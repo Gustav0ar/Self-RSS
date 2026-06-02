@@ -1,0 +1,442 @@
+@import "tailwindcss";
+
+@theme {
+	--color-background: #f5f7fb;
+	--color-foreground: #0f172a;
+	--color-muted: #eef2ff;
+	--color-muted-foreground: #64748b;
+	--color-border: #d9e2f0;
+	--color-input: #d9e2f0;
+	--color-ring: #4f46e5;
+	--color-primary: #4f46e5;
+	--color-primary-foreground: #f8fafc;
+	--color-secondary: #e2e8f0;
+	--color-secondary-foreground: #0f172a;
+	--color-accent: #e8eefc;
+	--color-accent-foreground: #0f172a;
+	--color-destructive: #dc2626;
+	--color-destructive-foreground: #f8fafc;
+	--color-card: rgba(255, 255, 255, 0.86);
+	--color-card-foreground: #0f172a;
+	--color-popover: rgba(255, 255, 255, 0.96);
+	--color-popover-foreground: #0f172a;
+	--color-sidebar: rgba(255, 255, 255, 0.74);
+	--color-sidebar-foreground: #475569;
+	--color-sidebar-active: #1e1b4b;
+	--radius-sm: 0.375rem;
+	--radius-md: 0.75rem;
+	--radius-lg: 1.125rem;
+}
+
+.dark {
+	--color-background: #020617;
+	--color-foreground: #e2e8f0;
+	--color-muted: #0f172a;
+	--color-muted-foreground: #94a3b8;
+	--color-border: #1e293b;
+	--color-input: #1e293b;
+	--color-ring: #818cf8;
+	--color-primary: #818cf8;
+	--color-primary-foreground: #0f172a;
+	--color-secondary: #111827;
+	--color-secondary-foreground: #e2e8f0;
+	--color-accent: #172036;
+	--color-accent-foreground: #e2e8f0;
+	--color-destructive: #ef4444;
+	--color-destructive-foreground: #f8fafc;
+	--color-card: rgba(15, 23, 42, 0.74);
+	--color-card-foreground: #e2e8f0;
+	--color-popover: rgba(15, 23, 42, 0.92);
+	--color-popover-foreground: #e2e8f0;
+	--color-sidebar: rgba(15, 23, 42, 0.68);
+	--color-sidebar-foreground: #94a3b8;
+	--color-sidebar-active: #c7d2fe;
+}
+
+html.amoled {
+	color-scheme: dark;
+}
+
+.amoled {
+	--color-background: #000000;
+	--color-foreground: #f3f4f6;
+	--color-muted: #050505;
+	--color-muted-foreground: #9ca3af;
+	--color-border: #121212;
+	--color-input: #161616;
+	--color-ring: #8b5cf6;
+	--color-primary: #8b5cf6;
+	--color-primary-foreground: #f8fafc;
+	--color-secondary: #0a0a0a;
+	--color-secondary-foreground: #f3f4f6;
+	--color-accent: #111111;
+	--color-accent-foreground: #f3f4f6;
+	--color-destructive: #ef4444;
+	--color-destructive-foreground: #f8fafc;
+	--color-card: rgba(0, 0, 0, 0.94);
+	--color-card-foreground: #f3f4f6;
+	--color-popover: rgba(0, 0, 0, 0.98);
+	--color-popover-foreground: #f3f4f6;
+	--color-sidebar: rgba(0, 0, 0, 0.94);
+	--color-sidebar-foreground: #9ca3af;
+	--color-sidebar-active: #c4b5fd;
+}
+
+html,
+body,
+#root {
+	height: 100%;
+}
+
+html {
+	color-scheme: light;
+	scroll-behavior: smooth;
+}
+
+html.dark,
+html.amoled {
+	color-scheme: dark;
+}
+
+body {
+	font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	background:
+		radial-gradient(
+			circle at top left,
+			color-mix(in srgb, var(--color-primary) 14%, transparent),
+			transparent 32%
+		),
+		radial-gradient(
+			circle at top right,
+			color-mix(in srgb, #38bdf8 18%, transparent),
+			transparent 28%
+		),
+		linear-gradient(
+			180deg,
+			color-mix(in srgb, var(--color-background) 96%, white 4%) 0%,
+			var(--color-background) 100%
+		);
+	color: var(--color-foreground);
+}
+
+.amoled body {
+	background: #000000;
+}
+
+button,
+input,
+select,
+textarea {
+	transition:
+		background-color 180ms ease,
+		border-color 180ms ease,
+		color 180ms ease,
+		box-shadow 180ms ease,
+		transform 180ms ease,
+		opacity 180ms ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ring) 22%, transparent);
+}
+
+::selection {
+	background: color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.app-shell {
+	position: relative;
+	isolation: isolate;
+}
+
+.app-shell::before {
+	content: "";
+	position: absolute;
+	inset: 1.25rem;
+	border-radius: 1.75rem;
+	background: linear-gradient(
+		180deg,
+		color-mix(in srgb, var(--color-card) 88%, transparent),
+		color-mix(in srgb, var(--color-card) 58%, transparent)
+	);
+	box-shadow:
+		0 24px 80px color-mix(in srgb, #020617 20%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 50%, transparent);
+	border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+	backdrop-filter: blur(24px);
+	z-index: -1;
+}
+
+.dark .app-shell::before {
+	box-shadow:
+		0 28px 96px color-mix(in srgb, black 42%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+
+.amoled .app-shell::before {
+	background: linear-gradient(180deg, rgba(0, 0, 0, 0.98), rgba(0, 0, 0, 0.94));
+	border: 1px solid rgba(255, 255, 255, 0.05);
+	box-shadow:
+		0 18px 56px rgba(0, 0, 0, 0.78),
+		inset 0 1px 0 rgba(255, 255, 255, 0.04);
+	backdrop-filter: blur(12px);
+}
+
+.surface-card {
+	border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+	background: color-mix(in srgb, var(--color-card) 96%, transparent);
+	box-shadow:
+		0 16px 42px color-mix(in srgb, #0f172a 8%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 55%, transparent);
+	backdrop-filter: blur(20px);
+}
+
+.amoled .surface-card {
+	box-shadow:
+		0 8px 28px rgba(0, 0, 0, 0.52),
+		inset 0 1px 0 rgba(255, 255, 255, 0.03);
+	backdrop-filter: blur(10px);
+}
+
+.surface-muted {
+	background: color-mix(in srgb, var(--color-muted) 82%, transparent);
+	border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+}
+
+.input-surface {
+	border: 1px solid color-mix(in srgb, var(--color-input) 88%, transparent);
+	background: color-mix(in srgb, var(--color-popover) 88%, transparent);
+	box-shadow: inset 0 1px 0 color-mix(in srgb, white 42%, transparent);
+}
+
+.motion-enter {
+	animation: fade-up 260ms ease;
+}
+
+.motion-scale {
+	animation: scale-in 220ms ease;
+}
+
+.panel-divider {
+	position: relative;
+}
+
+.panel-divider::after {
+	content: "";
+	position: absolute;
+	left: 1rem;
+	right: 1rem;
+	bottom: 0;
+	height: 1px;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		color-mix(in srgb, var(--color-border) 92%, transparent),
+		transparent
+	);
+}
+
+.reader-content {
+	color: var(--color-card-foreground);
+	font-size: 1rem;
+	line-height: 1.82;
+	word-break: break-word;
+	overflow-wrap: anywhere;
+}
+
+.reader-content > * + * {
+	margin-top: 1rem;
+}
+
+.reader-content :is(h1, h2, h3, h4, h5, h6) {
+	margin-top: 2rem;
+	margin-bottom: 0.75rem;
+	font-weight: 700;
+	line-height: 1.18;
+	text-wrap: balance;
+}
+
+.reader-content :is(h1, h2) {
+	font-size: 1.45rem;
+}
+
+.reader-content p {
+	margin: 0;
+	color: var(--color-card-foreground);
+	line-height: 1.82;
+	text-wrap: pretty;
+}
+
+.reader-content a {
+	color: color-mix(in srgb, var(--color-primary) 78%, var(--color-foreground) 22%);
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+	text-underline-offset: 0.2em;
+}
+
+.reader-content :is(ul, ol) {
+	padding-left: 1.35rem;
+	line-height: 1.75;
+}
+
+.reader-content li + li {
+	margin-top: 0.45rem;
+}
+
+.reader-content blockquote {
+	border-left: 3px solid color-mix(in srgb, var(--color-primary) 35%, var(--color-border) 65%);
+	padding-left: 1rem;
+	color: var(--color-muted-foreground);
+}
+
+.reader-content img,
+.reader-content video,
+.reader-content picture,
+.reader-content iframe.embedded-media {
+	display: block;
+	max-width: 100%;
+	margin: 1.5rem auto;
+	border-radius: 1rem;
+	overflow: hidden;
+	background: var(--color-muted);
+	object-fit: cover;
+	box-shadow: 0 14px 36px color-mix(in srgb, #0f172a 12%, transparent);
+}
+
+.reader-content img,
+.reader-content video,
+.reader-content picture,
+.reader-content iframe.embedded-media--youtube,
+.reader-content iframe.embedded-media--vimeo,
+.reader-content iframe.embedded-media--streamable,
+.reader-content iframe.embedded-media--videopress {
+	width: 100%;
+}
+
+.reader-content iframe.embedded-media {
+	border: 0;
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 80%, transparent);
+}
+
+.reader-content iframe.embedded-media--youtube,
+.reader-content iframe.embedded-media--vimeo,
+.reader-content iframe.embedded-media--streamable,
+.reader-content iframe.embedded-media--videopress {
+	aspect-ratio: 16 / 9;
+}
+
+.reader-content iframe.embedded-media--x {
+	width: min(100%, 560px);
+	height: 600px;
+	border-radius: 1.25rem;
+}
+
+.reader-content figure {
+	margin: 1.5rem 0;
+	display: grid;
+	gap: 0.75rem;
+}
+
+.reader-content figcaption {
+	font-size: 0.85rem;
+	color: var(--color-muted-foreground);
+	text-align: center;
+}
+
+.reader-content table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.92rem;
+	margin: 1.5rem 0;
+	overflow: hidden;
+	border-radius: 1rem;
+	border: 1px solid var(--color-border);
+}
+
+.reader-content th,
+.reader-content td {
+	border: 1px solid var(--color-border);
+	padding: 0.7rem 0.85rem;
+	text-align: left;
+	vertical-align: top;
+}
+
+.reader-content hr {
+	margin: 1.8rem 0;
+	border: 0;
+	border-top: 1px solid var(--color-border);
+}
+
+@keyframes fade-up {
+	from {
+		opacity: 0;
+		transform: translateY(14px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes scale-in {
+	from {
+		opacity: 0;
+		transform: scale(0.97);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes pulse-glow {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 0%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 8px color-mix(in srgb, var(--color-primary) 12%, transparent);
+	}
+}
+
+.animate-pulse-glow {
+	animation: pulse-glow 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+
+	/* biome-ignore lint/style/noDescendingSpecificity: global reduced-motion reset intentionally applies broadly. */
+	*,
+	*::before,
+	*::after {
+		animation-duration: 1ms;
+		animation-iteration-count: 1;
+		transition-duration: 1ms;
+	}
+}
+
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: color-mix(in srgb, var(--color-border) 90%, transparent);
+	border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in srgb, var(--color-muted-foreground) 72%, transparent);
+}

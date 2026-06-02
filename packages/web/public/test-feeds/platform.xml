@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+	<channel>
+		<title>Platform Weekly</title>
+		<link>https://example.com/platform</link>
+		<description>Platform engineering headlines</description>
+		<item>
+			<title>Platform release notes</title>
+			<link>https://example.com/platform/release-notes</link>
+			<guid>platform-release-notes</guid>
+			<description><![CDATA[<p>Platform release notes for the week.</p>]]></description>
+			<pubDate>Tue, 13 Jan 2026 10:00:00 GMT</pubDate>
+		</item>
+	</channel>
+</rss>

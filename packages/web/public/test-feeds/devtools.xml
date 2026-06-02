@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+	<channel>
+		<title>DevTools Digest</title>
+		<link>https://example.com/devtools</link>
+		<description>Developer tooling updates</description>
+		<item>
+			<title>Inspector improvements</title>
+			<link>https://example.com/devtools/inspector</link>
+			<guid>devtools-inspector</guid>
+			<description><![CDATA[<p>Inspector improvements landed today.</p>]]></description>
+			<pubDate>Mon, 12 Jan 2026 09:00:00 GMT</pubDate>
+		</item>
+	</channel>
+</rss>

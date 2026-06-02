@@ -1,0 +1,131 @@
+# SelfFeed - Production Self-Hosting Docker Compose Configuration
+#
+# This file allows you to deploy the application on a VPS behind Traefik
+# without needing to clone or build the codebase locally.
+#
+# Instructions:
+# 1. Copy this file to your server as `docker-compose.yml`
+# 2. Create a `.env` file in the same directory using the variables required below.
+# 3. Create the data directory: `mkdir -p data && chmod 777 data` (or set ownership)
+# 4. Run `docker compose up -d` to start the service stack.
+
+services:
+  redis:
+    image: docker.io/redis:8.8-alpine
+    container_name: selffeed-redis
+    command:
+      [
+        "redis-server",
+        "--requirepass",
+        "${REDIS_PASSWORD:?Redis password is required}",
+      ]
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-api:${IMAGE_TAG:-latest}
+    container_name: selffeed-api
+    init: true
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      NODE_ENV: production
+      API_PORT: "3000"
+      DATABASE_URL: /app/data/self-feed.db
+      REDIS_URL: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required (e.g. https://rss.yourdomain.com)}
+      TRUST_PROXY: "true" # Required for proper rate limiting behind Traefik
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      FEED_SYNC_CONCURRENCY: ${FEED_SYNC_CONCURRENCY:-5}
+      FEED_SYNC_TIMEOUT_MS: ${FEED_SYNC_TIMEOUT_MS:-30000}
+      FEED_MAX_CONTENT_LENGTH: ${FEED_MAX_CONTENT_LENGTH:-5242880}
+      FEED_ALLOW_PRIVATE_HOSTS: "false"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-30}
+      RATE_LIMIT_FEED_CREATE_MAX: ${RATE_LIMIT_FEED_CREATE_MAX:-100}
+      RATE_LIMIT_SEARCH_MAX: ${RATE_LIMIT_SEARCH_MAX:-100}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const res = await fetch('http://127.0.0.1:3000/health'); if (!res.ok) process.exit(1);",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-api:${IMAGE_TAG:-latest}
+    container_name: selffeed-worker
+    init: true
+    restart: unless-stopped
+    command: ["start:worker"]
+    volumes:
+      - ./data:/app/data
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: /app/data/self-feed.db
+      REDIS_URL: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      TRUST_PROXY: "true"
+      FEED_SYNC_CONCURRENCY: ${FEED_SYNC_CONCURRENCY:-5}
+      FEED_SYNC_TIMEOUT_MS: ${FEED_SYNC_TIMEOUT_MS:-30000}
+      FEED_MAX_CONTENT_LENGTH: ${FEED_MAX_CONTENT_LENGTH:-5242880}
+      FEED_ALLOW_PRIVATE_HOSTS: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-web:${IMAGE_TAG:-latest}
+    container_name: selffeed-web
+    init: true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - default
+      - traefik_public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.self-feed.rule=Host(`${DOMAIN_NAME:?Domain name is required}`)"
+      - "traefik.http.routers.self-feed.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.self-feed.tls=true"
+      - "traefik.http.routers.self-feed.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-myresolver}"
+      - "traefik.http.services.self-feed.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik_public"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redisdata:
+
+networks:
+  default:
+  traefik_public:
+    external: true

@@ -1,0 +1,265 @@
+import { Monitor, Moon, Settings, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { type Preferences, usePreferences, useUpdatePreferences } from '@/hooks/queries';
+import { useTheme } from '@/providers/theme';
+
+export function PreferencesPanel() {
+	const { data: prefs, isLoading } = usePreferences();
+	const updatePrefs = useUpdatePreferences();
+	const { setTheme } = useTheme();
+	const [isOpen, setIsOpen] = useState(false);
+	const [draftPrefs, setDraftPrefs] = useState<Preferences | null>(null);
+
+	useEffect(() => {
+		if (prefs) {
+			setDraftPrefs(prefs);
+		}
+	}, [prefs]);
+
+	if (!isOpen) {
+		return (
+			<button
+				type="button"
+				onClick={() => setIsOpen(true)}
+				className="inline-flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+				aria-label="Preferences"
+			>
+				<Settings className="h-4 w-4" />
+			</button>
+		);
+	}
+
+	if (isLoading || !draftPrefs) {
+		return createPortal(
+			<div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md">
+				<div className="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7">
+					<div className="p-4 text-sm text-muted-foreground">Loading...</div>
+				</div>
+			</div>,
+			document.body,
+		);
+	}
+
+	function handleChange<K extends keyof Preferences>(key: K, value: Preferences[K]) {
+		setDraftPrefs((current) => (current ? { ...current, [key]: value } : current));
+		if (key === 'theme' && typeof value === 'string') {
+			setTheme(value as 'light' | 'dark' | 'amoled' | 'system');
+		}
+		updatePrefs.mutate({ [key]: value });
+	}
+
+	return createPortal(
+		<div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md">
+			<div className="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7">
+				<div className="mb-6 flex items-start justify-between gap-4">
+					<div>
+						<p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">
+							Reader preferences
+						</p>
+						<h2 className="mt-1 text-xl font-semibold tracking-tight">Preferences</h2>
+						<p className="mt-2 text-sm leading-6 text-muted-foreground">
+							Adjust the look and reading behavior of your workspace.
+						</p>
+					</div>
+					<button
+						type="button"
+						onClick={() => setIsOpen(false)}
+						className="inline-flex h-10 items-center justify-center rounded-2xl px-4 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+					>
+						Close
+					</button>
+				</div>
+
+				<div className="grid gap-5 md:grid-cols-2">
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-theme" className="block text-sm font-medium">
+							Theme
+						</label>
+						<div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+							<ThemeChoice
+								label="Light"
+								icon={<Sun className="h-4 w-4" />}
+								active={draftPrefs.theme === 'light'}
+								onClick={() => handleChange('theme', 'light')}
+							/>
+							<ThemeChoice
+								label="Dark"
+								icon={<Moon className="h-4 w-4" />}
+								active={draftPrefs.theme === 'dark'}
+								onClick={() => handleChange('theme', 'dark')}
+							/>
+							<ThemeChoice
+								label="AMOLED"
+								icon={<Moon className="h-4 w-4" />}
+								active={draftPrefs.theme === 'amoled'}
+								onClick={() => handleChange('theme', 'amoled')}
+							/>
+							<ThemeChoice
+								label="System"
+								icon={<Monitor className="h-4 w-4" />}
+								active={draftPrefs.theme === 'system'}
+								onClick={() => handleChange('theme', 'system')}
+							/>
+						</div>
+						<select
+							id="pref-theme"
+							value={draftPrefs.theme}
+							onChange={(e) => handleChange('theme', e.target.value)}
+							className="sr-only"
+						>
+							<option value="system">System</option>
+							<option value="light">Light</option>
+							<option value="dark">Dark</option>
+							<option value="amoled">AMOLED</option>
+						</select>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-font" className="block text-sm font-medium">
+							Font Family
+						</label>
+						<input
+							id="pref-font"
+							type="text"
+							value={draftPrefs.fontFamily}
+							onChange={(e) => handleChange('fontFamily', e.target.value)}
+							className="input-surface mt-3 h-12 w-full rounded-2xl px-4 text-sm outline-none"
+						/>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-text-size" className="block text-sm font-medium">
+							Text Size: {draftPrefs.textSize}px
+						</label>
+						<input
+							id="pref-text-size"
+							type="range"
+							min={12}
+							max={24}
+							value={draftPrefs.textSize}
+							onChange={(e) => handleChange('textSize', Number(e.target.value))}
+							className="mt-4 w-full"
+						/>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-density" className="block text-sm font-medium">
+							Density
+						</label>
+						<select
+							id="pref-density"
+							value={draftPrefs.density}
+							onChange={(e) => handleChange('density', e.target.value)}
+							className="input-surface mt-3 h-12 w-full rounded-2xl px-4 text-sm outline-none"
+						>
+							<option value="comfortable">Comfortable</option>
+							<option value="compact">Compact</option>
+						</select>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-sort" className="block text-sm font-medium">
+							Default Sort
+						</label>
+						<select
+							id="pref-sort"
+							value={draftPrefs.defaultSort}
+							onChange={(e) => handleChange('defaultSort', e.target.value)}
+							className="input-surface mt-3 h-12 w-full rounded-2xl px-4 text-sm outline-none"
+						>
+							<option value="latest">Newest First</option>
+							<option value="oldest">Oldest First</option>
+						</select>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<p className="block text-sm font-medium">Reading options</p>
+						<div className="mt-4 space-y-3">
+							<ToggleRow
+								label="Hide read articles"
+								checked={draftPrefs.hideRead}
+								onChange={(checked) => handleChange('hideRead', checked)}
+							/>
+							<ToggleRow
+								label="Enable keyboard shortcuts"
+								checked={draftPrefs.keyboardShortcutsEnabled}
+								onChange={(checked) => handleChange('keyboardShortcutsEnabled', checked)}
+							/>
+						</div>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<label htmlFor="pref-auto-mark" className="block text-sm font-medium">
+							Auto-mark as read
+						</label>
+						<select
+							id="pref-auto-mark"
+							value={draftPrefs.autoMarkReadMode}
+							onChange={(e) => handleChange('autoMarkReadMode', e.target.value)}
+							className="input-surface mt-3 h-12 w-full rounded-2xl px-4 text-sm outline-none"
+						>
+							<option value="disabled">Disabled</option>
+							<option value="on_navigate">On Navigate</option>
+							<option value="on_open">On Open</option>
+						</select>
+					</section>
+				</div>
+			</div>
+		</div>,
+		document.body,
+	);
+}
+
+function ThemeChoice({
+	label,
+	icon,
+	active,
+	onClick,
+}: {
+	label: string;
+	icon: React.ReactNode;
+	active: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={
+				active
+					? 'flex min-h-[4.5rem] min-w-0 overflow-hidden rounded-2xl bg-primary px-1 py-3 font-medium text-primary-foreground'
+					: 'flex min-h-[4.5rem] min-w-0 overflow-hidden rounded-2xl border border-border bg-background/70 px-1 py-3 text-muted-foreground hover:bg-accent hover:text-foreground'
+			}
+		>
+			<span className="flex w-full min-w-0 flex-col items-center justify-center gap-2 text-center">
+				{icon}
+				<span className="block max-w-full text-center text-[10px] leading-tight sm:text-[11px]">
+					{label}
+				</span>
+			</span>
+		</button>
+	);
+}
+
+function ToggleRow({
+	label,
+	checked,
+	onChange,
+}: {
+	label: string;
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+}) {
+	return (
+		<label className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/60 px-4 py-3 text-sm">
+			<span>{label}</span>
+			<input
+				type="checkbox"
+				checked={checked}
+				onChange={(e) => onChange(e.target.checked)}
+				className="h-4 w-4 rounded"
+			/>
+		</label>
+	);
+}

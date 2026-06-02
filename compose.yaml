@@ -1,0 +1,99 @@
+services:
+  redis:
+    image: docker.io/redis:8.8-alpine
+    container_name: rss-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rss-api
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment: &api_env
+      NODE_ENV: production
+      API_PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:-/app/data/rss.db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      FEED_SYNC_CONCURRENCY: ${FEED_SYNC_CONCURRENCY:-5}
+      FEED_SYNC_TIMEOUT_MS: ${FEED_SYNC_TIMEOUT_MS:-30000}
+      FEED_MAX_CONTENT_LENGTH: ${FEED_MAX_CONTENT_LENGTH:-5242880}
+      FEED_ALLOW_PRIVATE_HOSTS: ${FEED_ALLOW_PRIVATE_HOSTS:-false}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-30}
+      RATE_LIMIT_FEED_CREATE_MAX: ${RATE_LIMIT_FEED_CREATE_MAX:-100}
+      RATE_LIMIT_SEARCH_MAX: ${RATE_LIMIT_SEARCH_MAX:-100}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const res = await fetch('http://127.0.0.1:3000/health'); if (!res.ok) process.exit(1);",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rss-worker
+    init: true
+    restart: unless-stopped
+    command: ["start:worker"]
+    volumes:
+      - ./data:/app/data
+    environment: *api_env
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: rss-web
+    init: true
+    restart: unless-stopped
+    ports:
+      - "5173:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redisdata:

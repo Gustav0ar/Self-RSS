@@ -1,0 +1,41 @@
+{
+	"name": "@self-feed/api",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun --env-file=.env --env-file=../../.env.example --watch src/index.ts",
+		"dev:worker": "bun --env-file=.env --env-file=../../.env.example --watch src/worker.ts",
+		"start": "bun --env-file=.env --env-file=../../.env.example src/index.ts",
+		"start:worker": "bun --env-file=.env --env-file=../../.env.example src/worker.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run tests/unit",
+		"test:unit": "vitest run tests/unit",
+		"test:integration": "bun test tests/integration",
+		"build": "tsc --noEmit",
+		"db:generate": "drizzle-kit generate",
+		"db:migrate": "bun --env-file=.env src/db/migrate.ts",
+		"db:push": "drizzle-kit push",
+		"db:seed": "bun --env-file=.env src/db/seed.ts",
+		"openapi:generate": "bun src/openapi/generate.ts"
+	},
+	"dependencies": {
+		"@self-feed/shared": "workspace:*",
+		"dompurify": "^3.4.6",
+		"drizzle-orm": "^0.45.2",
+		"hono": "^4.12.23",
+		"ioredis": "^5.11.0",
+		"jose": "^6.2.3",
+		"jsdom": "^29.1.1",
+		"rss-parser": "^3.13.0",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.14",
+		"@types/dompurify": "^3.2.0",
+		"@types/jsdom": "^28.0.3",
+		"drizzle-kit": "^0.31.10",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.7"
+	}
+}

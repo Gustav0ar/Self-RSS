@@ -1,0 +1,141 @@
+name: Deploy
+
+# Visibility strategy:
+# - This workflow lives in a public repo, so its definition is public.
+# - It runs inside the "production" environment, which is configured on
+#   GitHub to require approval from a list of reviewers (the repo owner
+#   in this case) and to be visible only to people with at least Write
+#   access to the repo. Anonymous visitors to the Actions tab cannot see
+#   the run logs, environment secrets, or environment variables.
+# - The workflow uploads a deploy-summary artifact (image tag, commit
+#   SHA, target host, status) that IS public, so anyone can verify
+#   that a deploy happened without seeing the secret material.
+
+on:
+  workflow_run:
+    workflows: ["Containers"]
+    types: [completed]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force deploy even if last containers build failed"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    # `environment: production` gates the job on the repo's protected
+    # environment configuration. Configure the environment in the GitHub
+    # UI to require reviewers and to limit visibility to repo members.
+    environment: production
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build deploy summary (artifact only, no secrets)
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha && format('sha-{0}', github.event.workflow_run.head_sha) || format('sha-{0}', github.sha) }}
+          VARS_IMAGE_OWNER: ${{ vars.IMAGE_OWNER_LOWERCASE }}
+          VPS_HOST_SECRET: ${{ secrets.VPS_HOST }}
+        run: |
+          HOST_FP="$(printf '%s' "${VPS_HOST_SECRET}" | sha256sum | cut -c1-12)"
+          cat > .github/deploy-summary.json <<EOF
+          {
+            "service": "self-feed",
+            "image_tag": "${IMAGE_TAG}",
+            "head_sha": "${HEAD_SHA}",
+            "image_owner": "${VARS_IMAGE_OWNER}",
+            "trigger": "${{ github.event_name }}",
+            "host_fingerprint": "${HOST_FP}"
+          }
+          EOF
+
+      - name: Upload public deploy summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-summary
+          path: .github/deploy-summary.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: SSH and deploy
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -euo pipefail
+
+            # Resolve configuration. Repo vars override defaults.
+            DEPLOY_PATH="${{ vars.DEPLOY_PATH || '/opt/self-feed' }}"
+            COMPOSE_CMD="${{ vars.COMPOSE_COMMAND || 'docker compose' }}"
+            REGISTRY="${{ vars.REGISTRY || 'ghcr.io' }}"
+            HEAD_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+            IMAGE_OWNER="${{ vars.IMAGE_OWNER_LOWERCASE }}"
+            IMAGE_TAG="sha-${HEAD_SHA:0:7}"
+
+            echo "::group::Deploy self-feed"
+            echo "Target path : ${DEPLOY_PATH}"
+            echo "Image       : ${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}"
+            echo "::endgroup::"
+
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+
+            # Ensure the data dir exists for the SQLite volume.
+            mkdir -p data
+
+            # Pull the deploy file from the repo so the VPS doesn't need
+            # to be a separate git checkout. (Uses the workflow's
+            # GITHUB_TOKEN to fetch the file at HEAD_SHA.)
+            curl -fsSL \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.raw" \
+              -o docker-compose.yml \
+              "https://raw.githubusercontent.com/${{ github.repository }}/${HEAD_SHA}/docker-compose.yml"
+
+            export IMAGE_TAG
+            export IMAGE_OWNER_LOWERCASE="${IMAGE_OWNER}"
+            export REGISTRY
+
+            # Pull images, restart services, prune.
+            "$COMPOSE_CMD" -f docker-compose.yml pull
+            "$COMPOSE_CMD" -f docker-compose.yml up -d --remove-orphans
+
+            # Health checks (run on the host, not inside the containers,
+            # to avoid requiring the compose CLI to know how to exec).
+            echo "Waiting for API to come up..."
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then
+                echo "API healthy"
+                break
+              fi
+              sleep 2
+            done
+            curl -fsS http://127.0.0.1:3000/health >/dev/null
+
+            echo "Waiting for web to come up..."
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1; then
+                echo "Web healthy"
+                break
+              fi
+              sleep 2
+            done
+            curl -fsS http://127.0.0.1:8080/ >/dev/null
+
+            docker image prune -f

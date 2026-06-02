@@ -1,0 +1,116 @@
+# SelfFeed Deployment
+
+This is the **single source of truth** for deploying the repo to your VPS. The
+deploy runs in a protected GitHub Actions environment, so logs and secrets are
+only visible to you — public users only see the deploy-summary artifact.
+
+## One-time GitHub configuration
+
+Do this once after the repo is created, before the first deploy.
+
+### 1. Create the `production` environment
+
+1. Go to **Repo → Settings → Environments → New environment**.
+2. Name it `production` (must match the name in `deploy.yml`).
+3. **Deployment protection rules**:
+   - Enable **Required reviewers** and add yourself.
+   - (Optional) Enable **Wait timer** if you want a cooldown window.
+4. **Environment visibility**:
+   - Default is fine — environment is only visible to people with at
+     least Write access to the repo. Anonymous visitors to the Actions
+     tab cannot view runs in this environment, cannot view its logs,
+     and cannot see its secrets or variables.
+5. **Deployment branches**: restrict to `main`.
+
+### 2. Add environment secrets
+
+Under the `production` environment, add these secrets. They are
+**environment-scoped**, which means they are only available to jobs
+that use `environment: production` and only visible to people with
+write access to the repo.
+
+| Secret           | Example value                         |
+| ---------------- | ------------------------------------- |
+| `VPS_HOST`       | `203.0.113.10`                        |
+| `VPS_USERNAME`   | `deploy`                              |
+| `VPS_PORT`       | `22` (optional, defaults to 22)       |
+| `VPS_SSH_KEY`    | contents of the private key (`-----BEGIN OPENSSH PRIVATE KEY-----...`) |
+
+The SSH public key for the same key must be installed on the VPS in
+`~deploy/.ssh/authorized_keys` with `chmod 600`.
+
+### 3. Add environment variables
+
+These are non-sensitive and can live in vars (visible to repo members
+but not to the public):
+
+| Var                       | Default                 | Notes                                  |
+| ------------------------- | ----------------------- | -------------------------------------- |
+| `DEPLOY_PATH`             | `/opt/self-feed`        | Directory on the VPS holding the deploy |
+| `COMPOSE_COMMAND`         | `docker compose`        | Use `podman compose` if you prefer     |
+| `REGISTRY`                | `ghcr.io`               | Container registry to pull from        |
+| `IMAGE_OWNER_LOWERCASE`   | `gustav0ar`             | Your GitHub username, lowercased       |
+
+> Set `DEPLOY_PATH` to `/mnt/storage/containers/selfrss` if that's where
+> you want the stack to live.
+
+## First-time VPS setup
+
+On the VPS, as the deploy user, prepare the deployment path:
+
+```bash
+# 1. Install Docker (skip if already installed).
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker deploy
+
+# 2. Create the deploy directory and data volume.
+sudo mkdir -p /mnt/storage/containers/selfrss/data
+sudo chown -R deploy:deploy /mnt/storage/containers/selfrss
+
+# 3. Create the .env file with production secrets.
+sudo -u deploy bash -c 'cat > /mnt/storage/containers/selfrss/.env <<EOF
+REDIS_PASSWORD=<long-random>
+JWT_SECRET=<openssl rand -hex 32>
+JWT_REFRESH_SECRET=<openssl rand -hex 32>
+JWT_ACCESS_EXPIRES_IN=15m
+JWT_REFRESH_EXPIRES_IN=7d
+CORS_ALLOWED_ORIGINS=https://rss.yourdomain.com
+DOMAIN_NAME=rss.yourdomain.com
+TRAEFIK_ENTRYPOINT=websecure
+TRAEFIK_CERT_RESOLVER=le
+ALLOW_REGISTRATION=true
+ADMIN_EMAIL=you@example.com
+ADMIN_PASSWORD=<strong-password>
+EOF'
+sudo chmod 600 /mnt/storage/containers/selfrss/.env
+
+# 4. Make sure the Traefik network exists.
+docker network create traefik_public 2>/dev/null || true
+```
+
+## Deploy flow
+
+1. Push a commit to `main` (or trigger the `Deploy` workflow manually).
+2. The `Containers` workflow builds the `self-feed-api` and
+   `self-feed-web` images.
+3. The `Deploy` workflow is gated on:
+   - The `production` environment's required reviewers (you) approving
+     the deployment.
+   - The image tag matching the latest successful build.
+4. On approval, the workflow:
+   - Pulls the `docker-compose.yml` from the repo at the deploy commit.
+   - Pulls the new images.
+   - Restarts the stack with `docker compose up -d --remove-orphans`.
+   - Health-checks the API and web.
+   - Prunes dangling images.
+5. A `deploy-summary` artifact is uploaded for public visibility
+   (image tag, commit SHA, host fingerprint) — **no secrets**.
+
+## Visibility recap
+
+- **Public users** see: the workflow file, the `deploy-summary`
+  artifact, the commit history.
+- **Public users do NOT see**: deploy logs, environment secrets,
+  environment variables, environment name (when restricted), or
+  approval history.
+- **You (and any collaborators you add)** see everything.

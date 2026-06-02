@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+	<channel>
+		<title>Infinite Scroll Digest</title>
+		<link>https://example.com/infinite</link>
+		<description>Lots of stories for pagination tests</description>
+		<item>
+			<title>Infinite Story 35</title>
+			<link>https://example.com/infinite/35</link>
+			<guid>infinite-story-35</guid>
+			<description><![CDATA[<p>Infinite story 35 body.</p>]]></description>
+			<pubDate>Sun, 01 Feb 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 34</title>
+			<link>https://example.com/infinite/34</link>
+			<guid>infinite-story-34</guid>
+			<description><![CDATA[<p>Infinite story 34 body.</p>]]></description>
+			<pubDate>Sat, 31 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 33</title>
+			<link>https://example.com/infinite/33</link>
+			<guid>infinite-story-33</guid>
+			<description><![CDATA[<p>Infinite story 33 body.</p>]]></description>
+			<pubDate>Fri, 30 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 32</title>
+			<link>https://example.com/infinite/32</link>
+			<guid>infinite-story-32</guid>
+			<description><![CDATA[<p>Infinite story 32 body.</p>]]></description>
+			<pubDate>Thu, 29 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 31</title>
+			<link>https://example.com/infinite/31</link>
+			<guid>infinite-story-31</guid>
+			<description><![CDATA[<p>Infinite story 31 body.</p>]]></description>
+			<pubDate>Wed, 28 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 30</title>
+			<link>https://example.com/infinite/30</link>
+			<guid>infinite-story-30</guid>
+			<description><![CDATA[<p>Infinite story 30 body.</p>]]></description>
+			<pubDate>Tue, 27 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 29</title>
+			<link>https://example.com/infinite/29</link>
+			<guid>infinite-story-29</guid>
+			<description><![CDATA[<p>Infinite story 29 body.</p>]]></description>
+			<pubDate>Mon, 26 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 28</title>
+			<link>https://example.com/infinite/28</link>
+			<guid>infinite-story-28</guid>
+			<description><![CDATA[<p>Infinite story 28 body.</p>]]></description>
+			<pubDate>Sun, 25 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 27</title>
+			<link>https://example.com/infinite/27</link>
+			<guid>infinite-story-27</guid>
+			<description><![CDATA[<p>Infinite story 27 body.</p>]]></description>
+			<pubDate>Sat, 24 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 26</title>
+			<link>https://example.com/infinite/26</link>
+			<guid>infinite-story-26</guid>
+			<description><![CDATA[<p>Infinite story 26 body.</p>]]></description>
+			<pubDate>Fri, 23 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 25</title>
+			<link>https://example.com/infinite/25</link>
+			<guid>infinite-story-25</guid>
+			<description><![CDATA[<p>Infinite story 25 body.</p>]]></description>
+			<pubDate>Thu, 22 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 24</title>
+			<link>https://example.com/infinite/24</link>
+			<guid>infinite-story-24</guid>
+			<description><![CDATA[<p>Infinite story 24 body.</p>]]></description>
+			<pubDate>Wed, 21 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 23</title>
+			<link>https://example.com/infinite/23</link>
+			<guid>infinite-story-23</guid>
+			<description><![CDATA[<p>Infinite story 23 body.</p>]]></description>
+			<pubDate>Tue, 20 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 22</title>
+			<link>https://example.com/infinite/22</link>
+			<guid>infinite-story-22</guid>
+			<description><![CDATA[<p>Infinite story 22 body.</p>]]></description>
+			<pubDate>Mon, 19 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 21</title>
+			<link>https://example.com/infinite/21</link>
+			<guid>infinite-story-21</guid>
+			<description><![CDATA[<p>Infinite story 21 body.</p>]]></description>
+			<pubDate>Sun, 18 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 20</title>
+			<link>https://example.com/infinite/20</link>
+			<guid>infinite-story-20</guid>
+			<description><![CDATA[<p>Infinite story 20 body.</p>]]></description>
+			<pubDate>Sat, 17 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 19</title>
+			<link>https://example.com/infinite/19</link>
+			<guid>infinite-story-19</guid>
+			<description><![CDATA[<p>Infinite story 19 body.</p>]]></description>
+			<pubDate>Fri, 16 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 18</title>
+			<link>https://example.com/infinite/18</link>
+			<guid>infinite-story-18</guid>
+			<description><![CDATA[<p>Infinite story 18 body.</p>]]></description>
+			<pubDate>Thu, 15 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 17</title>
+			<link>https://example.com/infinite/17</link>
+			<guid>infinite-story-17</guid>
+			<description><![CDATA[<p>Infinite story 17 body.</p>]]></description>
+			<pubDate>Wed, 14 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 16</title>
+			<link>https://example.com/infinite/16</link>
+			<guid>infinite-story-16</guid>
+			<description><![CDATA[<p>Infinite story 16 body.</p>]]></description>
+			<pubDate>Tue, 13 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 15</title>
+			<link>https://example.com/infinite/15</link>
+			<guid>infinite-story-15</guid>
+			<description><![CDATA[<p>Infinite story 15 body.</p>]]></description>
+			<pubDate>Mon, 12 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 14</title>
+			<link>https://example.com/infinite/14</link>
+			<guid>infinite-story-14</guid>
+			<description><![CDATA[<p>Infinite story 14 body.</p>]]></description>
+			<pubDate>Sun, 11 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 13</title>
+			<link>https://example.com/infinite/13</link>
+			<guid>infinite-story-13</guid>
+			<description><![CDATA[<p>Infinite story 13 body.</p>]]></description>
+			<pubDate>Sat, 10 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 12</title>
+			<link>https://example.com/infinite/12</link>
+			<guid>infinite-story-12</guid>
+			<description><![CDATA[<p>Infinite story 12 body.</p>]]></description>
+			<pubDate>Fri, 09 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 11</title>
+			<link>https://example.com/infinite/11</link>
+			<guid>infinite-story-11</guid>
+			<description><![CDATA[<p>Infinite story 11 body.</p>]]></description>
+			<pubDate>Thu, 08 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 10</title>
+			<link>https://example.com/infinite/10</link>
+			<guid>infinite-story-10</guid>
+			<description><![CDATA[<p>Infinite story 10 body.</p>]]></description>
+			<pubDate>Wed, 07 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 9</title>
+			<link>https://example.com/infinite/9</link>
+			<guid>infinite-story-9</guid>
+			<description><![CDATA[<p>Infinite story 9 body.</p>]]></description>
+			<pubDate>Tue, 06 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 8</title>
+			<link>https://example.com/infinite/8</link>
+			<guid>infinite-story-8</guid>
+			<description><![CDATA[<p>Infinite story 8 body.</p>]]></description>
+			<pubDate>Mon, 05 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 7</title>
+			<link>https://example.com/infinite/7</link>
+			<guid>infinite-story-7</guid>
+			<description><![CDATA[<p>Infinite story 7 body.</p>]]></description>
+			<pubDate>Sun, 04 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 6</title>
+			<link>https://example.com/infinite/6</link>
+			<guid>infinite-story-6</guid>
+			<description><![CDATA[<p>Infinite story 6 body.</p>]]></description>
+			<pubDate>Sat, 03 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 5</title>
+			<link>https://example.com/infinite/5</link>
+			<guid>infinite-story-5</guid>
+			<description><![CDATA[<p>Infinite story 5 body.</p>]]></description>
+			<pubDate>Fri, 02 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 4</title>
+			<link>https://example.com/infinite/4</link>
+			<guid>infinite-story-4</guid>
+			<description><![CDATA[<p>Infinite story 4 body.</p>]]></description>
+			<pubDate>Thu, 01 Jan 2026 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 3</title>
+			<link>https://example.com/infinite/3</link>
+			<guid>infinite-story-3</guid>
+			<description><![CDATA[<p>Infinite story 3 body.</p>]]></description>
+			<pubDate>Wed, 31 Dec 2025 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 2</title>
+			<link>https://example.com/infinite/2</link>
+			<guid>infinite-story-2</guid>
+			<description><![CDATA[<p>Infinite story 2 body.</p>]]></description>
+			<pubDate>Tue, 30 Dec 2025 12:00:00 GMT</pubDate>
+		</item>
+		<item>
+			<title>Infinite Story 1</title>
+			<link>https://example.com/infinite/1</link>
+			<guid>infinite-story-1</guid>
+			<description><![CDATA[<p>Infinite story 1 body.</p>]]></description>
+			<pubDate>Mon, 29 Dec 2025 12:00:00 GMT</pubDate>
+		</item>
+	</channel>
+</rss>
