@@ -129,9 +129,23 @@ jobs:
             HEAD_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
             IMAGE_OWNER="${{ vars.IMAGE_OWNER_LOWERCASE }}"
             IMAGE_TAG="sha-${HEAD_SHA:0:7}"
+            read -r -a COMPOSE_ARGS <<< "${COMPOSE_CMD}"
+            if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
+              echo "COMPOSE_COMMAND is empty"
+              exit 1
+            fi
+            if ! command -v "${COMPOSE_ARGS[0]}" >/dev/null 2>&1; then
+              echo "Container CLI not found: ${COMPOSE_ARGS[0]}"
+              exit 1
+            fi
+            CONTAINER_CLI="${COMPOSE_ARGS[0]}"
+            if [ "${CONTAINER_CLI}" = "docker-compose" ]; then
+              CONTAINER_CLI="docker"
+            fi
 
             echo "::group::Deploy self-feed"
             echo "Target path : ${DEPLOY_PATH}"
+            echo "Compose     : ${COMPOSE_CMD}"
             echo "Image       : ${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}"
             echo "::endgroup::"
 
@@ -155,8 +169,8 @@ jobs:
             export REGISTRY
 
             # Pull images, restart services, prune.
-            "$COMPOSE_CMD" -f docker-compose.yml pull
-            "$COMPOSE_CMD" -f docker-compose.yml up -d --remove-orphans
+            "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull
+            "${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans
 
             # Health checks (run on the host, not inside the containers,
             # to avoid requiring the compose CLI to know how to exec).
@@ -180,4 +194,4 @@ jobs:
             done
             curl -fsS http://127.0.0.1:8080/ >/dev/null
 
-            docker image prune -f
+            "${CONTAINER_CLI}" image prune -f
