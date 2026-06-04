@@ -97,6 +97,14 @@ sudo chmod 600 /mnt/storage/containers/selfrss/.env
 docker network create traefik_public 2>/dev/null || true
 ```
 
+The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
+by the unprivileged `bun` user inside the API container. If you create
+the directory manually, run:
+
+```bash
+sudo chmod 777 /mnt/storage/containers/selfrss/data
+```
+
 Set the production environment secrets to the same account:
 
 ```text

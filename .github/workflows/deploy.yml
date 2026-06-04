@@ -152,8 +152,18 @@ jobs:
             mkdir -p "${DEPLOY_PATH}"
             cd "${DEPLOY_PATH}"
 
+            dump_compose_diagnostics() {
+              set +e
+              echo "::group::Compose diagnostics"
+              "${COMPOSE_ARGS[@]}" -f docker-compose.yml ps || true
+              "${COMPOSE_ARGS[@]}" -f docker-compose.yml logs --no-color --tail=120 api redis worker web || true
+              echo "::endgroup::"
+            }
+            trap dump_compose_diagnostics ERR
+
             # Ensure the data dir exists for the SQLite volume.
             mkdir -p data
+            chmod 777 data
 
             # Pull the deploy file from the repo so the VPS doesn't need
             # to be a separate git checkout. (Uses the workflow's
