@@ -32,12 +32,14 @@ write access to the repo.
 | Secret           | Example value                         |
 | ---------------- | ------------------------------------- |
 | `VPS_HOST`       | `203.0.113.10`                        |
-| `VPS_USERNAME`   | `deploy`                              |
+| `VPS_USERNAME`   | `selffeed-deploy`                     |
 | `VPS_PORT`       | `22` (optional, defaults to 22)       |
 | `VPS_SSH_KEY`    | contents of the private key (`-----BEGIN OPENSSH PRIVATE KEY-----...`) |
 
-The SSH public key for the same key must be installed on the VPS in
-`~deploy/.ssh/authorized_keys` with `chmod 600`.
+`VPS_USERNAME` must match the account created by
+`scripts/setup-vps-deploy-user.sh`. The default is `selffeed-deploy`.
+The SSH public key for `VPS_SSH_KEY` must be installed in that account's
+`authorized_keys`.
 
 ### 3. Add environment variables
 
@@ -56,19 +58,26 @@ but not to the public):
 
 ## First-time VPS setup
 
-On the VPS, as the deploy user, prepare the deployment path:
+On the VPS, run the setup helper as root. This creates the dedicated
+`selffeed-deploy` user, prepares the deploy path, installs the public
+key in `authorized_keys`, and writes the private key to a handoff file
+for the GitHub environment secret.
 
 ```bash
 # 1. Install Docker (skip if already installed).
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker deploy
 
-# 2. Create the deploy directory and data volume.
-sudo mkdir -p /mnt/storage/containers/selfrss/data
-sudo chown -R deploy:deploy /mnt/storage/containers/selfrss
+# 2. Download and run the deploy-user setup.
+curl -fsSL \
+  https://raw.githubusercontent.com/Gustav0ar/Self-RSS/main/scripts/setup-vps-deploy-user.sh \
+  -o /tmp/setup-vps-deploy-user.sh
+sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed-deploy
 
-# 3. Create the .env file with production secrets.
-sudo -u deploy bash -c 'cat > /mnt/storage/containers/selfrss/.env <<EOF
+# 3. Copy this full private key into the production VPS_SSH_KEY secret.
+sudo cat /root/.ssh-key-handoff/selffeed-deploy.key
+
+# 4. Create the .env file with production secrets.
+sudo -u selffeed-deploy bash -c 'cat > /mnt/storage/containers/selfrss/.env <<EOF
 REDIS_PASSWORD=<long-random>
 JWT_SECRET=<openssl rand -hex 32>
 JWT_REFRESH_SECRET=<openssl rand -hex 32>
@@ -84,8 +93,23 @@ ADMIN_PASSWORD=<strong-password>
 EOF'
 sudo chmod 600 /mnt/storage/containers/selfrss/.env
 
-# 4. Make sure the Traefik network exists.
+# 5. Make sure the Traefik network exists.
 docker network create traefik_public 2>/dev/null || true
+```
+
+Set the production environment secrets to the same account:
+
+```text
+VPS_USERNAME = selffeed-deploy
+VPS_PORT     = 22
+```
+
+If SSH auth fails in GitHub Actions, compare the workflow's printed
+deploy key fingerprint with the server key:
+
+```bash
+sudo ssh-keygen -l -f /var/lib/selffeed-deploy/.ssh/id_ed25519.pub
+sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed-deploy
 ```
 
 ## Deploy flow

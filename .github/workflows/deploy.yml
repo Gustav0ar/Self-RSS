@@ -70,12 +70,54 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Prepare and test SSH key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USERNAME: ${{ secrets.VPS_USERNAME }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SSH_KEY_FILE: ${{ runner.temp }}/vps_ssh_key
+        run: |
+          set -euo pipefail
+
+          for name in VPS_HOST VPS_USERNAME VPS_PORT VPS_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name} is not set in the production environment."
+              exit 1
+            fi
+          done
+
+          install -m 700 -d "$(dirname "${SSH_KEY_FILE}")" "${HOME}/.ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" | sed 's/\r$//' > "${SSH_KEY_FILE}"
+          chmod 600 "${SSH_KEY_FILE}"
+
+          if ! ssh-keygen -y -f "${SSH_KEY_FILE}" >/dev/null 2>&1; then
+            echo "::error::VPS_SSH_KEY is not a parseable private SSH key. Paste the full private key, including BEGIN/END lines and real newlines."
+            exit 1
+          fi
+
+          KEY_FP="$(ssh-keygen -lf "${SSH_KEY_FILE}" | awk '{print $2}')"
+          echo "Deploy key fingerprint: ${KEY_FP}"
+          echo "Testing SSH authentication with the configured VPS host, port, and username..."
+
+          if ! ssh -i "${SSH_KEY_FILE}" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=15 \
+            -p "${VPS_PORT}" \
+            "${VPS_USERNAME}@${VPS_HOST}" \
+            true; then
+            echo "::error::SSH authentication failed. Check that VPS_USERNAME is the account that owns authorized_keys and that VPS_SSH_KEY's public key is installed for that account."
+            exit 1
+          fi
+
       - name: SSH and deploy
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          key_path: ${{ runner.temp }}/vps_ssh_key
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
             set -euo pipefail

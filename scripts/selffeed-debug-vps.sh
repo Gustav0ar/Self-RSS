@@ -7,6 +7,12 @@ set -e
 DEPLOY_USER="${1:-selffeed-deploy}"
 echo "=== Checking ${DEPLOY_USER} ==="
 id "${DEPLOY_USER}" || { echo "USER MISSING"; exit 1; }
+getent passwd "${DEPLOY_USER}" || true
+
+echo
+echo "=== Home and SSH directory permissions ==="
+ls -ld "/var/lib/${DEPLOY_USER}" 2>&1 || true
+ls -ld "/var/lib/${DEPLOY_USER}/.ssh" 2>&1 || true
 
 echo
 echo "=== Authorized keys (one per line) ==="
@@ -19,10 +25,9 @@ if [ -f "/var/lib/${DEPLOY_USER}/.ssh/authorized_keys" ]; then
   ssh-keygen -l -f "/var/lib/${DEPLOY_USER}/.ssh/authorized_keys"
   echo
   echo "Command= field on each key:"
-  awk '{ for (i=1;i<=NF;i++) if ($i ~ /^command=/) { print $i; break } }' "/var/lib/${DEPLOY_USER}/.ssh/authorized_keys"
-  echo
-  echo "Wrapper path:"
-  ls -la /usr/local/bin/selffeed-deploy-wrapper 2>&1 || echo "MISSING"
+  if ! awk '{ for (i=1;i<=NF;i++) if ($i ~ /^command=/) { print $i; found=1; break } } END { exit found ? 0 : 1 }' "/var/lib/${DEPLOY_USER}/.ssh/authorized_keys"; then
+    echo "No forced-command entries found."
+  fi
 else
   echo "FILE MISSING"
 fi
@@ -39,10 +44,13 @@ echo
 echo "=== Try authenticating with the server's own key locally ==="
 # This proves the key + user combination is valid from a local SSH client.
 if [ -f "/var/lib/${DEPLOY_USER}/.ssh/id_ed25519" ]; then
-  echo "Running: ssh -i /var/lib/${DEPLOY_USER}/.ssh/id_ed25519 -o IdentitiesOnly=yes -v ${DEPLOY_USER}@localhost true"
-  sudo -u "${DEPLOY_USER}" ssh -i "/var/lib/${DEPLOY_USER}/.ssh/id_ed25519" \
+  echo "Private key fingerprint:"
+  ssh-keygen -l -f "/var/lib/${DEPLOY_USER}/.ssh/id_ed25519"
+  echo
+  echo "Running: ssh -i /var/lib/${DEPLOY_USER}/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -v ${DEPLOY_USER}@localhost true"
+  ssh -i "/var/lib/${DEPLOY_USER}/.ssh/id_ed25519" \
     -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
-    -o ConnectTimeout=5 -v "${DEPLOY_USER}@localhost" true 2>&1 | head -40 || true
+    -o BatchMode=yes -o ConnectTimeout=5 -v "${DEPLOY_USER}@localhost" true 2>&1 | head -80 || true
 else
   echo "No key at /var/lib/${DEPLOY_USER}/.ssh/id_ed25519"
 fi
