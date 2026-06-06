@@ -114,6 +114,12 @@ services:
       - "traefik.http.routers.self-feed.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.self-feed.tls=true"
       - "traefik.http.routers.self-feed.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-myresolver}"
+      - "traefik.http.routers.self-feed.service=self-feed"
+      - "traefik.http.routers.self-feed-http.rule=Host(`${DOMAIN_NAME:?Domain name is required}`)"
+      - "traefik.http.routers.self-feed-http.entrypoints=${TRAEFIK_HTTP_ENTRYPOINT:-web}"
+      - "traefik.http.routers.self-feed-http.middlewares=self-feed-https-redirect"
+      - "traefik.http.routers.self-feed-http.service=self-feed"
+      - "traefik.http.middlewares.self-feed-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.services.self-feed.loadbalancer.server.port=8080"
       - "traefik.docker.network=traefik_public"
     healthcheck:

@@ -88,6 +88,7 @@ IMAGE_OWNER_LOWERCASE=gustav0ar
 IMAGE_TAG=latest
 CORS_ALLOWED_ORIGINS=https://rss.yourdomain.com
 DOMAIN_NAME=rss.yourdomain.com
+TRAEFIK_HTTP_ENTRYPOINT=web
 TRAEFIK_ENTRYPOINT=websecure
 TRAEFIK_CERT_RESOLVER=le
 ALLOW_REGISTRATION=true
@@ -107,6 +108,11 @@ as `docker compose logs` can parse `docker-compose.yml` on the VPS.
 `DOMAIN_NAME` must be only the bare hostname. Do not include `https://`,
 paths, or a port. Use `CORS_ALLOWED_ORIGINS` for the full browser origin
 including `https://`.
+
+The default Traefik labels assume HTTP entrypoint `web` and HTTPS
+entrypoint `websecure`. If your Traefik instance uses different
+entrypoint names, set `TRAEFIK_HTTP_ENTRYPOINT` and `TRAEFIK_ENTRYPOINT`
+to match.
 
 The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
 by the unprivileged `bun` user inside the API container. If you create
