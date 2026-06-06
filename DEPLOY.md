@@ -104,6 +104,10 @@ docker network create traefik_public 2>/dev/null || true
 The Deploy workflow rewrites them on each deploy so manual commands such
 as `docker compose logs` can parse `docker-compose.yml` on the VPS.
 
+`DOMAIN_NAME` must be only the bare hostname. Do not include `https://`,
+paths, or a port. Use `CORS_ALLOWED_ORIGINS` for the full browser origin
+including `https://`.
+
 The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
 by the unprivileged `bun` user inside the API container. If you create
 the directory manually, run:

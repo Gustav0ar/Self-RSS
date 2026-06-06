@@ -193,6 +193,28 @@ jobs:
               rm -f "${tmp_file}"
             }
 
+            read_env_var() {
+              key="$1"
+              grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- || true
+            }
+
+            normalize_domain_name() {
+              raw_domain="$(read_env_var DOMAIN_NAME)"
+              normalized_domain="$(printf '%s' "${raw_domain}" \
+                | sed -E 's#^[[:alpha:]][[:alnum:]+.-]*://##; s#/.*$##; s#:[0-9]+$##' \
+                | tr '[:upper:]' '[:lower:]')"
+
+              if [ -z "${normalized_domain}" ]; then
+                echo "DOMAIN_NAME is missing in ${DEPLOY_PATH}/.env. Set it to the bare host, for example rss.example.com."
+                exit 1
+              fi
+
+              if [ "${raw_domain}" != "${normalized_domain}" ]; then
+                echo "Normalizing DOMAIN_NAME from '${raw_domain}' to '${normalized_domain}' for Traefik Host matching."
+                upsert_env_var DOMAIN_NAME "${normalized_domain}"
+              fi
+            }
+
             # Ensure the data dir exists for the SQLite volume.
             mkdir -p data
             chmod 777 data
@@ -210,6 +232,7 @@ jobs:
               echo ".env is missing in ${DEPLOY_PATH}; create it with the production secrets before deploying."
               exit 1
             fi
+            normalize_domain_name
 
             # Persist non-secret image metadata so manual commands like
             # `docker compose logs` work on the VPS after deployment.
