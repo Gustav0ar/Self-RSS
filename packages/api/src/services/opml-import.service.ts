@@ -3,7 +3,6 @@ import { JSDOM } from 'jsdom';
 import { AppError } from '../middleware/errors.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
-import type { FeedService } from './feed.service.js';
 
 interface ParsedOpmlFeed {
 	feedUrl: string;
@@ -18,11 +17,42 @@ function slugify(text: string): string {
 		.replace(/^-|-$/g, '');
 }
 
+function titleFromUrl(feedUrl: string): string {
+	try {
+		const url = new URL(feedUrl);
+		return url.hostname.replace(/^www\./, '') || feedUrl;
+	} catch {
+		return feedUrl;
+	}
+}
+
+function normalizeFeedUrlForImport(rawUrl: string): string {
+	let url: URL;
+	try {
+		url = new URL(rawUrl.trim());
+	} catch {
+		throw AppError.badRequest('Invalid remote URL');
+	}
+
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+		throw AppError.badRequest('Only HTTP and HTTPS feed URLs are allowed');
+	}
+
+	if (url.username || url.password) {
+		throw AppError.badRequest('Feed URLs must not include credentials');
+	}
+
+	if (!url.hostname) {
+		throw AppError.badRequest('Remote URL must include a hostname');
+	}
+
+	return url.toString();
+}
+
 export class OpmlImportService {
 	constructor(
 		private categoryRepo: CategoryRepository,
 		private feedRepo: FeedRepository,
-		private feedService: FeedService,
 	) {}
 
 	async import(userId: string, filename: string, content: string): Promise<OpmlImportSummary> {
@@ -45,6 +75,32 @@ export class OpmlImportService {
 				summary.warnings.push({
 					code: 'INVALID_ENTRY',
 					message: 'Feed outline is missing xmlUrl',
+					categoryPath: entry.categoryPath,
+				});
+				continue;
+			}
+
+			let normalizedFeedUrl: string;
+			try {
+				normalizedFeedUrl = normalizeFeedUrlForImport(entry.feedUrl);
+			} catch (error) {
+				summary.invalidEntries += 1;
+				summary.warnings.push({
+					code: 'INVALID_FEED_URL',
+					message: error instanceof Error ? error.message : 'Invalid feed URL',
+					feedUrl: entry.feedUrl,
+					categoryPath: entry.categoryPath,
+				});
+				continue;
+			}
+
+			const existingFeed = await this.feedRepo.findByUrl(userId, normalizedFeedUrl);
+			if (existingFeed) {
+				summary.skippedDuplicates += 1;
+				summary.warnings.push({
+					code: 'DUPLICATE_FEED',
+					message: 'Feed already subscribed and was skipped',
+					feedUrl: normalizedFeedUrl,
 					categoryPath: entry.categoryPath,
 				});
 				continue;
@@ -79,29 +135,20 @@ export class OpmlImportService {
 				summary.warnings.push({
 					code: 'UNCATEGORIZED_ENTRY',
 					message: 'Feed entry is missing a category path',
-					feedUrl: entry.feedUrl,
-				});
-				continue;
-			}
-
-			const normalizedFeedUrl = await this.feedService.normalizeFeedUrl(entry.feedUrl);
-			const existingFeed = await this.feedRepo.findByUrl(userId, normalizedFeedUrl);
-			if (existingFeed) {
-				summary.skippedDuplicates += 1;
-				summary.warnings.push({
-					code: 'DUPLICATE_FEED',
-					message: 'Feed already subscribed and was skipped',
 					feedUrl: normalizedFeedUrl,
-					categoryPath: entry.categoryPath,
 				});
 				continue;
 			}
 
 			try {
-				await this.feedService.create(userId, {
+				await this.feedRepo.create({
+					userId,
 					categoryId,
 					feedUrl: normalizedFeedUrl,
-					title: entry.title?.trim() || undefined,
+					title: entry.title?.trim() || titleFromUrl(normalizedFeedUrl),
+					siteUrl: null,
+					faviconUrl: null,
+					description: null,
 				});
 				summary.createdFeeds += 1;
 			} catch (error) {

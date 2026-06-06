@@ -114,7 +114,7 @@ export function createDeps(
 		),
 	};
 
-	services.opmlImport = new OpmlImportService(repos.category, repos.feed, services.feed);
+	services.opmlImport = new OpmlImportService(repos.category, repos.feed);
 	services.article = new ArticleService(
 		repos.article,
 		repos.feed,
