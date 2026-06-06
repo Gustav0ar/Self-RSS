@@ -107,7 +107,7 @@ services:
         condition: service_healthy
     networks:
       - default
-      - traefik_public
+      - web
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.self-feed.rule=Host(`${DOMAIN_NAME:?Domain name is required}`)"
@@ -121,7 +121,7 @@ services:
       - "traefik.http.routers.self-feed-http.service=self-feed"
       - "traefik.http.middlewares.self-feed-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.services.self-feed.loadbalancer.server.port=8080"
-      - "traefik.docker.network=traefik_public"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-web}"
     healthcheck:
       test:
         ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
@@ -134,5 +134,6 @@ volumes:
 
 networks:
   default:
-  traefik_public:
+  web:
+    name: ${TRAEFIK_NETWORK:-web}
     external: true

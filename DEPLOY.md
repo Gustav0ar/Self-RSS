@@ -88,6 +88,7 @@ IMAGE_OWNER_LOWERCASE=gustav0ar
 IMAGE_TAG=latest
 CORS_ALLOWED_ORIGINS=https://rss.yourdomain.com
 DOMAIN_NAME=rss.yourdomain.com
+TRAEFIK_NETWORK=web
 TRAEFIK_HTTP_ENTRYPOINT=web
 TRAEFIK_ENTRYPOINT=websecure
 TRAEFIK_CERT_RESOLVER=le
@@ -98,7 +99,7 @@ EOF'
 sudo chmod 600 /mnt/storage/containers/selfrss/.env
 
 # 5. Make sure the Traefik network exists.
-docker network create traefik_public 2>/dev/null || true
+docker network create web 2>/dev/null || true
 ```
 
 `REGISTRY`, `IMAGE_OWNER_LOWERCASE`, and `IMAGE_TAG` are not secrets.
@@ -113,6 +114,10 @@ The default Traefik labels assume HTTP entrypoint `web` and HTTPS
 entrypoint `websecure`. If your Traefik instance uses different
 entrypoint names, set `TRAEFIK_HTTP_ENTRYPOINT` and `TRAEFIK_ENTRYPOINT`
 to match.
+
+The default external Docker network is also `web`. Set
+`TRAEFIK_NETWORK` only if your Traefik container uses another external
+network name.
 
 The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
 by the unprivileged `bun` user inside the API container. If you create

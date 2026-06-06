@@ -121,7 +121,7 @@ Next steps:
 
   2. Create the Traefik network if it doesn't exist:
 
-       docker network create traefik_public 2>/dev/null || true
+       docker network create web 2>/dev/null || true
 
   3. Create ${DEPLOY_PATH}/.env with the production secrets (see DEPLOY.md).
 
