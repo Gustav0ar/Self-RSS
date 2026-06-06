@@ -68,6 +68,14 @@ export function FeedView({
 	).toString();
 
 	useEffect(() => {
+		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
+			return;
+		}
+
+		void refreshFeed(feedId);
+	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
+
+	useEffect(() => {
 		if (articleIds.length === 0) {
 			return;
 		}

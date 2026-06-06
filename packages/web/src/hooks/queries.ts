@@ -92,6 +92,145 @@ function updateArticleReadStateInCachedQuery(
 	return value;
 }
 
+function articleSnapshotFromCachedQuery(
+	value: unknown,
+	articleId: string,
+): { feedId: string; isRead: boolean } | null {
+	if (!value || typeof value !== 'object') {
+		return null;
+	}
+
+	if ('id' in value && value.id === articleId && 'feedId' in value && 'isRead' in value) {
+		return { feedId: String(value.feedId), isRead: Boolean(value.isRead) };
+	}
+
+	if ('pages' in value && Array.isArray(value.pages)) {
+		for (const page of value.pages) {
+			const snapshot = articleSnapshotFromCachedQuery(page, articleId);
+			if (snapshot) {
+				return snapshot;
+			}
+		}
+	}
+
+	if ('data' in value && Array.isArray(value.data)) {
+		const article = value.data.find(
+			(item): item is ArticleListItem =>
+				item && typeof item === 'object' && 'id' in item && item.id === articleId,
+		);
+		if (article) {
+			return { feedId: article.feedId, isRead: article.isRead };
+		}
+	}
+
+	return null;
+}
+
+function findCachedArticleSnapshot(
+	qc: QueryClient,
+	articleId: string,
+): { feedId: string; isRead: boolean } | null {
+	const detailSnapshot = articleSnapshotFromCachedQuery(
+		qc.getQueryData(articleQueryKey(articleId)),
+		articleId,
+	);
+	if (detailSnapshot) {
+		return detailSnapshot;
+	}
+
+	for (const [, data] of qc.getQueriesData({ queryKey: ['articles'] })) {
+		const snapshot = articleSnapshotFromCachedQuery(data, articleId);
+		if (snapshot) {
+			return snapshot;
+		}
+	}
+
+	for (const [, data] of qc.getQueriesData({ queryKey: ['search'] })) {
+		const snapshot = articleSnapshotFromCachedQuery(data, articleId);
+		if (snapshot) {
+			return snapshot;
+		}
+	}
+
+	return null;
+}
+
+function updateFeedUnreadCount(value: unknown, feedId: string, delta: number): unknown {
+	if (!Array.isArray(value)) {
+		return value;
+	}
+
+	let changed = false;
+	const feeds = value.map((feed) => {
+		if (!feed || typeof feed !== 'object' || !('id' in feed) || feed.id !== feedId) {
+			return feed;
+		}
+
+		changed = true;
+		const unreadCount = Math.max(0, Number((feed as FeedWithCounts).unreadCount ?? 0) + delta);
+		return { ...feed, unreadCount };
+	});
+
+	return changed ? feeds : value;
+}
+
+function findCachedFeed(qc: QueryClient, feedId: string): { categoryId: string } | null {
+	for (const [, data] of qc.getQueriesData({ queryKey: ['feeds'] })) {
+		if (!Array.isArray(data)) {
+			continue;
+		}
+		const feed = data.find(
+			(item): item is FeedWithCounts =>
+				item && typeof item === 'object' && 'id' in item && item.id === feedId,
+		);
+		if (feed) {
+			return { categoryId: feed.categoryId };
+		}
+	}
+	return null;
+}
+
+function updateCategoryUnreadCount(value: unknown, categoryId: string, delta: number): unknown {
+	if (!Array.isArray(value)) {
+		return value;
+	}
+
+	let changed = false;
+	const categories = value.map((category) => {
+		if (
+			!category ||
+			typeof category !== 'object' ||
+			!('id' in category) ||
+			category.id !== categoryId
+		) {
+			return category;
+		}
+
+		changed = true;
+		const unreadCount = Math.max(
+			0,
+			Number((category as CategoryWithCounts).unreadCount ?? 0) + delta,
+		);
+		return { ...category, unreadCount };
+	});
+
+	return changed ? categories : value;
+}
+
+function applyUnreadCountDelta(qc: QueryClient, feedId: string, delta: number) {
+	const feed = findCachedFeed(qc, feedId);
+
+	qc.setQueriesData({ queryKey: ['feeds'] }, (value) =>
+		updateFeedUnreadCount(value, feedId, delta),
+	);
+
+	if (feed) {
+		qc.setQueriesData({ queryKey: ['categories'] }, (value) =>
+			updateCategoryUnreadCount(value, feed.categoryId, delta),
+		);
+	}
+}
+
 function applyArticleReadState(qc: QueryClient, articleId: string, read: boolean) {
 	qc.setQueryData<ArticleDetail>(articleQueryKey(articleId), (article) =>
 		article ? { ...article, isRead: read } : article,
@@ -369,15 +508,29 @@ export function useMarkRead() {
 				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
 				qc.cancelQueries({ queryKey: ['articles'] }),
 				qc.cancelQueries({ queryKey: ['search'] }),
+				qc.cancelQueries({ queryKey: ['feeds'] }),
+				qc.cancelQueries({ queryKey: ['categories'] }),
 			]);
 
+			const previousSnapshot = findCachedArticleSnapshot(qc, articleId);
 			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
 			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
 			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
+			const previousFeeds = qc.getQueriesData({ queryKey: ['feeds'] });
+			const previousCategories = qc.getQueriesData({ queryKey: ['categories'] });
 
 			applyArticleReadState(qc, articleId, read);
+			if (previousSnapshot && previousSnapshot.isRead !== read) {
+				applyUnreadCountDelta(qc, previousSnapshot.feedId, read ? -1 : 1);
+			}
 
-			return { previousArticle, previousArticles, previousSearch };
+			return {
+				previousArticle,
+				previousArticles,
+				previousSearch,
+				previousFeeds,
+				previousCategories,
+			};
 		},
 		onError: (_error, { articleId }, context) => {
 			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
@@ -385,6 +538,12 @@ export function useMarkRead() {
 				qc.setQueryData(queryKey, data);
 			}
 			for (const [queryKey, data] of context?.previousSearch ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+			for (const [queryKey, data] of context?.previousFeeds ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+			for (const [queryKey, data] of context?.previousCategories ?? []) {
 				qc.setQueryData(queryKey, data);
 			}
 		},

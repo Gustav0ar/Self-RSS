@@ -240,7 +240,7 @@ function ArticleRow({
 						Now reading
 					</div>
 				) : null}
-				<h3
+				<p
 					className={cn(
 						'mt-1 line-clamp-2 text-sm leading-6',
 						isSelected
@@ -251,7 +251,7 @@ function ArticleRow({
 					)}
 				>
 					{article.title}
-				</h3>
+				</p>
 				{article.author ? (
 					<p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{article.author}</p>
 				) : null}
