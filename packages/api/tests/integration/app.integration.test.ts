@@ -671,13 +671,23 @@ describe('API integration', () => {
 			const sync = await authedRequest('/api/v1/feeds/sync', token, {
 				method: 'POST',
 			});
-			expect(sync.response.status).toBe(200);
+			expect(sync.response.status).toBe(202);
 			expect(sync.body.data).toEqual({
-				totalFeeds: 2,
-				syncedFeeds: 2,
-				failedFeeds: 0,
-				skippedFeeds: 0,
-				newArticles: 3,
+				accepted: true,
+				alreadyQueued: false,
+			});
+
+			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
+			expect(queuedResult).toMatchObject({
+				userId: registered.body.data.user.id,
+				skipped: false,
+				result: {
+					totalFeeds: 2,
+					syncedFeeds: 2,
+					failedFeeds: 0,
+					skippedFeeds: 0,
+					newArticles: 3,
+				},
 			});
 
 			const feeds = await authedRequest('/api/v1/feeds', token);

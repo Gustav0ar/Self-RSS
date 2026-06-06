@@ -409,6 +409,9 @@ export function useSyncAllFeeds() {
 		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
 		onSuccess: () => {
 			invalidateReaderQueries(qc);
+			for (const delayMs of [3_000, 10_000, 30_000]) {
+				globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
+			}
 		},
 	});
 }

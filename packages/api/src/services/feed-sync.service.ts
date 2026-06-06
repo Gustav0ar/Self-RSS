@@ -42,6 +42,8 @@ type FeedItemRecord = Record<string, unknown>;
 
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
+const MANUAL_SYNC_DEDUPE_TTL_SECONDS = 60 * 30;
+const MANUAL_SYNC_LOCK_TTL_SECONDS = 60 * 30;
 
 export class FeedSyncService {
 	private parser: RSSParser;
@@ -303,7 +305,7 @@ export class FeedSyncService {
 		let syncedFeeds = 0;
 		let failedFeeds = 0;
 		let newArticles = 0;
-		const bulkConcurrency = Math.min(this.config.concurrency * 4, 50);
+		const bulkConcurrency = Math.max(1, this.config.concurrency);
 		let nextFeedIndex = 0;
 
 		const worker = async () => {
@@ -337,6 +339,49 @@ export class FeedSyncService {
 			skippedFeeds,
 			newArticles,
 		};
+	}
+
+	async queueSyncAllFeeds(userId: string) {
+		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
+		const didQueue = await this.redis.set(
+			queuedKey,
+			'1',
+			'EX',
+			MANUAL_SYNC_DEDUPE_TTL_SECONDS,
+			'NX',
+		);
+
+		if (didQueue !== 'OK') {
+			return { accepted: true, alreadyQueued: true };
+		}
+
+		await this.redis.rpush(CacheKeys.feedSyncAllQueue(), userId);
+		logger.info('Queued bulk feed sync', { userId });
+		return { accepted: true, alreadyQueued: false };
+	}
+
+	async processNextQueuedSyncAllFeeds() {
+		const userId = await this.redis.lpop(CacheKeys.feedSyncAllQueue());
+		if (!userId) {
+			return null;
+		}
+
+		const lockKey = CacheKeys.feedSyncAllLock(userId);
+		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
+		const didLock = await this.redis.set(lockKey, '1', 'EX', MANUAL_SYNC_LOCK_TTL_SECONDS, 'NX');
+		if (didLock !== 'OK') {
+			logger.warn('Skipping queued bulk feed sync because one is already running', { userId });
+			return { userId, skipped: true as const };
+		}
+
+		try {
+			logger.info('Starting queued bulk feed sync', { userId });
+			const result = await this.syncAllFeeds(userId);
+			logger.info('Queued bulk feed sync complete', { userId, ...result });
+			return { userId, skipped: false as const, result };
+		} finally {
+			await this.redis.del(lockKey, queuedKey);
+		}
 	}
 
 	async syncDueFeeds() {

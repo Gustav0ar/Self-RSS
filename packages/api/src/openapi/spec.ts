@@ -344,7 +344,7 @@ export const openApiSpec = {
 			post: {
 				tags: ['Feeds'],
 				security: bearerSecurity,
-				responses: { '200': json({ type: 'object' }) },
+				responses: { '202': json({ type: 'object' }) },
 			},
 		},
 		'/feeds/{feedId}/sync': {

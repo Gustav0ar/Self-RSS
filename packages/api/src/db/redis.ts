@@ -37,4 +37,7 @@ export const CacheKeys = {
 	rateLimit: (key: string) => `rl:${key}`,
 	feedEtag: (feedUrl: string) => `feed:etag:${feedUrl}`,
 	feedLastModified: (feedUrl: string) => `feed:lastmod:${feedUrl}`,
+	feedSyncAllQueue: () => 'feed:sync-all:queue',
+	feedSyncAllQueued: (userId: string) => `feed:sync-all:queued:${userId}`,
+	feedSyncAllLock: (userId: string) => `feed:sync-all:lock:${userId}`,
 } as const;

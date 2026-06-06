@@ -2,7 +2,11 @@ import { createDeps } from './config/deps.js';
 import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
 import { closeRedis, getRedis } from './db/redis.js';
-import { startRetentionCleanup, startSyncScheduler } from './jobs/scheduler.js';
+import {
+	startQueuedSyncWorker,
+	startRetentionCleanup,
+	startSyncScheduler,
+} from './jobs/scheduler.js';
 import { createLogger } from './utils/logger.js';
 import { createTokenUtils } from './utils/tokens.js';
 
@@ -27,7 +31,13 @@ try {
 		concurrency: env.FEED_SYNC_CONCURRENCY,
 		allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
 	});
-	const stopSyncScheduler = startSyncScheduler(deps.services.feedSync);
+	const syncCoordinator = { isRunning: false };
+	const stopSyncScheduler = startSyncScheduler(deps.services.feedSync, undefined, syncCoordinator);
+	const stopQueuedSyncWorker = startQueuedSyncWorker(
+		deps.services.feedSync,
+		undefined,
+		syncCoordinator,
+	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article);
 
 	let shuttingDown = false;
@@ -36,6 +46,7 @@ try {
 		shuttingDown = true;
 		logger.info('Shutting down API worker', { signal });
 		stopSyncScheduler();
+		stopQueuedSyncWorker();
 		stopRetentionCleanup();
 		await Promise.allSettled([closeRedis(), closeDb()]);
 		process.exit(0);

@@ -289,11 +289,17 @@ describe('FeedSyncService', () => {
 
 		const syncPromise = service.syncAllFeeds('user-1');
 		await vi.waitFor(() => {
-			expect(started).toEqual(['feed-1', 'feed-2', 'feed-3']);
+			expect(started).toEqual(['feed-1']);
 		});
 
 		releases.get('feed-1')?.();
+		await vi.waitFor(() => {
+			expect(started).toEqual(['feed-1', 'feed-2']);
+		});
 		releases.get('feed-2')?.();
+		await vi.waitFor(() => {
+			expect(started).toEqual(['feed-1', 'feed-2', 'feed-3']);
+		});
 		releases.get('feed-3')?.();
 		const result = await syncPromise;
 
@@ -307,6 +313,91 @@ describe('FeedSyncService', () => {
 			failedFeeds: 1,
 			skippedFeeds: 0,
 			newArticles: 2,
+		});
+	});
+
+	it('queues bulk refresh once per user', async () => {
+		const redis = {
+			set: vi.fn(async () => 'OK'),
+			rpush: vi.fn(async () => 1),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.queueSyncAllFeeds('user-1');
+
+		expect(redis.set).toHaveBeenCalledWith('feed:sync-all:queued:user-1', '1', 'EX', 1800, 'NX');
+		expect(redis.rpush).toHaveBeenCalledWith('feed:sync-all:queue', 'user-1');
+		expect(result).toEqual({ accepted: true, alreadyQueued: false });
+	});
+
+	it('deduplicates already queued bulk refreshes', async () => {
+		const redis = {
+			set: vi.fn(async () => null),
+			rpush: vi.fn(async () => 1),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.queueSyncAllFeeds('user-1');
+
+		expect(redis.rpush).not.toHaveBeenCalled();
+		expect(result).toEqual({ accepted: true, alreadyQueued: true });
+	});
+
+	it('processes the next queued bulk refresh and clears queue state', async () => {
+		const redis = {
+			lpop: vi.fn(async () => 'user-1'),
+			set: vi.fn(async () => 'OK'),
+			del: vi.fn(async () => 2),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds').mockResolvedValue({
+			totalFeeds: 2,
+			syncedFeeds: 2,
+			failedFeeds: 0,
+			skippedFeeds: 0,
+			newArticles: 3,
+		});
+
+		const result = await service.processNextQueuedSyncAllFeeds();
+
+		expect(redis.lpop).toHaveBeenCalledWith('feed:sync-all:queue');
+		expect(redis.set).toHaveBeenCalledWith('feed:sync-all:lock:user-1', '1', 'EX', 1800, 'NX');
+		expect(syncAllSpy).toHaveBeenCalledWith('user-1');
+		expect(redis.del).toHaveBeenCalledWith(
+			'feed:sync-all:lock:user-1',
+			'feed:sync-all:queued:user-1',
+		);
+		expect(result).toEqual({
+			userId: 'user-1',
+			skipped: false,
+			result: {
+				totalFeeds: 2,
+				syncedFeeds: 2,
+				failedFeeds: 0,
+				skippedFeeds: 0,
+				newArticles: 3,
+			},
 		});
 	});
 

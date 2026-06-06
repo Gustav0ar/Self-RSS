@@ -4,19 +4,23 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger();
 
+interface SyncCoordinator {
+	isRunning: boolean;
+}
+
 export function startSyncScheduler(
 	syncService: FeedSyncService,
 	intervalMs: number = 5 * 60 * 1000,
+	coordinator: SyncCoordinator = { isRunning: false },
 ) {
 	logger.info('Feed sync scheduler started', { intervalMs });
-	let isRunning = false;
 
 	const interval = setInterval(async () => {
-		if (isRunning) {
+		if (coordinator.isRunning) {
 			logger.warn('Skipping sync cycle because the previous one is still running');
 			return;
 		}
-		isRunning = true;
+		coordinator.isRunning = true;
 		try {
 			const result = await syncService.syncDueFeeds();
 			if (result.total > 0) {
@@ -27,8 +31,40 @@ export function startSyncScheduler(
 				error: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
-			isRunning = false;
+			coordinator.isRunning = false;
 		}
+	}, intervalMs);
+
+	return () => clearInterval(interval);
+}
+
+export function startQueuedSyncWorker(
+	syncService: FeedSyncService,
+	intervalMs: number = 1000,
+	coordinator: SyncCoordinator = { isRunning: false },
+) {
+	logger.info('Queued feed sync worker started', { intervalMs });
+
+	const drainOnce = async () => {
+		if (coordinator.isRunning) {
+			return;
+		}
+
+		coordinator.isRunning = true;
+		try {
+			await syncService.processNextQueuedSyncAllFeeds();
+		} catch (err) {
+			logger.error('Queued feed sync worker error', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			coordinator.isRunning = false;
+		}
+	};
+
+	void drainOnce();
+	const interval = setInterval(() => {
+		void drainOnce();
 	}, intervalMs);
 
 	return () => clearInterval(interval);

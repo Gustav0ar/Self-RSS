@@ -60,6 +60,12 @@ describe('stripHtml', () => {
 
 		expect(stripHtml(payload)).toBe('Hello World');
 	});
+
+	it('drops script/style content and decodes common entities', () => {
+		expect(
+			stripHtml('<style>.x{color:red}</style><p>AT&amp;T&nbsp;News</p><script>alert(1)</script>'),
+		).toBe('AT&T News');
+	});
 });
 
 describe('extractExcerpt', () => {

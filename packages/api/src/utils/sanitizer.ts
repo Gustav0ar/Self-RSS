@@ -25,6 +25,20 @@ const VIDEO_LOADER_PLACEHOLDER_TAG_REGEX = new RegExp(
 	`<img[^>]+${VIDEO_LOADER_PLACEHOLDER_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*>`,
 	'gi',
 );
+const SCRIPT_STYLE_TAG_REGEX = /<(script|style|template|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const TEXT_BOUNDARY_TAG_REGEX =
+	/<\/?(?:address|article|aside|blockquote|br|dd|details|div|dl|dt|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi;
+const HTML_TAG_REGEX = /<\/?[a-zA-Z][^>]*>/g;
+const WHITESPACE_REGEX = /\s+/g;
+const HTML_ENTITY_REGEX = /&(#\d+|#x[\da-f]+|[a-z][a-z0-9]+);/gi;
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+	amp: '&',
+	apos: "'",
+	gt: '>',
+	lt: '<',
+	nbsp: ' ',
+	quot: '"',
+};
 
 const TWITTER_STATUS_URL_REGEX =
 	/https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[^\s"']+\/status\/(\d+)/i;
@@ -195,8 +209,6 @@ const SANITIZE_OPTIONS = {
 	ADD_ATTR: ['target'],
 };
 
-const STRIP_OPTIONS = { ALLOWED_TAGS: [], ALLOWED_ATTR: [] };
-
 function normalizeHtmlInput(value: unknown, seen = new Set<unknown>()): string {
 	if (typeof value === 'string') {
 		return value;
@@ -235,7 +247,11 @@ function normalizeHtmlInput(value: unknown, seen = new Set<unknown>()): string {
 }
 
 export function sanitizeHtml(dirty: unknown): string {
-	return purify.sanitize(normalizeHtmlInput(dirty), SANITIZE_OPTIONS);
+	const normalizedHtml = normalizeHtmlInput(dirty);
+	if (!normalizedHtml.includes('<')) {
+		return normalizedHtml;
+	}
+	return purify.sanitize(normalizedHtml, SANITIZE_OPTIONS);
 }
 
 export function hasRichMedia(html: unknown): boolean {
@@ -246,7 +262,39 @@ export function hasRichMedia(html: unknown): boolean {
 }
 
 export function stripHtml(html: unknown): string {
-	return purify.sanitize(normalizeHtmlInput(html), STRIP_OPTIONS).trim();
+	return decodeHtmlEntities(
+		normalizeHtmlInput(html)
+			.replace(SCRIPT_STYLE_TAG_REGEX, ' ')
+			.replace(TEXT_BOUNDARY_TAG_REGEX, ' ')
+			.replace(HTML_TAG_REGEX, ' '),
+	)
+		.replace(WHITESPACE_REGEX, ' ')
+		.trim();
+}
+
+function decodeHtmlEntities(text: string): string {
+	return text.replace(HTML_ENTITY_REGEX, (entity, code: string) => {
+		const normalized = code.toLowerCase();
+		const named = NAMED_HTML_ENTITIES[normalized];
+		if (named) {
+			return named;
+		}
+
+		const codePoint = normalized.startsWith('#x')
+			? Number.parseInt(normalized.slice(2), 16)
+			: normalized.startsWith('#')
+				? Number.parseInt(normalized.slice(1), 10)
+				: NaN;
+		if (!Number.isFinite(codePoint)) {
+			return entity;
+		}
+
+		try {
+			return String.fromCodePoint(codePoint);
+		} catch {
+			return entity;
+		}
+	});
 }
 
 export function extractExcerpt(text: string, maxLength = 300): string {
