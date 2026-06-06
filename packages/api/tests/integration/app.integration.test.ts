@@ -677,6 +677,14 @@ describe('API integration', () => {
 				alreadyQueued: false,
 			});
 
+			const queuedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
+			expect(queuedStatus.response.status).toBe(200);
+			expect(queuedStatus.body.data).toEqual({
+				queued: true,
+				running: false,
+				active: true,
+			});
+
 			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
 			expect(queuedResult).toMatchObject({
 				userId: registered.body.data.user.id,
@@ -688,6 +696,14 @@ describe('API integration', () => {
 					skippedFeeds: 0,
 					newArticles: 3,
 				},
+			});
+
+			const completedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
+			expect(completedStatus.response.status).toBe(200);
+			expect(completedStatus.body.data).toEqual({
+				queued: false,
+				running: false,
+				active: false,
 			});
 
 			const feeds = await authedRequest('/api/v1/feeds', token);

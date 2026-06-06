@@ -116,6 +116,12 @@ export function createFeedRoutes(
 		return c.json({ data: result }, 202);
 	});
 
+	routes.get('/sync/status', async (c) => {
+		const userId = c.get('userId');
+		const status = await syncService.getSyncAllFeedsStatus(userId);
+		return c.json({ data: status });
+	});
+
 	routes.patch('/:feedId', async (c) => {
 		const userId = c.get('userId');
 		const feedId = parseUuidParam(c, 'feedId');

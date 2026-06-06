@@ -360,6 +360,23 @@ export class FeedSyncService {
 		return { accepted: true, alreadyQueued: false };
 	}
 
+	async getSyncAllFeedsStatus(userId: string) {
+		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
+		const lockKey = CacheKeys.feedSyncAllLock(userId);
+		const [queuedCount, runningCount] = await Promise.all([
+			this.redis.exists(queuedKey),
+			this.redis.exists(lockKey),
+		]);
+		const running = runningCount > 0;
+		const queued = queuedCount > 0 && !running;
+
+		return {
+			queued,
+			running,
+			active: queued || running,
+		};
+	}
+
 	async processNextQueuedSyncAllFeeds() {
 		const userId = await this.redis.lpop(CacheKeys.feedSyncAllQueue());
 		if (!userId) {

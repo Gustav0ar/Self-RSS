@@ -312,6 +312,25 @@
 						}
 					}
 				}
+			},
+			"FeedSyncAllStatus": {
+				"type": "object",
+				"required": [
+					"queued",
+					"running",
+					"active"
+				],
+				"properties": {
+					"queued": {
+						"type": "boolean"
+					},
+					"running": {
+						"type": "boolean"
+					},
+					"active": {
+						"type": "boolean"
+					}
+				}
 			}
 		}
 	},
@@ -878,6 +897,37 @@
 							"application/json": {
 								"schema": {
 									"type": "object"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/feeds/sync/status": {
+			"get": {
+				"tags": [
+					"Feeds"
+				],
+				"security": [
+					{
+						"bearerAuth": []
+					}
+				],
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/FeedSyncAllStatus"
+										}
+									}
 								}
 							}
 						}

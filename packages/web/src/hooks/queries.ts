@@ -13,13 +13,19 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useCallback } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
 
-function invalidateReaderQueries(qc: ReturnType<typeof useQueryClient>) {
+export function invalidateReaderQueries(qc: QueryClient) {
 	qc.invalidateQueries({ queryKey: ['articles'] });
 	qc.invalidateQueries({ queryKey: ['article'] });
 	qc.invalidateQueries({ queryKey: ['feeds'] });
 	qc.invalidateQueries({ queryKey: ['categories'] });
 	qc.invalidateQueries({ queryKey: ['stats'] });
 	qc.invalidateQueries({ queryKey: ['search'] });
+}
+
+export interface FeedSyncAllStatus {
+	queued: boolean;
+	running: boolean;
+	active: boolean;
 }
 
 function buildArticleSearchParams(params: ArticleQueryParams, cursor?: string | null) {
@@ -408,11 +414,24 @@ export function useSyncAllFeeds() {
 	return useMutation({
 		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
 		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
 			invalidateReaderQueries(qc);
 			for (const delayMs of [3_000, 10_000, 30_000]) {
 				globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
 			}
 		},
+	});
+}
+
+export function useSyncAllFeedsStatus() {
+	return useQuery({
+		queryKey: ['feeds', 'sync', 'status'],
+		queryFn: () =>
+			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status').then(
+				(response) => response.data,
+			),
+		refetchInterval: (query) => (query.state.data?.active ? 2_000 : false),
+		staleTime: 1_000,
 	});
 }
 

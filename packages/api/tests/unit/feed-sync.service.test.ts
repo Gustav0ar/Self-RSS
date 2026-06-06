@@ -357,6 +357,44 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ accepted: true, alreadyQueued: true });
 	});
 
+	it('reports queued bulk refresh status', async () => {
+		const redis = {
+			exists: vi.fn(async (key: string) => (key.includes(':queued:') ? 1 : 0)),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.getSyncAllFeedsStatus('user-1');
+
+		expect(redis.exists).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
+		expect(redis.exists).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
+		expect(result).toEqual({ queued: true, running: false, active: true });
+	});
+
+	it('reports running bulk refresh status', async () => {
+		const redis = {
+			exists: vi.fn(async (key: string) => (key.includes(':lock:') ? 1 : 0)),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.getSyncAllFeedsStatus('user-1');
+
+		expect(result).toEqual({ queued: false, running: true, active: true });
+	});
+
 	it('processes the next queued bulk refresh and clears queue state', async () => {
 		const redis = {
 			lpop: vi.fn(async () => 'user-1'),

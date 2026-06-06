@@ -30,7 +30,8 @@ export function FeedView({
 	const [unreadOnly, setUnreadOnly] = useState(false);
 	const [sort, setSort] = useState<SortOrder>('latest');
 	const { feedSyncError } = useAppState();
-	const { isRefreshingAllFeeds, isRefreshingFeed, refreshFeed } = useFeedRefresh();
+	const { allFeedsSyncStatus, isRefreshingAllFeeds, isRefreshingFeed, refreshFeed } =
+		useFeedRefresh();
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
@@ -129,6 +130,21 @@ export function FeedView({
 		}
 	}
 
+	const refreshStatusTitle = feedId
+		? 'Loading new articles'
+		: allFeedsSyncStatus?.queued
+			? 'Refresh queued'
+			: 'Loading new articles';
+	const refreshStatusDetail = feedId
+		? 'Checking this feed now'
+		: allFeedsSyncStatus?.queued
+			? 'Waiting for the background worker'
+			: 'Checking feeds and pulling in new stories';
+	const showListLoader =
+		isLoading ||
+		(isFetching && articles.length === 0) ||
+		(isRefreshingCurrentSelection && articles.length === 0);
+
 	return (
 		<div className="flex h-full min-h-0 flex-col lg:flex-row">
 			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[26rem] lg:border-b-0 lg:border-r xl:w-[30rem]">
@@ -184,6 +200,31 @@ export function FeedView({
 							/>
 						</ToolbarButton>
 					</div>
+
+					{isRefreshingCurrentSelection ? (
+						<div
+							aria-live="polite"
+							className="mt-4 overflow-hidden rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3"
+						>
+							<div className="flex min-w-0 items-center gap-3">
+								<div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+									<span className="absolute h-9 w-9 animate-ping rounded-full bg-primary/20" />
+									<RefreshCw className="relative h-4 w-4 animate-spin" />
+								</div>
+								<div className="min-w-0 flex-1">
+									<p className="truncate text-sm font-medium text-foreground">
+										{refreshStatusTitle}
+									</p>
+									<p className="mt-0.5 truncate text-xs text-muted-foreground">
+										{refreshStatusDetail}
+									</p>
+								</div>
+							</div>
+							<div className="mt-3 h-1 overflow-hidden rounded-full bg-background/60">
+								<div className="h-full w-full animate-pulse rounded-full bg-primary/70" />
+							</div>
+						</div>
+					) : null}
 				</div>
 
 				<div className="min-h-0 flex-1">
@@ -192,9 +233,7 @@ export function FeedView({
 						selectedId={selectedArticleId}
 						onSelect={onSelectArticle}
 						onPrefetch={prefetchArticle}
-						loading={
-							isLoading || (isFetching && articles.length === 0) || isRefreshingCurrentSelection
-						}
+						loading={showListLoader}
 						hasMore={hasNextPage}
 						onLoadMore={() => {
 							void fetchNextPage();

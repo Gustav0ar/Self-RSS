@@ -5,6 +5,7 @@ import { FeedView } from '../../src/components/articles/feed-view';
 const refreshFeed = vi.fn();
 const useKeyboardNavMock = vi.fn();
 const openWindowMock = vi.fn();
+let isRefreshingAllFeeds = false;
 
 vi.mock('../../src/hooks/queries', () => ({
 	useInfiniteArticles: () => ({
@@ -28,8 +29,13 @@ vi.mock('../../src/hooks/queries', () => ({
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
 	useFeedRefresh: () => ({
+		allFeedsSyncStatus: {
+			queued: false,
+			running: isRefreshingAllFeeds,
+			active: isRefreshingAllFeeds,
+		},
 		feedSyncError: null,
-		isRefreshingAllFeeds: false,
+		isRefreshingAllFeeds,
 		isRefreshingFeed: () => false,
 		refreshFeed,
 	}),
@@ -56,6 +62,7 @@ vi.mock('../../src/providers/app-state', () => ({
 describe('FeedView refresh', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		isRefreshingAllFeeds = false;
 		useKeyboardNavMock.mockImplementation(() => undefined);
 		vi.stubGlobal('open', openWindowMock);
 	});
@@ -80,6 +87,19 @@ describe('FeedView refresh', () => {
 
 		fireEvent.click(refreshButton);
 		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true });
+	});
+
+	it('shows refresh progress while all feeds are syncing in the background', () => {
+		isRefreshingAllFeeds = true;
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(screen.getByText('Loading new articles')).toBeTruthy();
+		expect(screen.getByText('Checking feeds and pulling in new stories')).toBeTruthy();
+		expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(
+			true,
+		);
+		expect(screen.getByText('Article list')).toBeTruthy();
 	});
 
 	it('opens article URLs with the active feed context in a new tab', () => {

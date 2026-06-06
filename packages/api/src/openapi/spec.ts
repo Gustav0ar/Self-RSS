@@ -182,6 +182,15 @@ export const openApiSpec = {
 					},
 				},
 			},
+			FeedSyncAllStatus: {
+				type: 'object',
+				required: ['queued', 'running', 'active'],
+				properties: {
+					queued: { type: 'boolean' },
+					running: { type: 'boolean' },
+					active: { type: 'boolean' },
+				},
+			},
 		},
 	},
 	paths: {
@@ -345,6 +354,15 @@ export const openApiSpec = {
 				tags: ['Feeds'],
 				security: bearerSecurity,
 				responses: { '202': json({ type: 'object' }) },
+			},
+		},
+		'/feeds/sync/status': {
+			get: {
+				tags: ['Feeds'],
+				security: bearerSecurity,
+				responses: {
+					'200': json(apiDataRef('#/components/schemas/FeedSyncAllStatus')),
+				},
 			},
 		},
 		'/feeds/{feedId}/sync': {
