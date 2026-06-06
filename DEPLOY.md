@@ -83,6 +83,9 @@ JWT_SECRET=<openssl rand -hex 32>
 JWT_REFRESH_SECRET=<openssl rand -hex 32>
 JWT_ACCESS_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
+REGISTRY=ghcr.io
+IMAGE_OWNER_LOWERCASE=gustav0ar
+IMAGE_TAG=latest
 CORS_ALLOWED_ORIGINS=https://rss.yourdomain.com
 DOMAIN_NAME=rss.yourdomain.com
 TRAEFIK_ENTRYPOINT=websecure
@@ -96,6 +99,10 @@ sudo chmod 600 /mnt/storage/containers/selfrss/.env
 # 5. Make sure the Traefik network exists.
 docker network create traefik_public 2>/dev/null || true
 ```
+
+`REGISTRY`, `IMAGE_OWNER_LOWERCASE`, and `IMAGE_TAG` are not secrets.
+The Deploy workflow rewrites them on each deploy so manual commands such
+as `docker compose logs` can parse `docker-compose.yml` on the VPS.
 
 The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
 by the unprivileged `bun` user inside the API container. If you create

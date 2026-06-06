@@ -183,6 +183,16 @@ jobs:
               return 1
             }
 
+            upsert_env_var() {
+              key="$1"
+              value="$2"
+              tmp_file="$(mktemp)"
+              grep -v -E "^${key}=" .env > "${tmp_file}" || true
+              printf '%s=%s\n' "${key}" "${value}" >> "${tmp_file}"
+              cat "${tmp_file}" > .env
+              rm -f "${tmp_file}"
+            }
+
             # Ensure the data dir exists for the SQLite volume.
             mkdir -p data
             chmod 777 data
@@ -195,6 +205,17 @@ jobs:
               -H "Accept: application/vnd.github.raw" \
               -o docker-compose.yml \
               "https://raw.githubusercontent.com/${{ github.repository }}/${HEAD_SHA}/docker-compose.yml"
+
+            if [ ! -f .env ]; then
+              echo ".env is missing in ${DEPLOY_PATH}; create it with the production secrets before deploying."
+              exit 1
+            fi
+
+            # Persist non-secret image metadata so manual commands like
+            # `docker compose logs` work on the VPS after deployment.
+            upsert_env_var REGISTRY "${REGISTRY}"
+            upsert_env_var IMAGE_OWNER_LOWERCASE "${IMAGE_OWNER}"
+            upsert_env_var IMAGE_TAG "${IMAGE_TAG}"
 
             export IMAGE_TAG
             export IMAGE_OWNER_LOWERCASE="${IMAGE_OWNER}"
