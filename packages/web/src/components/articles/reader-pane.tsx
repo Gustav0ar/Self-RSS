@@ -1,39 +1,56 @@
 import { formatDistanceToNow } from 'date-fns';
 import { BookOpen, Eye, EyeOff, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useArticle, useEnrichArticle, useMarkRead } from '@/hooks/queries';
+import { useArticle, useMarkRead } from '@/hooks/queries';
 
 interface ReaderPaneProps {
 	articleId: string | null;
 }
 
+function prepareReaderHtml(html: string) {
+	const lowerHtml = html.toLowerCase();
+	if (
+		!lowerHtml.includes('<img') &&
+		!lowerHtml.includes('<iframe') &&
+		!lowerHtml.includes('embedded-media')
+	) {
+		return html;
+	}
+
+	const doc = new DOMParser().parseFromString(html, 'text/html');
+	doc.querySelectorAll('iframe.embedded-media').forEach((iframe) => {
+		const parent = iframe.parentElement;
+		iframe.remove();
+		if (
+			parent &&
+			['P', 'DIV', 'FIGURE', 'SECTION', 'ARTICLE'].includes(parent.tagName) &&
+			parent.childElementCount === 0 &&
+			!parent.textContent?.trim()
+		) {
+			parent.remove();
+		}
+	});
+	doc.querySelectorAll('img').forEach((img) => {
+		img.setAttribute('loading', 'lazy');
+		img.setAttribute('decoding', 'async');
+		img.setAttribute('fetchpriority', 'low');
+	});
+	doc.querySelectorAll('iframe').forEach((iframe) => {
+		iframe.setAttribute('loading', 'lazy');
+	});
+
+	return doc.body.innerHTML;
+}
+
 export function ReaderPane({ articleId }: ReaderPaneProps) {
 	const { data: article, isLoading } = useArticle(articleId);
 	const markRead = useMarkRead();
-	const enrichArticle = useEnrichArticle();
 	const lastAutoMarkedId = useRef<string | null>(null);
-	const lastEnrichedId = useRef<string | null>(null);
 
 	const isRead = article?.isRead;
-	const contentHtmlWithoutEmbeddedMedia = useMemo(() => {
+	const readerHtml = useMemo(() => {
 		const html = article?.contentHtml ?? '';
-		if (!html.includes('embedded-media')) {
-			return html;
-		}
-		const doc = new DOMParser().parseFromString(html, 'text/html');
-		doc.querySelectorAll('iframe.embedded-media').forEach((iframe) => {
-			const parent = iframe.parentElement;
-			iframe.remove();
-			if (
-				parent &&
-				['P', 'DIV', 'FIGURE', 'SECTION', 'ARTICLE'].includes(parent.tagName) &&
-				parent.childElementCount === 0 &&
-				!parent.textContent?.trim()
-			) {
-				parent.remove();
-			}
-		});
-		return doc.body.innerHTML;
+		return prepareReaderHtml(html);
 	}, [article?.contentHtml]);
 	const mediaToRender = (article?.media ?? []).filter(
 		(media) => media.type === 'video' || media.type === 'embed',
@@ -90,7 +107,6 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 	useEffect(() => {
 		if (!articleId) {
 			lastAutoMarkedId.current = null;
-			lastEnrichedId.current = null;
 			return;
 		}
 		if (article?.isRead) {
@@ -109,22 +125,6 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 			);
 		}
 	}, [articleId, isRead, article, markRead]);
-
-	useEffect(() => {
-		if (!articleId || !article?.canonicalUrl || article.isEnriched || enrichArticle.isPending) {
-			return;
-		}
-		if (lastEnrichedId.current === articleId) {
-			return;
-		}
-
-		lastEnrichedId.current = articleId;
-		enrichArticle.mutate(articleId, {
-			onError: () => {
-				lastEnrichedId.current = null;
-			},
-		});
-	}, [articleId, article, enrichArticle]);
 
 	if (!articleId) {
 		return (
@@ -169,7 +169,7 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 	const publishedAt = article.publishedAt
 		? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
 		: null;
-	const hasContent = Boolean(contentHtmlWithoutEmbeddedMedia.trim());
+	const hasContent = Boolean(readerHtml.trim());
 
 	function toggleRead() {
 		if (!articleId) {
@@ -241,7 +241,7 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 					<div
 						className="reader-content surface-card motion-enter mt-6 rounded-[1.75rem] px-6 py-6 sm:px-8 sm:py-8"
 						// biome-ignore lint/security/noDangerouslySetInnerHtml: Sanitized content from API
-						dangerouslySetInnerHTML={{ __html: contentHtmlWithoutEmbeddedMedia }}
+						dangerouslySetInnerHTML={{ __html: readerHtml }}
 					/>
 				) : article.excerpt ? (
 					<div className="surface-card motion-enter mt-6 rounded-[1.75rem] px-6 py-6 text-base leading-8 text-foreground sm:px-8 sm:py-8">

@@ -23,6 +23,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
 	useMarkRead: () => ({ mutate: vi.fn() }),
+	usePrefetchArticle: () => vi.fn(),
 }));
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({

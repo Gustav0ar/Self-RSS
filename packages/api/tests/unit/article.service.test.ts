@@ -2,6 +2,44 @@ import { describe, expect, it, vi } from 'vitest';
 import { ArticleService } from '../../src/services/article.service.js';
 
 describe('ArticleService', () => {
+	it('loads article detail with the user-scoped detail query', async () => {
+		const articleRepo = {
+			findDetailForUser: vi.fn(async () => ({
+				id: 'article-1',
+				feedId: 'feed-1',
+				guid: 'guid-1',
+				canonicalUrl: 'https://example.com/post-1',
+				title: 'Post 1',
+				author: null,
+				excerpt: 'Excerpt',
+				contentHtml: '<p>Body</p>',
+				contentText: 'Body',
+				heroImageUrl: null,
+				publishedAt: new Date('2026-06-01T00:00:00.000Z'),
+				fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
+				hash: 'hash-1',
+				feedTitle: 'Feed',
+				feedFaviconUrl: null,
+				feedSiteUrl: 'https://example.com',
+				isRead: false,
+				media: [],
+			})),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			{ del: vi.fn(async () => 0) } as never,
+		);
+
+		const result = await service.getArticle('user-1', 'article-1');
+
+		expect(articleRepo.findDetailForUser).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(result.publishedAt).toBe('2026-06-01T00:00:00.000Z');
+		expect(result.fetchedAt).toBe('2026-06-01T00:01:00.000Z');
+		expect(result.isEnriched).toBe(false);
+	});
+
 	it('waits for enrichment to complete before returning success', async () => {
 		const articleRepo = {
 			findById: vi.fn(async () => ({
@@ -43,12 +81,10 @@ describe('ArticleService', () => {
 
 	it('invalidates only affected unread cache keys on markRead', async () => {
 		const articleRepo = {
-			findById: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
 			markRead: vi.fn(async () => undefined),
 		};
-		const feedRepo = {
-			findById: vi.fn(async () => ({ id: 'feed-1' })),
-		};
+		const feedRepo = {};
 		const metricsRepo = {
 			incrementReadCount: vi.fn(async () => undefined),
 		};
@@ -65,6 +101,7 @@ describe('ArticleService', () => {
 
 		const result = await service.markRead('user-1', 'article-1', true, 'manual');
 
+		expect(articleRepo.findRefForUser).toHaveBeenCalledWith('user-1', 'article-1');
 		expect(articleRepo.markRead).toHaveBeenCalledWith('user-1', 'article-1', 'manual');
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 1);
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');

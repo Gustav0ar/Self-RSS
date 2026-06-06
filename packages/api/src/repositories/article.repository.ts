@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { articleMedia, articleReads, articles, feeds } from '../db/schema.js';
 
@@ -106,6 +106,63 @@ export class ArticleRepository {
 			where: eq(articles.id, id),
 			with: { media: true, feed: true },
 		});
+	}
+
+	async findDetailForUser(userId: string, articleId: string) {
+		const [article] = await this.db
+			.select({
+				id: articles.id,
+				feedId: articles.feedId,
+				guid: articles.guid,
+				canonicalUrl: articles.canonicalUrl,
+				title: articles.title,
+				author: articles.author,
+				excerpt: articles.excerpt,
+				contentHtml: articles.contentHtml,
+				contentText: articles.contentText,
+				heroImageUrl: articles.heroImageUrl,
+				publishedAt: articles.publishedAt,
+				fetchedAt: articles.fetchedAt,
+				hash: articles.hash,
+				feedTitle: feeds.title,
+				feedFaviconUrl: feeds.faviconUrl,
+				feedSiteUrl: feeds.siteUrl,
+				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+			})
+			.from(articles)
+			.innerJoin(feeds, and(eq(articles.feedId, feeds.id), eq(feeds.userId, userId)))
+			.leftJoin(
+				articleReads,
+				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
+			)
+			.where(eq(articles.id, articleId))
+			.limit(1);
+
+		if (!article) {
+			return null;
+		}
+
+		const media = await this.db
+			.select()
+			.from(articleMedia)
+			.where(eq(articleMedia.articleId, articleId))
+			.orderBy(asc(articleMedia.position));
+
+		return { ...article, media };
+	}
+
+	async findRefForUser(userId: string, articleId: string) {
+		const [article] = await this.db
+			.select({
+				id: articles.id,
+				feedId: articles.feedId,
+			})
+			.from(articles)
+			.innerJoin(feeds, and(eq(articles.feedId, feeds.id), eq(feeds.userId, userId)))
+			.where(eq(articles.id, articleId))
+			.limit(1);
+
+		return article ?? null;
 	}
 
 	async findExistingGuids(feedId: string, guids: string[]) {

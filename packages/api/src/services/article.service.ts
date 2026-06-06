@@ -76,34 +76,20 @@ export class ArticleService {
 	}
 
 	async getArticle(userId: string, articleId: string) {
-		const article = await this.articleRepo.findById(articleId);
+		const article = await this.articleRepo.findDetailForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
-
-		// Check ownership through feed
-		const feed = await this.feedRepo.findById(article.feedId, userId);
-		if (!feed) throw AppError.notFound('Article not found');
-
-		const isRead = await this.articleRepo.isRead(userId, articleId);
 
 		return {
 			...article,
-			feedTitle: feed.title,
-			feedFaviconUrl: feed.faviconUrl,
-			feedSiteUrl: feed.siteUrl,
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			fetchedAt: article.fetchedAt.toISOString(),
-			isRead,
-			media: article.media ?? [],
 			isEnriched: !!article.heroImageUrl || (article.media?.length ?? 0) > 0,
 		};
 	}
 
 	async markRead(userId: string, articleId: string, read: boolean, source: string) {
-		const article = await this.articleRepo.findById(articleId);
+		const article = await this.articleRepo.findRefForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
-
-		const feed = await this.feedRepo.findById(article.feedId, userId);
-		if (!feed) throw AppError.notFound('Article not found');
 
 		if (read) {
 			await this.articleRepo.markRead(userId, articleId, source);

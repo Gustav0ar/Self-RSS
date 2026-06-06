@@ -8,7 +8,9 @@ import type {
 	OpmlImportSummary,
 	SortOrder,
 } from '@self-feed/shared';
+import type { QueryClient } from '@tanstack/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
 
 function invalidateReaderQueries(qc: ReturnType<typeof useQueryClient>) {
@@ -29,6 +31,77 @@ function buildArticleSearchParams(params: ArticleQueryParams, cursor?: string | 
 	if (params.limit) searchParams.set('limit', String(params.limit));
 	if (cursor) searchParams.set('cursor', cursor);
 	return searchParams.toString();
+}
+
+const articleQueryKey = (articleId: string) => ['article', articleId] as const;
+
+function fetchArticle(articleId: string) {
+	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`).then((r) => r.data);
+}
+
+function updateArticleListResponseReadState(
+	response: ApiListResponse<ArticleListItem>,
+	articleId: string,
+	read: boolean,
+): ApiListResponse<ArticleListItem> {
+	let changed = false;
+	const data = response.data.map((article) => {
+		if (article.id !== articleId || article.isRead === read) {
+			return article;
+		}
+		changed = true;
+		return { ...article, isRead: read };
+	});
+
+	return changed ? { ...response, data } : response;
+}
+
+function updateArticleReadStateInCachedQuery(
+	value: unknown,
+	articleId: string,
+	read: boolean,
+): unknown {
+	if (!value || typeof value !== 'object') {
+		return value;
+	}
+
+	if ('pages' in value && Array.isArray(value.pages)) {
+		return {
+			...value,
+			pages: value.pages.map((page) => {
+				if (page && typeof page === 'object' && 'data' in page && Array.isArray(page.data)) {
+					return updateArticleListResponseReadState(
+						page as ApiListResponse<ArticleListItem>,
+						articleId,
+						read,
+					);
+				}
+				return page;
+			}),
+		};
+	}
+
+	if ('data' in value && Array.isArray(value.data)) {
+		return updateArticleListResponseReadState(
+			value as ApiListResponse<ArticleListItem>,
+			articleId,
+			read,
+		);
+	}
+
+	return value;
+}
+
+function applyArticleReadState(qc: QueryClient, articleId: string, read: boolean) {
+	qc.setQueryData<ArticleDetail>(articleQueryKey(articleId), (article) =>
+		article ? { ...article, isRead: read } : article,
+	);
+	qc.setQueriesData({ queryKey: ['articles'] }, (value) =>
+		updateArticleReadStateInCachedQuery(value, articleId, read),
+	);
+	qc.setQueriesData({ queryKey: ['search'] }, (value) =>
+		updateArticleReadStateInCachedQuery(value, articleId, read),
+	);
 }
 
 // --- Categories ---
@@ -248,11 +321,23 @@ export function useInfiniteArticles(params: ArticleQueryParams = {}) {
 
 export function useArticle(articleId: string | null) {
 	return useQuery({
-		queryKey: ['article', articleId],
-		queryFn: () =>
-			apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`).then((r) => r.data),
+		queryKey: articleId ? articleQueryKey(articleId) : ['article', null],
+		queryFn: () => fetchArticle(articleId!),
 		enabled: !!articleId,
 	});
+}
+
+export function usePrefetchArticle() {
+	const qc = useQueryClient();
+	return useCallback(
+		(articleId: string) =>
+			qc.prefetchQuery({
+				queryKey: articleQueryKey(articleId),
+				queryFn: () => fetchArticle(articleId),
+				staleTime: 1000 * 60,
+			}),
+		[qc],
+	);
 }
 
 export function useEnrichArticle() {
@@ -279,8 +364,34 @@ export function useMarkRead() {
 				method: 'PATCH',
 				body: JSON.stringify({ read }),
 			}),
-		onSuccess: () => {
-			invalidateReaderQueries(qc);
+		onMutate: async ({ articleId, read }) => {
+			await Promise.all([
+				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
+				qc.cancelQueries({ queryKey: ['articles'] }),
+				qc.cancelQueries({ queryKey: ['search'] }),
+			]);
+
+			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
+			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
+			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
+
+			applyArticleReadState(qc, articleId, read);
+
+			return { previousArticle, previousArticles, previousSearch };
+		},
+		onError: (_error, { articleId }, context) => {
+			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
+			for (const [queryKey, data] of context?.previousArticles ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+			for (const [queryKey, data] of context?.previousSearch ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+		},
+		onSettled: () => {
+			qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
+			qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
+			qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
 		},
 	});
 }

@@ -1,9 +1,14 @@
 import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ReaderPane } from '@/components/articles/reader-pane';
-import { useInfiniteArticles, useMarkAllRead, useMarkRead } from '@/hooks/queries';
+import {
+	useInfiniteArticles,
+	useMarkAllRead,
+	useMarkRead,
+	usePrefetchArticle,
+} from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
 import { cn } from '@/lib/utils';
@@ -28,7 +33,7 @@ export function FeedView({
 	const { isRefreshingAllFeeds, isRefreshingFeed, refreshFeed } = useFeedRefresh();
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
-	const autoSyncedViews = useRef(new Set<string>());
+	const prefetchArticle = usePrefetchArticle();
 
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
 		useInfiniteArticles({
@@ -42,41 +47,40 @@ export function FeedView({
 	const markRead = useMarkRead();
 	const markAllRead = useMarkAllRead();
 
-	const seenArticleIds = new Set<string>();
-	const articles =
-		data?.pages
-			.flatMap((page) => page.data)
-			.filter((article) => {
-				if (seenArticleIds.has(article.id)) {
-					return false;
-				}
-				seenArticleIds.add(article.id);
-				return true;
-			}) ?? [];
-	const articleIds = articles.map((a) => a.id);
+	const articles = useMemo(() => {
+		const seenArticleIds = new Set<string>();
+		return (
+			data?.pages
+				.flatMap((page) => page.data)
+				.filter((article) => {
+					if (seenArticleIds.has(article.id)) {
+						return false;
+					}
+					seenArticleIds.add(article.id);
+					return true;
+				}) ?? []
+		);
+	}, [data?.pages]);
+	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
-	const viewId = feedId ?? categoryId ?? 'all';
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
 	).toString();
 
 	useEffect(() => {
-		if (isLoading || isRefreshingCurrentSelection || feedSyncError) {
-			return;
-		}
-		if (autoSyncedViews.current.has(viewId)) {
+		if (articleIds.length === 0) {
 			return;
 		}
 
-		autoSyncedViews.current.add(viewId);
-
-		if (feedId) {
-			void refreshFeed(feedId, { force: true });
-			return;
+		const selectedIndex = selectedArticleId ? articleIds.indexOf(selectedArticleId) : -1;
+		const idsToPrefetch =
+			selectedIndex >= 0
+				? articleIds.slice(selectedIndex, selectedIndex + 3)
+				: articleIds.slice(0, 2);
+		for (const id of idsToPrefetch) {
+			void prefetchArticle(id);
 		}
-
-		void refreshFeed(undefined, { force: true });
-	}, [feedId, viewId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
+	}, [articleIds, prefetchArticle, selectedArticleId]);
 
 	useKeyboardNav({
 		articleIds,
@@ -179,6 +183,7 @@ export function FeedView({
 						articles={articles}
 						selectedId={selectedArticleId}
 						onSelect={onSelectArticle}
+						onPrefetch={prefetchArticle}
 						loading={
 							isLoading || (isFetching && articles.length === 0) || isRefreshingCurrentSelection
 						}

@@ -20,6 +20,7 @@ interface ArticleListProps {
 	articles: ArticleListItemData[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
+	onPrefetch?: (id: string) => void;
 	loading?: boolean;
 	hasMore?: boolean;
 	onLoadMore?: () => void;
@@ -30,6 +31,7 @@ export function ArticleList({
 	articles,
 	selectedId,
 	onSelect,
+	onPrefetch,
 	loading,
 	hasMore,
 	onLoadMore,
@@ -153,6 +155,7 @@ export function ArticleList({
 							article={article}
 							isSelected={article.id === selectedId}
 							onSelect={() => onSelect(article.id)}
+							onPrefetch={() => onPrefetch?.(article.id)}
 							index={index}
 						/>
 					))}
@@ -178,11 +181,13 @@ function ArticleRow({
 	article,
 	isSelected,
 	onSelect,
+	onPrefetch,
 	index,
 }: {
 	article: ArticleListItemData;
 	isSelected: boolean;
 	onSelect: () => void;
+	onPrefetch?: () => void;
 	index: number;
 }) {
 	const timeAgo = article.publishedAt
@@ -193,6 +198,8 @@ function ArticleRow({
 		<button
 			type="button"
 			onClick={onSelect}
+			onFocus={onPrefetch}
+			onPointerEnter={onPrefetch}
 			data-article-id={article.id}
 			aria-current={isSelected ? 'true' : undefined}
 			className={cn(
