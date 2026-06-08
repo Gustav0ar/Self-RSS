@@ -2,17 +2,20 @@ package com.selffeed.android.data
 
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.security.crypto.MasterKey
 import androidx.core.content.edit
 
 class SessionStore(context: Context) {
     private val appContext = context.applicationContext
-    private val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
     
+    private val masterKey = MasterKey.Builder(appContext)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
     private val prefs = EncryptedSharedPreferences.create(
-        PREFS_NAME,
-        masterKeyAlias,
         appContext,
+        PREFS_NAME,
+        masterKey,
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )

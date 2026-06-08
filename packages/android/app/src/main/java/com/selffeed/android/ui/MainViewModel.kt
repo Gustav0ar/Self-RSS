@@ -208,7 +208,8 @@ class MainViewModel(
     }
 
     fun refreshVisibleData() {
-        if (!repository.isLoggedIn()) return
+        if (!_uiState.value.isAuthenticated || !repository.isLoggedIn()) return
+
         loadCategories()
         loadFeeds()
         loadArticles()
@@ -498,7 +499,7 @@ class MainViewModel(
                             },
                         )
                     }
-                    if (!result.data.isRead && !manuallyUnread.contains(id)) {
+                    if (!result.data.isRead) {
                         markRead(id, true)
                     }
                     maybeEnrichSelectedArticle(result.data)

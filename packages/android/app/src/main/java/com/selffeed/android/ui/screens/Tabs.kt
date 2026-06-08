@@ -38,7 +38,14 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RssFeed
+import androidx.compose.material.icons.filled.MarkEmailRead
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.PhoneAndroid
@@ -48,7 +55,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -67,8 +77,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -319,98 +331,97 @@ private fun FeedRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
-    val density = LocalDensity.current
-    val refreshThreshold = with(density) { 96.dp.toPx() }
-    var pullOffset by remember { mutableStateOf(0f) }
-    val animatedOffset = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
-                return if (available.y < 0 && pullOffset > 0) {
-                    val consumed = available.y.coerceAtLeast(-pullOffset)
-                    pullOffset += consumed
-                    androidx.compose.ui.geometry.Offset(0f, consumed)
-                } else androidx.compose.ui.geometry.Offset.Zero
-            }
-
-            override fun onPostScroll(
-                consumed: androidx.compose.ui.geometry.Offset,
-                available: androidx.compose.ui.geometry.Offset,
-                source: NestedScrollSource,
-            ): androidx.compose.ui.geometry.Offset {
-                return if (available.y > 0) {
-                    pullOffset += available.y * 0.45f
-                    androidx.compose.ui.geometry.Offset(0f, available.y)
-                } else androidx.compose.ui.geometry.Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pullOffset > refreshThreshold && !state.isSyncingFeeds) {
-                    viewModel.syncAllFeeds()
-                    scope.launch {
-                        animatedOffset.snapTo(pullOffset)
-                        animatedOffset.animateTo(refreshThreshold, spring(stiffness = Spring.StiffnessLow))
-                        pullOffset = refreshThreshold
-                        delay(1200)
-                        animatedOffset.animateTo(0f, spring(stiffness = Spring.StiffnessLow))
-                        pullOffset = 0f
-                    }
-                    return available
-                }
-                if (pullOffset > 0f) {
-                    scope.launch {
-                        animatedOffset.snapTo(pullOffset)
-                        animatedOffset.animateTo(0f, spring(stiffness = Spring.StiffnessLow))
-                        pullOffset = 0f
-                    }
-                    return available
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
-    val displayOffset = if (animatedOffset.isRunning) animatedOffset.value else pullOffset
     val listState = rememberLazyListState()
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(nestedScrollConnection),
+    PullToRefreshBox(
+        isRefreshing = state.isSyncingFeeds,
+        onRefresh = { viewModel.syncAllFeeds() },
+        modifier = Modifier.fillMaxSize(),
     ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .offset(y = with(density) { displayOffset.toDp() }),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Top,
         ) {
-            item {
-                Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-                    Text(
-                        text = if (state.articles.any { !it.isRead }) "${state.articles.count { !it.isRead }} unread right now" else "Everything in this view is read",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
             items(state.articles, key = { it.id }) { article ->
-                ArticleCard(
-                    article = article,
-                    selected = state.selectedArticle?.id == article.id,
-                    onClick = { viewModel.openArticle(article.id) },
-                )
+                val dismissState = rememberSwipeToDismissBoxState()
+                
+                // Track if we should update to avoid visual jumps during animation
+                var pendingToggle by remember { mutableStateOf(false) }
+
+                LaunchedEffect(dismissState.currentValue) {
+                    if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+                        pendingToggle = true
+                        delay(250) // Wait for settle animation
+                        viewModel.markRead(article.id, !article.isRead)
+                        dismissState.reset()
+                        pendingToggle = false
+                    }
+                }
+
+                SwipeToDismissBox(
+                    state = dismissState,
+                    enableDismissFromStartToEnd = false,
+                    backgroundContent = {
+                        val isRead = article.isRead
+                        val color = if (isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                        val icon = if (isRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
+                        val label = if (isRead) "Mark unread" else "Mark read"
+                        
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(color.copy(alpha = 0.9f))
+                                .padding(horizontal = 24.dp),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.graphicsLayer {
+                                    this.alpha = (dismissState.progress * 2f - 1f).coerceIn(0f, 1f)
+                                    this.translationX = (1f - dismissState.progress) * 100f
+                                }
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Icon(
+                                    icon,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.scale(dismissState.progress.coerceIn(0.8f, 1.2f))
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    // Content
+                    val effectiveIsRead = if (pendingToggle) !article.isRead else article.isRead
+                    Column {
+                        ArticleCard(
+                            article = article.copy(isRead = effectiveIsRead),
+                            selected = state.selectedArticle?.id == article.id,
+                            onClick = { viewModel.openArticle(article.id) },
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                        )
+                    }
+                }
             }
 
             if (state.hasMoreArticles) {
                 item {
-                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
                         if (state.loadingMoreArticles) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         } else {
@@ -419,34 +430,6 @@ fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
                                 label = { Text("Load more") },
                             )
                         }
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = displayOffset > 0 || state.isSyncingFeeds,
-            modifier = Modifier.align(Alignment.TopCenter),
-            enter = fadeIn(animationSpec = tween(180, easing = FastOutSlowInEasing)) + slideInVertically { -it / 2 },
-            exit = fadeOut(animationSpec = tween(180)) + slideOutVertically { -it / 2 },
-        ) {
-            Surface(
-                modifier = Modifier.padding(top = 8.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
-                shadowElevation = 8.dp,
-            ) {
-                Box(modifier = Modifier.padding(12.dp), contentAlignment = Alignment.Center) {
-                    if (state.isSyncingFeeds) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.scale((displayOffset / refreshThreshold).coerceIn(0.6f, 1f)),
-                        )
                     }
                 }
             }
@@ -460,74 +443,65 @@ private fun ArticleCard(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Card(
+    val isRead = article.isRead
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface,
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-        ),
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.background,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                .alpha(if (isRead && !selected) 0.6f else 1f)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (article.isRead) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!article.isRead) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary),
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text(
+                            text = article.feedTitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     Text(
-                        text = article.feedTitle,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        text = formatPublishedAt(article.displayedAt ?: article.publishedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(start = if (article.isRead) 0.dp else 14.dp)
                     )
                 }
-                Text(
-                    text = formatPublishedAt(article.displayedAt ?: article.publishedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 18.dp)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = article.title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (article.isRead) FontWeight.Medium else FontWeight.SemiBold,
+                    fontWeight = if (article.isRead) FontWeight.Normal else FontWeight.SemiBold,
+                    color = if (isRead && !selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f
                 )
-                article.author?.takeIf { it.isNotBlank() }?.let {
+                article.excerpt?.takeIf { it.isNotBlank() }?.let {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                article.excerpt?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -538,9 +512,8 @@ private fun ArticleCard(
                     model = imageUrl,
                     contentDescription = null,
                     modifier = Modifier
-                        .width(86.dp)
-                        .height(86.dp)
-                        .clip(RoundedCornerShape(20.dp))
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentScale = ContentScale.Crop,
                 )

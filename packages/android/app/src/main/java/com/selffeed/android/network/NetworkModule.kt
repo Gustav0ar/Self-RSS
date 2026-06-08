@@ -2,8 +2,11 @@ package com.selffeed.android.network
 
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
+import com.squareup.moshi.FromJson
 import com.squareup.moshi.JsonAdapter
+import com.squareup.moshi.JsonReader
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.ToJson
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Authenticator
 import okhttp3.Cookie
@@ -110,6 +113,7 @@ class TokenAuthenticator(
 
 object NetworkModule {
     fun provideMoshi(): Moshi = Moshi.Builder()
+        .add(FlexibleBooleanAdapter())
         .add(KotlinJsonAdapterFactory())
         .build()
 
@@ -163,4 +167,26 @@ private object Types {
         ApiEnvelope::class.java,
         RefreshData::class.java,
     )
+}
+
+class FlexibleBooleanAdapter {
+    @FromJson
+    fun fromJson(reader: JsonReader): Boolean {
+        return when (reader.peek()) {
+            JsonReader.Token.BOOLEAN -> reader.nextBoolean()
+            JsonReader.Token.NUMBER -> reader.nextInt() != 0
+            JsonReader.Token.STRING -> reader.nextString().toBoolean()
+            JsonReader.Token.NULL -> {
+                reader.nextNull<Unit>()
+                false
+            }
+            else -> {
+                reader.skipValue()
+                false
+            }
+        }
+    }
+
+    @ToJson
+    fun toJson(value: Boolean): Boolean = value
 }
