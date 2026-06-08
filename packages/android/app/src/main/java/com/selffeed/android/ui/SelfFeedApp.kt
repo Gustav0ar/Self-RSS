@@ -69,7 +69,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.openExternalUrl
 import com.selffeed.android.ui.components.shareOpmlContent
-import com.selffeed.android.ui.ResumeRefreshObserver
 import com.selffeed.android.ui.screens.ArticlesTab
 import com.selffeed.android.ui.screens.FeedsTab
 import com.selffeed.android.ui.screens.SearchTab
@@ -120,9 +119,6 @@ fun SelfFeedApp(viewModel: MainViewModel) {
         )
         return
     }
-
-    ResumeRefreshObserver(onResume = viewModel::refreshVisibleData)
-
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -186,6 +182,10 @@ fun SelfFeedApp(viewModel: MainViewModel) {
                 }
             },
         ) { paddingValues ->
+            if (state.errorMessage == null) {
+                ResumeRefreshObserver(onResume = viewModel::refreshVisibleData)
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
