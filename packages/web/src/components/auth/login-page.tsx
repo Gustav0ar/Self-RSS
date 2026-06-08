@@ -11,6 +11,7 @@ export function LoginPage() {
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
+	const canRegister = registrationEnabled === true;
 
 	useEffect(() => {
 		let cancelled = false;
@@ -27,7 +28,8 @@ export function LoginPage() {
 				}
 			} catch {
 				if (!cancelled) {
-					setRegistrationEnabled(true);
+					setRegistrationEnabled(false);
+					setMode('login');
 				}
 			}
 		}
@@ -45,6 +47,11 @@ export function LoginPage() {
 			if (mode === 'login') {
 				await login(email, password);
 			} else {
+				if (!canRegister) {
+					setMode('login');
+					setError('Registration is currently closed');
+					return;
+				}
 				await register('', email, password);
 			}
 		} catch (err) {
@@ -165,7 +172,7 @@ export function LoginPage() {
 
 						<div className="mt-6 text-center text-sm text-muted-foreground">
 							{mode === 'login' ? (
-								registrationEnabled === true ? (
+								canRegister ? (
 									<>
 										Don&apos;t have an account?{' '}
 										<button

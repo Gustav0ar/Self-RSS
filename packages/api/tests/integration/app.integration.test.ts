@@ -3,9 +3,10 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
+import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { closeRedis, getRedis } from '../../src/db/redis.js';
-import { auditLogs } from '../../src/db/schema.js';
+import { auditLogs, users } from '../../src/db/schema.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
@@ -136,6 +137,32 @@ afterAll(async () => {
 });
 
 describe('API integration', () => {
+	it('blocks public registration when ALLOW_REGISTRATION is false, even for bootstrap admin', async () => {
+		const previousAllowRegistration = process.env.ALLOW_REGISTRATION;
+		process.env.ALLOW_REGISTRATION = 'false';
+		clearEnvCache();
+
+		try {
+			const status = await jsonRequest('/api/v1/auth/registration-status');
+			expect(status.response.status).toBe(200);
+			expect(status.body.data.registrationEnabled).toBe(false);
+
+			const blocked = await registerUser('bootstrap-blocked@example.com');
+			expect(blocked.response.status).toBe(403);
+			expect(blocked.body.error.message).toContain('Registration is disabled');
+
+			const userCountRows = await db.select({ count: sql<number>`count(*)` }).from(users);
+			expect(userCountRows[0]?.count).toBe(0);
+		} finally {
+			if (previousAllowRegistration === undefined) {
+				delete process.env.ALLOW_REGISTRATION;
+			} else {
+				process.env.ALLOW_REGISTRATION = previousAllowRegistration;
+			}
+			clearEnvCache();
+		}
+	});
+
 	it('covers auth, refresh, logout, registration lock, and admin user creation', async () => {
 		await deps.repos.settings.update({ registrationLocked: true });
 

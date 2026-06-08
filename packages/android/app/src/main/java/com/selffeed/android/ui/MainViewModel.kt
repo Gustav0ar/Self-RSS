@@ -31,6 +31,7 @@ data class AppUiState(
     val loading: Boolean = true,
     val isAuthenticated: Boolean = false,
     val authMode: AuthMode = AuthMode.LOGIN,
+    val registrationEnabled: Boolean = false,
     val activeTab: HomeTab = HomeTab.ARTICLES,
     val isSyncingFeeds: Boolean = false,
     val user: User? = null,
@@ -74,10 +75,13 @@ class MainViewModel(
     fun bootstrap() {
         viewModelScope.launch {
             if (!repository.isLoggedIn()) {
+                val registrationEnabled = loadRegistrationEnabled()
                 _uiState.update {
                     it.copy(
                         loading = false,
                         isAuthenticated = false,
+                        authMode = if (registrationEnabled) it.authMode else AuthMode.LOGIN,
+                        registrationEnabled = registrationEnabled,
                     )
                 }
                 return@launch
@@ -96,10 +100,13 @@ class MainViewModel(
                 }
 
                 is AppResult.Error -> {
+                    val registrationEnabled = loadRegistrationEnabled()
                     _uiState.update {
                         it.copy(
                             loading = false,
                             isAuthenticated = false,
+                            authMode = if (registrationEnabled) it.authMode else AuthMode.LOGIN,
+                            registrationEnabled = registrationEnabled,
                             errorMessage = "Session expired. Please login again.",
                         )
                     }
@@ -109,6 +116,12 @@ class MainViewModel(
     }
 
     fun setAuthMode(mode: AuthMode) {
+        if (mode == AuthMode.REGISTER && !_uiState.value.registrationEnabled) {
+            _uiState.update {
+                it.copy(authMode = AuthMode.LOGIN, errorMessage = "Registration is currently closed")
+            }
+            return
+        }
         _uiState.update { it.copy(authMode = mode, errorMessage = null) }
     }
 
@@ -140,6 +153,18 @@ class MainViewModel(
     }
 
     fun register(email: String, password: String) {
+        if (!_uiState.value.registrationEnabled) {
+            _uiState.update {
+                it.copy(
+                    loading = false,
+                    authMode = AuthMode.LOGIN,
+                    errorMessage = "Registration is currently closed",
+                    statusMessage = null,
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update { it.copy(loading = true, errorMessage = null, statusMessage = null) }
             when (val result = repository.register(email.trim(), password)) {
@@ -165,7 +190,10 @@ class MainViewModel(
     fun logout() {
         viewModelScope.launch {
             repository.logout()
-            _uiState.value = AppUiState(loading = false)
+            _uiState.value = AppUiState(
+                loading = false,
+                registrationEnabled = loadRegistrationEnabled(),
+            )
         }
     }
 
@@ -801,6 +829,12 @@ class MainViewModel(
     fun clearMessages() {
         _uiState.update { it.copy(statusMessage = null, errorMessage = null) }
     }
+
+    private suspend fun loadRegistrationEnabled(): Boolean =
+        when (val result = repository.registrationStatus()) {
+            is AppResult.Success -> result.data.registrationEnabled
+            is AppResult.Error -> false
+        }
 }
 
 class MainViewModelFactory(

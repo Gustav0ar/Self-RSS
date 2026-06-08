@@ -114,3 +114,31 @@ describe('AuthService - getRegistrationStatus', () => {
 		expect(userRepo.hasUsers).toHaveBeenCalled();
 	});
 });
+
+describe('AuthService - register', () => {
+	it('rejects registration before touching settings or users when ALLOW_REGISTRATION is false', async () => {
+		applyEnv({ ALLOW_REGISTRATION: 'false' });
+
+		const userRepo = {
+			registerUser: vi.fn(),
+		};
+		const settingsRepo = {
+			get: vi.fn(),
+		};
+
+		const service = new AuthService(
+			userRepo as unknown as AuthServiceDeps[0],
+			settingsRepo as unknown as AuthServiceDeps[1],
+			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[3],
+		);
+
+		await expect(service.register('new@example.com', 'password123')).rejects.toMatchObject({
+			code: 'FORBIDDEN',
+			statusCode: 403,
+			message: 'Registration is disabled.',
+		});
+		expect(settingsRepo.get).not.toHaveBeenCalled();
+		expect(userRepo.registerUser).not.toHaveBeenCalled();
+	});
+});

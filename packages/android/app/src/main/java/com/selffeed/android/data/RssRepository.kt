@@ -55,6 +55,10 @@ class RssRepository(
     private val cacheLocks = ConcurrentHashMap<String, Mutex>()
     private val apiErrorAdapter: JsonAdapter<ApiErrorEnvelope> = moshi.adapter(ApiErrorEnvelope::class.java)
 
+    suspend fun registrationStatus() = safeReadCall {
+        api.registrationStatus().data
+    }
+
     suspend fun login(email: String, password: String) = safeCall {
         val response = api.login(LoginRequest(email, password)).data
         sessionStore.setAccessToken(response.tokens.accessToken)

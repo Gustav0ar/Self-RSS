@@ -42,6 +42,11 @@ data class RefreshData(
 )
 
 @JsonClass(generateAdapter = true)
+data class RegistrationStatusResponse(
+    val registrationEnabled: Boolean,
+)
+
+@JsonClass(generateAdapter = true)
 data class User(
     val id: String,
     val email: String,

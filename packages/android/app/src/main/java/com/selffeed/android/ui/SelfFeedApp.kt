@@ -112,6 +112,7 @@ fun SelfFeedApp(viewModel: MainViewModel) {
     if (!state.isAuthenticated) {
         AuthScreen(
             mode = state.authMode,
+            registrationEnabled = state.registrationEnabled,
             errorMessage = state.errorMessage,
             onModeChange = viewModel::setAuthMode,
             onLogin = viewModel::login,
@@ -325,6 +326,7 @@ private fun AppTopBar(
 @Composable
 private fun AuthScreen(
     mode: AuthMode,
+    registrationEnabled: Boolean,
     errorMessage: String?,
     onModeChange: (AuthMode) -> Unit,
     onLogin: (String, String) -> Unit,
@@ -385,11 +387,13 @@ private fun AuthScreen(
                         onClick = { onModeChange(AuthMode.LOGIN) },
                         label = { Text("Login") },
                     )
-                    FilterChip(
-                        selected = mode == AuthMode.REGISTER,
-                        onClick = { onModeChange(AuthMode.REGISTER) },
-                        label = { Text("Register") },
-                    )
+                    if (registrationEnabled) {
+                        FilterChip(
+                            selected = mode == AuthMode.REGISTER,
+                            onClick = { onModeChange(AuthMode.REGISTER) },
+                            label = { Text("Register") },
+                        )
+                    }
                 }
 
                 OutlinedTextField(

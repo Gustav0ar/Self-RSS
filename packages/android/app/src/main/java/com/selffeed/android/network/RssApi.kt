@@ -14,6 +14,9 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface RssApi {
+    @GET("auth/registration-status")
+    suspend fun registrationStatus(): ApiEnvelope<RegistrationStatusResponse>
+
     @POST("auth/login")
     suspend fun login(@Body request: LoginRequest): ApiEnvelope<AuthResponse>
 

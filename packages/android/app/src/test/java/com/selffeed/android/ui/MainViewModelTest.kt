@@ -5,6 +5,7 @@ import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
@@ -58,6 +59,7 @@ class MainViewModelTest {
         coEvery { repository.preferences() } returns AppResult.Success(samplePreferences())
         coEvery { repository.stats() } returns AppResult.Success(sampleStats())
         coEvery { repository.adminSettings() } returns AppResult.Success(AppSettingsResponse(registrationLocked = false))
+        coEvery { repository.registrationStatus() } returns AppResult.Success(RegistrationStatusResponse(registrationEnabled = true))
         coEvery { repository.login(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.register(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.logout() } returns AppResult.Success(true)
@@ -73,6 +75,23 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertFalse(state.loading)
         assertFalse(state.isAuthenticated)
+        assertTrue(state.registrationEnabled)
+        coVerify(exactly = 1) { repository.registrationStatus() }
+    }
+
+    @Test
+    fun bootstrap_loggedOut_disablesRegistrationWhenStatusUnavailable() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery { repository.registrationStatus() } returns AppResult.Error("status unavailable")
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.loading)
+        assertFalse(state.isAuthenticated)
+        assertFalse(state.registrationEnabled)
+        assertEquals(AuthMode.LOGIN, state.authMode)
     }
 
     @Test
@@ -120,6 +139,27 @@ class MainViewModelTest {
 
         coVerify(exactly = 1) { repository.login("reader@example.com", "password123") }
         coVerify(atLeast = 1) { repository.stats() }
+    }
+
+    @Test
+    fun register_disabled_doesNotCallRepository() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery { repository.registrationStatus() } returns AppResult.Success(
+            RegistrationStatusResponse(registrationEnabled = false),
+        )
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.setAuthMode(AuthMode.REGISTER)
+        viewModel.register("reader@example.com", "password123")
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.registrationEnabled)
+        assertFalse(state.isAuthenticated)
+        assertEquals(AuthMode.LOGIN, state.authMode)
+        assertEquals("Registration is currently closed", state.errorMessage)
+        coVerify(exactly = 0) { repository.register(any(), any()) }
     }
 
     @Test
