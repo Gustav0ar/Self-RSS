@@ -45,10 +45,10 @@ export function RootLayout() {
 	}
 
 	return (
-		<div className="app-shell h-full p-3 sm:p-4 lg:p-5">
-			<div className="flex h-full min-h-0 flex-col rounded-[1.6rem]">
+		<div className="app-shell h-full p-2 sm:p-3 lg:p-4">
+			<div className="flex h-full min-h-0 flex-col rounded-2xl">
 				<TopBar onSelectArticle={navigateToArticle} />
-				<div className="flex min-h-0 flex-1 gap-3 px-3 pb-3 pt-0 sm:gap-4 sm:px-4 sm:pb-4">
+				<div className="flex min-h-0 flex-1 gap-2 px-2 pb-2 pt-0 sm:gap-3 sm:px-3 sm:pb-3">
 					<Sidebar
 						selectedFeedId={selectedFeedId}
 						selectedCategoryId={selectedCategoryId}
@@ -62,7 +62,7 @@ export function RootLayout() {
 							void router.navigate({ to: '/', search: { categoryId } });
 						}}
 					/>
-					<main className="surface-card motion-enter min-h-0 flex-1 overflow-hidden rounded-[1.5rem]">
+					<main className="surface-card surface-quiet motion-enter min-h-0 flex-1 overflow-hidden rounded-2xl">
 						<Outlet />
 					</main>
 				</div>

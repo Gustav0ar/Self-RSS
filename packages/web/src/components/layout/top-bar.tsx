@@ -30,10 +30,10 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 	}
 
 	return (
-		<header className="relative z-30 px-3 pb-3 pt-3 sm:px-4 sm:pb-4 sm:pt-4">
-			<div className="surface-card motion-enter flex h-auto min-h-16 items-center justify-between gap-3 rounded-[1.5rem] px-4 py-3 sm:px-5">
+		<header className="relative z-30 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
+			<div className="surface-card surface-quiet motion-enter flex h-auto min-h-14 flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4">
 				<div className="flex min-w-0 items-center gap-3">
-					<div className="animate-pulse-glow flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary">
+					<div className="animate-pulse-glow flex h-10 w-10 items-center justify-center rounded-xl bg-primary/12 text-primary">
 						<Rss className="h-5 w-5" />
 					</div>
 					<div className="min-w-0">
@@ -47,19 +47,19 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 				</div>
 
 				{isAuthenticated ? (
-					<div className="min-w-0 max-w-xl flex-1 items-center gap-3 lg:flex">
+					<div className="order-3 min-w-0 flex-[1_0_100%] items-center gap-3 sm:order-none sm:max-w-2xl sm:flex-1 md:flex">
 						<div className="min-w-0 flex-1">
 							<SearchBar onSelectArticle={onSelectArticle ?? (() => {})} />
 						</div>
 					</div>
 				) : null}
 
-				<div className="flex items-center gap-2 sm:gap-3">
+				<div className="ml-auto flex items-center gap-2 sm:gap-3">
 					{isAuthenticated ? <PreferencesPanel /> : null}
 					<button
 						type="button"
 						onClick={cycleTheme}
-						className="inline-flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+						className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
 						aria-label="Toggle theme"
 						title={`Theme: ${theme}`}
 					>
@@ -74,14 +74,14 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 					{isAuthenticated ? (
 						<>
 							{username ? (
-								<div className="surface-muted hidden max-w-52 items-center rounded-full px-3 py-2 text-xs text-muted-foreground md:flex">
+								<div className="surface-muted hidden max-w-52 items-center rounded-full px-3 py-1.5 text-xs text-muted-foreground lg:flex">
 									<span className="truncate">{username}</span>
 								</div>
 							) : null}
 							<button
 								type="button"
 								onClick={logout}
-								className="inline-flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+								className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
 								aria-label="Sign out"
 							>
 								<LogOut className="h-4 w-4" />

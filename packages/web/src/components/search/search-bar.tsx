@@ -24,7 +24,7 @@ export function SearchBar({ onSelectArticle }: SearchBarProps) {
 	return (
 		<div className="relative">
 			<div className="relative">
-				<SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+				<SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 				<input
 					type="text"
 					value={query}
@@ -34,7 +34,7 @@ export function SearchBar({ onSelectArticle }: SearchBarProps) {
 					}}
 					onFocus={() => setIsOpen(true)}
 					placeholder="Search articles..."
-					className="input-surface h-11 w-full rounded-full py-2 pl-11 pr-11 text-sm outline-none"
+					className="input-surface h-9 w-full rounded-full py-2 pl-10 pr-10 text-sm outline-none"
 				/>
 				{query ? (
 					<button

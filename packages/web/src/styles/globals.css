@@ -157,8 +157,8 @@ a:focus-visible {
 .app-shell::before {
 	content: "";
 	position: absolute;
-	inset: 1.25rem;
-	border-radius: 1.75rem;
+	inset: 0.75rem;
+	border-radius: 1.25rem;
 	background: linear-gradient(
 		180deg,
 		color-mix(in srgb, var(--color-card) 88%, transparent),
@@ -168,7 +168,7 @@ a:focus-visible {
 		0 24px 80px color-mix(in srgb, #020617 20%, transparent),
 		inset 0 1px 0 color-mix(in srgb, white 50%, transparent);
 	border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-	backdrop-filter: blur(24px);
+	backdrop-filter: blur(18px);
 	z-index: -1;
 }
 
@@ -191,9 +191,22 @@ a:focus-visible {
 	border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
 	background: color-mix(in srgb, var(--color-card) 96%, transparent);
 	box-shadow:
-		0 16px 42px color-mix(in srgb, #0f172a 8%, transparent),
-		inset 0 1px 0 color-mix(in srgb, white 55%, transparent);
-	backdrop-filter: blur(20px);
+		0 10px 28px color-mix(in srgb, #0f172a 6%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 42%, transparent);
+	backdrop-filter: blur(16px);
+}
+
+.surface-quiet {
+	box-shadow:
+		0 8px 22px color-mix(in srgb, #0f172a 5%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 36%, transparent);
+}
+
+.surface-compact {
+	box-shadow:
+		0 6px 18px color-mix(in srgb, #0f172a 5%, transparent),
+		inset 0 1px 0 color-mix(in srgb, white 32%, transparent);
+	backdrop-filter: blur(12px);
 }
 
 .amoled .surface-card {
@@ -201,6 +214,13 @@ a:focus-visible {
 		0 8px 28px rgba(0, 0, 0, 0.52),
 		inset 0 1px 0 rgba(255, 255, 255, 0.03);
 	backdrop-filter: blur(10px);
+}
+
+.amoled .surface-quiet,
+.amoled .surface-compact {
+	box-shadow:
+		0 6px 18px rgba(0, 0, 0, 0.42),
+		inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
 .surface-muted {
