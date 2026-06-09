@@ -304,7 +304,7 @@ private fun AppTopBar(
                         tint = if (selectedArticle.isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
                 }
-            } else if (state.activeTab == HomeTab.ARTICLES) {
+            } else if (state.activeTab == HomeTab.ARTICLES && state.articles.isNotEmpty()) {
                 IconButton(onClick = onMarkAllRead) {
                     Icon(Icons.Default.MarkEmailRead, contentDescription = "Mark all as read")
                 }
