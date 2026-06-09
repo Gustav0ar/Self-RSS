@@ -93,4 +93,12 @@ export class UserRepository {
 		const countRows = await this.db.select({ count: sql<number>`count(*)` }).from(users);
 		return (countRows[0]?.count ?? 0) > 0;
 	}
+
+	async findActiveUserIds(): Promise<string[]> {
+		const result = await this.db
+			.select({ id: users.id })
+			.from(users)
+			.where(eq(users.isActive, true));
+		return result.map((r) => r.id);
+	}
 }
