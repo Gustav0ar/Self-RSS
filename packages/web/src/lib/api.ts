@@ -2,6 +2,7 @@ const API_BASE = '/api/v1';
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
+const clientId = crypto.randomUUID();
 
 // The refresh token is now handled securely via HttpOnly cookies.
 // We only keep the short-lived access token in memory.
@@ -20,6 +21,10 @@ export function clearTokens() {
 
 export function getAccessToken() {
 	return accessToken;
+}
+
+export function getClientId() {
+	return clientId;
 }
 
 export async function refreshAccessToken(): Promise<boolean> {
@@ -66,6 +71,7 @@ function buildRequestHeaders(options: RequestInit) {
 	if (accessToken) {
 		headers.Authorization = `Bearer ${accessToken}`;
 	}
+	headers['X-Self-Feed-Client-Id'] = clientId;
 
 	return headers;
 }

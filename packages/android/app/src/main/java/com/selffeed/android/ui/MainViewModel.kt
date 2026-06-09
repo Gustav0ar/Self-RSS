@@ -8,9 +8,12 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.ArticleReadStateChangedEvent
+import com.selffeed.android.network.ArticlesMarkedReadEvent
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.OpmlImportSummary
+import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
@@ -23,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.selffeed.android.ui.utils.formatSyncSummary
+import kotlinx.coroutines.flow.collect
 
 enum class AuthMode { LOGIN, REGISTER }
 enum class HomeTab { FEEDS, ARTICLES, SEARCH, SETTINGS, STATS }
@@ -66,6 +70,7 @@ class MainViewModel(
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
     private var searchJob: Job? = null
     private var enrichArticleJob: Job? = null
+    private var readStateSyncJob: Job? = null
     private val manuallyUnread = mutableSetOf<String>()
 
     init {
@@ -97,9 +102,11 @@ class MainViewModel(
                         )
                     }
                     refreshAll()
+                    startReadStateSync()
                 }
 
                 is AppResult.Error -> {
+                    stopReadStateSync()
                     val registrationEnabled = loadRegistrationEnabled()
                     _uiState.update {
                         it.copy(
@@ -143,6 +150,7 @@ class MainViewModel(
                         )
                     }
                     refreshAll()
+                    startReadStateSync()
                 }
 
                 is AppResult.Error -> {
@@ -178,6 +186,7 @@ class MainViewModel(
                         )
                     }
                     refreshAll()
+                    startReadStateSync()
                 }
 
                 is AppResult.Error -> {
@@ -189,6 +198,7 @@ class MainViewModel(
 
     fun logout() {
         viewModelScope.launch {
+            stopReadStateSync()
             repository.logout()
             _uiState.value = AppUiState(
                 loading = false,
@@ -830,6 +840,176 @@ class MainViewModel(
     fun clearMessages() {
         _uiState.update { it.copy(statusMessage = null, errorMessage = null) }
     }
+
+    override fun onCleared() {
+        stopReadStateSync()
+        super.onCleared()
+    }
+
+    private fun startReadStateSync() {
+        if (readStateSyncJob?.isActive == true) return
+        readStateSyncJob = viewModelScope.launch {
+            repository.readStateEvents().collect { event ->
+                if (event.clientId != null && event.clientId == repository.clientId()) {
+                    return@collect
+                }
+                applyReadStateSyncEvent(event)
+            }
+        }
+    }
+
+    private fun stopReadStateSync() {
+        readStateSyncJob?.cancel()
+        readStateSyncJob = null
+    }
+
+    private fun applyReadStateSyncEvent(event: ReadStateSyncEvent) {
+        when (event) {
+            is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
+            is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
+        }
+    }
+
+    private fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
+        repository.invalidateReadStateCaches(event.articleId)
+        var shouldReloadArticles = false
+
+        _uiState.update { state ->
+            val previousReadState = state.articleReadState(event.articleId)
+            val changed = previousReadState?.let { it != event.isRead } ?: true
+            val unreadDelta = if (!changed) 0 else if (event.isRead) -1 else 1
+            val feed = state.feeds.firstOrNull { it.id == event.feedId }
+            val hideRead = state.preferences?.hideRead == true
+            val visibleFeed = state.isFeedVisible(event.feedId)
+            shouldReloadArticles = !event.isRead &&
+                hideRead &&
+                visibleFeed &&
+                state.articles.none { it.id == event.articleId }
+
+            state.copy(
+                articles = state.articles.mapNotNull { article ->
+                    if (article.id != event.articleId) {
+                        article
+                    } else if (event.isRead && hideRead) {
+                        null
+                    } else {
+                        article.copy(isRead = event.isRead)
+                    }
+                },
+                searchResults = state.searchResults.map { article ->
+                    if (article.id == event.articleId) article.copy(isRead = event.isRead) else article
+                },
+                selectedArticle = state.selectedArticle?.let { article ->
+                    if (article.id == event.articleId) article.copy(isRead = event.isRead) else article
+                },
+                feeds = if (unreadDelta == 0) {
+                    state.feeds
+                } else {
+                    state.feeds.map { currentFeed ->
+                        if (currentFeed.id == event.feedId) {
+                            currentFeed.copy(
+                                unreadCount = (currentFeed.unreadCount + unreadDelta).coerceAtLeast(0),
+                            )
+                        } else {
+                            currentFeed
+                        }
+                    }
+                },
+                categories = if (unreadDelta == 0 || feed == null) {
+                    state.categories
+                } else {
+                    state.categories.withUnreadDelta(feed.categoryId, unreadDelta)
+                },
+                stats = if (unreadDelta == 0) {
+                    state.stats
+                } else {
+                    state.stats?.withReadDelta(
+                        unreadDelta = unreadDelta,
+                        readDelta = if (event.isRead) 1 else -1,
+                    )
+                },
+            )
+        }
+
+        if (shouldReloadArticles) {
+            loadArticles()
+        }
+    }
+
+    private fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
+        repository.invalidateReadStateCaches()
+        val feedIds = event.feedIds.toSet()
+
+        _uiState.update { state ->
+            val hideRead = state.preferences?.hideRead == true
+            val categoryDeltas = state.feeds
+                .filter { it.id in feedIds && it.unreadCount > 0 }
+                .groupBy { it.categoryId }
+                .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
+
+            state.copy(
+                articles = if (hideRead) {
+                    state.articles.filterNot { it.feedId in feedIds }
+                } else {
+                    state.articles.map { article ->
+                        if (article.feedId in feedIds) article.copy(isRead = true) else article
+                    }
+                },
+                searchResults = state.searchResults.map { article ->
+                    if (article.feedId in feedIds) article.copy(isRead = true) else article
+                },
+                selectedArticle = state.selectedArticle?.let { article ->
+                    if (article.feedId in feedIds) article.copy(isRead = true) else article
+                },
+                feeds = state.feeds.map { feed ->
+                    if (feed.id in feedIds) feed.copy(unreadCount = 0) else feed
+                },
+                categories = state.categories.withUnreadDeltas(categoryDeltas),
+                stats = state.stats?.withReadDelta(
+                    unreadDelta = -event.markedCount,
+                    readDelta = event.markedCount,
+                ),
+            )
+        }
+    }
+
+    private fun AppUiState.articleReadState(articleId: String): Boolean? =
+        selectedArticle?.takeIf { it.id == articleId }?.isRead
+            ?: articles.firstOrNull { it.id == articleId }?.isRead
+            ?: searchResults.firstOrNull { it.id == articleId }?.isRead
+
+    private fun AppUiState.isFeedVisible(feedId: String): Boolean {
+        selectedFeedId?.let { return it == feedId }
+        val feed = feeds.firstOrNull { it.id == feedId } ?: return selectedCategoryId == null
+        selectedCategoryId?.let { return it == feed.categoryId }
+        return true
+    }
+
+    private fun List<CategoryWithCounts>.withUnreadDelta(
+        categoryId: String,
+        delta: Int,
+    ): List<CategoryWithCounts> = withUnreadDeltas(mapOf(categoryId to delta))
+
+    private fun List<CategoryWithCounts>.withUnreadDeltas(
+        deltas: Map<String, Int>,
+    ): List<CategoryWithCounts> = map { category ->
+        val children = category.children?.withUnreadDeltas(deltas)
+        val delta = deltas[category.id] ?: 0
+        if (delta == 0 && children == category.children) {
+            category
+        } else {
+            category.copy(
+                unreadCount = (category.unreadCount + delta).coerceAtLeast(0),
+                children = children,
+            )
+        }
+    }
+
+    private fun StatsResponse.withReadDelta(unreadDelta: Int, readDelta: Int): StatsResponse =
+        copy(
+            totalUnread = (totalUnread + unreadDelta).coerceAtLeast(0),
+            totalRead = (totalRead + readDelta).coerceAtLeast(0),
+        )
 
     private suspend fun loadRegistrationEnabled(): Boolean =
         when (val result = repository.registrationStatus()) {

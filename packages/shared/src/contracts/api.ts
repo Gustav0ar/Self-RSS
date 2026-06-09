@@ -99,6 +99,32 @@ export interface ArticleDetail extends Article {
 	isEnriched: boolean;
 }
 
+export interface ArticleReadStateChangedEvent {
+	type: 'article.read_state_changed';
+	eventId: string;
+	articleId: string;
+	feedId: string;
+	isRead: boolean;
+	source: string;
+	clientId: string | null;
+	updatedAt: string;
+}
+
+export interface ArticlesMarkedReadEvent {
+	type: 'articles.marked_read';
+	eventId: string;
+	feedIds: string[];
+	scope: {
+		feedId?: string;
+		categoryId?: string;
+	};
+	markedCount: number;
+	clientId: string | null;
+	updatedAt: string;
+}
+
+export type ReadStateSyncEvent = ArticleReadStateChangedEvent | ArticlesMarkedReadEvent;
+
 // Stats
 export interface StatsResponse {
 	totalUnread: number;

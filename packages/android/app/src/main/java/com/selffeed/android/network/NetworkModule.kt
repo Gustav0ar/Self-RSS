@@ -136,7 +136,9 @@ object NetworkModule {
                     requestBuilder.header("Authorization", "Bearer $accessToken")
                 }
 
-                if (original.header("Content-Type") == null) {
+                requestBuilder.header("X-Self-Feed-Client-Id", sessionStore.getClientId())
+
+                if (original.body != null && original.header("Content-Type") == null) {
                     requestBuilder.header("Content-Type", "application/json")
                 }
 

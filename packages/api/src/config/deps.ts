@@ -19,6 +19,7 @@ import { FeedSyncService } from '../services/feed-sync.service.js';
 import { OpmlExportService } from '../services/opml-export.service.js';
 import { OpmlImportService } from '../services/opml-import.service.js';
 import { PreferencesService } from '../services/preferences.service.js';
+import { RealtimeService } from '../services/realtime.service.js';
 import { StatsService } from '../services/stats.service.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
 import type { TokenUtils } from '../utils/tokens.js';
@@ -46,6 +47,7 @@ export interface AppDeps {
 		opmlImport: OpmlImportService;
 		article: ArticleService;
 		preferences: PreferencesService;
+		realtime: RealtimeService;
 		stats: StatsService;
 	};
 	rateLimiter: RateLimiter;
@@ -105,6 +107,7 @@ export function createDeps(
 		opmlImport: null as unknown as OpmlImportService,
 		article: null as unknown as ArticleService,
 		preferences: new PreferencesService(repos.preferences),
+		realtime: new RealtimeService(redis),
 		stats: new StatsService(
 			repos.article,
 			repos.feed,
@@ -121,6 +124,7 @@ export function createDeps(
 		repos.metrics,
 		redis,
 		services.feedSync,
+		services.realtime,
 	);
 
 	const rateLimiter = new RateLimiter(redis);

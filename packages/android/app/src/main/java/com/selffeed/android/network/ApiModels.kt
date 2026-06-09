@@ -146,6 +146,89 @@ data class ArticleDetail(
     val isEnriched: Boolean = false,
 )
 
+sealed interface ReadStateSyncEvent {
+    val eventId: String
+    val clientId: String?
+    val updatedAt: String
+}
+
+data class ArticleReadStateChangedEvent(
+    override val eventId: String,
+    val articleId: String,
+    val feedId: String,
+    val isRead: Boolean,
+    val source: String,
+    override val clientId: String?,
+    override val updatedAt: String,
+) : ReadStateSyncEvent
+
+data class ArticlesMarkedReadEvent(
+    override val eventId: String,
+    val feedIds: List<String>,
+    val scope: ReadStateScope,
+    val markedCount: Int,
+    override val clientId: String?,
+    override val updatedAt: String,
+) : ReadStateSyncEvent
+
+@JsonClass(generateAdapter = true)
+data class ReadStateScope(
+    val feedId: String? = null,
+    val categoryId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ReadStateEventPayload(
+    val type: String,
+    val eventId: String? = null,
+    val articleId: String? = null,
+    val feedId: String? = null,
+    val isRead: Boolean? = null,
+    val source: String? = null,
+    val clientId: String? = null,
+    val updatedAt: String? = null,
+    val feedIds: List<String>? = null,
+    val scope: ReadStateScope? = null,
+    val markedCount: Int? = null,
+) {
+    fun toEvent(): ReadStateSyncEvent? = when (type) {
+        "article.read_state_changed" -> {
+            val validEventId = eventId ?: return null
+            val validArticleId = articleId ?: return null
+            val validFeedId = feedId ?: return null
+            val validIsRead = isRead ?: return null
+            val validSource = source ?: return null
+            val validUpdatedAt = updatedAt ?: return null
+            ArticleReadStateChangedEvent(
+                eventId = validEventId,
+                articleId = validArticleId,
+                feedId = validFeedId,
+                isRead = validIsRead,
+                source = validSource,
+                clientId = clientId,
+                updatedAt = validUpdatedAt,
+            )
+        }
+
+        "articles.marked_read" -> {
+            val validEventId = eventId ?: return null
+            val validFeedIds = feedIds ?: return null
+            val validMarkedCount = markedCount ?: return null
+            val validUpdatedAt = updatedAt ?: return null
+            ArticlesMarkedReadEvent(
+                eventId = validEventId,
+                feedIds = validFeedIds,
+                scope = scope ?: ReadStateScope(),
+                markedCount = validMarkedCount,
+                clientId = clientId,
+                updatedAt = validUpdatedAt,
+            )
+        }
+
+        else -> null
+    }
+}
+
 @JsonClass(generateAdapter = true)
 data class UserPreferences(
     val userId: String? = null,

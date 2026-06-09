@@ -6,9 +6,11 @@ import type {
 	CategoryWithCounts,
 	FeedWithCounts,
 	OpmlImportSummary,
+	ReadStateSyncEvent,
 	SortOrder,
+	StatsResponse,
 } from '@self-feed/shared';
-import type { QueryClient } from '@tanstack/react-query';
+import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
@@ -49,14 +51,18 @@ function updateArticleListResponseReadState(
 	response: ApiListResponse<ArticleListItem>,
 	articleId: string,
 	read: boolean,
+	removeReadArticle = false,
 ): ApiListResponse<ArticleListItem> {
 	let changed = false;
-	const data = response.data.map((article) => {
+	const data = response.data.flatMap((article) => {
 		if (article.id !== articleId || article.isRead === read) {
-			return article;
+			return [article];
 		}
 		changed = true;
-		return { ...article, isRead: read };
+		if (read && removeReadArticle) {
+			return [];
+		}
+		return [{ ...article, isRead: read }];
 	});
 
 	return changed ? { ...response, data } : response;
@@ -66,6 +72,7 @@ function updateArticleReadStateInCachedQuery(
 	value: unknown,
 	articleId: string,
 	read: boolean,
+	removeReadArticle = false,
 ): unknown {
 	if (!value || typeof value !== 'object') {
 		return value;
@@ -80,6 +87,7 @@ function updateArticleReadStateInCachedQuery(
 						page as ApiListResponse<ArticleListItem>,
 						articleId,
 						read,
+						removeReadArticle,
 					);
 				}
 				return page;
@@ -92,7 +100,57 @@ function updateArticleReadStateInCachedQuery(
 			value as ApiListResponse<ArticleListItem>,
 			articleId,
 			read,
+			removeReadArticle,
 		);
+	}
+
+	return value;
+}
+
+function updateFeedArticlesReadStateInCachedQuery(
+	value: unknown,
+	feedIds: Set<string>,
+	removeReadArticles = false,
+): unknown {
+	if (!value || typeof value !== 'object') {
+		return value;
+	}
+
+	if ('pages' in value && Array.isArray(value.pages)) {
+		return {
+			...value,
+			pages: value.pages.map((page) =>
+				updateFeedArticlesReadStateInCachedQuery(page, feedIds, removeReadArticles),
+			),
+		};
+	}
+
+	if ('data' in value && Array.isArray(value.data)) {
+		let changed = false;
+		const data = value.data.flatMap((article) => {
+			if (
+				!article ||
+				typeof article !== 'object' ||
+				!('feedId' in article) ||
+				!feedIds.has(String(article.feedId))
+			) {
+				return [article];
+			}
+
+			if (removeReadArticles) {
+				changed = true;
+				return [];
+			}
+
+			if ('isRead' in article && article.isRead === true) {
+				return [article];
+			}
+
+			changed = true;
+			return [{ ...article, isRead: true }];
+		});
+
+		return changed ? { ...value, data } : value;
 	}
 
 	return value;
@@ -180,6 +238,24 @@ function updateFeedUnreadCount(value: unknown, feedId: string, delta: number): u
 	return changed ? feeds : value;
 }
 
+function setFeedUnreadCount(value: unknown, feedId: string, unreadCount: number): unknown {
+	if (!Array.isArray(value)) {
+		return value;
+	}
+
+	let changed = false;
+	const feeds = value.map((feed) => {
+		if (!feed || typeof feed !== 'object' || !('id' in feed) || feed.id !== feedId) {
+			return feed;
+		}
+
+		changed = true;
+		return { ...feed, unreadCount };
+	});
+
+	return changed ? feeds : value;
+}
+
 function findCachedFeed(qc: QueryClient, feedId: string): { categoryId: string } | null {
 	for (const [, data] of qc.getQueriesData({ queryKey: ['feeds'] })) {
 		if (!Array.isArray(data)) {
@@ -237,16 +313,136 @@ function applyUnreadCountDelta(qc: QueryClient, feedId: string, delta: number) {
 	}
 }
 
+function isUnreadOnlyArticlesQuery(queryKey: QueryKey) {
+	if (queryKey[0] !== 'articles') {
+		return false;
+	}
+
+	const params = queryKey[1];
+	if (params && typeof params === 'object' && !Array.isArray(params)) {
+		return Boolean((params as ArticleQueryParams).unreadOnly);
+	}
+
+	return queryKey[3] === true;
+}
+
+function updateArticleQueries(
+	qc: QueryClient,
+	updater: (queryKey: QueryKey, value: unknown) => unknown,
+) {
+	for (const [queryKey, value] of qc.getQueriesData({ queryKey: ['articles'] })) {
+		qc.setQueryData(queryKey, updater(queryKey, value));
+	}
+}
+
 function applyArticleReadState(qc: QueryClient, articleId: string, read: boolean) {
 	qc.setQueryData<ArticleDetail>(articleQueryKey(articleId), (article) =>
 		article ? { ...article, isRead: read } : article,
 	);
-	qc.setQueriesData({ queryKey: ['articles'] }, (value) =>
-		updateArticleReadStateInCachedQuery(value, articleId, read),
+	updateArticleQueries(qc, (queryKey, value) =>
+		updateArticleReadStateInCachedQuery(
+			value,
+			articleId,
+			read,
+			read && isUnreadOnlyArticlesQuery(queryKey),
+		),
 	);
 	qc.setQueriesData({ queryKey: ['search'] }, (value) =>
 		updateArticleReadStateInCachedQuery(value, articleId, read),
 	);
+}
+
+function applyStatsDelta(qc: QueryClient, unreadDelta: number, readDelta: number) {
+	qc.setQueryData<StatsResponse>(['stats'], (stats) =>
+		stats
+			? {
+					...stats,
+					totalUnread: Math.max(0, stats.totalUnread + unreadDelta),
+					totalRead: Math.max(0, stats.totalRead + readDelta),
+				}
+			: stats,
+	);
+}
+
+function updateOpenArticleByFeed(qc: QueryClient, feedIds: Set<string>) {
+	for (const [queryKey, value] of qc.getQueriesData<ArticleDetail>({ queryKey: ['article'] })) {
+		if (value?.feedId && feedIds.has(value.feedId) && !value.isRead) {
+			qc.setQueryData<ArticleDetail>(queryKey, { ...value, isRead: true });
+		}
+	}
+}
+
+function cachedUnreadCountForFeed(qc: QueryClient, feedId: string) {
+	for (const [, value] of qc.getQueriesData({ queryKey: ['feeds'] })) {
+		if (!Array.isArray(value)) {
+			continue;
+		}
+		const feed = value.find(
+			(item): item is FeedWithCounts =>
+				item && typeof item === 'object' && 'id' in item && item.id === feedId,
+		);
+		if (feed) {
+			return Math.max(0, Number(feed.unreadCount ?? 0));
+		}
+	}
+	return 0;
+}
+
+export function applyReadStateSyncEvent(
+	qc: QueryClient,
+	event: ReadStateSyncEvent,
+	options: { clientId: string },
+) {
+	if (event.clientId && event.clientId === options.clientId) {
+		return;
+	}
+
+	if (event.type === 'article.read_state_changed') {
+		const snapshot = findCachedArticleSnapshot(qc, event.articleId);
+		applyArticleReadState(qc, event.articleId, event.isRead);
+
+		const shouldUpdateCounts = snapshot ? snapshot.isRead !== event.isRead : true;
+		if (shouldUpdateCounts) {
+			applyUnreadCountDelta(qc, event.feedId, event.isRead ? -1 : 1);
+			applyStatsDelta(qc, event.isRead ? -1 : 1, event.isRead ? 1 : -1);
+		}
+
+		if (!event.isRead) {
+			qc.invalidateQueries({ queryKey: ['articles'] });
+		}
+		qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		return;
+	}
+
+	const feedIds = new Set(event.feedIds);
+	const feedUnreadCounts = event.feedIds.map((feedId) => ({
+		feedId,
+		unreadCount: cachedUnreadCountForFeed(qc, feedId),
+	}));
+
+	updateOpenArticleByFeed(qc, feedIds);
+	updateArticleQueries(qc, (queryKey, value) =>
+		updateFeedArticlesReadStateInCachedQuery(value, feedIds, isUnreadOnlyArticlesQuery(queryKey)),
+	);
+	qc.setQueriesData({ queryKey: ['search'] }, (value) =>
+		updateFeedArticlesReadStateInCachedQuery(value, feedIds),
+	);
+
+	for (const { feedId, unreadCount } of feedUnreadCounts) {
+		if (unreadCount > 0) {
+			applyUnreadCountDelta(qc, feedId, -unreadCount);
+		}
+		qc.setQueriesData({ queryKey: ['feeds'] }, (value) => setFeedUnreadCount(value, feedId, 0));
+	}
+	applyStatsDelta(qc, -event.markedCount, event.markedCount);
+
+	qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
+	qc.invalidateQueries({ queryKey: ['search'], refetchType: 'none' });
+	qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
+	qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
+	qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
 }
 
 // --- Categories ---

@@ -4,7 +4,13 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
+import com.selffeed.android.network.ArticleReadStateChangedEvent
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.ArticlesMarkedReadEvent
+import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.ReadStateScope
+import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.User
@@ -17,6 +23,7 @@ import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -33,12 +40,18 @@ class MainViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private lateinit var repository: RssRepository
+    private lateinit var readStateEvents: MutableSharedFlow<ReadStateSyncEvent>
 
     @Before
     fun setup() {
         repository = mockk()
+        readStateEvents = MutableSharedFlow(extraBufferCapacity = 16)
 
         every { repository.isLoggedIn() } returns false
+        every { repository.clientId() } returns "android-client"
+        every { repository.readStateEvents() } returns readStateEvents
+        every { repository.invalidateReadStateCaches(any()) } just runs
+        every { repository.invalidateReadStateCaches(null) } just runs
         every { repository.getDebugResilienceSnapshot() } returns emptyMap()
         every { repository.resetDebugResilienceMetrics() } just runs
 
@@ -233,6 +246,224 @@ class MainViewModelTest {
     }
 
     @Test
+    fun readStateSync_remoteReadUpdatesLoadedState() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 10, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Unread 1"),
+                    sampleArticle(id = "a2", title = "Unread 2"),
+                ),
+                null,
+                false,
+            ),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        readStateEvents.emit(
+            ArticleReadStateChangedEvent(
+                eventId = "event-1",
+                articleId = "a1",
+                feedId = "feed-1",
+                isRead = true,
+                source = "manual",
+                clientId = "web-client",
+                updatedAt = "2026-06-01T00:00:00.000Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertEquals(1, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(1, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(9, state.stats?.totalUnread)
+        assertEquals(21, state.stats?.totalRead)
+        verify { repository.invalidateReadStateCaches("a1") }
+    }
+
+    @Test
+    fun readStateSync_ignoresEventsFromSameAndroidClient() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 10, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Unread 1")), null, false),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        readStateEvents.emit(
+            ArticleReadStateChangedEvent(
+                eventId = "event-1",
+                articleId = "a1",
+                feedId = "feed-1",
+                isRead = true,
+                source = "manual",
+                clientId = "android-client",
+                updatedAt = "2026-06-01T00:00:00.000Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.articles.first { it.id == "a1" }.isRead)
+        assertEquals(2, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        verify(exactly = 0) { repository.invalidateReadStateCaches("a1") }
+    }
+
+    @Test
+    fun readStateSync_remoteReadRemovesArticleFromHiddenReadList() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 1)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 1)),
+        )
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Unread 1")), null, false),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        readStateEvents.emit(
+            ArticleReadStateChangedEvent(
+                eventId = "event-1",
+                articleId = "a1",
+                feedId = "feed-1",
+                isRead = true,
+                source = "manual",
+                clientId = "web-client",
+                updatedAt = "2026-06-01T00:00:00.000Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.articles.none { it.id == "a1" })
+    }
+
+    @Test
+    fun readStateSync_remoteUnreadReloadsHiddenReadListWhenArticleIsMissing() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 0)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 0)),
+        )
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a2", title = "Other unread")), null, false),
+        )
+
+        MainViewModel(repository)
+        advanceUntilIdle()
+
+        readStateEvents.emit(
+            ArticleReadStateChangedEvent(
+                eventId = "event-1",
+                articleId = "a1",
+                feedId = "feed-1",
+                isRead = false,
+                source = "manual",
+                clientId = "web-client",
+                updatedAt = "2026-06-01T00:00:00.000Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        coVerify(atLeast = 2) {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        }
+    }
+
+    @Test
+    fun readStateSync_markAllReadUpdatesVisibleState() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(
+                sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 3),
+                sampleFeed(id = "feed-2", categoryId = "category-1", unreadCount = 2),
+                sampleFeed(id = "feed-3", categoryId = "category-2", unreadCount = 4),
+            ),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(
+                sampleCategory(id = "category-1", unreadCount = 5),
+                sampleCategory(id = "category-2", unreadCount = 4),
+            ),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 9, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Feed 1", feedId = "feed-1"),
+                    sampleArticle(id = "a2", title = "Feed 2", feedId = "feed-2"),
+                    sampleArticle(id = "a3", title = "Feed 3", feedId = "feed-3"),
+                ),
+                null,
+                false,
+            ),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        readStateEvents.emit(
+            ArticlesMarkedReadEvent(
+                eventId = "event-1",
+                feedIds = listOf("feed-1", "feed-2"),
+                scope = ReadStateScope(),
+                markedCount = 5,
+                clientId = "web-client",
+                updatedAt = "2026-06-01T00:00:00.000Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertTrue(state.articles.first { it.id == "a2" }.isRead)
+        assertFalse(state.articles.first { it.id == "a3" }.isRead)
+        assertEquals(0, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(0, state.feeds.first { it.id == "feed-2" }.unreadCount)
+        assertEquals(4, state.feeds.first { it.id == "feed-3" }.unreadCount)
+        assertEquals(0, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(4, state.categories.first { it.id == "category-2" }.unreadCount)
+        assertEquals(4, state.stats?.totalUnread)
+        assertEquals(25, state.stats?.totalRead)
+        verify { repository.invalidateReadStateCaches(null) }
+    }
+
+    @Test
     fun resetDebugMetrics_doesNotCrash() = runTest {
         every { repository.isLoggedIn() } returns false
 
@@ -254,32 +485,56 @@ class MainViewModelTest {
         updatedAt = "2026-01-01T00:00:00.000Z",
     )
 
-    private fun samplePreferences(): UserPreferences = UserPreferences(
+    private fun samplePreferences(hideRead: Boolean = false): UserPreferences = UserPreferences(
         userId = "user-1",
         theme = "system",
         fontFamily = "system-ui",
         textSize = 16,
         density = "comfortable",
         defaultSort = "latest",
-        hideRead = false,
+        hideRead = hideRead,
         keyboardShortcutsEnabled = true,
-        autoMarkReadMode = "disabled",
+        autoMarkReadMode = "on_navigate",
         createdAt = "2026-01-01T00:00:00.000Z",
         updatedAt = "2026-01-01T00:00:00.000Z",
     )
 
-    private fun sampleStats(): StatsResponse = StatsResponse(
-        totalUnread = 10,
-        totalRead = 20,
+    private fun sampleStats(totalUnread: Int = 10, totalRead: Int = 20): StatsResponse = StatsResponse(
+        totalUnread = totalUnread,
+        totalRead = totalRead,
         totalFeeds = 3,
         totalCategories = 2,
         recentSyncRuns = emptyList(),
         dailyMetrics = emptyList(),
     )
 
-    private fun sampleArticle(id: String, title: String): ArticleListItem = ArticleListItem(
+    private fun sampleFeed(id: String, categoryId: String, unreadCount: Int): FeedWithCounts = FeedWithCounts(
         id = id,
-        feedId = "feed-1",
+        categoryId = categoryId,
+        title = "Feed $id",
+        feedUrl = "https://example.com/$id.xml",
+        pollingIntervalMinutes = 60,
+        syncStatus = "idle",
+        unreadCount = unreadCount,
+    )
+
+    private fun sampleCategory(id: String, unreadCount: Int): CategoryWithCounts = CategoryWithCounts(
+        id = id,
+        name = "Category $id",
+        slug = id,
+        sortOrder = 0,
+        feedCount = 1,
+        unreadCount = unreadCount,
+    )
+
+    private fun sampleArticle(
+        id: String,
+        title: String,
+        feedId: String = "feed-1",
+        isRead: Boolean = false,
+    ): ArticleListItem = ArticleListItem(
+        id = id,
+        feedId = feedId,
         feedTitle = "Feed",
         feedFaviconUrl = null,
         title = title,
@@ -287,6 +542,6 @@ class MainViewModelTest {
         excerpt = "Excerpt",
         heroImageUrl = null,
         publishedAt = null,
-        isRead = false,
+        isRead = isRead,
     )
 }

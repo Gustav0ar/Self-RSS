@@ -82,7 +82,7 @@ describe('ArticleService', () => {
 	it('invalidates only affected unread cache keys on markRead', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			markRead: vi.fn(async () => undefined),
+			markRead: vi.fn(async () => true),
 		};
 		const feedRepo = {};
 		const metricsRepo = {
@@ -91,21 +91,107 @@ describe('ArticleService', () => {
 		const redis = {
 			del: vi.fn(async () => 2),
 		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
 
 		const service = new ArticleService(
 			articleRepo as never,
 			feedRepo as never,
 			metricsRepo as never,
 			redis as never,
+			undefined,
+			realtime as never,
 		);
 
-		const result = await service.markRead('user-1', 'article-1', true, 'manual');
+		const result = await service.markRead('user-1', 'article-1', true, 'manual', 'client-1');
 
 		expect(articleRepo.findRefForUser).toHaveBeenCalledWith('user-1', 'article-1');
 		expect(articleRepo.markRead).toHaveBeenCalledWith('user-1', 'article-1', 'manual');
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 1);
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
+		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(
+			'user-1',
+			expect.objectContaining({
+				type: 'article.read_state_changed',
+				articleId: 'article-1',
+				feedId: 'feed-1',
+				isRead: true,
+				source: 'manual',
+				clientId: 'client-1',
+			}),
+		);
 		expect(result).toEqual({ success: true });
+	});
+
+	it('does not publish or count duplicate markRead requests', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			markRead: vi.fn(async () => false),
+		};
+		const metricsRepo = {
+			incrementReadCount: vi.fn(async () => undefined),
+		};
+		const redis = {
+			del: vi.fn(async () => 0),
+		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			metricsRepo as never,
+			redis as never,
+			undefined,
+			realtime as never,
+		);
+
+		await service.markRead('user-1', 'article-1', true, 'manual', 'client-1');
+
+		expect(metricsRepo.incrementReadCount).not.toHaveBeenCalled();
+		expect(redis.del).not.toHaveBeenCalled();
+		expect(realtime.publishReadStateEvent).not.toHaveBeenCalled();
+	});
+
+	it('publishes unread changes without incrementing read metrics', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			markUnread: vi.fn(async () => true),
+		};
+		const metricsRepo = {
+			incrementReadCount: vi.fn(async () => undefined),
+		};
+		const redis = {
+			del: vi.fn(async () => 1),
+		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			metricsRepo as never,
+			redis as never,
+			undefined,
+			realtime as never,
+		);
+
+		await service.markRead('user-1', 'article-1', false, 'manual', 'client-1');
+
+		expect(articleRepo.markUnread).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(metricsRepo.incrementReadCount).not.toHaveBeenCalled();
+		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
+		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(
+			'user-1',
+			expect.objectContaining({
+				type: 'article.read_state_changed',
+				articleId: 'article-1',
+				feedId: 'feed-1',
+				isRead: false,
+				clientId: 'client-1',
+			}),
+		);
 	});
 
 	it('passes all touched feed ids to markAllRead invalidation', async () => {
@@ -121,15 +207,20 @@ describe('ArticleService', () => {
 		const redis = {
 			del: vi.fn(async () => 3),
 		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
 
 		const service = new ArticleService(
 			articleRepo as never,
 			feedRepo as never,
 			metricsRepo as never,
 			redis as never,
+			undefined,
+			realtime as never,
 		);
 
-		const result = await service.markAllRead('user-1', {});
+		const result = await service.markAllRead('user-1', {}, 'client-1');
 
 		expect(articleRepo.markAllRead).toHaveBeenCalledWith('user-1', ['feed-1', 'feed-2']);
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 3);
@@ -138,6 +229,49 @@ describe('ArticleService', () => {
 			'unread:user-1:feed:feed-1',
 			'unread:user-1:feed:feed-2',
 		);
+		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(
+			'user-1',
+			expect.objectContaining({
+				type: 'articles.marked_read',
+				feedIds: ['feed-1', 'feed-2'],
+				scope: {},
+				markedCount: 3,
+				clientId: 'client-1',
+			}),
+		);
 		expect(result).toEqual({ markedCount: 3 });
+	});
+
+	it('does not publish markAllRead events when nothing changed', async () => {
+		const articleRepo = {
+			markAllRead: vi.fn(async () => 0),
+		};
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1' }]),
+		};
+		const metricsRepo = {
+			incrementReadCount: vi.fn(async () => undefined),
+		};
+		const redis = {
+			del: vi.fn(async () => 1),
+		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			feedRepo as never,
+			metricsRepo as never,
+			redis as never,
+			undefined,
+			realtime as never,
+		);
+
+		const result = await service.markAllRead('user-1', {}, 'client-1');
+
+		expect(metricsRepo.incrementReadCount).not.toHaveBeenCalled();
+		expect(realtime.publishReadStateEvent).not.toHaveBeenCalled();
+		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
+		expect(result).toEqual({ markedCount: 0 });
 	});
 });

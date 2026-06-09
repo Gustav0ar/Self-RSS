@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.core.content.edit
+import java.util.UUID
 
 class SessionStore(context: Context) {
     private val appContext = context.applicationContext
@@ -37,13 +38,28 @@ class SessionStore(context: Context) {
     }
 
     @Synchronized
+    fun getClientId(): String {
+        val existing = prefs.getString(KEY_CLIENT_ID, null)
+        if (!existing.isNullOrBlank()) return existing
+
+        val generated = UUID.randomUUID().toString()
+        prefs.edit { putString(KEY_CLIENT_ID, generated) }
+        return generated
+    }
+
+    @Synchronized
     fun clear() {
-        prefs.edit { clear() }
+        val clientId = getClientId()
+        prefs.edit {
+            clear()
+            putString(KEY_CLIENT_ID, clientId)
+        }
     }
 
     companion object {
         private const val PREFS_NAME = "rss_secure_session"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_COOKIE = "refresh_cookie"
+        private const val KEY_CLIENT_ID = "client_id"
     }
 }

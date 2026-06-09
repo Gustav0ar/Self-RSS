@@ -14,6 +14,7 @@ import { createAdminRoutes } from './routes/admin.js';
 import { createArticleRoutes, createSearchRoutes } from './routes/articles.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createCategoryRoutes } from './routes/categories.js';
+import { createEventRoutes } from './routes/events.js';
 import { createFeedRoutes } from './routes/feeds.js';
 import { createHealthRoutes } from './routes/index.js';
 import { createPreferencesRoutes } from './routes/preferences.js';
@@ -63,7 +64,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils) {
 				return allowedOrigins.has(origin) ? origin : undefined;
 			},
 			allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-			allowHeaders: ['Content-Type', 'Authorization'],
+			allowHeaders: ['Content-Type', 'Authorization', 'X-Self-Feed-Client-Id'],
 			exposeHeaders: ['X-Request-Id'],
 			maxAge: 86400,
 			credentials: true,
@@ -104,6 +105,9 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils) {
 		v1.route('/preferences', createPreferencesRoutes(deps.services.preferences));
 		v1.use('/stats/*', authMiddleware);
 		v1.route('/stats', createStatsRoutes(deps.services.stats));
+
+		v1.use('/events/*', authMiddleware);
+		v1.route('/events', createEventRoutes(deps.services.realtime));
 
 		v1.use('/admin/*', authMiddleware, requireAdmin);
 		v1.route(

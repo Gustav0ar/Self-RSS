@@ -2,6 +2,7 @@ import { Outlet, useRouter } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { usePreferences } from '@/hooks/queries';
+import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import { fontFamilyCss, normalizeDensityPreference } from '@/lib/preferences';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
@@ -12,6 +13,7 @@ export function RootLayout() {
 	const router = useRouter();
 	const { isAuthenticated, isLoading } = useAuth();
 	const { selectedFeedId, selectedCategoryId } = useAppState();
+	useReadStateSync(isAuthenticated);
 
 	function buildSelectionSearch() {
 		if (selectedFeedId) {

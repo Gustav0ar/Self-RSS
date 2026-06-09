@@ -128,6 +128,54 @@ export const openApiSpec = {
 					isRead: { type: 'boolean' },
 				},
 			},
+			ArticleReadStateChangedEvent: {
+				type: 'object',
+				required: [
+					'type',
+					'eventId',
+					'articleId',
+					'feedId',
+					'isRead',
+					'source',
+					'clientId',
+					'updatedAt',
+				],
+				properties: {
+					type: { type: 'string', const: 'article.read_state_changed' },
+					eventId: { type: 'string' },
+					articleId: { type: 'string', format: 'uuid' },
+					feedId: { type: 'string', format: 'uuid' },
+					isRead: { type: 'boolean' },
+					source: { type: 'string' },
+					clientId: { type: ['string', 'null'] },
+					updatedAt: { type: 'string', format: 'date-time' },
+				},
+			},
+			ArticlesMarkedReadEvent: {
+				type: 'object',
+				required: ['type', 'eventId', 'feedIds', 'scope', 'markedCount', 'clientId', 'updatedAt'],
+				properties: {
+					type: { type: 'string', const: 'articles.marked_read' },
+					eventId: { type: 'string' },
+					feedIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+					scope: {
+						type: 'object',
+						properties: {
+							feedId: { type: 'string', format: 'uuid' },
+							categoryId: { type: 'string', format: 'uuid' },
+						},
+					},
+					markedCount: { type: 'integer' },
+					clientId: { type: ['string', 'null'] },
+					updatedAt: { type: 'string', format: 'date-time' },
+				},
+			},
+			ReadStateSyncEvent: {
+				oneOf: [
+					{ $ref: '#/components/schemas/ArticleReadStateChangedEvent' },
+					{ $ref: '#/components/schemas/ArticlesMarkedReadEvent' },
+				],
+			},
 			Preferences: {
 				type: 'object',
 				properties: {
@@ -405,6 +453,28 @@ export const openApiSpec = {
 				security: bearerSecurity,
 				requestBody: json({ type: 'object' }),
 				responses: { '200': json({ type: 'object' }) },
+			},
+		},
+		'/events/read-state': {
+			get: {
+				tags: ['Events'],
+				security: bearerSecurity,
+				description:
+					'Server-sent event stream for read/unread changes. Events use event name "read-state" with a ReadStateSyncEvent JSON payload.',
+				responses: {
+					'200': {
+						description: 'Read-state event stream',
+						content: {
+							'text/event-stream': {
+								schema: {
+									type: 'string',
+									description:
+										'SSE stream. Each read-state event data line contains a ReadStateSyncEvent JSON payload.',
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 		'/search': {
