@@ -146,9 +146,9 @@ export function ArticleList({
 			<div
 				ref={scrollRef}
 				data-testid="article-list-scroll"
-				className="flex-1 overflow-auto px-3 pb-3"
+				className="flex-1 overflow-auto px-2.5 pb-2.5"
 			>
-				<div className="space-y-2">
+				<div className="space-y-1.5">
 					{articles.map((article, index) => (
 						<ArticleRow
 							key={article.id}
@@ -163,12 +163,12 @@ export function ArticleList({
 				{hasMore ? (
 					<div
 						ref={loadMoreRef}
-						className="mx-1 mt-3 rounded-2xl border border-border/70 bg-background/40 px-4 py-3 text-center text-sm text-muted-foreground"
+						className="mx-1 mt-2 rounded-xl border border-border/70 bg-background/40 px-3 py-2 text-center text-xs text-muted-foreground"
 					>
 						{loadingMore ? 'Loading more articles...' : 'Scroll to load more'}
 					</div>
 				) : articles.length > 0 ? (
-					<div className="mx-1 mt-3 rounded-2xl border border-border/70 bg-background/40 px-4 py-3 text-center text-xs text-muted-foreground">
+					<div className="mx-1 mt-2 rounded-xl border border-border/70 bg-background/40 px-3 py-2 text-center text-xs text-muted-foreground">
 						You&apos;ve reached the end
 					</div>
 				) : null}
@@ -203,9 +203,8 @@ function ArticleRow({
 			data-article-id={article.id}
 			aria-current={isSelected ? 'true' : undefined}
 			className={cn(
-				'motion-enter surface-card relative flex w-full gap-3 rounded-[1.35rem] border px-4 py-3 text-left hover:-translate-y-0.5 hover:bg-accent/45',
-				isSelected &&
-					'!border-primary/70 !bg-primary/18 shadow-[0_0_0_1px_rgba(129,140,248,0.4),0_18px_36px_rgba(79,70,229,0.24)]',
+				'motion-enter surface-card surface-compact relative flex w-full gap-2.5 rounded-xl border px-3 py-2.5 text-left hover:bg-accent/45',
+				isSelected && 'border-l-4 !border-primary/60 !border-l-primary !bg-primary/12 shadow-sm',
 				!isSelected && !article.isRead && 'border-primary/12 bg-card/95',
 			)}
 			style={{ animationDelay: `${Math.min(index, 10) * 18}ms` }}
@@ -219,9 +218,6 @@ function ArticleRow({
 					<CircleDot className="h-3 w-3 text-primary" />
 				)}
 			</div>
-			{isSelected ? (
-				<div className="absolute inset-y-3 left-1.5 w-1 rounded-full bg-primary/80" />
-			) : null}
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2 text-xs text-muted-foreground">
 					{article.feedFaviconUrl ? (
@@ -235,14 +231,9 @@ function ArticleRow({
 						</>
 					) : null}
 				</div>
-				{isSelected ? (
-					<div className="mb-2 inline-flex items-center rounded-full bg-primary/18 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">
-						Now reading
-					</div>
-				) : null}
 				<p
 					className={cn(
-						'mt-1 line-clamp-2 text-sm leading-6',
+						'mt-1 line-clamp-2 text-sm leading-5',
 						isSelected
 							? 'font-semibold text-foreground'
 							: !article.isRead
@@ -253,12 +244,12 @@ function ArticleRow({
 					{article.title}
 				</p>
 				{article.author ? (
-					<p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{article.author}</p>
+					<p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{article.author}</p>
 				) : null}
 				{article.excerpt ? (
 					<p
 						className={cn(
-							'mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground',
+							'mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground',
 							isSelected && 'text-foreground/80',
 						)}
 					>
@@ -270,7 +261,7 @@ function ArticleRow({
 				<img
 					src={article.heroImageUrl}
 					alt=""
-					className="h-16 w-16 shrink-0 rounded-2xl object-cover shadow-sm"
+					className="h-12 w-12 shrink-0 rounded-xl object-cover shadow-sm"
 				/>
 			) : null}
 		</button>

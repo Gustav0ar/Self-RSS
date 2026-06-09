@@ -1,10 +1,26 @@
 import { formatDistanceToNow } from 'date-fns';
-import { BookOpen, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useArticle, useMarkRead } from '@/hooks/queries';
 
 interface ReaderPaneProps {
 	articleId: string | null;
+	articles?: ReaderArticleSummary[];
+	onSelectArticle?: (id: string) => void;
+}
+
+export interface ReaderArticleSummary {
+	id: string;
+	feedId: string;
+	feedTitle: string;
+	feedFaviconUrl: string | null;
+	title: string;
+	author: string | null;
+	excerpt: string | null;
+	heroImageUrl: string | null;
+	publishedAt: string | null;
+	isRead: boolean;
 }
 
 function prepareReaderHtml(html: string) {
@@ -42,7 +58,7 @@ function prepareReaderHtml(html: string) {
 	return doc.body.innerHTML;
 }
 
-export function ReaderPane({ articleId }: ReaderPaneProps) {
+export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
 	const { data: article, isLoading } = useArticle(articleId);
 	const markRead = useMarkRead();
 	const lastAutoMarkedId = useRef<string | null>(null);
@@ -170,6 +186,15 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 		? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
 		: null;
 	const hasContent = Boolean(readerHtml.trim());
+	const currentIndex = articles.findIndex((item) => item.id === article.id);
+	const previousArticle = currentIndex > 0 ? (articles[currentIndex - 1] ?? null) : null;
+	const nextArticle =
+		currentIndex >= 0 && currentIndex < articles.length - 1
+			? (articles[currentIndex + 1] ?? null)
+			: null;
+	const moreFromFeed = articles
+		.filter((item) => item.feedId === article.feedId && item.id !== article.id)
+		.slice(0, 4);
 
 	function toggleRead() {
 		if (!articleId) {
@@ -180,123 +205,288 @@ export function ReaderPane({ articleId }: ReaderPaneProps) {
 
 	return (
 		<div className="h-full overflow-auto">
-			<article className="mx-auto max-w-5xl px-5 py-6 sm:px-6 lg:px-8 lg:py-8">
-				<header className="surface-card motion-enter rounded-[1.75rem] px-6 py-6 sm:px-8 sm:py-8">
-					<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-						{article.feedFaviconUrl ? (
-							<img src={article.feedFaviconUrl} alt="" className="h-4 w-4 rounded-sm" />
-						) : null}
-						<span>{article.feedTitle}</span>
-						{publishedAt ? (
-							<>
-								<span>·</span>
-								<span>{publishedAt}</span>
-							</>
-						) : null}
-						<div className="surface-muted ml-auto inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]">
-							<Sparkles className="h-3 w-3 text-primary" />
-							Reader mode
+			<article className="grid min-h-full gap-5 px-4 py-4 sm:px-5 lg:px-6 2xl:grid-cols-[minmax(0,1fr)_20rem]">
+				<div className="min-w-0">
+					<header className="motion-enter max-w-[82ch]">
+						<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+							{article.feedFaviconUrl ? (
+								<img src={article.feedFaviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+							) : null}
+							<span>{article.feedTitle}</span>
+							{publishedAt ? (
+								<>
+									<span>·</span>
+									<span>{publishedAt}</span>
+								</>
+							) : null}
+							<div className="surface-muted inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]">
+								<Sparkles className="h-3 w-3 text-primary" />
+								Reader mode
+							</div>
 						</div>
-					</div>
-					<h1 className="mt-4 text-3xl font-semibold leading-tight tracking-tight text-foreground sm:text-4xl">
-						{article.canonicalUrl ? (
-							<a
-								href={article.canonicalUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="transition-colors hover:text-primary"
+						<h1 className="mt-3 text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
+							{article.canonicalUrl ? (
+								<a
+									href={article.canonicalUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="transition-colors hover:text-primary"
+								>
+									{article.title}
+								</a>
+							) : (
+								article.title
+							)}
+						</h1>
+						{article.author ? (
+							<p className="mt-2 text-sm text-muted-foreground">by {article.author}</p>
+						) : null}
+
+						<div className="mt-4 flex flex-wrap items-center gap-2">
+							<button
+								type="button"
+								onClick={toggleRead}
+								className="inline-flex h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-accent"
 							>
-								{article.title}
-							</a>
-						) : (
-							article.title
-						)}
-					</h1>
-					{article.author ? (
-						<p className="mt-3 text-sm text-muted-foreground">by {article.author}</p>
+								{article.isRead ? (
+									<>
+										<EyeOff className="h-3.5 w-3.5" />
+										Mark unread
+									</>
+								) : (
+									<>
+										<Eye className="h-3.5 w-3.5" />
+										Mark read
+									</>
+								)}
+							</button>
+							{article.canonicalUrl ? (
+								<a
+									href={article.canonicalUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="inline-flex h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-accent"
+								>
+									<ExternalLink className="h-3.5 w-3.5" />
+									Original
+								</a>
+							) : null}
+						</div>
+					</header>
+
+					{hasContent ? (
+						<div
+							className="reader-content motion-enter mt-5 max-w-[82ch] border-t border-border/70 pt-5"
+							// biome-ignore lint/security/noDangerouslySetInnerHtml: Sanitized content from API
+							dangerouslySetInnerHTML={{ __html: readerHtml }}
+						/>
+					) : article.excerpt ? (
+						<div className="motion-enter mt-5 max-w-[82ch] border-t border-border/70 pt-5 text-base leading-8 text-foreground">
+							<p>{article.excerpt}</p>
+						</div>
 					) : null}
 
-					<div className="mt-6 flex flex-wrap items-center gap-2">
-						<button
-							type="button"
-							onClick={toggleRead}
-							className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-xs font-medium hover:bg-accent"
-						>
-							{article.isRead ? (
-								<>
-									<EyeOff className="h-3.5 w-3.5" />
-									Mark unread
-								</>
-							) : (
-								<>
-									<Eye className="h-3.5 w-3.5" />
-									Mark read
-								</>
-							)}
-						</button>
-					</div>
-				</header>
-
-				{hasContent ? (
-					<div
-						className="reader-content surface-card motion-enter mt-6 rounded-[1.75rem] px-6 py-6 sm:px-8 sm:py-8"
-						// biome-ignore lint/security/noDangerouslySetInnerHtml: Sanitized content from API
-						dangerouslySetInnerHTML={{ __html: readerHtml }}
-					/>
-				) : article.excerpt ? (
-					<div className="surface-card motion-enter mt-6 rounded-[1.75rem] px-6 py-6 text-base leading-8 text-foreground sm:px-8 sm:py-8">
-						<p>{article.excerpt}</p>
-					</div>
-				) : null}
-
-				{mediaToRender.length > 0 ? (
-					<div className="surface-card motion-enter mt-6 space-y-4 rounded-[1.75rem] p-5 sm:p-6">
-						{mediaToRender.map((m, i) => {
-							if (m.type === 'image') {
-								return (
-									<img
-										key={m.url}
-										src={m.url}
-										alt=""
-										className="max-w-full rounded-2xl"
-										loading="lazy"
-									/>
-								);
-							}
-							if (m.type === 'video' || m.type === 'embed') {
-								const isX = (m.provider as string) === 'x';
-								return (
-									<div
-										key={m.url}
-										className={`overflow-hidden rounded-[1.35rem] border border-border/70 bg-muted ${
-											isX ? 'w-full max-w-[560px] mx-auto' : ''
-										}`}
-										style={
-											isX
-												? { height: '600px' }
-												: {
-														aspectRatio:
-															m.width && m.height ? `${m.width} / ${m.height}` : '16 / 9',
-													}
-										}
-									>
-										<iframe
-											src={m.embedUrl ?? m.url}
-											title={`Media ${i + 1}`}
-											className="h-full w-full"
-											scrolling={isX ? 'no' : undefined}
-											style={isX ? { overflow: 'hidden' } : undefined}
-											allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture"
-											allowFullScreen
+					{mediaToRender.length > 0 ? (
+						<div className="surface-card motion-enter mt-6 space-y-4 rounded-xl p-4 sm:p-5">
+							{mediaToRender.map((m, i) => {
+								if (m.type === 'image') {
+									return (
+										<img
+											key={m.url}
+											src={m.url}
+											alt=""
+											className="max-w-full rounded-xl"
+											loading="lazy"
 										/>
-									</div>
-								);
-							}
-							return null;
-						})}
+									);
+								}
+								if (m.type === 'video' || m.type === 'embed') {
+									const isX = (m.provider as string) === 'x';
+									return (
+										<div
+											key={m.url}
+											className={`overflow-hidden rounded-xl border border-border/70 bg-muted ${
+												isX ? 'w-full max-w-[560px] mx-auto' : ''
+											}`}
+											style={
+												isX
+													? { height: '600px' }
+													: {
+															aspectRatio:
+																m.width && m.height ? `${m.width} / ${m.height}` : '16 / 9',
+														}
+											}
+										>
+											<iframe
+												src={m.embedUrl ?? m.url}
+												title={`Media ${i + 1}`}
+												className="h-full w-full"
+												scrolling={isX ? 'no' : undefined}
+												style={isX ? { overflow: 'hidden' } : undefined}
+												allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture"
+												allowFullScreen
+											/>
+										</div>
+									);
+								}
+								return null;
+							})}
+						</div>
+					) : null}
+				</div>
+
+				<aside className="hidden min-w-0 2xl:block">
+					<div className="sticky top-4 space-y-3">
+						{article.heroImageUrl ? (
+							<img
+								src={article.heroImageUrl}
+								alt=""
+								className="aspect-video w-full rounded-xl object-cover"
+							/>
+						) : null}
+
+						<div className="surface-card surface-compact rounded-xl p-4">
+							<p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+								Article
+							</p>
+							<div className="mt-3 space-y-3 text-sm">
+								<MetadataLine label="Source" value={article.feedTitle} />
+								{article.author ? <MetadataLine label="Author" value={article.author} /> : null}
+								{publishedAt ? <MetadataLine label="Published" value={publishedAt} /> : null}
+							</div>
+							<div className="mt-4 grid grid-cols-2 gap-2">
+								<button
+									type="button"
+									onClick={toggleRead}
+									className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border text-xs font-medium hover:bg-accent"
+								>
+									{article.isRead ? (
+										<>
+											<EyeOff className="h-3.5 w-3.5" />
+											Unread
+										</>
+									) : (
+										<>
+											<Eye className="h-3.5 w-3.5" />
+											Read
+										</>
+									)}
+								</button>
+								{article.canonicalUrl ? (
+									<a
+										href={article.canonicalUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border text-xs font-medium hover:bg-accent"
+									>
+										<ExternalLink className="h-3.5 w-3.5" />
+										Open
+									</a>
+								) : (
+									<span className="inline-flex h-9 items-center justify-center rounded-lg border border-border text-xs text-muted-foreground">
+										No link
+									</span>
+								)}
+							</div>
+						</div>
+
+						{onSelectArticle && (previousArticle || nextArticle) ? (
+							<div className="surface-card surface-compact rounded-xl p-3">
+								<p className="px-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+									Queue
+								</p>
+								<div className="mt-2 grid gap-2">
+									<QueueButton
+										article={previousArticle}
+										icon={<ArrowLeft className="h-3.5 w-3.5" />}
+										label="Previous"
+										onSelectArticle={onSelectArticle}
+									/>
+									<QueueButton
+										article={nextArticle}
+										icon={<ArrowRight className="h-3.5 w-3.5" />}
+										label="Next"
+										onSelectArticle={onSelectArticle}
+									/>
+								</div>
+							</div>
+						) : null}
+
+						{onSelectArticle && moreFromFeed.length > 0 ? (
+							<div className="surface-card surface-compact rounded-xl p-3">
+								<p className="px-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+									More from this feed
+								</p>
+								<div className="mt-2 space-y-1">
+									{moreFromFeed.map((item) => (
+										<button
+											key={item.id}
+											type="button"
+											onClick={() => onSelectArticle(item.id)}
+											className="w-full rounded-lg px-2 py-2 text-left text-xs leading-5 hover:bg-accent"
+										>
+											<span className="line-clamp-2 font-medium text-foreground">{item.title}</span>
+											{item.publishedAt ? (
+												<span className="mt-0.5 block text-muted-foreground">
+													{formatDistanceToNow(new Date(item.publishedAt), { addSuffix: true })}
+												</span>
+											) : null}
+										</button>
+									))}
+								</div>
+							</div>
+						) : null}
 					</div>
-				) : null}
+				</aside>
 			</article>
 		</div>
+	);
+}
+
+function MetadataLine({ label, value }: { label: string; value: string }) {
+	return (
+		<div className="grid gap-1">
+			<span className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
+			<span className="break-words text-foreground">{value}</span>
+		</div>
+	);
+}
+
+function QueueButton({
+	article,
+	icon,
+	label,
+	onSelectArticle,
+}: {
+	article: ReaderArticleSummary | null;
+	icon: ReactNode;
+	label: string;
+	onSelectArticle: (id: string) => void;
+}) {
+	if (!article) {
+		return (
+			<span className="flex min-h-14 items-center gap-2 rounded-lg border border-border/70 px-2.5 py-2 text-xs text-muted-foreground/70">
+				{icon}
+				{label}
+			</span>
+		);
+	}
+
+	return (
+		<button
+			type="button"
+			onClick={() => onSelectArticle(article.id)}
+			className="flex min-h-14 items-start gap-2 rounded-lg border border-border/70 px-2.5 py-2 text-left text-xs hover:bg-accent"
+		>
+			<span className="mt-0.5 text-muted-foreground">{icon}</span>
+			<span className="min-w-0">
+				<span className="block text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+					{label}
+				</span>
+				<span className="mt-0.5 line-clamp-2 font-medium leading-5 text-foreground">
+					{article.title}
+				</span>
+			</span>
+		</button>
 	);
 }
