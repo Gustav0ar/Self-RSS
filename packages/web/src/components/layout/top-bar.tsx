@@ -15,14 +15,7 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 	const { isAuthenticated, logout, username } = useAuth();
 
 	function cycleTheme() {
-		const next =
-			theme === 'light'
-				? 'dark'
-				: theme === 'dark'
-					? 'amoled'
-					: theme === 'amoled'
-						? 'system'
-						: 'light';
+		const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
 		setTheme(next);
 		if (isAuthenticated) {
 			updatePrefs.mutate({ theme: next });

@@ -8,8 +8,8 @@ import {
 	useState,
 } from 'react';
 
-type Theme = 'light' | 'dark' | 'amoled' | 'system';
-type ResolvedTheme = 'light' | 'dark' | 'amoled';
+type Theme = 'light' | 'dark' | 'system';
+type ResolvedTheme = 'light' | 'dark';
 
 interface ThemeContextValue {
 	theme: Theme;
@@ -32,14 +32,17 @@ function resolveTheme(theme: Theme): ResolvedTheme {
 function applyThemeClasses(resolvedTheme: ResolvedTheme) {
 	const root = document.documentElement;
 	root.classList.toggle('dark', resolvedTheme === 'dark');
-	root.classList.toggle('amoled', resolvedTheme === 'amoled');
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
 	const [theme, setThemeState] = useState<Theme>(() => {
 		if (typeof window === 'undefined') return 'system';
 		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored === 'light' || stored === 'dark' || stored === 'amoled' || stored === 'system') {
+		if (stored === 'amoled') {
+			localStorage.setItem(STORAGE_KEY, 'dark');
+			return 'dark';
+		}
+		if (stored === 'light' || stored === 'dark' || stored === 'system') {
 			return stored;
 		}
 		return 'system';

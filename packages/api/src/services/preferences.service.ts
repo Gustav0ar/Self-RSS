@@ -8,7 +8,7 @@ const DEFAULTS = {
 	defaultSort: 'latest',
 	hideRead: false,
 	keyboardShortcutsEnabled: true,
-	autoMarkReadMode: 'disabled',
+	autoMarkReadMode: 'on_navigate',
 };
 
 export type PreferenceValues = typeof DEFAULTS;
@@ -44,7 +44,9 @@ export class PreferencesService {
 	}
 
 	async updatePreferences(userId: string, data: Partial<PreferenceValues>) {
-		const prefs = await this.prefsRepo.upsert(userId, data);
+		const stored = await this.prefsRepo.findByUserId(userId);
+		const input = stored ? data : { ...DEFAULTS, ...data };
+		const prefs = await this.prefsRepo.upsert(userId, input);
 		return resolvePreferences(prefs as unknown as Record<string, unknown>);
 	}
 }

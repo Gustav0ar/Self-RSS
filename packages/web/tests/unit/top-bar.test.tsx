@@ -36,12 +36,12 @@ vi.mock('../../src/hooks/queries', () => ({
 }));
 
 describe('TopBar', () => {
-	it('cycles from dark to amoled and persists the preference', () => {
+	it('cycles from dark to system and persists the preference', () => {
 		render(<TopBar />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Toggle theme' }));
 
-		expect(setThemeMock).toHaveBeenCalledWith('amoled');
-		expect(mutateMock).toHaveBeenCalledWith({ theme: 'amoled' });
+		expect(setThemeMock).toHaveBeenCalledWith('system');
+		expect(mutateMock).toHaveBeenCalledWith({ theme: 'system' });
 	});
 });

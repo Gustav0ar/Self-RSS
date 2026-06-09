@@ -7,14 +7,26 @@ const useKeyboardNavMock = vi.fn();
 const openWindowMock = vi.fn();
 const useInfiniteArticlesMock = vi.fn();
 const updatePreferencesMutate = vi.fn();
+const markReadMutate = vi.fn();
 let isRefreshingAllFeeds = false;
 let hideReadPreference = false;
+let defaultSortPreference = 'latest';
+let keyboardShortcutsEnabled = true;
+let autoMarkReadMode = 'on_navigate';
 
 vi.mock('../../src/hooks/queries', () => ({
 	useInfiniteArticles: (params: unknown) => useInfiniteArticlesMock(params),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
-	useMarkRead: () => ({ mutate: vi.fn() }),
-	usePreferences: () => ({ data: { hideRead: hideReadPreference } }),
+	useMarkRead: () => ({ mutate: markReadMutate }),
+	usePreferences: () => ({
+		data: {
+			hideRead: hideReadPreference,
+			defaultSort: defaultSortPreference,
+			keyboardShortcutsEnabled,
+			autoMarkReadMode,
+			density: 'comfortable',
+		},
+	}),
 	usePrefetchArticle: () => vi.fn(),
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
 }));
@@ -56,11 +68,17 @@ describe('FeedView refresh', () => {
 		vi.clearAllMocks();
 		isRefreshingAllFeeds = false;
 		hideReadPreference = false;
+		defaultSortPreference = 'latest';
+		keyboardShortcutsEnabled = true;
+		autoMarkReadMode = 'on_navigate';
 		useInfiniteArticlesMock.mockReturnValue({
 			data: {
 				pages: [
 					{
-						data: [{ id: 'article-7', isRead: false }],
+						data: [
+							{ id: 'article-7', feedId: 'feed-42', isRead: false },
+							{ id: 'article-8', feedId: 'feed-42', isRead: false },
+						],
 					},
 				],
 			},
@@ -146,5 +164,63 @@ describe('FeedView refresh', () => {
 				expect.objectContaining({ unreadOnly: true }),
 			);
 		});
+	});
+
+	it('uses the persisted default sort preference when loading articles', async () => {
+		defaultSortPreference = 'oldest';
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		await waitFor(() => {
+			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+				expect.objectContaining({ sort: 'oldest' }),
+			);
+		});
+	});
+
+	it('disables keyboard navigation when the preference is off', () => {
+		keyboardShortcutsEnabled = false;
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(useKeyboardNavMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+	});
+
+	it('marks the destination article read when navigating in on-navigate mode', () => {
+		const onSelectArticle = vi.fn();
+		useKeyboardNavMock.mockImplementation((options: { onSelect: (id: string) => void }) => {
+			options.onSelect('article-8');
+		});
+
+		render(<FeedView selectedArticleId="article-7" onSelectArticle={onSelectArticle} />);
+
+		expect(markReadMutate).toHaveBeenCalledWith({ articleId: 'article-8', read: true });
+		expect(onSelectArticle).toHaveBeenCalledWith('article-8');
+	});
+
+	it('does not mark articles read from navigation when auto-mark is disabled', () => {
+		const onSelectArticle = vi.fn();
+		autoMarkReadMode = 'disabled';
+		useKeyboardNavMock.mockImplementation((options: { onSelect: (id: string) => void }) => {
+			options.onSelect('article-8');
+		});
+
+		render(<FeedView selectedArticleId="article-7" onSelectArticle={onSelectArticle} />);
+
+		expect(markReadMutate).not.toHaveBeenCalled();
+		expect(onSelectArticle).toHaveBeenCalledWith('article-8');
+	});
+
+	it('leaves on-open auto-marking to the reader pane', () => {
+		const onSelectArticle = vi.fn();
+		autoMarkReadMode = 'on_open';
+		useKeyboardNavMock.mockImplementation((options: { onSelect: (id: string) => void }) => {
+			options.onSelect('article-8');
+		});
+
+		render(<FeedView selectedArticleId="article-7" onSelectArticle={onSelectArticle} />);
+
+		expect(markReadMutate).not.toHaveBeenCalled();
+		expect(onSelectArticle).toHaveBeenCalledWith('article-8');
 	});
 });

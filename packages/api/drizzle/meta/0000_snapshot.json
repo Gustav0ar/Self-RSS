@@ -838,7 +838,7 @@
 					"primaryKey": false,
 					"notNull": true,
 					"autoincrement": false,
-					"default": "'disabled'"
+					"default": "'on_navigate'"
 				},
 				"created_at": {
 					"name": "created_at",

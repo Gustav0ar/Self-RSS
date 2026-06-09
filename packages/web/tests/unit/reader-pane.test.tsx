@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { render, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReaderPane } from '../../src/components/articles/reader-pane';
 
 const articleWithEmbeddedHtml = {
@@ -44,6 +44,7 @@ const articleWithEmbeddedHtml = {
 
 const markReadMutate = vi.fn();
 const enrichMutate = vi.fn();
+let autoMarkReadMode = 'on_navigate';
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
@@ -52,9 +53,15 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	useEnrichArticle: () => ({ mutate: enrichMutate, isPending: false }),
+	usePreferences: () => ({ data: { autoMarkReadMode } }),
 }));
 
 describe('ReaderPane', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		autoMarkReadMode = 'on_navigate';
+	});
+
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
 		render(<ReaderPane articleId="article-1" />);
 
@@ -64,5 +71,24 @@ describe('ReaderPane', () => {
 		expect(document.querySelectorAll('.reader-content iframe')).toHaveLength(0);
 		expect(mediaPanel?.querySelectorAll('iframe')).toHaveLength(1);
 		expect(mediaPanel?.querySelectorAll('img')).toHaveLength(0);
+	});
+
+	it('does not mark articles read on open when auto-mark is on navigate', () => {
+		render(<ReaderPane articleId="article-1" />);
+
+		expect(markReadMutate).not.toHaveBeenCalled();
+	});
+
+	it('marks articles read on open when auto-mark is on open', async () => {
+		autoMarkReadMode = 'on_open';
+
+		render(<ReaderPane articleId="article-1" />);
+
+		await waitFor(() => {
+			expect(markReadMutate).toHaveBeenCalledWith(
+				{ articleId: 'article-1', read: true },
+				expect.any(Object),
+			);
+		});
 	});
 });

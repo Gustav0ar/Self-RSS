@@ -1,8 +1,15 @@
 import { Monitor, Moon, Settings, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { type Preferences, usePreferences, useUpdatePreferences } from '@/hooks/queries';
+import { FONT_FAMILY_OPTIONS } from '@/lib/preferences';
 import { useTheme } from '@/providers/theme';
+
+type WebTheme = 'light' | 'dark' | 'system';
+
+function normalizeThemePreference(theme: string): WebTheme {
+	return theme === 'light' || theme === 'system' ? theme : 'dark';
+}
 
 export function PreferencesPanel() {
 	const { data: prefs, isLoading } = usePreferences();
@@ -13,9 +20,20 @@ export function PreferencesPanel() {
 
 	useEffect(() => {
 		if (prefs) {
-			setDraftPrefs(prefs);
+			setDraftPrefs({ ...prefs, theme: normalizeThemePreference(prefs.theme) });
 		}
 	}, [prefs]);
+
+	const fontOptions = useMemo(() => {
+		if (
+			!draftPrefs?.fontFamily ||
+			FONT_FAMILY_OPTIONS.some((option) => option.value === draftPrefs.fontFamily)
+		) {
+			return FONT_FAMILY_OPTIONS;
+		}
+
+		return [...FONT_FAMILY_OPTIONS, { label: draftPrefs.fontFamily, value: draftPrefs.fontFamily }];
+	}, [draftPrefs?.fontFamily]);
 
 	if (!isOpen) {
 		return (
@@ -42,11 +60,13 @@ export function PreferencesPanel() {
 	}
 
 	function handleChange<K extends keyof Preferences>(key: K, value: Preferences[K]) {
-		setDraftPrefs((current) => (current ? { ...current, [key]: value } : current));
+		const nextValue =
+			key === 'theme' && typeof value === 'string' ? normalizeThemePreference(value) : value;
+		setDraftPrefs((current) => (current ? { ...current, [key]: nextValue } : current));
 		if (key === 'theme' && typeof value === 'string') {
-			setTheme(value as 'light' | 'dark' | 'amoled' | 'system');
+			setTheme(normalizeThemePreference(value));
 		}
-		updatePrefs.mutate({ [key]: value });
+		updatePrefs.mutate({ [key]: nextValue });
 	}
 
 	return createPortal(
@@ -76,7 +96,7 @@ export function PreferencesPanel() {
 						<label htmlFor="pref-theme" className="block text-sm font-medium">
 							Theme
 						</label>
-						<div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+						<div className="mt-3 grid grid-cols-3 gap-2">
 							<ThemeChoice
 								label="Light"
 								icon={<Sun className="h-4 w-4" />}
@@ -90,12 +110,6 @@ export function PreferencesPanel() {
 								onClick={() => handleChange('theme', 'dark')}
 							/>
 							<ThemeChoice
-								label="AMOLED"
-								icon={<Moon className="h-4 w-4" />}
-								active={draftPrefs.theme === 'amoled'}
-								onClick={() => handleChange('theme', 'amoled')}
-							/>
-							<ThemeChoice
 								label="System"
 								icon={<Monitor className="h-4 w-4" />}
 								active={draftPrefs.theme === 'system'}
@@ -104,14 +118,13 @@ export function PreferencesPanel() {
 						</div>
 						<select
 							id="pref-theme"
-							value={draftPrefs.theme}
+							value={normalizeThemePreference(draftPrefs.theme)}
 							onChange={(e) => handleChange('theme', e.target.value)}
 							className="sr-only"
 						>
 							<option value="system">System</option>
 							<option value="light">Light</option>
 							<option value="dark">Dark</option>
-							<option value="amoled">AMOLED</option>
 						</select>
 					</section>
 
@@ -119,13 +132,18 @@ export function PreferencesPanel() {
 						<label htmlFor="pref-font" className="block text-sm font-medium">
 							Font Family
 						</label>
-						<input
+						<select
 							id="pref-font"
-							type="text"
 							value={draftPrefs.fontFamily}
 							onChange={(e) => handleChange('fontFamily', e.target.value)}
 							className="input-surface mt-3 h-12 w-full rounded-2xl px-4 text-sm outline-none"
-						/>
+						>
+							{fontOptions.map((option) => (
+								<option key={option.value} value={option.value}>
+									{option.label}
+								</option>
+							))}
+						</select>
 					</section>
 
 					<section className="surface-muted rounded-[1.5rem] p-5">

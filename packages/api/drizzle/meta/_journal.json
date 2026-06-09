@@ -15,6 +15,13 @@
 			"when": 1780318542246,
 			"tag": "0001_articles_fts",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "6",
+			"when": 1780969600000,
+			"tag": "0002_default_auto_mark_on_navigate",
+			"breakpoints": true
 		}
 	]
 }
