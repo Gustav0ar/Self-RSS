@@ -127,7 +127,7 @@ CREATE TABLE `user_preferences` (
 	`default_sort` text DEFAULT 'latest' NOT NULL,
 	`hide_read` integer DEFAULT false NOT NULL,
 	`keyboard_shortcuts_enabled` integer DEFAULT true NOT NULL,
-	`auto_mark_read_mode` text DEFAULT 'disabled' NOT NULL,
+	`auto_mark_read_mode` text DEFAULT 'on_navigate' NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade

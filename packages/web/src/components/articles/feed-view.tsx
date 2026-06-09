@@ -13,6 +13,11 @@ import {
 } from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
+import {
+	normalizeAutoMarkReadPreference,
+	normalizeDensityPreference,
+	normalizeSortPreference,
+} from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 import { useAppState } from '@/providers/app-state';
 
@@ -71,6 +76,9 @@ export function FeedView({
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
 	).toString();
+	const density = normalizeDensityPreference(prefs?.density);
+	const keyboardShortcutsEnabled = prefs?.keyboardShortcutsEnabled ?? true;
+	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
 
 	useEffect(() => {
 		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
@@ -95,10 +103,21 @@ export function FeedView({
 		}
 	}, [articleIds, prefetchArticle, selectedArticleId]);
 
+	function handleSelectArticle(id: string) {
+		if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {
+			const nextArticle = articles.find((article) => article.id === id);
+			if (nextArticle && !nextArticle.isRead) {
+				markRead.mutate({ articleId: nextArticle.id, read: true });
+			}
+		}
+
+		onSelectArticle(id);
+	}
+
 	useKeyboardNav({
 		articleIds,
 		selectedId: selectedArticleId,
-		onSelect: onSelectArticle,
+		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
 			const article = articles.find((a) => a.id === id);
 			if (article) {
@@ -120,6 +139,7 @@ export function FeedView({
 				handleRefresh();
 			}
 		},
+		enabled: keyboardShortcutsEnabled,
 	});
 
 	function handleMarkAllRead() {
@@ -154,6 +174,10 @@ export function FeedView({
 			setUnreadOnly(prefs.hideRead);
 		}
 	}, [prefs?.hideRead]);
+
+	useEffect(() => {
+		setSort(normalizeSortPreference(prefs?.defaultSort));
+	}, [prefs?.defaultSort]);
 
 	function handleUnreadOnlyToggle() {
 		const nextUnreadOnly = !unreadOnly;
@@ -244,7 +268,7 @@ export function FeedView({
 					<ArticleList
 						articles={articles}
 						selectedId={selectedArticleId}
-						onSelect={onSelectArticle}
+						onSelect={handleSelectArticle}
 						onPrefetch={prefetchArticle}
 						loading={showListLoader}
 						hasMore={hasNextPage}
@@ -252,6 +276,7 @@ export function FeedView({
 							void fetchNextPage();
 						}}
 						loadingMore={isFetchingNextPage}
+						density={density}
 					/>
 				</div>
 			</div>
@@ -260,7 +285,7 @@ export function FeedView({
 				<ReaderPane
 					articleId={selectedArticleId}
 					articles={articles}
-					onSelectArticle={onSelectArticle}
+					onSelectArticle={handleSelectArticle}
 				/>
 			</div>
 		</div>

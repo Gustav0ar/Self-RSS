@@ -96,7 +96,7 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 
 	await page.getByRole('button', { name: 'Preferences' }).click();
 	await page.getByRole('combobox', { name: 'Theme' }).selectOption('dark');
-	await page.getByLabel('Font Family').fill('Georgia');
+	await page.getByRole('combobox', { name: 'Font Family' }).selectOption('Georgia');
 	await page.getByRole('checkbox', { name: 'Hide read articles' }).check();
 	await page.getByRole('button', { name: 'Close' }).click();
 	await expect(page.locator('html')).toHaveClass(/dark/);
@@ -105,7 +105,7 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(page.getByText('All Feeds')).toBeVisible();
 	await page.getByRole('button', { name: 'Preferences' }).click();
 	await expect(page.getByRole('combobox', { name: 'Theme' })).toHaveValue('dark');
-	await expect(page.getByLabel('Font Family')).toHaveValue('Georgia');
+	await expect(page.getByRole('combobox', { name: 'Font Family' })).toHaveValue('Georgia');
 	await expect(page.getByRole('checkbox', { name: 'Hide read articles' })).toBeChecked();
 });
 

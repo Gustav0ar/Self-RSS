@@ -9,7 +9,7 @@ const DEFAULTS = {
 	defaultSort: 'latest',
 	hideRead: false,
 	keyboardShortcutsEnabled: true,
-	autoMarkReadMode: 'disabled',
+	autoMarkReadMode: 'on_navigate',
 };
 
 type PreferenceValues = typeof DEFAULTS;

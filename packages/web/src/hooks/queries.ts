@@ -631,7 +631,23 @@ export function useUpdatePreferences() {
 				method: 'PATCH',
 				body: JSON.stringify(data),
 			}),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ['preferences'] }),
+		onMutate: async (data) => {
+			await qc.cancelQueries({ queryKey: ['preferences'] });
+			const previous = qc.getQueryData<Preferences>(['preferences']);
+			if (previous) {
+				qc.setQueryData<Preferences>(['preferences'], { ...previous, ...data });
+			}
+			return { previous };
+		},
+		onError: (_error, _data, context) => {
+			if (context?.previous) {
+				qc.setQueryData(['preferences'], context.previous);
+			}
+		},
+		onSuccess: (response) => {
+			qc.setQueryData(['preferences'], response.data);
+			qc.invalidateQueries({ queryKey: ['preferences'] });
+		},
 	});
 }
 

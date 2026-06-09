@@ -81,7 +81,7 @@ export const userPreferences = sqliteTable('user_preferences', {
 	defaultSort: text('default_sort').notNull().default('latest'),
 	hideRead: boolean('hide_read').notNull().default(false),
 	keyboardShortcutsEnabled: boolean('keyboard_shortcuts_enabled').notNull().default(true),
-	autoMarkReadMode: text('auto_mark_read_mode').notNull().default('disabled'),
+	autoMarkReadMode: text('auto_mark_read_mode').notNull().default('on_navigate'),
 	createdAt: timestamp('created_at')
 		.notNull()
 		.$defaultFn(() => new Date()),

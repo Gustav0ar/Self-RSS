@@ -532,6 +532,7 @@ describe('API integration', () => {
 			expect(updatedPreferences.response.status).toBe(200);
 			expect(updatedPreferences.body.data.theme).toBe('dark');
 			expect(updatedPreferences.body.data.fontFamily).toBe('Georgia');
+			expect(updatedPreferences.body.data.autoMarkReadMode).toBe('on_navigate');
 
 			const preferences = await authedRequest('/api/v1/preferences', token);
 			expect(preferences.body.data.hideRead).toBe(true);

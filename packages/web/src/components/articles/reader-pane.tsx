@@ -2,7 +2,8 @@ import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useArticle, useMarkRead } from '@/hooks/queries';
+import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
+import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 
 interface ReaderPaneProps {
 	articleId: string | null;
@@ -60,6 +61,7 @@ function prepareReaderHtml(html: string) {
 
 export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
 	const { data: article, isLoading } = useArticle(articleId);
+	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
 	const lastAutoMarkedId = useRef<string | null>(null);
 
@@ -71,6 +73,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const mediaToRender = (article?.media ?? []).filter(
 		(media) => media.type === 'video' || media.type === 'embed',
 	);
+	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {
@@ -129,7 +132,12 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 			lastAutoMarkedId.current = articleId;
 			return;
 		}
-		if (article && !isRead && lastAutoMarkedId.current !== articleId) {
+		if (
+			autoMarkReadMode === 'on_open' &&
+			article &&
+			!isRead &&
+			lastAutoMarkedId.current !== articleId
+		) {
 			lastAutoMarkedId.current = articleId;
 			markRead.mutate(
 				{ articleId, read: true },
@@ -140,7 +148,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 				},
 			);
 		}
-	}, [articleId, isRead, article, markRead]);
+	}, [articleId, isRead, article, autoMarkReadMode, markRead]);
 
 	if (!articleId) {
 		return (
@@ -281,7 +289,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							dangerouslySetInnerHTML={{ __html: readerHtml }}
 						/>
 					) : article.excerpt ? (
-						<div className="motion-enter mt-5 max-w-[82ch] border-t border-border/70 pt-5 text-base leading-8 text-foreground">
+						<div className="motion-enter mt-5 max-w-[82ch] border-t border-border/70 pt-5 leading-8 text-foreground [font-size:var(--reader-text-size,1rem)]">
 							<p>{article.excerpt}</p>
 						</div>
 					) : null}

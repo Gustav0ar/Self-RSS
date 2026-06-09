@@ -1,6 +1,7 @@
 import { formatDistanceToNow } from 'date-fns';
 import { Circle, CircleDot } from 'lucide-react';
 import { useCallback, useEffect, useRef } from 'react';
+import type { DisplayDensityPreference } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 
 interface ArticleListItemData {
@@ -25,6 +26,7 @@ interface ArticleListProps {
 	hasMore?: boolean;
 	onLoadMore?: () => void;
 	loadingMore?: boolean;
+	density?: DisplayDensityPreference;
 }
 
 export function ArticleList({
@@ -36,6 +38,7 @@ export function ArticleList({
 	hasMore,
 	onLoadMore,
 	loadingMore,
+	density = 'comfortable',
 }: ArticleListProps) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -157,6 +160,7 @@ export function ArticleList({
 							onSelect={() => onSelect(article.id)}
 							onPrefetch={() => onPrefetch?.(article.id)}
 							index={index}
+							density={density}
 						/>
 					))}
 				</div>
@@ -183,12 +187,14 @@ function ArticleRow({
 	onSelect,
 	onPrefetch,
 	index,
+	density,
 }: {
 	article: ArticleListItemData;
 	isSelected: boolean;
 	onSelect: () => void;
 	onPrefetch?: () => void;
 	index: number;
+	density: DisplayDensityPreference;
 }) {
 	const timeAgo = article.publishedAt
 		? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
@@ -203,7 +209,8 @@ function ArticleRow({
 			data-article-id={article.id}
 			aria-current={isSelected ? 'true' : undefined}
 			className={cn(
-				'motion-enter surface-card surface-compact relative flex w-full gap-2.5 rounded-xl border px-3 py-2.5 text-left hover:bg-accent/45',
+				'motion-enter surface-card surface-compact relative flex w-full rounded-xl border text-left hover:bg-accent/45',
+				density === 'compact' ? 'gap-2 px-2.5 py-2' : 'gap-2.5 px-3 py-2.5',
 				isSelected && 'border-l-4 !border-primary/60 !border-l-primary !bg-primary/12 shadow-sm',
 				!isSelected && !article.isRead && 'border-primary/12 bg-card/95',
 			)}
@@ -233,7 +240,8 @@ function ArticleRow({
 				</div>
 				<p
 					className={cn(
-						'mt-1 line-clamp-2 text-sm leading-5',
+						'mt-1 text-sm',
+						density === 'compact' ? 'line-clamp-1 leading-5' : 'line-clamp-2 leading-5',
 						isSelected
 							? 'font-semibold text-foreground'
 							: !article.isRead
@@ -246,7 +254,7 @@ function ArticleRow({
 				{article.author ? (
 					<p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{article.author}</p>
 				) : null}
-				{article.excerpt ? (
+				{article.excerpt && density !== 'compact' ? (
 					<p
 						className={cn(
 							'mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground',
@@ -261,7 +269,10 @@ function ArticleRow({
 				<img
 					src={article.heroImageUrl}
 					alt=""
-					className="h-12 w-12 shrink-0 rounded-xl object-cover shadow-sm"
+					className={cn(
+						'shrink-0 rounded-xl object-cover shadow-sm',
+						density === 'compact' ? 'h-10 w-10' : 'h-12 w-12',
+					)}
 				/>
 			) : null}
 		</button>

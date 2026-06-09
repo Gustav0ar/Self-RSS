@@ -59,6 +59,16 @@ vi.mock('../../src/components/layout/top-bar', () => ({
 	},
 }));
 
+vi.mock('../../src/hooks/queries', () => ({
+	usePreferences: () => ({
+		data: {
+			fontFamily: 'Inter',
+			textSize: 16,
+			density: 'comfortable',
+		},
+	}),
+}));
+
 describe('RootLayout routing', () => {
 	it('navigates to article URLs while preserving the current feed context', () => {
 		render(<RootLayout />);
