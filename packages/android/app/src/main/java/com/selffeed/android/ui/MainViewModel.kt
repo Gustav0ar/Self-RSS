@@ -71,6 +71,7 @@ class MainViewModel(
     private var searchJob: Job? = null
     private var enrichArticleJob: Job? = null
     private var readStateSyncJob: Job? = null
+    private var articleRequestSequence = 0L
     private val manuallyUnread = mutableSetOf<String>()
 
     init {
@@ -428,6 +429,8 @@ class MainViewModel(
     }
 
     fun loadArticles() {
+        val requestId = nextArticleRequestId()
+        val query = _uiState.value.articleQuery()
         _uiState.update {
             it.copy(
                 articleCursor = null,
@@ -436,25 +439,34 @@ class MainViewModel(
             )
         }
         viewModelScope.launch {
-            val state = _uiState.value
             when (
                 val result = repository.articles(
-                    feedId = state.selectedFeedId,
-                    categoryId = state.selectedCategoryId,
-                    unreadOnly = state.preferences?.hideRead == true,
-                    sort = state.preferences?.defaultSort,
+                    feedId = query.feedId,
+                    categoryId = query.categoryId,
+                    unreadOnly = query.unreadOnly,
+                    sort = query.sort,
                     limit = 30,
                 )
             ) {
-                is AppResult.Success -> _uiState.update {
-                    it.copy(
-                        articles = result.data.data,
-                        articleCursor = result.data.cursor,
-                        hasMoreArticles = result.data.hasMore,
-                        loadingMoreArticles = false,
-                    )
+                is AppResult.Success -> _uiState.update { current ->
+                    if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
+                        current
+                    } else {
+                        current.copy(
+                            articles = result.data.data,
+                            articleCursor = result.data.cursor,
+                            hasMoreArticles = result.data.hasMore,
+                            loadingMoreArticles = false,
+                        )
+                    }
                 }
-                is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _uiState.update { current ->
+                    if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
+                        current
+                    } else {
+                        current.copy(errorMessage = result.message)
+                    }
+                }
             }
         }
     }
@@ -465,33 +477,43 @@ class MainViewModel(
             return
         }
 
+        val requestId = articleRequestSequence
+        val query = snapshot.articleQuery()
+        val cursor = snapshot.articleCursor
         _uiState.update { it.copy(loadingMoreArticles = true) }
         viewModelScope.launch {
-            val state = _uiState.value
             when (
                 val result = repository.articles(
-                    feedId = state.selectedFeedId,
-                    categoryId = state.selectedCategoryId,
-                    unreadOnly = state.preferences?.hideRead == true,
-                    sort = state.preferences?.defaultSort,
+                    feedId = query.feedId,
+                    categoryId = query.categoryId,
+                    unreadOnly = query.unreadOnly,
+                    sort = query.sort,
                     limit = 30,
-                    cursor = state.articleCursor,
+                    cursor = cursor,
                 )
             ) {
-                is AppResult.Success -> _uiState.update {
-                    it.copy(
-                        articles = it.articles + result.data.data,
-                        articleCursor = result.data.cursor,
-                        hasMoreArticles = result.data.hasMore,
-                        loadingMoreArticles = false,
-                    )
+                is AppResult.Success -> _uiState.update { current ->
+                    if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
+                        current
+                    } else {
+                        current.copy(
+                            articles = current.articles + result.data.data,
+                            articleCursor = result.data.cursor,
+                            hasMoreArticles = result.data.hasMore,
+                            loadingMoreArticles = false,
+                        )
+                    }
                 }
 
-                is AppResult.Error -> _uiState.update {
-                    it.copy(
-                        errorMessage = result.message,
-                        loadingMoreArticles = false,
-                    )
+                is AppResult.Error -> _uiState.update { current ->
+                    if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
+                        current
+                    } else {
+                        current.copy(
+                            errorMessage = result.message,
+                            loadingMoreArticles = false,
+                        )
+                    }
                 }
             }
         }
@@ -706,10 +728,14 @@ class MainViewModel(
         viewModelScope.launch {
             when (val result = repository.preferences()) {
                 is AppResult.Success -> {
+                    val previousQuery = _uiState.value.articleQuery()
                     val normalizedPreferences = result.data.withNormalizedTheme()
                     _uiState.update { it.copy(preferences = normalizedPreferences) }
                     if (result.data.theme != normalizedPreferences.theme) {
                         persistNormalizedTheme(normalizedPreferences.theme)
+                    }
+                    if (_uiState.value.isAuthenticated && _uiState.value.articleQuery() != previousQuery) {
+                        loadArticles()
                     }
                 }
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -1023,6 +1049,22 @@ class MainViewModel(
             totalRead = (totalRead + readDelta).coerceAtLeast(0),
         )
 
+    private fun nextArticleRequestId(): Long {
+        articleRequestSequence += 1
+        return articleRequestSequence
+    }
+
+    private fun isCurrentArticleRequest(requestId: Long): Boolean =
+        requestId == articleRequestSequence
+
+    private fun AppUiState.articleQuery(): ArticleQuery =
+        ArticleQuery(
+            feedId = selectedFeedId,
+            categoryId = selectedCategoryId,
+            unreadOnly = preferences?.hideRead == true,
+            sort = preferences?.defaultSort,
+        )
+
     private suspend fun persistNormalizedTheme(theme: String) {
         when (val result = repository.updatePreferences(UpdatePreferencesRequest(theme = theme))) {
             is AppResult.Success -> _uiState.update {
@@ -1045,6 +1087,13 @@ class MainViewModel(
             is AppResult.Success -> result.data.registrationEnabled
             is AppResult.Error -> false
         }
+
+    private data class ArticleQuery(
+        val feedId: String?,
+        val categoryId: String?,
+        val unreadOnly: Boolean,
+        val sort: String?,
+    )
 }
 
 class MainViewModelFactory(
