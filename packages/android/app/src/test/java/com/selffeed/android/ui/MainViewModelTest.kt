@@ -24,6 +24,7 @@ import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -244,6 +245,43 @@ class MainViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { repository.articles(any(), any(), any(), any(), 30, "cursor-1") }
+    }
+
+    @Test
+    fun bootstrap_reloadsArticlesWhenHiddenReadPreferenceArrives() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
+        coEvery {
+            repository.articles(any(), any(), false, any(), any(), null)
+        } coAnswers {
+            delay(50)
+            AppResult.Success(
+                ApiListResponse(
+                    listOf(sampleArticle(id = "read-article", title = "Read", isRead = true)),
+                    null,
+                    false,
+                ),
+            )
+        }
+        coEvery {
+            repository.articles(any(), any(), true, "latest", any(), null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(sampleArticle(id = "unread-article", title = "Unread", isRead = false)),
+                null,
+                false,
+            ),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.preferences?.hideRead == true)
+        assertEquals(listOf("unread-article"), state.articles.map { it.id })
+        assertTrue(state.articles.none { it.isRead })
+        coVerify(atLeast = 1) { repository.articles(any(), any(), false, any(), any(), null) }
+        coVerify(atLeast = 1) { repository.articles(any(), any(), true, "latest", any(), null) }
     }
 
     @Test
