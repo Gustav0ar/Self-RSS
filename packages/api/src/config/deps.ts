@@ -11,8 +11,8 @@ import {
 	SyncRunRepository,
 } from '../repositories/settings.repository.js';
 import { UserRepository } from '../repositories/user.repository.js';
-import { ArticleCacheService } from '../services/article-cache.service.js';
 import { ArticleService } from '../services/article.service.js';
+import { ArticleCacheService } from '../services/article-cache.service.js';
 import { AuthService } from '../services/auth.service.js';
 import { CategoryService } from '../services/category.service.js';
 import { FeedService } from '../services/feed.service.js';

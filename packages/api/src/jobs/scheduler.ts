@@ -1,6 +1,6 @@
 import type { ArticleRepository } from '../repositories/article.repository.js';
-import type { FeedSyncService } from '../services/feed-sync.service.js';
 import type { ArticleCacheService } from '../services/article-cache.service.js';
+import type { FeedSyncService } from '../services/feed-sync.service.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger();

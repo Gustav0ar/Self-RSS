@@ -59,7 +59,13 @@ export class ArticleCacheService {
 	 */
 	async getCachedArticleList(
 		userId: string,
-		options: { feedId?: string; categoryId?: string; unreadOnly?: boolean; sort?: string; limit: number },
+		options: {
+			feedId?: string;
+			categoryId?: string;
+			unreadOnly?: boolean;
+			sort?: string;
+			limit: number;
+		},
 	): Promise<CachedArticleList | null> {
 		// Try scoped cache first
 		let cacheKey: string | null = null;
@@ -98,13 +104,11 @@ export class ArticleCacheService {
 			// Apply sort
 			if (options.sort === 'oldest') {
 				filtered.sort(
-					(a, b) =>
-						new Date(a.displayedAt).getTime() - new Date(b.displayedAt).getTime(),
+					(a, b) => new Date(a.displayedAt).getTime() - new Date(b.displayedAt).getTime(),
 				);
 			} else {
 				filtered.sort(
-					(a, b) =>
-						new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime(),
+					(a, b) => new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime(),
 				);
 			}
 
@@ -116,7 +120,7 @@ export class ArticleCacheService {
 
 			return {
 				articles: items,
-				cursor: hasMore ? items[items.length - 1]?.id ?? null : null,
+				cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
 				hasMore,
 				meta: data.meta,
 			};
@@ -155,7 +159,7 @@ export class ArticleCacheService {
 	 */
 	async populateCache(userId: string): Promise<void> {
 		// Try to acquire lock - skip if another warming is in progress
-		if (!await this.tryAcquireWarmingLock(userId)) {
+		if (!(await this.tryAcquireWarmingLock(userId))) {
 			logger.debug('Skipping cache population - warming already in progress', { userId });
 			return;
 		}
@@ -185,7 +189,12 @@ export class ArticleCacheService {
 					articles: [],
 					cursor: null,
 					hasMore: false,
-					meta: { syncedAt: new Date().toISOString(), newArticlesCount: 0, scope: 'all', generation },
+					meta: {
+						syncedAt: new Date().toISOString(),
+						newArticlesCount: 0,
+						scope: 'all',
+						generation,
+					},
 				};
 				await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(empty));
 				return;
@@ -229,7 +238,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? result[result.length - 1]?.id ?? null : null,
+				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
@@ -262,7 +271,7 @@ export class ArticleCacheService {
 	 * Populate cache for a specific feed (used for targeted warming)
 	 */
 	async populateFeedCache(userId: string, feedId: string): Promise<void> {
-		if (!await this.tryAcquireWarmingLock(userId)) {
+		if (!(await this.tryAcquireWarmingLock(userId))) {
 			return;
 		}
 
@@ -292,7 +301,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? result[result.length - 1]?.id ?? null : null,
+				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
@@ -318,7 +327,7 @@ export class ArticleCacheService {
 	 * Populate cache for a specific category (used for targeted warming)
 	 */
 	async populateCategoryCache(userId: string, categoryId: string): Promise<void> {
-		if (!await this.tryAcquireWarmingLock(userId)) {
+		if (!(await this.tryAcquireWarmingLock(userId))) {
 			return;
 		}
 
@@ -334,7 +343,12 @@ export class ArticleCacheService {
 					articles: [],
 					cursor: null,
 					hasMore: false,
-					meta: { syncedAt: new Date().toISOString(), newArticlesCount: 0, scope: `category:${categoryId}`, generation },
+					meta: {
+						syncedAt: new Date().toISOString(),
+						newArticlesCount: 0,
+						scope: `category:${categoryId}`,
+						generation,
+					},
 				};
 				await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(empty));
 				return;
@@ -362,7 +376,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? result[result.length - 1]?.id ?? null : null,
+				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),

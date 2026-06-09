@@ -197,7 +197,7 @@ describe('read-state sync', () => {
 				'latest',
 				30,
 			])?.pages[0]?.data,
-		).toEqual([]);
+		).toEqual([article('article-1', 'feed-1', true)]);
 		expect(
 			qc.getQueryData<{ pages: ApiListResponse<ArticleListItem>[] }>([
 				'articles',
