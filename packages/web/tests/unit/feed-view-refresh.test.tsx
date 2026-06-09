@@ -1,30 +1,22 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedView } from '../../src/components/articles/feed-view';
 
 const refreshFeed = vi.fn();
 const useKeyboardNavMock = vi.fn();
 const openWindowMock = vi.fn();
+const useInfiniteArticlesMock = vi.fn();
+const updatePreferencesMutate = vi.fn();
 let isRefreshingAllFeeds = false;
+let hideReadPreference = false;
 
 vi.mock('../../src/hooks/queries', () => ({
-	useInfiniteArticles: () => ({
-		data: {
-			pages: [
-				{
-					data: [{ id: 'article-7', isRead: false }],
-				},
-			],
-		},
-		isFetching: false,
-		isFetchingNextPage: false,
-		isLoading: false,
-		fetchNextPage: vi.fn(),
-		hasNextPage: false,
-	}),
+	useInfiniteArticles: (params: unknown) => useInfiniteArticlesMock(params),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
 	useMarkRead: () => ({ mutate: vi.fn() }),
+	usePreferences: () => ({ data: { hideRead: hideReadPreference } }),
 	usePrefetchArticle: () => vi.fn(),
+	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
 }));
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
@@ -63,6 +55,21 @@ describe('FeedView refresh', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		isRefreshingAllFeeds = false;
+		hideReadPreference = false;
+		useInfiniteArticlesMock.mockReturnValue({
+			data: {
+				pages: [
+					{
+						data: [{ id: 'article-7', isRead: false }],
+					},
+				],
+			},
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
 		useKeyboardNavMock.mockImplementation(() => undefined);
 		vi.stubGlobal('open', openWindowMock);
 	});
@@ -114,5 +121,30 @@ describe('FeedView refresh', () => {
 			'_blank',
 			'noopener,noreferrer',
 		);
+	});
+
+	it('uses the persisted unread-only preference when loading articles', async () => {
+		hideReadPreference = true;
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		await waitFor(() => {
+			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+				expect.objectContaining({ unreadOnly: true }),
+			);
+		});
+	});
+
+	it('persists toolbar unread-only changes to preferences', async () => {
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Unread' }));
+
+		expect(updatePreferencesMutate).toHaveBeenCalledWith({ hideRead: true });
+		await waitFor(() => {
+			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+				expect.objectContaining({ unreadOnly: true }),
+			);
+		});
 	});
 });
