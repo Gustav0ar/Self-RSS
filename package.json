@@ -23,7 +23,7 @@
 		"dev:api": "API_HOST=0.0.0.0 bun run --filter '@self-feed/api' dev",
 		"dev:worker": "bun run --filter '@self-feed/api' dev:worker",
 		"dev:web": "bun run --filter '@self-feed/web' dev",
-		"dev:services": "bunx concurrently -k -n api,worker,web \"bun run dev:api\" \"bun run dev:worker\" \"bun run dev:web\"",
+		"dev:services": "bun scripts/dev-services.ts",
 		"dev:prepare": "bun scripts/compose.ts stop api worker web || true && (command -v fuser >/dev/null && fuser -k 3000/tcp >/dev/null 2>&1 || true) && (command -v lsof >/dev/null && lsof -tiTCP:3000 -sTCP:LISTEN | xargs -r kill >/dev/null 2>&1 || true)",
 		"dev:infra": "bun scripts/compose.ts up -d redis",
 		"dev:down": "bun scripts/compose.ts down",
