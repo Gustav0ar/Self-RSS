@@ -23,6 +23,7 @@ class SelfFeedApplication : Application() {
         repository = RssRepository(
             api = api,
             sessionStore = sessionStore,
+            okHttpClient = okHttp,
             moshi = moshi,
             offlineCacheStore = offlineCacheStore,
         )

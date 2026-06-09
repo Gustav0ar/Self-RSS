@@ -5,6 +5,7 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
 import type { FeedSyncService } from './feed-sync.service.js';
+import type { RealtimeService } from './realtime.service.js';
 
 export class ArticleService {
 	constructor(
@@ -13,6 +14,7 @@ export class ArticleService {
 		private metricsRepo: MetricsRepository,
 		private redis: Redis,
 		private feedSyncService?: FeedSyncService,
+		private realtimeService?: RealtimeService,
 	) {}
 
 	async getArticles(
@@ -87,22 +89,48 @@ export class ArticleService {
 		};
 	}
 
-	async markRead(userId: string, articleId: string, read: boolean, source: string) {
+	async markRead(
+		userId: string,
+		articleId: string,
+		read: boolean,
+		source: string,
+		clientId: string | null = null,
+	) {
 		const article = await this.articleRepo.findRefForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
 
+		let changed = false;
 		if (read) {
-			await this.articleRepo.markRead(userId, articleId, source);
-			await this.metricsRepo.incrementReadCount(userId, 1);
+			changed = await this.articleRepo.markRead(userId, articleId, source);
+			if (changed) {
+				await this.metricsRepo.incrementReadCount(userId, 1);
+			}
 		} else {
-			await this.articleRepo.markUnread(userId, articleId);
+			changed = await this.articleRepo.markUnread(userId, articleId);
 		}
 
-		await this.invalidateUnreadCache(userId, [article.feedId]);
+		if (changed) {
+			await this.invalidateUnreadCache(userId, [article.feedId]);
+			await this.realtimeService?.publishReadStateEvent(userId, {
+				type: 'article.read_state_changed',
+				eventId: crypto.randomUUID(),
+				articleId,
+				feedId: article.feedId,
+				isRead: read,
+				source,
+				clientId,
+				updatedAt: new Date().toISOString(),
+			});
+		}
+
 		return { success: true };
 	}
 
-	async markAllRead(userId: string, options: { categoryId?: string; feedId?: string }) {
+	async markAllRead(
+		userId: string,
+		options: { categoryId?: string; feedId?: string },
+		clientId: string | null = null,
+	) {
 		let feedIds: string[] = [];
 
 		if (options.feedId) {
@@ -120,6 +148,15 @@ export class ArticleService {
 		const count = await this.articleRepo.markAllRead(userId, feedIds);
 		if (count > 0) {
 			await this.metricsRepo.incrementReadCount(userId, count);
+			await this.realtimeService?.publishReadStateEvent(userId, {
+				type: 'articles.marked_read',
+				eventId: crypto.randomUUID(),
+				feedIds,
+				scope: options,
+				markedCount: count,
+				clientId,
+				updatedAt: new Date().toISOString(),
+			});
 		}
 		await this.invalidateUnreadCache(userId, feedIds);
 		return { markedCount: count };

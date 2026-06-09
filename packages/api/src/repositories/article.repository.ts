@@ -198,13 +198,20 @@ export class ArticleRepository {
 	}
 
 	async markRead(userId: string, articleId: string, source: string) {
-		await this.db.insert(articleReads).values({ userId, articleId, source }).onConflictDoNothing();
+		const inserted = await this.db
+			.insert(articleReads)
+			.values({ userId, articleId, source })
+			.onConflictDoNothing()
+			.returning({ articleId: articleReads.articleId });
+		return inserted.length > 0;
 	}
 
 	async markUnread(userId: string, articleId: string) {
-		await this.db
+		const deleted = await this.db
 			.delete(articleReads)
-			.where(and(eq(articleReads.userId, userId), eq(articleReads.articleId, articleId)));
+			.where(and(eq(articleReads.userId, userId), eq(articleReads.articleId, articleId)))
+			.returning({ articleId: articleReads.articleId });
+		return deleted.length > 0;
 	}
 
 	async markAllRead(userId: string, feedIds: string[]) {

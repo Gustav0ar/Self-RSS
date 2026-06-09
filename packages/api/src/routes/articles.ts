@@ -37,11 +37,13 @@ export function createArticleRoutes(articleService: ArticleService) {
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const body = await parseBody(c, markReadSchema);
+		const clientId = c.req.header('X-Self-Feed-Client-Id') ?? null;
 		const result = await articleService.markRead(
 			userId,
 			articleId,
 			body.read,
 			body.source ?? 'manual',
+			clientId,
 		);
 		return c.json({ data: result });
 	});
@@ -49,7 +51,8 @@ export function createArticleRoutes(articleService: ArticleService) {
 	routes.patch('/mark-all-read', async (c) => {
 		const userId = c.get('userId');
 		const body = await parseBody(c, markAllReadSchema);
-		const result = await articleService.markAllRead(userId, body);
+		const clientId = c.req.header('X-Self-Feed-Client-Id') ?? null;
+		const result = await articleService.markAllRead(userId, body, clientId);
 		return c.json({ data: result });
 	});
 

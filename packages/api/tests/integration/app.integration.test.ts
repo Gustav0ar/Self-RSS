@@ -103,6 +103,79 @@ async function authedFormRequest(path: string, token: string, body: FormData) {
 	return { response, body: payload };
 }
 
+function createSseReader(response: Response) {
+	const reader = response.body?.getReader();
+	if (!reader) {
+		throw new Error('Expected streaming response body');
+	}
+	const decoder = new TextDecoder();
+	let buffer = '';
+
+	function parse(rawEvent: string) {
+		let event = 'message';
+		const data: string[] = [];
+		for (const rawLine of rawEvent.split('\n')) {
+			const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+			if (line.startsWith(':')) {
+				continue;
+			}
+			const separator = line.indexOf(':');
+			const field = separator === -1 ? line : line.slice(0, separator);
+			const rawValue = separator === -1 ? '' : line.slice(separator + 1);
+			const value = rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue;
+			if (field === 'event') {
+				event = value;
+			} else if (field === 'data') {
+				data.push(value);
+			}
+		}
+		return { event, data: data.length ? JSON.parse(data.join('\n')) : null };
+	}
+
+	return {
+		async next(timeoutMs = 2000) {
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			const timeout = new Promise<never>((_, reject) => {
+				timeoutId = setTimeout(
+					() => reject(new Error('Timed out waiting for SSE event')),
+					timeoutMs,
+				);
+			});
+
+			try {
+				return await Promise.race([
+					(async () => {
+						while (true) {
+							const eventBoundary = buffer.indexOf('\n\n');
+							if (eventBoundary >= 0) {
+								const rawEvent = buffer.slice(0, eventBoundary);
+								buffer = buffer.slice(eventBoundary + 2);
+								if (rawEvent.trim()) {
+									return parse(rawEvent);
+								}
+							}
+
+							const { done, value } = await reader.read();
+							if (done) {
+								throw new Error('SSE stream closed before the next event');
+							}
+							buffer += decoder.decode(value, { stream: true });
+						}
+					})(),
+					timeout,
+				]);
+			} finally {
+				if (timeoutId) {
+					clearTimeout(timeoutId);
+				}
+			}
+		},
+		async cancel() {
+			await reader.cancel();
+		},
+	};
+}
+
 async function startFeedServer(xml: string) {
 	const server = createServer((_req, res) => {
 		res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
@@ -132,6 +205,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+	await deps.services.realtime.close();
 	await closeRedis();
 	await closeDb();
 });
@@ -459,6 +533,7 @@ describe('API integration', () => {
 		</rss>`;
 
 		const feedServer = await startFeedServer(feedXml);
+		let events: ReturnType<typeof createSseReader> | null = null;
 		try {
 			const feed = await authedRequest('/api/v1/feeds', token, {
 				method: 'POST',
@@ -498,11 +573,36 @@ describe('API integration', () => {
 			expect(search.response.status).toBe(200);
 			expect(search.body.data[0].title).toBe('Alpha Integration Story');
 
+			const eventResponse = await app.request('/api/v1/events/read-state', {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					'X-Self-Feed-Client-Id': 'listener-client',
+				},
+			});
+			expect(eventResponse.status).toBe(200);
+			expect(eventResponse.headers.get('Content-Type')).toContain('text/event-stream');
+			events = createSseReader(eventResponse);
+			const connectedEvent = await events.next();
+			expect(connectedEvent.event).toBe('read-state.connected');
+
 			const markRead = await authedRequest(`/api/v1/articles/${articleId}/read`, token, {
 				method: 'PATCH',
+				headers: {
+					'X-Self-Feed-Client-Id': 'writer-client',
+				},
 				body: JSON.stringify({ read: true }),
 			});
 			expect(markRead.response.status).toBe(200);
+			const markReadEvent = await events.next();
+			expect(markReadEvent.event).toBe('read-state');
+			expect(markReadEvent.data).toMatchObject({
+				type: 'article.read_state_changed',
+				articleId,
+				feedId: feed.body.data.id,
+				isRead: true,
+				source: 'manual',
+				clientId: 'writer-client',
+			});
 
 			const feedListAfterMarkRead = await authedRequest('/api/v1/feeds', token);
 			expect(feedListAfterMarkRead.response.status).toBe(200);
@@ -516,10 +616,24 @@ describe('API integration', () => {
 
 			const markAll = await authedRequest('/api/v1/articles/mark-all-read', token, {
 				method: 'PATCH',
+				headers: {
+					'X-Self-Feed-Client-Id': 'writer-client',
+				},
 				body: JSON.stringify({ categoryId: category.body.data.id }),
 			});
 			expect(markAll.response.status).toBe(200);
 			expect(markAll.body.data.markedCount).toBe(1);
+			const markAllEvent = await events.next();
+			expect(markAllEvent.event).toBe('read-state');
+			expect(markAllEvent.data).toMatchObject({
+				type: 'articles.marked_read',
+				feedIds: [feed.body.data.id],
+				scope: { categoryId: category.body.data.id },
+				markedCount: 1,
+				clientId: 'writer-client',
+			});
+			await events.cancel();
+			events = null;
 
 			const feedListAfterMarkAll = await authedRequest('/api/v1/feeds', token);
 			expect(feedListAfterMarkAll.response.status).toBe(200);
@@ -544,7 +658,8 @@ describe('API integration', () => {
 			expect(stats.body.data.totalRead).toBe(2);
 			expect(stats.body.data.dailyMetrics[0].searchCount).toBeGreaterThanOrEqual(1);
 		} finally {
-			feedServer.stop();
+			await events?.cancel().catch(() => undefined);
+			await feedServer.stop();
 		}
 	});
 

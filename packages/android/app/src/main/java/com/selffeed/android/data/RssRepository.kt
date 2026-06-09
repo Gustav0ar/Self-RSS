@@ -11,23 +11,41 @@ import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.LoginRequest
 import com.selffeed.android.network.MarkAllReadRequest
 import com.selffeed.android.network.MarkReadRequest
+import com.selffeed.android.network.ReadStateEventPayload
+import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.RegisterRequest
+import com.selffeed.android.network.SseEventParser
 import com.selffeed.android.network.UpdateAppSettingsRequest
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
+import com.selffeed.android.network.toReadStateEvent
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
@@ -40,6 +58,7 @@ sealed interface AppResult<out T> {
 class RssRepository(
     private val api: RssApi,
     private val sessionStore: SessionStore,
+    okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val offlineCacheStore: OfflineCacheStore,
 ) {
@@ -54,6 +73,10 @@ class RssRepository(
     private val cache = ConcurrentHashMap<String, CacheEntry<Any?>>()
     private val cacheLocks = ConcurrentHashMap<String, Mutex>()
     private val apiErrorAdapter: JsonAdapter<ApiErrorEnvelope> = moshi.adapter(ApiErrorEnvelope::class.java)
+    private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
+    private val readStateClient = okHttpClient.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
 
     suspend fun registrationStatus() = safeReadCall {
         api.registrationStatus().data
@@ -243,6 +266,30 @@ class RssRepository(
     suspend fun markAllRead(feedId: String? = null, categoryId: String? = null) = safeCall {
         api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data.markedCount.also {
             invalidateFeedAndArticleCaches()
+        }
+    }
+
+    fun clientId(): String = sessionStore.getClientId()
+
+    fun readStateEvents(): Flow<ReadStateSyncEvent> = flow {
+        var reconnectAttempt = 0
+        while (currentCoroutineContext().isActive && isLoggedIn()) {
+            try {
+                readStateEventsOnce().collect { event ->
+                    reconnectAttempt = 0
+                    emit(event)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                debugLog("Read-state stream disconnected: ${e.message ?: e::class.java.simpleName}")
+            }
+
+            if (!currentCoroutineContext().isActive || !isLoggedIn()) {
+                break
+            }
+            delay(readStateReconnectDelay(reconnectAttempt))
+            reconnectAttempt++
         }
     }
 
@@ -469,6 +516,14 @@ class RssRepository(
         offlineCacheStore.clearByPrefix("categories")
     }
 
+    fun invalidateReadStateCaches(articleId: String? = null) {
+        if (articleId != null) {
+            invalidateByPrefix("article:$articleId")
+            offlineCacheStore.clearByPrefix("article-$articleId")
+        }
+        invalidateFeedAndArticleCaches()
+    }
+
     private fun clearCacheAndDatabase() {
         clearCache()
         offlineCacheStore.clearAll()
@@ -493,6 +548,67 @@ class RssRepository(
         offlineCacheStore.clearByPrefix("articles-")
     }
 
+    private fun readStateEventsOnce(): Flow<ReadStateSyncEvent> = callbackFlow stream@ {
+        val request = Request.Builder()
+            .url("${BuildConfig.API_BASE_URL.trimEnd('/')}/events/read-state")
+            .header("Accept", "text/event-stream")
+            .build()
+        val call = readStateClient.newCall(request)
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (call.isCanceled()) {
+                        this@stream.close()
+                    } else {
+                        this@stream.close(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!response.isSuccessful) {
+                            this@stream.close(IOException("Read-state stream failed with HTTP ${response.code}"))
+                            return
+                        }
+
+                        val body = response.body
+                        if (body == null) {
+                            this@stream.close(IOException("Read-state stream response did not include a body"))
+                            return
+                        }
+
+                        val parser = SseEventParser()
+                        try {
+                            val source = body.source()
+                            while (!call.isCanceled()) {
+                                val line = source.readUtf8Line() ?: break
+                                parser.pushLine(line)
+                                    ?.toReadStateEvent(readStateEventAdapter)
+                                    ?.let { this@stream.trySend(it) }
+                            }
+                            parser.flush()
+                                ?.toReadStateEvent(readStateEventAdapter)
+                                ?.let { this@stream.trySend(it) }
+                            this@stream.close()
+                        } catch (e: IOException) {
+                            if (call.isCanceled()) {
+                                this@stream.close()
+                            } else {
+                                this@stream.close(e)
+                            }
+                        }
+                    }
+                }
+            },
+        )
+
+        awaitClose { call.cancel() }
+    }
+
+    private fun readStateReconnectDelay(attempt: Int): Long =
+        (READ_STATE_RECONNECT_INITIAL_DELAY_MS * (1L shl attempt.coerceAtMost(5)))
+            .coerceAtMost(READ_STATE_RECONNECT_MAX_DELAY_MS)
+
     private fun debugLog(message: String) {
         if (!BuildConfig.DEBUG) return
         Log.d("RssRepository", message)
@@ -507,6 +623,8 @@ class RssRepository(
         const val READ_RETRY_MAX_ATTEMPTS = 3
         const val READ_RETRY_INITIAL_DELAY_MS = 180L
         const val READ_RETRY_MAX_DELAY_MS = 1000L
+        const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1000L
+        const val READ_STATE_RECONNECT_MAX_DELAY_MS = 30_000L
         val RETRIABLE_HTTP_CODES = setOf(429, 500, 502, 503, 504)
 
         const val USER_TTL_MS = 15_000L

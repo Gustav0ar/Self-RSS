@@ -69,6 +69,10 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 }));
 
+vi.mock('../../src/hooks/use-read-state-sync', () => ({
+	useReadStateSync: vi.fn(),
+}));
+
 describe('RootLayout routing', () => {
 	it('navigates to article URLs while preserving the current feed context', () => {
 		render(<RootLayout />);
