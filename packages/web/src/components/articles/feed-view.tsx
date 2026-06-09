@@ -7,7 +7,9 @@ import {
 	useInfiniteArticles,
 	useMarkAllRead,
 	useMarkRead,
+	usePreferences,
 	usePrefetchArticle,
+	useUpdatePreferences,
 } from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
@@ -29,6 +31,8 @@ export function FeedView({
 }: FeedViewProps) {
 	const [unreadOnly, setUnreadOnly] = useState(false);
 	const [sort, setSort] = useState<SortOrder>('latest');
+	const { data: prefs } = usePreferences();
+	const updatePrefs = useUpdatePreferences();
 	const { feedSyncError } = useAppState();
 	const { allFeedsSyncStatus, isRefreshingAllFeeds, isRefreshingFeed, refreshFeed } =
 		useFeedRefresh();
@@ -145,6 +149,18 @@ export function FeedView({
 		(isFetching && articles.length === 0) ||
 		(isRefreshingCurrentSelection && articles.length === 0);
 
+	useEffect(() => {
+		if (typeof prefs?.hideRead === 'boolean') {
+			setUnreadOnly(prefs.hideRead);
+		}
+	}, [prefs?.hideRead]);
+
+	function handleUnreadOnlyToggle() {
+		const nextUnreadOnly = !unreadOnly;
+		setUnreadOnly(nextUnreadOnly);
+		updatePrefs.mutate({ hideRead: nextUnreadOnly });
+	}
+
 	return (
 		<div className="flex h-full min-h-0 flex-col lg:flex-row">
 			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[26rem] lg:border-b-0 lg:border-r xl:w-[30rem]">
@@ -174,11 +190,7 @@ export function FeedView({
 					</div>
 
 					<div className="mt-4 flex flex-wrap items-center gap-2">
-						<ToolbarButton
-							active={unreadOnly}
-							onClick={() => setUnreadOnly(!unreadOnly)}
-							label="Unread"
-						>
+						<ToolbarButton active={unreadOnly} onClick={handleUnreadOnlyToggle} label="Unread">
 							<Filter className="h-3.5 w-3.5" />
 						</ToolbarButton>
 						<ToolbarButton
