@@ -5,7 +5,6 @@ import { CacheKeys } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
-import type { ArticleCacheService } from './article-cache.service.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
@@ -18,6 +17,7 @@ import {
 	sanitizeHtml,
 	stripHtml,
 } from '../utils/sanitizer.js';
+import type { ArticleCacheService } from './article-cache.service.js';
 
 const logger = createLogger();
 

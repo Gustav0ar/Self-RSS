@@ -51,18 +51,14 @@ function updateArticleListResponseReadState(
 	response: ApiListResponse<ArticleListItem>,
 	articleId: string,
 	read: boolean,
-	removeReadArticle = false,
 ): ApiListResponse<ArticleListItem> {
 	let changed = false;
-	const data = response.data.flatMap((article) => {
+	const data = response.data.map((article) => {
 		if (article.id !== articleId || article.isRead === read) {
-			return [article];
+			return article;
 		}
 		changed = true;
-		if (read && removeReadArticle) {
-			return [];
-		}
-		return [{ ...article, isRead: read }];
+		return { ...article, isRead: read };
 	});
 
 	return changed ? { ...response, data } : response;
@@ -72,7 +68,6 @@ function updateArticleReadStateInCachedQuery(
 	value: unknown,
 	articleId: string,
 	read: boolean,
-	removeReadArticle = false,
 ): unknown {
 	if (!value || typeof value !== 'object') {
 		return value;
@@ -87,7 +82,6 @@ function updateArticleReadStateInCachedQuery(
 						page as ApiListResponse<ArticleListItem>,
 						articleId,
 						read,
-						removeReadArticle,
 					);
 				}
 				return page;
@@ -100,7 +94,6 @@ function updateArticleReadStateInCachedQuery(
 			value as ApiListResponse<ArticleListItem>,
 			articleId,
 			read,
-			removeReadArticle,
 		);
 	}
 
@@ -339,13 +332,8 @@ function applyArticleReadState(qc: QueryClient, articleId: string, read: boolean
 	qc.setQueryData<ArticleDetail>(articleQueryKey(articleId), (article) =>
 		article ? { ...article, isRead: read } : article,
 	);
-	updateArticleQueries(qc, (queryKey, value) =>
-		updateArticleReadStateInCachedQuery(
-			value,
-			articleId,
-			read,
-			read && isUnreadOnlyArticlesQuery(queryKey),
-		),
+	updateArticleQueries(qc, (_queryKey, value) =>
+		updateArticleReadStateInCachedQuery(value, articleId, read),
 	);
 	qc.setQueriesData({ queryKey: ['search'] }, (value) =>
 		updateArticleReadStateInCachedQuery(value, articleId, read),

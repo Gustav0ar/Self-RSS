@@ -49,7 +49,8 @@ export const CacheKeys = {
 	articleCacheWarming: (userId: string) => `articles:warming:${userId}`,
 	// Scoped article caches (by feed or category)
 	articleListByFeed: (userId: string, feedId: string) => `articles:list:${userId}:feed:${feedId}`,
-	articleListByCategory: (userId: string, categoryId: string) => `articles:list:${userId}:cat:${categoryId}`,
+	articleListByCategory: (userId: string, categoryId: string) =>
+		`articles:list:${userId}:cat:${categoryId}`,
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
 } as const;
