@@ -52,17 +52,9 @@ private val DarkColors = darkColorScheme(
 @Composable
 fun SelfFeedTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    isAmoled: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    var colorScheme = if (darkTheme) DarkColors else LightColors
-    if (darkTheme && isAmoled) {
-        colorScheme = colorScheme.copy(
-            background = Color.Black,
-            surface = Color.Black,
-            surfaceVariant = Color(0xFF121212),
-        )
-    }
+    val colorScheme = if (darkTheme) DarkColors else LightColors
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {

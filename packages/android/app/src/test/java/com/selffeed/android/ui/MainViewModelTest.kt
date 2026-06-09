@@ -13,6 +13,7 @@ import com.selffeed.android.network.ReadStateScope
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
 import io.mockk.coEvery
@@ -464,6 +465,41 @@ class MainViewModelTest {
     }
 
     @Test
+    fun loadPreferences_migratesAmoledThemeToDark() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(theme = "amoled"))
+        coEvery { repository.updatePreferences(UpdatePreferencesRequest(theme = "dark")) } returns AppResult.Success(
+            samplePreferences(theme = "dark"),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.loadPreferences()
+        advanceUntilIdle()
+
+        assertEquals("dark", viewModel.uiState.value.preferences?.theme)
+        coVerify(exactly = 1) { repository.updatePreferences(UpdatePreferencesRequest(theme = "dark")) }
+    }
+
+    @Test
+    fun updateTheme_normalizesAmoledToDark() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery { repository.updatePreferences(UpdatePreferencesRequest(theme = "dark")) } returns AppResult.Success(
+            samplePreferences(theme = "dark"),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.updateTheme("amoled")
+        advanceUntilIdle()
+
+        assertEquals("dark", viewModel.uiState.value.preferences?.theme)
+        coVerify(exactly = 1) { repository.updatePreferences(UpdatePreferencesRequest(theme = "dark")) }
+    }
+
+    @Test
     fun resetDebugMetrics_doesNotCrash() = runTest {
         every { repository.isLoggedIn() } returns false
 
@@ -485,9 +521,12 @@ class MainViewModelTest {
         updatedAt = "2026-01-01T00:00:00.000Z",
     )
 
-    private fun samplePreferences(hideRead: Boolean = false): UserPreferences = UserPreferences(
+    private fun samplePreferences(
+        hideRead: Boolean = false,
+        theme: String = "system",
+    ): UserPreferences = UserPreferences(
         userId = "user-1",
-        theme = "system",
+        theme = theme,
         fontFamily = "system-ui",
         textSize = 16,
         density = "comfortable",

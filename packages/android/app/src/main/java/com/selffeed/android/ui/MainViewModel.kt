@@ -705,7 +705,13 @@ class MainViewModel(
     fun loadPreferences() {
         viewModelScope.launch {
             when (val result = repository.preferences()) {
-                is AppResult.Success -> _uiState.update { it.copy(preferences = result.data) }
+                is AppResult.Success -> {
+                    val normalizedPreferences = result.data.withNormalizedTheme()
+                    _uiState.update { it.copy(preferences = normalizedPreferences) }
+                    if (result.data.theme != normalizedPreferences.theme) {
+                        persistNormalizedTheme(normalizedPreferences.theme)
+                    }
+                }
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
             }
         }
@@ -779,9 +785,15 @@ class MainViewModel(
     }
 
     fun updateTheme(theme: String) {
+        val normalizedTheme = normalizeThemePreference(theme)
         viewModelScope.launch {
-            when (val result = repository.updatePreferences(UpdatePreferencesRequest(theme = theme))) {
-                is AppResult.Success -> _uiState.update { it.copy(preferences = result.data, statusMessage = "Theme updated") }
+            when (val result = repository.updatePreferences(UpdatePreferencesRequest(theme = normalizedTheme))) {
+                is AppResult.Success -> _uiState.update {
+                    it.copy(
+                        preferences = result.data.withNormalizedTheme(),
+                        statusMessage = "Theme updated",
+                    )
+                }
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
             }
         }
@@ -1010,6 +1022,23 @@ class MainViewModel(
             totalUnread = (totalUnread + unreadDelta).coerceAtLeast(0),
             totalRead = (totalRead + readDelta).coerceAtLeast(0),
         )
+
+    private suspend fun persistNormalizedTheme(theme: String) {
+        when (val result = repository.updatePreferences(UpdatePreferencesRequest(theme = theme))) {
+            is AppResult.Success -> _uiState.update {
+                it.copy(preferences = result.data.withNormalizedTheme())
+            }
+            is AppResult.Error -> Unit
+        }
+    }
+
+    private fun UserPreferences.withNormalizedTheme(): UserPreferences {
+        val normalizedTheme = normalizeThemePreference(theme)
+        return if (theme == normalizedTheme) this else copy(theme = normalizedTheme)
+    }
+
+    private fun normalizeThemePreference(theme: String): String =
+        if (theme == "amoled") "dark" else theme
 
     private suspend fun loadRegistrationEnabled(): Boolean =
         when (val result = repository.registrationStatus()) {
