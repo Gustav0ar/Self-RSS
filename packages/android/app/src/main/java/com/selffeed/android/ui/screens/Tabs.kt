@@ -48,7 +48,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -582,6 +581,7 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
 @Composable
 fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
     val prefs = state.preferences ?: return
+    val selectedTheme = normalizeThemePreference(prefs.theme)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -605,10 +605,9 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                 Text("Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = prefs.theme == "light", onClick = { viewModel.updateTheme("light") }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = null) })
-                    FilterChip(selected = prefs.theme == "dark", onClick = { viewModel.updateTheme("dark") }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) })
-                    FilterChip(selected = prefs.theme == "amoled", onClick = { viewModel.updateTheme("amoled") }, label = { Text("AMOLED") }, leadingIcon = { Icon(Icons.Outlined.PhoneAndroid, contentDescription = null) })
-                    FilterChip(selected = prefs.theme == "system", onClick = { viewModel.updateTheme("system") }, label = { Text("System") })
+                    FilterChip(selected = selectedTheme == "light", onClick = { viewModel.updateTheme("light") }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = null) })
+                    FilterChip(selected = selectedTheme == "dark", onClick = { viewModel.updateTheme("dark") }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) })
+                    FilterChip(selected = selectedTheme == "system", onClick = { viewModel.updateTheme("system") }, label = { Text("System") })
                 }
             }
         }
@@ -695,6 +694,9 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
         }
     }
 }
+
+private fun normalizeThemePreference(theme: String): String =
+    if (theme == "amoled") "dark" else theme
 
 @Composable
 fun StatsTab(state: AppUiState, viewModel: MainViewModel) {

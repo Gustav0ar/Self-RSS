@@ -23,16 +23,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
-            val theme = state.preferences?.theme ?: "system"
-            val isAmoled = theme == "amoled"
+            val theme = normalizeThemePreference(state.preferences?.theme ?: "system")
             val darkTheme = when (theme) {
                 "light" -> false
-                "dark", "amoled" -> true
+                "dark" -> true
                 else -> isSystemInDarkTheme()
             }
-            SelfFeedTheme(darkTheme = darkTheme, isAmoled = isAmoled) {
+            SelfFeedTheme(darkTheme = darkTheme) {
                 SelfFeedApp(viewModel)
             }
         }
     }
+
+    private fun normalizeThemePreference(theme: String): String =
+        if (theme == "amoled") "dark" else theme
 }
