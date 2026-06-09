@@ -3,6 +3,7 @@ import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
 import { closeRedis, getRedis } from './db/redis.js';
 import {
+	startCacheWarmer,
 	startQueuedSyncWorker,
 	startRetentionCleanup,
 	startSyncScheduler,
@@ -39,6 +40,11 @@ try {
 		syncCoordinator,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article);
+	const stopCacheWarmer = startCacheWarmer(
+		deps.services.articleCache,
+		deps.repos.user,
+		60 * 1000, // 1 minute interval
+	);
 
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
@@ -48,6 +54,7 @@ try {
 		stopSyncScheduler();
 		stopQueuedSyncWorker();
 		stopRetentionCleanup();
+		stopCacheWarmer();
 		await Promise.allSettled([closeRedis(), closeDb()]);
 		process.exit(0);
 	};

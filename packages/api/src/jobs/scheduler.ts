@@ -1,5 +1,6 @@
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedSyncService } from '../services/feed-sync.service.js';
+import type { ArticleCacheService } from '../services/article-cache.service.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger();
@@ -10,7 +11,7 @@ interface SyncCoordinator {
 
 export function startSyncScheduler(
 	syncService: FeedSyncService,
-	intervalMs: number = 5 * 60 * 1000,
+	intervalMs: number = 60 * 1000,
 	coordinator: SyncCoordinator = { isRunning: false },
 ) {
 	logger.info('Feed sync scheduler started', { intervalMs });
@@ -96,6 +97,66 @@ export function startRetentionCleanup(
 		} finally {
 			isRunning = false;
 		}
+	}, intervalMs);
+
+	return () => clearInterval(interval);
+}
+
+/**
+ * Periodically warms the article cache for all active users.
+ * Prioritizes recently active users for faster perceived performance.
+ * Runs every minute to ensure fresh cached data is available on user refresh.
+ */
+export function startCacheWarmer(
+	articleCache: ArticleCacheService,
+	userRepo: { findActiveUserIds(): Promise<string[]> },
+	intervalMs: number = 60 * 1000, // 1 minute
+) {
+	logger.info('Article cache warmer started', { intervalMs });
+	let isRunning = false;
+
+	const warmOnce = async () => {
+		if (isRunning) return;
+		isRunning = true;
+		try {
+			// Get recently active users first (priority)
+			const recentUserIds = await articleCache.getRecentlyActiveUserIds(10);
+			const allUserIds = await userRepo.findActiveUserIds();
+
+			// Use Set for O(1) lookup instead of O(N) includes()
+			const recentSet = new Set(recentUserIds);
+			const priorityUsers = recentUserIds;
+			const idleUsers = allUserIds.filter((id) => !recentSet.has(id));
+
+			// Warm priority users first (they're more likely to refresh soon)
+			const warmUsers = async (users: string[], label: string) => {
+				if (users.length === 0) return;
+				const concurrency = 5;
+				for (let i = 0; i < users.length; i += concurrency) {
+					const batch = users.slice(i, i + concurrency);
+					await Promise.allSettled(batch.map((userId) => articleCache.populateCache(userId)));
+				}
+				logger.debug(`Cache warming ${label}`, { userCount: users.length });
+			};
+
+			// Warm recently active users first
+			await warmUsers(priorityUsers, 'priority');
+
+			// Then warm idle users (lower priority)
+			await warmUsers(idleUsers, 'idle');
+		} catch (err) {
+			logger.error('Cache warmer error', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			isRunning = false;
+		}
+	};
+
+	// Run immediately on startup, then on interval
+	void warmOnce();
+	const interval = setInterval(() => {
+		void warmOnce();
 	}, intervalMs);
 
 	return () => clearInterval(interval);

@@ -611,8 +611,10 @@ export function useSyncAllFeeds() {
 		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
-			invalidateReaderQueries(qc);
-			for (const delayMs of [3_000, 10_000, 30_000]) {
+			// Immediate optimistic refresh of articles for fast UI update
+			qc.invalidateQueries({ queryKey: ['articles'] });
+			// Additional refreshes at staggered intervals for background sync
+			for (const delayMs of [2_000, 5_000, 15_000]) {
 				globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
 			}
 		},
@@ -647,6 +649,10 @@ export function useArticles(params: ArticleQueryParams = {}) {
 	return useQuery({
 		queryKey: ['articles', params],
 		queryFn: () => apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`),
+		// Optimistic UI: show cached data immediately, refresh in background
+		placeholderData: (prev) => prev,
+		staleTime: 30_000, // Consider data fresh for 30s to avoid unnecessary refetches
+		gcTime: 5 * 60_000, // Keep in cache for 5 minutes
 	});
 }
 

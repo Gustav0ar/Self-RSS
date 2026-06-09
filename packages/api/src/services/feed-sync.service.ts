@@ -5,6 +5,7 @@ import { CacheKeys } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
+import type { ArticleCacheService } from './article-cache.service.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
@@ -36,6 +37,7 @@ interface PendingArticleEnrichment {
 	canonicalUrl: string;
 	contentHtml: string | null;
 	heroImageUrl: string | null;
+	fetchedAt: Date; // Used for priority sorting - more recent = higher priority
 }
 
 type FeedItemRecord = Record<string, unknown>;
@@ -55,6 +57,7 @@ export class FeedSyncService {
 		private metricsRepo: MetricsRepository,
 		private redis: Redis,
 		private config: SyncConfig,
+		private articleCache?: ArticleCacheService,
 	) {
 		this.parser = new RSSParser({
 			timeout: this.config.timeoutMs,
@@ -99,6 +102,7 @@ export class FeedSyncService {
 				string,
 				Omit<PendingArticleEnrichment, 'articleId'>
 			>();
+			const now = new Date(); // Use consistent timestamp for all enrichments in this sync
 			const guids = items
 				.map((item, index) => this.resolveItemGuid(item, index))
 				.filter((guid): guid is string => !!guid);
@@ -178,6 +182,7 @@ export class FeedSyncService {
 							canonicalUrl: canonicalUrl!,
 							contentHtml: sanitizedHtml || null,
 							heroImageUrl: heroImage,
+							fetchedAt: publishedAt ?? now,
 						});
 					}
 					return;
@@ -192,6 +197,7 @@ export class FeedSyncService {
 						canonicalUrl: canonicalUrl!,
 						contentHtml: sanitizedHtml || null,
 						heroImageUrl: heroImage,
+						fetchedAt: publishedAt ?? now,
 					});
 				}
 				articlesToInsert.push({
@@ -254,6 +260,11 @@ export class FeedSyncService {
 
 			if (pendingEnrichments.length > 0) {
 				void this.enrichArticlesInBackground(pendingEnrichments);
+			}
+
+			// Populate article cache after sync completes
+			if (this.articleCache && insertedArticles.length > 0) {
+				void this.articleCache.populateCache(userId);
 			}
 
 			logger.info('Feed synced', {
@@ -331,6 +342,11 @@ export class FeedSyncService {
 		await Promise.all(
 			Array.from({ length: Math.min(bulkConcurrency, syncableFeeds.length) }, () => worker()),
 		);
+
+		// Populate cache after bulk sync completes
+		if (this.articleCache && newArticles > 0) {
+			void this.articleCache.populateCache(userId);
+		}
 
 		return {
 			totalFeeds: feeds.length,
@@ -428,6 +444,9 @@ export class FeedSyncService {
 	}
 
 	private async enrichArticlesInBackground(pendingEnrichments: PendingArticleEnrichment[]) {
+		// Sort by most recent first - users see recent articles first
+		pendingEnrichments.sort((a, b) => b.fetchedAt.getTime() - a.fetchedAt.getTime());
+
 		for (let i = 0; i < pendingEnrichments.length; i += ARTICLE_ENRICHMENT_CONCURRENCY) {
 			const batch = pendingEnrichments.slice(i, i + ARTICLE_ENRICHMENT_CONCURRENCY);
 			await Promise.allSettled(batch.map((item) => this.enrichSingleArticle(item)));

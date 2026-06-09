@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
+import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
@@ -15,6 +16,7 @@ export class ArticleService {
 		private redis: Redis,
 		private feedSyncService?: FeedSyncService,
 		private realtimeService?: RealtimeService,
+		private articleCache?: ArticleCacheService,
 	) {}
 
 	async getArticles(
@@ -29,6 +31,29 @@ export class ArticleService {
 		},
 	) {
 		const limit = options.limit ?? 20;
+
+		// Track user activity for priority warming (fire-and-forget)
+		void this.articleCache?.trackUserActivity(userId);
+
+		// Try cache first (only for initial load without cursor)
+		if (!options.cursor && this.articleCache) {
+			const cached = await this.articleCache.getCachedArticleList(userId, {
+				feedId: options.feedId,
+				categoryId: options.categoryId,
+				unreadOnly: options.unreadOnly,
+				sort: options.sort,
+				limit,
+			});
+			if (cached) {
+				return {
+					data: cached.articles,
+					cursor: cached.cursor,
+					hasMore: cached.hasMore,
+				};
+			}
+		}
+
+		// Fallback to DB query
 		let feedIds: string[] = [];
 
 		if (options.feedId) {
@@ -111,6 +136,7 @@ export class ArticleService {
 
 		if (changed) {
 			await this.invalidateUnreadCache(userId, [article.feedId]);
+			await this.articleCache?.invalidateCache(userId);
 			await this.realtimeService?.publishReadStateEvent(userId, {
 				type: 'article.read_state_changed',
 				eventId: crypto.randomUUID(),
@@ -159,6 +185,7 @@ export class ArticleService {
 			});
 		}
 		await this.invalidateUnreadCache(userId, feedIds);
+		await this.articleCache?.invalidateCache(userId);
 		return { markedCount: count };
 	}
 
@@ -187,6 +214,7 @@ export class ArticleService {
 			canonicalUrl,
 			contentHtml: article.contentHtml,
 			heroImageUrl: article.heroImageUrl,
+			fetchedAt: article.fetchedAt,
 		});
 
 		return { success: true };
