@@ -5,11 +5,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -81,15 +76,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.selffeed.android.network.ArticleListItem
@@ -335,15 +326,38 @@ private fun FeedRow(
 @Composable
 fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
     val listState = rememberLazyListState()
+    val pullToRefreshState = rememberPullToRefreshState()
+    val density = LocalDensity.current
 
     PullToRefreshBox(
         isRefreshing = state.isSyncingFeeds,
         onRefresh = { viewModel.syncAllFeeds() },
         modifier = Modifier.fillMaxSize(),
+        state = pullToRefreshState,
     ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val progress = pullToRefreshState.distanceFraction
+                    if (progress > 0f) {
+                        // Create the "rubber band" effect by offsetting and scaling the list
+                        translationY = with(density) {
+                            val offset = if (progress <= 1f) {
+                                progress * 80.dp.toPx()
+                            } else {
+                                // Resistive pull beyond threshold
+                                80.dp.toPx() + (progress - 1f) * 24.dp.toPx()
+                            }
+                            offset
+                        }
+
+                        val scale = 1f + (progress * 0.01f).coerceAtMost(0.015f)
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                },
             verticalArrangement = Arrangement.Top,
         ) {
             if (state.articles.isEmpty() && !state.isSyncingFeeds) {

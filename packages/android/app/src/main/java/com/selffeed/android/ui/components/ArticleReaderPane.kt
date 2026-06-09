@@ -5,6 +5,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,12 +36,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.utils.canPreviewMedia
@@ -66,7 +70,6 @@ fun ArticleReaderPane(
 
     BackHandler(onBack = onBackToList)
 
-    // Sync external selection to pager (e.g. if list changes or initial load)
     LaunchedEffect(selectedArticle.id) {
         val targetPage = articles.indexOfFirst { it.id == selectedArticle.id }
         if (targetPage != -1 && targetPage != pagerState.currentPage) {
@@ -74,7 +77,6 @@ fun ArticleReaderPane(
         }
     }
 
-    // Sync pager to external selection (when swiping)
     LaunchedEffect(pagerState.currentPage) {
         val articleId = articles[pagerState.currentPage].id
         if (articleId != selectedArticle.id) {
@@ -107,7 +109,7 @@ private fun ArticleDetailView(
 ) {
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
-    var previewEmbedUrl by rememberSaveable(article.id) { mutableStateOf<String?>(null) }
+    val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
 
     val backgroundColor = MaterialTheme.colorScheme.background
     val textColor = MaterialTheme.colorScheme.onSurface
@@ -165,7 +167,8 @@ private fun ArticleDetailView(
                 SecureHtmlContent(
                     html = article.contentHtml,
                     backgroundColor = backgroundColor,
-                    textColor = textColor
+                    textColor = textColor,
+                    documentBaseUrl = documentBaseUrl,
                 )
             } else {
                 Text(
@@ -173,24 +176,49 @@ private fun ArticleDetailView(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-            }
 
-            if (article.media.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(24.dp))
-                Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(12.dp))
-                article.media.take(8).forEach { media ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
-                            Text(media.provider.ifBlank { media.url })
-                        }
-                        if (canPreviewMedia(media.provider, media.embedUrl)) {
-                            androidx.compose.material3.TextButton(onClick = { previewEmbedUrl = media.embedUrl }) {
-                                Text("Preview")
+                if (article.media.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    article.media.take(24).forEach { media ->
+                        if (media.type == "image") {
+                            AsyncImage(
+                                model = media.url,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { openExternalUrl(context, media.url) },
+                                contentScale = ContentScale.Fit,
+                            )
+                        } else if (canPreviewMedia(media.provider, media.embedUrl)) {
+                            EmbedPlayer(
+                                embedUrl = media.embedUrl!!,
+                                backgroundColor = backgroundColor,
+                                documentBaseUrl = documentBaseUrl,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val label = when {
+                                    media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
+                                    media.type == "embed" -> "Embedded Content"
+                                    media.type == "video" -> "Video"
+                                    else -> "Media Link"
+                                }
+                                androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
+                                    Text(label)
+                                }
                             }
                         }
                     }
@@ -200,47 +228,87 @@ private fun ArticleDetailView(
 
         Spacer(modifier = Modifier.height(32.dp))
     }
+}
 
-    previewEmbedUrl?.let { embedUrl ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { previewEmbedUrl = null },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { previewEmbedUrl = null }) { Text("Close") }
-            },
-            title = { Text("Embedded Media") },
-            text = {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp),
-                    factory = { factoryContext ->
-                        WebView(factoryContext).apply {
-                            settings.javaScriptEnabled = true
-                            settings.allowFileAccess = false
-                            settings.allowContentAccess = false
-                            settings.domStorageEnabled = true
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            settings.safeBrowsingEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = true
-                            setBackgroundColor(Color.Transparent.hashCode())
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                    val url = request?.url?.toString()
-                                    return if (isTrustedEmbedUrl(url)) false else {
-                                        openExternalUrl(factoryContext, url)
-                                        true
-                                    }
-                                }
+@Composable
+private fun EmbedPlayer(
+    embedUrl: String,
+    backgroundColor: Color,
+    documentBaseUrl: String,
+    modifier: Modifier = Modifier
+) {
+    var heightDp by remember(embedUrl) { mutableStateOf(300) }
+    val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
+    val youtubeShellHtml = remember(embedUrl, hexBackground) {
+        if (isYouTubeEmbedUrl(embedUrl)) {
+            youtubeEmbedHtml(embedUrl = embedUrl, background = hexBackground)
+        } else {
+            null
+        }
+    }
+
+    AndroidView(
+        modifier = modifier.height(heightDp.dp),
+        factory = { context ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.domStorageEnabled = true
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                setBackgroundColor(backgroundColor.toArgb())
+
+                addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun updateHeight(h: Float) {
+                        post {
+                            val newHeightDp = h.toInt()
+                            if (newHeightDp > 0 && newHeightDp != heightDp) {
+                                heightDp = newHeightDp
                             }
                         }
-                    },
-                    update = { webView ->
-                        if (isTrustedEmbedUrl(embedUrl)) webView.loadUrl(embedUrl)
-                    },
-                )
-            },
-        )
-    }
+                    }
+                }, "Android")
+
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        evaluateJavascript(
+                            "(function() { " +
+                                "var lastHeight = 0; " +
+                                "function sendHeight() { " +
+                                "  var h = document.body.scrollHeight || document.documentElement.scrollHeight; " +
+                                "  if (h > 0 && h !== lastHeight) { lastHeight = h; window.Android.updateHeight(h); } " +
+                                "} " +
+                                "new ResizeObserver(sendHeight).observe(document.body); " +
+                                "setInterval(sendHeight, 1000); " +
+                                "sendHeight(); " +
+                                "})();"
+                        ) { }
+                    }
+                }
+            }
+        },
+        update = { webView ->
+            val contentKey = "$documentBaseUrl\n${youtubeShellHtml ?: embedUrl}"
+            if (webView.tag != contentKey) {
+                webView.tag = contentKey
+                if (youtubeShellHtml != null) {
+                    webView.loadDataWithBaseURL(
+                        documentBaseUrl,
+                        youtubeShellHtml,
+                        "text/html",
+                        "utf-8",
+                        documentBaseUrl,
+                    )
+                } else {
+                    webView.loadUrl(embedUrl)
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -266,50 +334,308 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
 private fun SecureHtmlContent(
     html: String,
     backgroundColor: Color,
-    textColor: Color
+    textColor: Color,
+    documentBaseUrl: String,
 ) {
+    var webViewHeightDp by remember(html) { mutableStateOf(600) }
+
     val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
     val hexText = String.format("#%06X", 0xFFFFFF and textColor.toArgb())
 
     val processedHtml = """
         <html>
         <head>
-            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                body { background: $hexBackground; color: $hexText; margin: 0; padding: 0; }
+                body {
+                    background: $hexBackground;
+                    color: $hexText;
+                    margin: 0;
+                    padding: 0;
+                    overflow-x: hidden;
+                    word-wrap: break-word;
+                }
                 a { color: #9BB0FF; }
-                img, video, iframe { max-width: 100%; height: auto; border-radius: 16px; }
+                img, video {
+                    max-width: 100% !important;
+                    height: auto;
+                    border-radius: 12px;
+                    display: block;
+                    margin: 12px 0;
+                }
+                iframe {
+                    max-width: 100% !important;
+                    width: 100% !important;
+                    height: 500px;
+                    border-radius: 12px;
+                    display: block;
+                    margin: 12px 0;
+                    border: none;
+                }
+                .embedded-media--x {
+                    height: 600px;
+                }
+                .embedded-media--youtube,
+                .embedded-media--vimeo,
+                .embedded-media--streamable,
+                .embedded-media--videopress {
+                    aspect-ratio: 16 / 9;
+                    height: auto;
+                }
+                #content-container {
+                    display: flow-root;
+                    min-height: 100px;
+                }
             </style>
         </head>
-        <body>$html</body>
+        <body>
+            <div id="content-container">$html</div>
+            <script>
+                function measureContentHeight() {
+                    const container = document.getElementById('content-container');
+                    if (!container) {
+                        return 0;
+                    }
+
+                    const containerRect = container.getBoundingClientRect();
+                    let bottom = containerRect.bottom;
+
+                    container.querySelectorAll('*').forEach(element => {
+                        const style = window.getComputedStyle(element);
+                        if (style.display === 'none') {
+                            return;
+                        }
+
+                        const rect = element.getBoundingClientRect();
+                        const marginBottom = Number.parseFloat(style.marginBottom) || 0;
+                        bottom = Math.max(bottom, rect.bottom + marginBottom);
+                    });
+
+                    return Math.ceil(Math.max(container.scrollHeight, bottom - containerRect.top));
+                }
+
+                function postHeight() {
+                    const height = measureContentHeight();
+
+                    if (height > 50) {
+                        window.Android.updateHeight(height);
+                    }
+                }
+                window.addEventListener('load', postHeight);
+                window.addEventListener('resize', postHeight);
+                const resizeObserver = new ResizeObserver(postHeight);
+                resizeObserver.observe(document.body);
+                resizeObserver.observe(document.getElementById('content-container'));
+
+                let lastH = 0;
+                setInterval(() => {
+                    const h = measureContentHeight();
+                    if (h !== lastH) {
+                        lastH = h;
+                        postHeight();
+                    }
+                }, 1000);
+
+                function parseMessageData(data) {
+                    if (typeof data !== 'string') {
+                        return data;
+                    }
+                    try {
+                        return JSON.parse(data);
+                    } catch (_) {
+                        return data;
+                    }
+                }
+
+                function applyTwitterResize(data, source) {
+                    const payload = data && data['twttr.embed'];
+                    if (!payload || payload.method !== 'twttr.private.resize') {
+                        return false;
+                    }
+
+                    const params = payload.params && payload.params[0];
+                    const height = params && params.height;
+                    if (typeof height !== 'number' || height <= 0) {
+                        return false;
+                    }
+
+                    const tweetId = params.data && params.data.tweet_id;
+                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                    const twitterIframes = iframes.filter(iframe => iframe.src.includes('platform.twitter.com'));
+                    twitterIframes.forEach(iframe => {
+                        const iframeTweetId = (iframe.src.match(/[?&]id=(\d+)/) || [])[1];
+                        const matchesTweetId = tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId);
+                        if (matchesTweetId || iframe.contentWindow === source || twitterIframes.length === 1) {
+                            iframe.style.setProperty('height', height + 'px', 'important');
+                            const parent = iframe.parentElement;
+                            if (parent) {
+                                parent.style.height = 'auto';
+                            }
+                        }
+                    });
+                    return true;
+                }
+
+                window.addEventListener('message', function(e) {
+                    const data = parseMessageData(e.data);
+                    if (applyTwitterResize(data, e.source)) {
+                        postHeight();
+                        return;
+                    }
+
+                    if (data && (data.height || data.type === 'setHeight')) {
+                        const height = data.height || data.value;
+                        document.querySelectorAll('iframe').forEach(iframe => {
+                            if (iframe.contentWindow === e.source) {
+                                iframe.style.setProperty('height', height + 'px', 'important');
+                                postHeight();
+                            }
+                        });
+                    }
+                });
+            </script>
+        </body>
         </html>
     """.trimIndent()
 
     AndroidView(
         modifier = Modifier
             .fillMaxWidth()
-            .height(520.dp),
+            .height(webViewHeightDp.dp),
         factory = { factoryContext ->
             WebView(factoryContext).apply {
-                settings.javaScriptEnabled = false
+                settings.javaScriptEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
-                settings.domStorageEnabled = false
+                settings.domStorageEnabled = true
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.safeBrowsingEnabled = true
-                settings.loadsImagesAutomatically = true
-                settings.builtInZoomControls = false
-                setBackgroundColor(backgroundColor.toArgb())
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                settings.mediaPlaybackRequiresUserGesture = false
+
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+
+                addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun updateHeight(height: Float) {
+                        post {
+                            val newHeightDp = height.toInt()
+                            if (newHeightDp > 0 && newHeightDp != webViewHeightDp) {
+                                webViewHeightDp = newHeightDp
+                            }
+                        }
+                    }
+                }, "Android")
+
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        openExternalUrl(factoryContext, request?.url?.toString())
+                        val url = request?.url?.toString() ?: return true
+                        if (isTrustedEmbedUrl(url)) return false
+                        openExternalUrl(factoryContext, url)
                         return true
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
                     }
                 }
             }
         },
         update = { webView ->
-            webView.loadDataWithBaseURL(null, processedHtml, "text/html", "utf-8", null)
+            val contentKey = "$documentBaseUrl\n$processedHtml"
+            if (webView.tag != contentKey) {
+                webView.tag = contentKey
+                webView.loadDataWithBaseURL(
+                    documentBaseUrl,
+                    processedHtml,
+                    "text/html",
+                    "utf-8",
+                    documentBaseUrl,
+                )
+            }
         },
     )
 }
+
+private const val DefaultReaderDocumentBaseUrl = "https://self-feed.local/"
+
+private fun readerDocumentBaseUrl(vararg candidates: String?): String {
+    candidates.forEach { candidate ->
+        val trimmed = candidate?.trim()?.takeIf { it.isNotBlank() } ?: return@forEach
+        val uri = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return@forEach
+        val scheme = uri.scheme?.lowercase()
+        if ((scheme == "https" || scheme == "http") && !uri.host.isNullOrBlank()) {
+            return trimmed
+        }
+    }
+
+    return DefaultReaderDocumentBaseUrl
+}
+
+private fun isYouTubeEmbedUrl(url: String): Boolean {
+    val host = runCatching { java.net.URI(url).host?.lowercase() }.getOrNull() ?: return false
+    return host == "youtube.com" ||
+        host.endsWith(".youtube.com") ||
+        host == "youtube-nocookie.com" ||
+        host.endsWith(".youtube-nocookie.com")
+}
+
+private fun youtubeEmbedHtml(embedUrl: String, background: String): String {
+    val safeEmbedUrl = htmlAttribute(embedUrl)
+    return """
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                html, body {
+                    background: $background;
+                    margin: 0;
+                    padding: 0;
+                    overflow: hidden;
+                }
+                #embed-container {
+                    aspect-ratio: 16 / 9;
+                    background: $background;
+                    width: 100%;
+                }
+                iframe {
+                    border: 0;
+                    display: block;
+                    height: 100%;
+                    width: 100%;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="embed-container">
+                <iframe
+                    src="$safeEmbedUrl"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
+                    allowfullscreen
+                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            </div>
+            <script>
+                function postHeight() {
+                    const container = document.getElementById('embed-container');
+                    if (container) {
+                        window.Android.updateHeight(Math.ceil(container.getBoundingClientRect().height));
+                    }
+                }
+                window.addEventListener('load', postHeight);
+                window.addEventListener('resize', postHeight);
+                new ResizeObserver(postHeight).observe(document.getElementById('embed-container'));
+                postHeight();
+            </script>
+        </body>
+        </html>
+    """.trimIndent()
+}
+
+private fun htmlAttribute(value: String): String =
+    value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
