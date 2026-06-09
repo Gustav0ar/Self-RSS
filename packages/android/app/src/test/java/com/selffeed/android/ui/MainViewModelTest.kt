@@ -4,6 +4,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
+import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleReadStateChangedEvent
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticlesMarkedReadEvent
@@ -333,6 +334,33 @@ class MainViewModelTest {
     }
 
     @Test
+    fun openArticle_keepsReadArticleInHiddenReadListUntilRefresh() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
+        coEvery {
+            repository.articles(any(), any(), true, any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Unread 1")), null, false),
+        )
+        coEvery { repository.article("a1", any()) } returns AppResult.Success(
+            sampleArticleDetail(id = "a1", title = "Unread 1", isRead = false),
+        )
+        coEvery { repository.markRead("a1", true) } returns AppResult.Success(true)
+        every { repository.invalidateArticleCaches("a1") } just runs
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.openArticle("a1")
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(listOf("a1"), state.articles.map { it.id })
+        assertTrue(state.articles.first().isRead)
+        assertTrue(state.selectedArticle?.isRead == true)
+    }
+
+    @Test
     fun readStateSync_ignoresEventsFromSameAndroidClient() = runTest {
         every { repository.isLoggedIn() } returns true
         coEvery { repository.feeds(any()) } returns AppResult.Success(
@@ -371,7 +399,7 @@ class MainViewModelTest {
     }
 
     @Test
-    fun readStateSync_remoteReadRemovesArticleFromHiddenReadList() = runTest {
+    fun readStateSync_remoteReadKeepsArticleInHiddenReadListUntilRefresh() = runTest {
         every { repository.isLoggedIn() } returns true
         coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
         coEvery { repository.feeds(any()) } returns AppResult.Success(
@@ -402,7 +430,8 @@ class MainViewModelTest {
         )
         advanceUntilIdle()
 
-        assertTrue(viewModel.uiState.value.articles.none { it.id == "a1" })
+        val article = viewModel.uiState.value.articles.first { it.id == "a1" }
+        assertTrue(article.isRead)
     }
 
     @Test
@@ -620,5 +649,32 @@ class MainViewModelTest {
         heroImageUrl = null,
         publishedAt = null,
         isRead = isRead,
+    )
+
+    private fun sampleArticleDetail(
+        id: String,
+        title: String,
+        feedId: String = "feed-1",
+        isRead: Boolean = false,
+    ): ArticleDetail = ArticleDetail(
+        id = id,
+        feedId = feedId,
+        guid = id,
+        canonicalUrl = null,
+        title = title,
+        author = null,
+        excerpt = "Excerpt",
+        contentHtml = null,
+        contentText = "Content",
+        heroImageUrl = null,
+        publishedAt = null,
+        fetchedAt = "2026-01-01T00:00:00.000Z",
+        hash = id,
+        feedTitle = "Feed",
+        feedFaviconUrl = null,
+        feedSiteUrl = null,
+        media = emptyList(),
+        isRead = isRead,
+        isEnriched = false,
     )
 }

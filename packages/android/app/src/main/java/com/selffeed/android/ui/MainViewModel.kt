@@ -925,14 +925,8 @@ class MainViewModel(
                 state.articles.none { it.id == event.articleId }
 
             state.copy(
-                articles = state.articles.mapNotNull { article ->
-                    if (article.id != event.articleId) {
-                        article
-                    } else if (event.isRead && hideRead) {
-                        null
-                    } else {
-                        article.copy(isRead = event.isRead)
-                    }
+                articles = state.articles.map { article ->
+                    if (article.id == event.articleId) article.copy(isRead = event.isRead) else article
                 },
                 searchResults = state.searchResults.map { article ->
                     if (article.id == event.articleId) article.copy(isRead = event.isRead) else article

@@ -6,10 +6,18 @@ fun canPreviewMedia(provider: String, embedUrl: String?): Boolean {
     if (embedUrl.isNullOrBlank()) return false
     val isTrustedUrl = isTrustedEmbedUrl(embedUrl)
     val isTrustedProvider = when (provider.lowercase()) {
-        "youtube", "vimeo", "streamable", "videopress", "twitter", "x" -> true
+        "youtube", "vimeo", "streamable", "videopress", "twitter", "x", "instagram", "tiktok" -> true
         else -> false
     }
     return isTrustedUrl && isTrustedProvider
+}
+
+fun getYouTubeThumbnail(url: String?): String? {
+    if (url == null) return null
+    val regex = "(?:youtube\\.com\\/(?:watch\\?v=|embed\\/)|youtu\\.be\\/)([a-zA-Z0-9_-]+)".toRegex()
+    val match = regex.find(url)
+    val videoId = match?.groupValues?.get(1)
+    return videoId?.let { "https://img.youtube.com/vi/$it/0.jpg" }
 }
 
 fun isTrustedEmbedUrl(url: String?): Boolean {
@@ -25,5 +33,7 @@ fun isTrustedEmbedUrl(url: String?): Boolean {
         host.endsWith("videos.wordpress.com") ||
         host.endsWith("platform.twitter.com") ||
         host.endsWith("twitter.com") ||
-        host.endsWith("x.com")
+        host.endsWith("x.com") ||
+        host.endsWith("instagram.com") ||
+        host.endsWith("tiktok.com")
 }
