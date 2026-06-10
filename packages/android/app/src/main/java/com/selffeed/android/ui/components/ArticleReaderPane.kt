@@ -114,6 +114,9 @@ private fun ArticleDetailView(
 
     val backgroundColor = MaterialTheme.colorScheme.background
     val textColor = MaterialTheme.colorScheme.onSurface
+    val surfaceColor = MaterialTheme.colorScheme.surfaceVariant
+    val mutedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val linkColor = MaterialTheme.colorScheme.primary
 
     Column(
         modifier = Modifier
@@ -169,6 +172,9 @@ private fun ArticleDetailView(
                     html = article.contentHtml,
                     backgroundColor = backgroundColor,
                     textColor = textColor,
+                    surfaceColor = surfaceColor,
+                    mutedTextColor = mutedTextColor,
+                    linkColor = linkColor,
                     documentBaseUrl = documentBaseUrl,
                 )
             } else {
@@ -369,168 +375,32 @@ private fun SecureHtmlContent(
     html: String,
     backgroundColor: Color,
     textColor: Color,
+    surfaceColor: Color,
+    mutedTextColor: Color,
+    linkColor: Color,
     documentBaseUrl: String,
 ) {
     var webViewHeightDp by remember(html) { mutableStateOf(600) }
 
-    val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
-    val hexText = String.format("#%06X", 0xFFFFFF and textColor.toArgb())
-
-    val processedHtml = """
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <style>
-                body {
-                    background: $hexBackground;
-                    color: $hexText;
-                    margin: 0;
-                    padding: 0;
-                    overflow-x: hidden;
-                    word-wrap: break-word;
-                }
-                a { color: #9BB0FF; }
-                img, video {
-                    max-width: 100% !important;
-                    height: auto;
-                    border-radius: 12px;
-                    display: block;
-                    margin: 12px 0;
-                }
-                iframe {
-                    max-width: 100% !important;
-                    width: 100% !important;
-                    height: 500px;
-                    border-radius: 12px;
-                    display: block;
-                    margin: 12px 0;
-                    border: none;
-                }
-                .embedded-media--x {
-                    height: 600px;
-                }
-                .embedded-media--youtube,
-                .embedded-media--vimeo,
-                .embedded-media--streamable,
-                .embedded-media--videopress {
-                    aspect-ratio: 16 / 9;
-                    height: auto;
-                }
-                #content-container {
-                    display: flow-root;
-                    min-height: 100px;
-                }
-            </style>
-        </head>
-        <body>
-            <div id="content-container">$html</div>
-            <script>
-                function measureContentHeight() {
-                    const container = document.getElementById('content-container');
-                    if (!container) {
-                        return 0;
-                    }
-
-                    const containerRect = container.getBoundingClientRect();
-                    let bottom = containerRect.bottom;
-
-                    container.querySelectorAll('*').forEach(element => {
-                        const style = window.getComputedStyle(element);
-                        if (style.display === 'none') {
-                            return;
-                        }
-
-                        const rect = element.getBoundingClientRect();
-                        const marginBottom = Number.parseFloat(style.marginBottom) || 0;
-                        bottom = Math.max(bottom, rect.bottom + marginBottom);
-                    });
-
-                    return Math.ceil(Math.max(container.scrollHeight, bottom - containerRect.top));
-                }
-
-                function postHeight() {
-                    const height = measureContentHeight();
-
-                    if (height > 50) {
-                        window.Android.updateHeight(height);
-                    }
-                }
-                window.addEventListener('load', postHeight);
-                window.addEventListener('resize', postHeight);
-                const resizeObserver = new ResizeObserver(postHeight);
-                resizeObserver.observe(document.body);
-                resizeObserver.observe(document.getElementById('content-container'));
-
-                let lastH = 0;
-                setInterval(() => {
-                    const h = measureContentHeight();
-                    if (h !== lastH) {
-                        lastH = h;
-                        postHeight();
-                    }
-                }, 1000);
-
-                function parseMessageData(data) {
-                    if (typeof data !== 'string') {
-                        return data;
-                    }
-                    try {
-                        return JSON.parse(data);
-                    } catch (_) {
-                        return data;
-                    }
-                }
-
-                function applyTwitterResize(data, source) {
-                    const payload = data && data['twttr.embed'];
-                    if (!payload || payload.method !== 'twttr.private.resize') {
-                        return false;
-                    }
-
-                    const params = payload.params && payload.params[0];
-                    const height = params && params.height;
-                    if (typeof height !== 'number' || height <= 0) {
-                        return false;
-                    }
-
-                    const tweetId = params.data && params.data.tweet_id;
-                    const iframes = Array.from(document.querySelectorAll('iframe'));
-                    const twitterIframes = iframes.filter(iframe => iframe.src.includes('platform.twitter.com'));
-                    twitterIframes.forEach(iframe => {
-                        const iframeTweetId = (iframe.src.match(/[?&]id=(\d+)/) || [])[1];
-                        const matchesTweetId = tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId);
-                        if (matchesTweetId || iframe.contentWindow === source || twitterIframes.length === 1) {
-                            iframe.style.setProperty('height', height + 'px', 'important');
-                            const parent = iframe.parentElement;
-                            if (parent) {
-                                parent.style.height = 'auto';
-                            }
-                        }
-                    });
-                    return true;
-                }
-
-                window.addEventListener('message', function(e) {
-                    const data = parseMessageData(e.data);
-                    if (applyTwitterResize(data, e.source)) {
-                        postHeight();
-                        return;
-                    }
-
-                    if (data && (data.height || data.type === 'setHeight')) {
-                        const height = data.height || data.value;
-                        document.querySelectorAll('iframe').forEach(iframe => {
-                            if (iframe.contentWindow === e.source) {
-                                iframe.style.setProperty('height', height + 'px', 'important');
-                                postHeight();
-                            }
-                        });
-                    }
-                });
-            </script>
-        </body>
-        </html>
-    """.trimIndent()
+    val processedHtml = remember(
+        html,
+        backgroundColor,
+        textColor,
+        surfaceColor,
+        mutedTextColor,
+        linkColor,
+    ) {
+        buildReaderHtmlDocument(
+            html = html,
+            colors = readerHtmlColors(
+                backgroundColor = backgroundColor,
+                textColor = textColor,
+                surfaceColor = surfaceColor,
+                mutedTextColor = mutedTextColor,
+                linkColor = linkColor,
+            ),
+        )
+    }
 
     AndroidView(
         modifier = Modifier
@@ -549,6 +419,7 @@ private fun SecureHtmlContent(
 
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
+                setBackgroundColor(backgroundColor.toArgb())
 
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
@@ -604,21 +475,6 @@ private fun WebView.releaseReaderResources() {
         webViewClient = WebViewClient()
         destroy()
     }
-}
-
-private const val DefaultReaderDocumentBaseUrl = "https://self-feed.local/"
-
-private fun readerDocumentBaseUrl(vararg candidates: String?): String {
-    candidates.forEach { candidate ->
-        val trimmed = candidate?.trim()?.takeIf { it.isNotBlank() } ?: return@forEach
-        val uri = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return@forEach
-        val scheme = uri.scheme?.lowercase()
-        if ((scheme == "https" || scheme == "http") && !uri.host.isNullOrBlank()) {
-            return trimmed
-        }
-    }
-
-    return DefaultReaderDocumentBaseUrl
 }
 
 private fun isYouTubeEmbedUrl(url: String): Boolean {
