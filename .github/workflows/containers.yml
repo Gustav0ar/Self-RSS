@@ -17,16 +17,6 @@ jobs:
   build-and-push:
     name: Build and push multi-arch images
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image_name: api
-            dockerfile: Dockerfile.api
-            target: ""
-          - image_name: web
-            dockerfile: Dockerfile.web
-            target: ""
     steps:
       - uses: actions/checkout@v6
 
@@ -38,7 +28,24 @@ jobs:
 
       - uses: docker/setup-qemu-action@v4
 
+      - name: Pre-pull BuildKit image
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull moby/buildkit:buildx-stable-1; then
+              exit 0
+            fi
+
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+
+          docker pull moby/buildkit:buildx-stable-1
+
       - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            image=moby/buildkit:buildx-stable-1
 
       - uses: docker/login-action@v4
         with:
@@ -46,24 +53,48 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
+      - id: meta-api
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.image-prefix.outputs.value }}-${{ matrix.image_name }}
+          images: ${{ env.REGISTRY }}/${{ steps.image-prefix.outputs.value }}-api
           tags: |
             type=ref,event=branch
             type=ref,event=tag
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/build-push-action@v7
+      - name: Build and push API image
+        uses: docker/build-push-action@v7
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile.api
           push: true
           platforms: linux/amd64,linux/arm64
           provenance: false
-          labels: ${{ steps.meta.outputs.labels }}
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=${{ matrix.image_name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image_name }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+          tags: ${{ steps.meta-api.outputs.tags }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - id: meta-web
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image-prefix.outputs.value }}-web
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.web
+          push: true
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          labels: ${{ steps.meta-web.outputs.labels }}
+          tags: ${{ steps.meta-web.outputs.tags }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
