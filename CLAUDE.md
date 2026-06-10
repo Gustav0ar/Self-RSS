@@ -157,6 +157,15 @@ If integration or E2E tests fail, inspect these scripts before changing app code
 - Compose services provide Redis 8.8.
 - API defaults to `packages/api/.env` first, then falls back to root `.env.example` values where available.
 
+### System-specific build notes
+On this system, use the following paths for manual builds if not using the wrapper:
+- **JAVA_HOME**: `/home/gustavo/.local/share/JetBrains/Toolbox/apps/android-studio/jbr`
+- **Java Binary**: `/home/gustavo/.local/share/JetBrains/Toolbox/apps/android-studio/jbr/bin/java`
+- **Gradle Binary**: `/home/gustavo/.gradle/wrapper/dists/gradle-9.5.1-bin/iq79hdu3mqx29lgffhp8bfmx/gradle-9.5.1/bin/gradle`
+
+To build the Android app using the specific Java path:
+`JAVA_HOME=/home/gustavo/.local/share/JetBrains/Toolbox/apps/android-studio/jbr ./packages/android/gradlew -p packages/android :app:assembleDebug`
+
 ## Change guidance for future Claude sessions
 - Prefer updating shared contracts and validation before touching downstream consumers.
 - For backend feature work, trace the full path: route -> service -> repository -> schema/shared contract.

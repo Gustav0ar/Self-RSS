@@ -26,6 +26,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,6 +46,12 @@ fun ArticleReaderDialog(
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
     var previewEmbedUrl by rememberSaveable(article.id) { mutableStateOf<String?>(null) }
+    val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
+    val readerBackgroundColor = MaterialTheme.colorScheme.surface
+    val readerTextColor = MaterialTheme.colorScheme.onSurface
+    val readerSurfaceColor = MaterialTheme.colorScheme.surfaceVariant
+    val readerMutedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val readerLinkColor = MaterialTheme.colorScheme.primary
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -125,7 +133,15 @@ fun ArticleReaderDialog(
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             if (showHtml && !article.contentHtml.isNullOrBlank()) {
-                                SecureHtmlContent(html = article.contentHtml)
+                                SecureHtmlContent(
+                                    html = article.contentHtml,
+                                    backgroundColor = readerBackgroundColor,
+                                    textColor = readerTextColor,
+                                    surfaceColor = readerSurfaceColor,
+                                    mutedTextColor = readerMutedTextColor,
+                                    linkColor = readerLinkColor,
+                                    documentBaseUrl = documentBaseUrl,
+                                )
                             } else {
                                 Text(
                                     text = article.contentText ?: article.excerpt ?: "No content",
@@ -216,14 +232,33 @@ fun ArticleReaderDialog(
 }
 
 @Composable
-private fun SecureHtmlContent(html: String) {
+private fun SecureHtmlContent(
+    html: String,
+    backgroundColor: Color,
+    textColor: Color,
+    surfaceColor: Color,
+    mutedTextColor: Color,
+    linkColor: Color,
+    documentBaseUrl: String,
+) {
+    val processedHtml = buildReaderHtmlDocument(
+        html = html,
+        colors = readerHtmlColors(
+            backgroundColor = backgroundColor,
+            textColor = textColor,
+            surfaceColor = surfaceColor,
+            mutedTextColor = mutedTextColor,
+            linkColor = linkColor,
+        ),
+    )
+
     AndroidView(
         modifier = Modifier
             .fillMaxWidth()
             .height(420.dp),
         factory = { factoryContext ->
             WebView(factoryContext).apply {
-                settings.javaScriptEnabled = false
+                settings.javaScriptEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
                 settings.domStorageEnabled = false
@@ -231,6 +266,9 @@ private fun SecureHtmlContent(html: String) {
                 settings.safeBrowsingEnabled = true
                 settings.loadsImagesAutomatically = true
                 settings.builtInZoomControls = false
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                setBackgroundColor(backgroundColor.toArgb())
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
                         view: WebView?,
@@ -243,7 +281,17 @@ private fun SecureHtmlContent(html: String) {
             }
         },
         update = { webView ->
-            webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+            val contentKey = "$documentBaseUrl\n$processedHtml"
+            if (webView.tag != contentKey) {
+                webView.tag = contentKey
+                webView.loadDataWithBaseURL(
+                    documentBaseUrl,
+                    processedHtml,
+                    "text/html",
+                    "utf-8",
+                    documentBaseUrl,
+                )
+            }
         },
     )
 }
