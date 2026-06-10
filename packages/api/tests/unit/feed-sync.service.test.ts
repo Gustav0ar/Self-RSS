@@ -208,9 +208,18 @@ describe('FeedSyncService', () => {
 		expect(feedRepo.findAllByUser).toHaveBeenCalledWith('user-1');
 		expect(feedRepo.update).toHaveBeenCalledWith('feed-3', 'user-1', { syncStatus: 'idle' });
 		expect(syncFeedSpy).toHaveBeenCalledTimes(3);
-		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', { enrichArticles: false });
-		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', { enrichArticles: false });
-		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', { enrichArticles: false });
+		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
+			enrichArticles: false,
+			warmArticleCache: false,
+		});
+		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
+			enrichArticles: false,
+			warmArticleCache: false,
+		});
+		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
+			enrichArticles: false,
+			warmArticleCache: false,
+		});
 		expect(result).toEqual({
 			totalFeeds: 3,
 			syncedFeeds: 2,
@@ -304,7 +313,7 @@ describe('FeedSyncService', () => {
 		const result = await syncPromise;
 
 		for (const call of syncFeedSpy.mock.calls) {
-			expect(call[2]).toEqual({ enrichArticles: false });
+			expect(call[2]).toEqual({ enrichArticles: false, warmArticleCache: false });
 		}
 
 		expect(result).toEqual({

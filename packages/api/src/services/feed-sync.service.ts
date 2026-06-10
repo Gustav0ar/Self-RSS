@@ -30,6 +30,7 @@ interface SyncConfig {
 
 interface SyncFeedOptions {
 	enrichArticles?: boolean;
+	warmArticleCache?: boolean;
 }
 
 interface PendingArticleEnrichment {
@@ -77,6 +78,7 @@ export class FeedSyncService {
 		}
 
 		const shouldEnrichArticles = options.enrichArticles ?? true;
+		const shouldWarmArticleCache = options.warmArticleCache ?? true;
 
 		const run = await this.syncRunRepo.create(feedId);
 		await this.feedRepo.update(feedId, userId, { syncStatus: 'syncing' });
@@ -256,6 +258,9 @@ export class FeedSyncService {
 			});
 
 			await this.invalidateUnreadCache(userId, feedId);
+			if (this.articleCache && (insertedArticles.length > 0 || articlesToUpdate.length > 0)) {
+				await this.articleCache.invalidateCache(userId);
+			}
 			await this.metricsRepo.incrementSyncCount(userId);
 
 			if (pendingEnrichments.length > 0) {
@@ -263,7 +268,7 @@ export class FeedSyncService {
 			}
 
 			// Populate article cache after sync completes
-			if (this.articleCache && insertedArticles.length > 0) {
+			if (shouldWarmArticleCache && this.articleCache && insertedArticles.length > 0) {
 				void this.articleCache.populateCache(userId);
 			}
 
@@ -328,7 +333,10 @@ export class FeedSyncService {
 					continue;
 				}
 				try {
-					const result = await this.syncFeed(feed.id, userId, { enrichArticles: false });
+					const result = await this.syncFeed(feed.id, userId, {
+						enrichArticles: false,
+						warmArticleCache: false,
+					});
 					syncedFeeds += 1;
 					if (result) {
 						newArticles += result.newArticles;
@@ -345,7 +353,7 @@ export class FeedSyncService {
 
 		// Populate cache after bulk sync completes
 		if (this.articleCache && newArticles > 0) {
-			void this.articleCache.populateCache(userId);
+			await this.articleCache.populateCache(userId);
 		}
 
 		return {
