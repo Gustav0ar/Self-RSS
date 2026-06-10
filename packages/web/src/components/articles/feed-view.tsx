@@ -1,6 +1,6 @@
 import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import {
@@ -81,6 +81,9 @@ export function FeedView({
 	const density = normalizeDensityPreference(prefs?.density);
 	const keyboardShortcutsEnabled = prefs?.keyboardShortcutsEnabled ?? true;
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
+	const handleLoadMore = useCallback(() => {
+		void fetchNextPage();
+	}, [fetchNextPage]);
 
 	useEffect(() => {
 		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
@@ -272,9 +275,7 @@ export function FeedView({
 						onPrefetch={prefetchArticle}
 						loading={showListLoader}
 						hasMore={hasNextPage}
-						onLoadMore={() => {
-							void fetchNextPage();
-						}}
+						onLoadMore={handleLoadMore}
 						loadingMore={isFetchingNextPage}
 						density={density}
 					/>

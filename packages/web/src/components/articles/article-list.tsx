@@ -42,6 +42,7 @@ export function ArticleList({
 }: ArticleListProps) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const loadMoreRef = useRef<HTMLDivElement | null>(null);
+	const lastScrolledSelectedIdRef = useRef<string | null>(null);
 
 	const maybeLoadMore = useCallback(() => {
 		if (!hasMore || !onLoadMore || loadingMore) {
@@ -111,6 +112,7 @@ export function ArticleList({
 
 	useEffect(() => {
 		if (!selectedId) {
+			lastScrolledSelectedIdRef.current = null;
 			return;
 		}
 
@@ -121,7 +123,10 @@ export function ArticleList({
 
 		const root = scrollRef.current;
 		const selectedRow = root?.querySelector<HTMLElement>(`[data-article-id="${selectedId}"]`);
-		selectedRow?.scrollIntoView({ block: 'nearest' });
+		if (lastScrolledSelectedIdRef.current !== selectedId) {
+			selectedRow?.scrollIntoView({ block: 'nearest' });
+			lastScrolledSelectedIdRef.current = selectedId;
+		}
 
 		if (articles.length - selectedIndex <= 5) {
 			maybeLoadMore();
