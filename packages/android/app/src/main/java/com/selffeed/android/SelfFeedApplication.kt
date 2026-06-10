@@ -6,6 +6,7 @@ import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.network.NetworkModule
+import coil.imageLoader
 
 class SelfFeedApplication : Application() {
     lateinit var repository: RssRepository
@@ -26,6 +27,8 @@ class SelfFeedApplication : Application() {
             okHttpClient = okHttp,
             moshi = moshi,
             offlineCacheStore = offlineCacheStore,
+            imageRequestContext = this,
+            imageLoader = imageLoader,
         )
         FeedSyncWorker.schedule(this)
     }

@@ -65,7 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.compose.collectAsLazyPagingItems
+import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.openExternalUrl
 import com.selffeed.android.ui.components.shareOpmlContent
@@ -78,12 +79,21 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SelfFeedApp(viewModel: MainViewModel) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val topBarLabel = remember(
+        state.activeTab,
+        state.selectedArticle,
+        state.selectedFeedId,
+        state.selectedCategoryId,
+        state.feeds,
+        state.categories,
+    ) {
+        topBarLabel(state)
+    }
 
     LaunchedEffect(state.errorMessage, state.statusMessage) {
         state.errorMessage?.let {
@@ -120,6 +130,8 @@ fun SelfFeedApp(viewModel: MainViewModel) {
         return
     }
 
+    val articlePagingItems = viewModel.articlePagingData.collectAsLazyPagingItems()
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -138,7 +150,12 @@ fun SelfFeedApp(viewModel: MainViewModel) {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             topBar = {
                 AppTopBar(
-                    state = state,
+                    activeTab = state.activeTab,
+                    selectedArticle = state.selectedArticle,
+                    currentLabel = topBarLabel,
+                    showMarkAllRead = state.activeTab == HomeTab.ARTICLES &&
+                        state.selectedArticle == null &&
+                        state.articles.isNotEmpty(),
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = viewModel::markAllRead,
                     onBack = viewModel::closeArticle,
@@ -150,36 +167,10 @@ fun SelfFeedApp(viewModel: MainViewModel) {
                 )
             },
             bottomBar = {
-                NavigationBar(
-                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars),
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 0.dp,
-                ) {
-                    NavigationBarItem(
-                        selected = state.activeTab == HomeTab.ARTICLES,
-                        onClick = { viewModel.setTab(HomeTab.ARTICLES) },
-                        icon = { Icon(Icons.Default.GridView, contentDescription = null) },
-                        label = { Text("Articles") },
-                    )
-                    NavigationBarItem(
-                        selected = state.activeTab == HomeTab.SEARCH,
-                        onClick = { viewModel.setTab(HomeTab.SEARCH) },
-                        icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        label = { Text("Search") },
-                    )
-                    NavigationBarItem(
-                        selected = state.activeTab == HomeTab.FEEDS,
-                        onClick = { viewModel.setTab(HomeTab.FEEDS) },
-                        icon = { Icon(Icons.Default.RssFeed, contentDescription = null) },
-                        label = { Text("Feeds") },
-                    )
-                    NavigationBarItem(
-                        selected = state.activeTab == HomeTab.SETTINGS,
-                        onClick = { viewModel.setTab(HomeTab.SETTINGS) },
-                        icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
-                        label = { Text("Settings") },
-                    )
-                }
+                AppBottomBar(
+                    activeTab = state.activeTab,
+                    onTabSelected = viewModel::setTab,
+                )
             },
         ) { paddingValues ->
             if (state.errorMessage == null) {
@@ -213,7 +204,7 @@ fun SelfFeedApp(viewModel: MainViewModel) {
                                     },
                                 )
                             } else {
-                                ArticlesTab(state, viewModel)
+                                ArticlesTab(state, viewModel, articlePagingItems)
                             }
                         }
                         HomeTab.SEARCH -> SearchTab(state, viewModel)
@@ -251,26 +242,16 @@ private fun LoadingScreen() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppTopBar(
-    state: AppUiState,
+    activeTab: HomeTab,
+    selectedArticle: ArticleDetail?,
+    currentLabel: String,
+    showMarkAllRead: Boolean,
     onOpenDrawer: () -> Unit,
     onMarkAllRead: () -> Unit,
     onBack: () -> Unit,
     onToggleRead: () -> Unit,
 ) {
-    val selectedArticle = state.selectedArticle
-    val isArticleSelected = state.activeTab == HomeTab.ARTICLES && selectedArticle != null
-    val currentLabel = when (state.activeTab) {
-        HomeTab.ARTICLES -> when {
-            isArticleSelected -> selectedArticle.feedTitle
-            state.selectedFeedId != null -> state.feeds.find { it.id == state.selectedFeedId }?.title ?: "Feed"
-            state.selectedCategoryId != null -> state.categories.find { it.id == state.selectedCategoryId }?.name ?: "Category"
-            else -> "All Feeds"
-        }
-        HomeTab.SEARCH -> "Search"
-        HomeTab.FEEDS -> "Manage Feeds"
-        HomeTab.SETTINGS -> "Settings"
-        HomeTab.STATS -> "Stats"
-    }
+    val isArticleSelected = activeTab == HomeTab.ARTICLES && selectedArticle != null
 
     CenterAlignedTopAppBar(
         title = {
@@ -296,15 +277,16 @@ private fun AppTopBar(
         actions = {
             if (isArticleSelected) {
                 IconButton(onClick = onToggleRead) {
-                    val icon = if (selectedArticle.isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
-                    val description = if (selectedArticle.isRead) "Mark as unread" else "Mark as read"
+                    val isRead = selectedArticle?.isRead == true
+                    val icon = if (isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
+                    val description = if (isRead) "Mark as unread" else "Mark as read"
                     Icon(
                         imageVector = icon,
                         contentDescription = description,
-                        tint = if (selectedArticle.isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        tint = if (isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
                 }
-            } else if (state.activeTab == HomeTab.ARTICLES && state.articles.isNotEmpty()) {
+            } else if (showMarkAllRead) {
                 IconButton(onClick = onMarkAllRead) {
                     Icon(Icons.Default.MarkEmailRead, contentDescription = "Mark all as read")
                 }
@@ -320,6 +302,57 @@ private fun AppTopBar(
         ),
         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
     )
+}
+
+@Composable
+private fun AppBottomBar(
+    activeTab: HomeTab,
+    onTabSelected: (HomeTab) -> Unit,
+) {
+    NavigationBar(
+        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+    ) {
+        NavigationBarItem(
+            selected = activeTab == HomeTab.ARTICLES,
+            onClick = { onTabSelected(HomeTab.ARTICLES) },
+            icon = { Icon(Icons.Default.GridView, contentDescription = null) },
+            label = { Text("Articles") },
+        )
+        NavigationBarItem(
+            selected = activeTab == HomeTab.SEARCH,
+            onClick = { onTabSelected(HomeTab.SEARCH) },
+            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+            label = { Text("Search") },
+        )
+        NavigationBarItem(
+            selected = activeTab == HomeTab.FEEDS,
+            onClick = { onTabSelected(HomeTab.FEEDS) },
+            icon = { Icon(Icons.Default.RssFeed, contentDescription = null) },
+            label = { Text("Feeds") },
+        )
+        NavigationBarItem(
+            selected = activeTab == HomeTab.SETTINGS,
+            onClick = { onTabSelected(HomeTab.SETTINGS) },
+            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+            label = { Text("Settings") },
+        )
+    }
+}
+
+private fun topBarLabel(state: AppUiState): String = when (state.activeTab) {
+    HomeTab.ARTICLES -> when {
+        state.selectedArticle != null -> state.selectedArticle.feedTitle
+        state.selectedFeedId != null -> state.feeds.find { it.id == state.selectedFeedId }?.title ?: "Feed"
+        state.selectedCategoryId != null ->
+            state.categories.find { it.id == state.selectedCategoryId }?.name ?: "Category"
+        else -> "All Feeds"
+    }
+    HomeTab.SEARCH -> "Search"
+    HomeTab.FEEDS -> "Manage Feeds"
+    HomeTab.SETTINGS -> "Settings"
+    HomeTab.STATS -> "Stats"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

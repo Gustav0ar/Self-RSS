@@ -12,7 +12,7 @@ import type {
 } from '@self-feed/shared';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
 
 export function invalidateReaderQueries(qc: QueryClient) {
@@ -42,9 +42,34 @@ function buildArticleSearchParams(params: ArticleQueryParams, cursor?: string | 
 }
 
 const articleQueryKey = (articleId: string) => ['article', articleId] as const;
+const ARTICLE_WARM_LIMIT = 5;
+const ARTICLE_DETAIL_WARM_STALE_MS = 60_000;
+const ARTICLE_ENRICH_REFRESH_DELAY_MS = 800;
+const ARTICLE_ENRICH_RETRY_MS = 5 * 60_000;
 
 function fetchArticle(articleId: string) {
 	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`).then((r) => r.data);
+}
+
+function enrichArticle(articleId: string) {
+	return apiFetch<ApiResponse<{ success: boolean; reason?: string }>>(
+		`/articles/${articleId}/enrich`,
+		{
+			method: 'POST',
+		},
+	).then((r) => r.data);
+}
+
+function delay(ms: number) {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function shouldEnrichArticle(article: ArticleDetail) {
+	return !article.isEnriched && Boolean(article.canonicalUrl?.trim());
+}
+
+function isRecentlyAttempted(lastAttemptAt: number | undefined, now = Date.now()) {
+	return Boolean(lastAttemptAt && now - lastAttemptAt < ARTICLE_ENRICH_RETRY_MS);
 }
 
 function updateArticleListResponseReadState(
@@ -694,17 +719,72 @@ export function usePrefetchArticle() {
 export function useEnrichArticle() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (articleId: string) =>
-			apiFetch<ApiResponse<{ success: boolean; reason?: string }>>(
-				`/articles/${articleId}/enrich`,
-				{
-					method: 'POST',
-				},
-			).then((r) => r.data),
+		mutationFn: enrichArticle,
 		onSuccess: (_result, articleId) => {
 			qc.invalidateQueries({ queryKey: ['article', articleId] });
 		},
 	});
+}
+
+export function useWarmNextArticles() {
+	const qc = useQueryClient();
+	const warmingArticleIds = useRef(new Set<string>());
+	const enrichAttemptedAt = useRef(new Map<string, number>());
+
+	return useCallback(
+		(articleIds: readonly string[]) => {
+			const idsToWarm = Array.from(new Set(articleIds.filter(Boolean))).slice(
+				0,
+				ARTICLE_WARM_LIMIT,
+			);
+
+			for (const articleId of idsToWarm) {
+				if (warmingArticleIds.current.has(articleId)) {
+					continue;
+				}
+
+				warmingArticleIds.current.add(articleId);
+				void (async () => {
+					const queryKey = articleQueryKey(articleId);
+					try {
+						const article = await qc.fetchQuery({
+							queryKey,
+							queryFn: () => fetchArticle(articleId),
+							staleTime: ARTICLE_DETAIL_WARM_STALE_MS,
+						});
+
+						if (!shouldEnrichArticle(article)) {
+							return;
+						}
+
+						const now = Date.now();
+						if (isRecentlyAttempted(enrichAttemptedAt.current.get(articleId), now)) {
+							return;
+						}
+
+						enrichAttemptedAt.current.set(articleId, now);
+						const result = await enrichArticle(articleId);
+						if (!result.success && result.reason !== 'already_enriched') {
+							return;
+						}
+
+						await delay(ARTICLE_ENRICH_REFRESH_DELAY_MS);
+						qc.invalidateQueries({ queryKey, refetchType: 'none' });
+						await qc.fetchQuery({
+							queryKey,
+							queryFn: () => fetchArticle(articleId),
+							staleTime: ARTICLE_DETAIL_WARM_STALE_MS,
+						});
+					} catch {
+						// Background warming should never surface as reader UI noise.
+					} finally {
+						warmingArticleIds.current.delete(articleId);
+					}
+				})();
+			}
+		},
+		[qc],
+	);
 }
 
 export function useMarkRead() {

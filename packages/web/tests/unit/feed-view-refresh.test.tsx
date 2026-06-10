@@ -8,6 +8,7 @@ const openWindowMock = vi.fn();
 const useInfiniteArticlesMock = vi.fn();
 const updatePreferencesMutate = vi.fn();
 const markReadMutate = vi.fn();
+const warmNextArticlesMock = vi.fn();
 let isRefreshingAllFeeds = false;
 let hideReadPreference = false;
 let defaultSortPreference = 'latest';
@@ -28,6 +29,7 @@ vi.mock('../../src/hooks/queries', () => ({
 		},
 	}),
 	usePrefetchArticle: () => vi.fn(),
+	useWarmNextArticles: () => warmNextArticlesMock,
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
 }));
 
@@ -78,6 +80,10 @@ describe('FeedView refresh', () => {
 						data: [
 							{ id: 'article-7', feedId: 'feed-42', isRead: false },
 							{ id: 'article-8', feedId: 'feed-42', isRead: false },
+							{ id: 'article-9', feedId: 'feed-42', isRead: false },
+							{ id: 'article-10', feedId: 'feed-42', isRead: false },
+							{ id: 'article-11', feedId: 'feed-42', isRead: false },
+							{ id: 'article-12', feedId: 'feed-42', isRead: false },
 						],
 					},
 				],
@@ -222,5 +228,33 @@ describe('FeedView refresh', () => {
 
 		expect(markReadMutate).not.toHaveBeenCalled();
 		expect(onSelectArticle).toHaveBeenCalledWith('article-8');
+	});
+
+	it('warms the next five articles after the current selection', async () => {
+		render(<FeedView selectedArticleId="article-7" onSelectArticle={() => {}} />);
+
+		await waitFor(() => {
+			expect(warmNextArticlesMock).toHaveBeenCalledWith([
+				'article-8',
+				'article-9',
+				'article-10',
+				'article-11',
+				'article-12',
+			]);
+		});
+	});
+
+	it('warms the first five articles when no article is selected', async () => {
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		await waitFor(() => {
+			expect(warmNextArticlesMock).toHaveBeenCalledWith([
+				'article-7',
+				'article-8',
+				'article-9',
+				'article-10',
+				'article-11',
+			]);
+		});
 	});
 });

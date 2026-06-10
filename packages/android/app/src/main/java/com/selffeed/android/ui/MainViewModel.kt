@@ -3,8 +3,14 @@ package com.selffeed.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.cachedIn
+import android.os.SystemClock
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ArticlePageQuery
+import com.selffeed.android.data.ArticlePagingSource
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -21,12 +27,18 @@ import com.selffeed.android.network.UserPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.selffeed.android.ui.utils.formatSyncSummary
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 
 enum class AuthMode { LOGIN, REGISTER }
 enum class HomeTab { FEEDS, ARTICLES, SEARCH, SETTINGS, STATS }
@@ -63,16 +75,92 @@ data class AppUiState(
     val errorMessage: String? = null,
 )
 
+data class ArticlesUiState(
+    val articles: List<ArticleListItem> = emptyList(),
+    val selectedArticle: ArticleDetail? = null,
+    val hasMoreArticles: Boolean = false,
+    val loadingMoreArticles: Boolean = false,
+    val isSyncingFeeds: Boolean = false,
+)
+
+data class ReaderUiState(
+    val selectedArticle: ArticleDetail? = null,
+    val articles: List<ArticleListItem> = emptyList(),
+)
+
+data class ChromeUiState(
+    val activeTab: HomeTab = HomeTab.ARTICLES,
+    val selectedFeedId: String? = null,
+    val selectedCategoryId: String? = null,
+    val selectedArticle: ArticleDetail? = null,
+    val articlesLoaded: Boolean = false,
+    val feeds: List<FeedWithCounts> = emptyList(),
+    val categories: List<CategoryWithCounts> = emptyList(),
+)
+
 class MainViewModel(
     private val repository: RssRepository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
+    val themePreference: StateFlow<String> = uiState
+        .map { normalizeThemePreference(it.preferences?.theme ?: "system") }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "system")
+    val articlesState: StateFlow<ArticlesUiState> = uiState
+        .map {
+            ArticlesUiState(
+                articles = it.articles,
+                selectedArticle = it.selectedArticle,
+                hasMoreArticles = it.hasMoreArticles,
+                loadingMoreArticles = it.loadingMoreArticles,
+                isSyncingFeeds = it.isSyncingFeeds,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ArticlesUiState())
+    val readerState: StateFlow<ReaderUiState> = uiState
+        .map { ReaderUiState(selectedArticle = it.selectedArticle, articles = it.articles) }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReaderUiState())
+    val chromeState: StateFlow<ChromeUiState> = uiState
+        .map {
+            ChromeUiState(
+                activeTab = it.activeTab,
+                selectedFeedId = it.selectedFeedId,
+                selectedCategoryId = it.selectedCategoryId,
+                selectedArticle = it.selectedArticle,
+                articlesLoaded = it.articles.isNotEmpty(),
+                feeds = it.feeds,
+                categories = it.categories,
+            )
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChromeUiState())
+    private val articlePagingQuery = MutableStateFlow(ArticlePageQuery())
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val articlePagingData = articlePagingQuery
+        .flatMapLatest { query ->
+            Pager(
+                config = PagingConfig(
+                    pageSize = ARTICLE_PAGE_SIZE,
+                    initialLoadSize = ARTICLE_PAGE_SIZE,
+                    prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
+                    enablePlaceholders = false,
+                ),
+                pagingSourceFactory = { ArticlePagingSource(repository, query) },
+            ).flow
+        }
+        .cachedIn(viewModelScope)
     private var searchJob: Job? = null
     private var enrichArticleJob: Job? = null
+    private var warmNextArticlesJob: Job? = null
     private var readStateSyncJob: Job? = null
     private var articleRequestSequence = 0L
+    private var articlePagingGeneration = 0L
+    private var lastVisibleRefreshAtMs = 0L
     private val manuallyUnread = mutableSetOf<String>()
+    private val backgroundEnrichAttemptedAt = mutableMapOf<String, Long>()
 
     init {
         bootstrap()
@@ -220,6 +308,9 @@ class MainViewModel(
 
     fun refreshVisibleData() {
         if (!_uiState.value.isAuthenticated || !repository.isLoggedIn()) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastVisibleRefreshAtMs < RESUME_REFRESH_MIN_INTERVAL_MS) return
+        lastVisibleRefreshAtMs = now
 
         loadCategories()
         loadFeeds()
@@ -431,6 +522,8 @@ class MainViewModel(
     fun loadArticles() {
         val requestId = nextArticleRequestId()
         val query = _uiState.value.articleQuery()
+        articlePagingGeneration += 1
+        articlePagingQuery.value = query.toArticlePageQuery(articlePagingGeneration)
         _uiState.update {
             it.copy(
                 articleCursor = null,
@@ -535,6 +628,7 @@ class MainViewModel(
                         markRead(id, true)
                     }
                     maybeEnrichSelectedArticle(result.data)
+                    warmNextArticlesAfter(id)
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -542,8 +636,21 @@ class MainViewModel(
         }
     }
 
+    fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
+        if (articles.isEmpty()) return
+        _uiState.update { current ->
+            val readStates = current.articles.associate { it.id to it.isRead }
+            current.copy(
+                articles = articles.map { article ->
+                    readStates[article.id]?.let { article.copy(isRead = it) } ?: article
+                },
+            )
+        }
+    }
+
     fun closeArticle() {
         enrichArticleJob?.cancel()
+        warmNextArticlesJob?.cancel()
         _uiState.update { it.copy(selectedArticle = null) }
     }
 
@@ -578,7 +685,6 @@ class MainViewModel(
                             selectedArticle = state.selectedArticle?.takeIf { it.id != articleId } ?: state.selectedArticle?.copy(isRead = result.data),
                         )
                     }
-                    repository.invalidateArticleCaches(articleId)
                     loadCategories()
                     loadStats()
                 }
@@ -613,7 +719,7 @@ class MainViewModel(
         enrichArticleJob = viewModelScope.launch {
             when (repository.enrichArticle(article.id)) {
                 is AppResult.Success -> {
-                    delay(800)
+                    delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
                     when (val refreshed = repository.article(article.id, forceRefresh = true)) {
                         is AppResult.Success -> {
                             _uiState.update { current ->
@@ -630,6 +736,67 @@ class MainViewModel(
                 is AppResult.Error -> Unit
             }
         }
+    }
+
+    private fun warmNextArticlesAfter(articleId: String) {
+        val state = _uiState.value
+        val currentIndex = state.articles.indexOfFirst { it.id == articleId }
+        if (currentIndex == -1) {
+            return
+        }
+
+        val articlesToWarm = state.articles
+            .drop(currentIndex + 1)
+            .take(NEXT_ARTICLE_WARM_LIMIT)
+        if (articlesToWarm.isEmpty()) {
+            return
+        }
+
+        repository.prefetchHeroImages(articlesToWarm.map { it.heroImageUrl })
+        val articleIds = articlesToWarm.map { it.id }.distinct()
+        warmNextArticlesJob?.cancel()
+        warmNextArticlesJob = viewModelScope.launch {
+            for (nextArticleId in articleIds) {
+                val detail = repository.cachedArticleDetail(nextArticleId)
+                    ?: when (val prefetched = repository.prefetchArticle(nextArticleId)) {
+                        is AppResult.Success -> prefetched.data
+                        is AppResult.Error -> continue
+                    }
+                repository.prefetchHeroImages(listOf(detail.heroImageUrl))
+
+                if (!shouldAttemptBackgroundEnrichment(detail)) {
+                    continue
+                }
+
+                when (val enriched = repository.enrichArticle(nextArticleId, invalidateCaches = false)) {
+                    is AppResult.Success -> {
+                        if (enriched.data.success || enriched.data.reason == "already_enriched") {
+                            delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
+                            repository.refreshArticleDetail(nextArticleId)
+                        }
+                    }
+                    is AppResult.Error -> Unit
+                }
+            }
+        }
+    }
+
+    private fun shouldAttemptBackgroundEnrichment(article: ArticleDetail): Boolean {
+        if (article.isEnriched || article.canonicalUrl.isNullOrBlank()) {
+            return false
+        }
+
+        val now = System.currentTimeMillis()
+        backgroundEnrichAttemptedAt.entries.removeIf {
+            now - it.value >= ARTICLE_BACKGROUND_ENRICH_RETRY_MS
+        }
+        val lastAttemptAt = backgroundEnrichAttemptedAt[article.id]
+        if (lastAttemptAt != null && now - lastAttemptAt < ARTICLE_BACKGROUND_ENRICH_RETRY_MS) {
+            return false
+        }
+
+        backgroundEnrichAttemptedAt[article.id] = now
+        return true
     }
 
     fun updateSearchQuery(query: String) {
@@ -880,6 +1047,8 @@ class MainViewModel(
     }
 
     override fun onCleared() {
+        enrichArticleJob?.cancel()
+        warmNextArticlesJob?.cancel()
         stopReadStateSync()
         super.onCleared()
     }
@@ -901,14 +1070,14 @@ class MainViewModel(
         readStateSyncJob = null
     }
 
-    private fun applyReadStateSyncEvent(event: ReadStateSyncEvent) {
+    private suspend fun applyReadStateSyncEvent(event: ReadStateSyncEvent) {
         when (event) {
             is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
             is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
         }
     }
 
-    private fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
+    private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
         repository.invalidateReadStateCaches(event.articleId)
         var shouldReloadArticles = false
 
@@ -968,7 +1137,7 @@ class MainViewModel(
         }
     }
 
-    private fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
+    private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
         repository.invalidateReadStateCaches()
         val feedIds = event.feedIds.toSet()
 
@@ -1059,6 +1228,15 @@ class MainViewModel(
             sort = preferences?.defaultSort,
         )
 
+    private fun ArticleQuery.toArticlePageQuery(generation: Long): ArticlePageQuery =
+        ArticlePageQuery(
+            feedId = feedId,
+            categoryId = categoryId,
+            unreadOnly = unreadOnly,
+            sort = sort,
+            generation = generation,
+        )
+
     private suspend fun persistNormalizedTheme(theme: String) {
         when (val result = repository.updatePreferences(UpdatePreferencesRequest(theme = theme))) {
             is AppResult.Success -> _uiState.update {
@@ -1088,6 +1266,15 @@ class MainViewModel(
         val unreadOnly: Boolean,
         val sort: String?,
     )
+
+    private companion object {
+        const val NEXT_ARTICLE_WARM_LIMIT = 5
+        const val ARTICLE_PAGE_SIZE = 30
+        const val ARTICLE_PAGING_PREFETCH_DISTANCE = 5
+        const val ARTICLE_ENRICH_REFRESH_DELAY_MS = 800L
+        const val ARTICLE_BACKGROUND_ENRICH_RETRY_MS = 5 * 60_000L
+        const val RESUME_REFRESH_MIN_INTERVAL_MS = 60_000L
+    }
 }
 
 class MainViewModelFactory(

@@ -1,10 +1,12 @@
 package com.selffeed.android.data
 
+import android.content.Context
 import android.util.Log
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.network.ApiErrorEnvelope
 import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
@@ -23,6 +25,9 @@ import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.toReadStateEvent
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
+import coil.ImageLoader
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
@@ -61,6 +66,8 @@ class RssRepository(
     okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val offlineCacheStore: OfflineCacheStore,
+    private val imageRequestContext: Context,
+    private val imageLoader: ImageLoader,
 ) {
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
@@ -251,9 +258,42 @@ class RssRepository(
         }
     }
 
-    suspend fun enrichArticle(articleId: String) = safeCall {
+    fun cachedArticleDetail(articleId: String): ArticleDetail? = getCached("article:$articleId")
+
+    suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> = article(articleId)
+
+    suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> = safeReadCall {
+        withRetry { api.article(articleId).data }.also { detail ->
+            putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+            offlineCacheStore.writeArticleDetail(detail)
+        }
+    }
+
+    fun prefetchHeroImages(imageUrls: Iterable<String?>) {
+        imageUrls
+            .asSequence()
+            .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+            .distinct()
+            .take(ARTICLE_IMAGE_PREFETCH_LIMIT)
+            .forEach { imageUrl ->
+                val request = ImageRequest.Builder(imageRequestContext)
+                    .data(imageUrl)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .build()
+                imageLoader.enqueue(request)
+            }
+    }
+
+    suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean = true) = safeCall {
         api.enrichArticle(articleId).data.also {
-            invalidateArticleCaches(articleId)
+            if (it.success || it.reason == "already_enriched") {
+                if (invalidateCaches) {
+                    invalidateArticleCaches(articleId)
+                } else {
+                    invalidateArticleDetailCache(articleId)
+                }
+            }
         }
     }
 
@@ -503,20 +543,24 @@ class RssRepository(
         clearCache()
     }
 
-    fun invalidateArticleCaches(articleId: String) {
-        invalidateByPrefix("article:$articleId")
+    suspend fun invalidateArticleCaches(articleId: String) {
+        invalidateArticleDetailCache(articleId)
         invalidateByPrefix("articles")
         invalidateByPrefix("search")
         invalidateByPrefix("feeds")
         invalidateByPrefix("categories")
         invalidateByPrefix("stats")
-        offlineCacheStore.clearByPrefix("article-$articleId")
         offlineCacheStore.clearByPrefix("articles-")
         offlineCacheStore.clearByPrefix("feeds")
         offlineCacheStore.clearByPrefix("categories")
     }
 
-    fun invalidateReadStateCaches(articleId: String? = null) {
+    private suspend fun invalidateArticleDetailCache(articleId: String) {
+        invalidateByPrefix("article:$articleId")
+        offlineCacheStore.clearByPrefix("article-$articleId")
+    }
+
+    suspend fun invalidateReadStateCaches(articleId: String? = null) {
         if (articleId != null) {
             invalidateByPrefix("article:$articleId")
             offlineCacheStore.clearByPrefix("article-$articleId")
@@ -524,7 +568,7 @@ class RssRepository(
         invalidateFeedAndArticleCaches()
     }
 
-    private fun clearCacheAndDatabase() {
+    private suspend fun clearCacheAndDatabase() {
         clearCache()
         offlineCacheStore.clearAll()
     }
@@ -537,7 +581,7 @@ class RssRepository(
         if (clearedEntries > 0) cacheInvalidatedEntriesCount.addAndGet(clearedEntries)
     }
 
-    private fun invalidateFeedAndArticleCaches() {
+    private suspend fun invalidateFeedAndArticleCaches() {
         invalidateByPrefix("feeds")
         invalidateByPrefix("articles")
         invalidateByPrefix("search")
@@ -637,6 +681,7 @@ class RssRepository(
         const val STATS_TTL_MS = 15_000L
         const val ADMIN_SETTINGS_TTL_MS = 20_000L
         const val OPML_EXPORT_TTL_MS = 10_000L
+        const val ARTICLE_IMAGE_PREFETCH_LIMIT = 5
         const val MAX_MEMORY_CACHE_ENTRIES = 160
     }
 }
