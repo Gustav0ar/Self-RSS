@@ -21,10 +21,10 @@
 	},
 	"dependencies": {
 		"@self-feed/shared": "workspace:*",
-		"dompurify": "^3.4.6",
+		"dompurify": "^3.4.8",
 		"drizzle-orm": "^0.45.2",
-		"hono": "^4.12.23",
-		"ioredis": "^5.11.0",
+		"hono": "^4.12.25",
+		"ioredis": "^5.11.1",
 		"jose": "^6.2.3",
 		"jsdom": "^29.1.1",
 		"rss-parser": "^3.13.0",
@@ -36,6 +36,6 @@
 		"@types/jsdom": "^28.0.3",
 		"drizzle-kit": "^0.31.10",
 		"typescript": "^6.0.3",
-		"vitest": "^4.1.7"
+		"vitest": "^4.1.8"
 	}
 }

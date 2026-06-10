@@ -14,14 +14,14 @@
 	},
 	"dependencies": {
 		"@self-feed/shared": "workspace:*",
-		"@tanstack/react-query": "^5.100.14",
-		"@tanstack/react-router": "^1.170.8",
+		"@tanstack/react-query": "^5.101.0",
+		"@tanstack/react-router": "^1.170.15",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
-		"date-fns": "^4.3.0",
-		"lucide-react": "^1.16.0",
-		"react": "^19.2.6",
-		"react-dom": "^19.2.6",
+		"date-fns": "^4.4.0",
+		"lucide-react": "^1.17.0",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
 		"tailwind-merge": "^3.6.0"
 	},
 	"devDependencies": {
@@ -30,13 +30,13 @@
 		"@testing-library/user-event": "^14.6.1",
 		"@tailwindcss/vite": "^4.3.0",
 		"@playwright/test": "^1.60.0",
-		"@types/node": "^25.9.1",
-		"@types/react": "^19.2.15",
+		"@types/node": "^25.9.2",
+		"@types/react": "^19.2.17",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^6.0.2",
 		"tailwindcss": "^4.3.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.0.14",
-		"vitest": "^4.1.7"
+		"vite": "^8.0.16",
+		"vitest": "^4.1.8"
 	}
 }

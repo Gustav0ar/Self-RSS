@@ -48,6 +48,7 @@
 			"!**/.next",
 			"!**/coverage",
 			"!**/*.gen.*",
+			"!**/.claude",
 			"!packages/api/openapi.json"
 		]
 	}
