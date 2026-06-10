@@ -16,7 +16,7 @@ jobs:
     name: CodeQL
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
@@ -26,10 +26,10 @@ jobs:
     name: Secret Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@v3.90.8
+      - uses: trufflesecurity/trufflehog@v3.95.5
         with:
           path: ./
           extra_args: --results=verified,unknown
@@ -38,8 +38,8 @@ jobs:
     name: Filesystem Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@v0.36.0
+      - uses: actions/checkout@v6
+      - uses: aquasecurity/trivy-action@0.33.0
         with:
           scan-type: fs
           scan-ref: .
