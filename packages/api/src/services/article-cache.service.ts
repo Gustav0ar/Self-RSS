@@ -196,6 +196,9 @@ export class ArticleCacheService {
 						generation,
 					},
 				};
+				if (!(await this.isGenerationCurrent(userId, generation))) {
+					return;
+				}
 				await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(empty));
 				return;
 			}
@@ -247,6 +250,11 @@ export class ArticleCacheService {
 					generation,
 				},
 			};
+
+			if (!(await this.isGenerationCurrent(userId, generation))) {
+				logger.debug('Skipping stale article cache population', { userId, generation });
+				return;
+			}
 
 			await Promise.all([
 				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
@@ -311,6 +319,9 @@ export class ArticleCacheService {
 				},
 			};
 
+			if (!(await this.isGenerationCurrent(userId, generation))) {
+				return;
+			}
 			await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached));
 		} catch (err) {
 			logger.error('Failed to populate feed cache', {
@@ -350,6 +361,9 @@ export class ArticleCacheService {
 						generation,
 					},
 				};
+				if (!(await this.isGenerationCurrent(userId, generation))) {
+					return;
+				}
 				await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(empty));
 				return;
 			}
@@ -386,6 +400,9 @@ export class ArticleCacheService {
 				},
 			};
 
+			if (!(await this.isGenerationCurrent(userId, generation))) {
+				return;
+			}
 			await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached));
 		} catch (err) {
 			logger.error('Failed to populate category cache', {
@@ -477,6 +494,10 @@ export class ArticleCacheService {
 		const genKey = CacheKeys.articleCacheGeneration(userId);
 		const gen = await this.redis.get(genKey);
 		return gen ? parseInt(gen, 10) : 0;
+	}
+
+	private async isGenerationCurrent(userId: string, generation: number): Promise<boolean> {
+		return (await this.getGeneration(userId)) === generation;
 	}
 
 	/**
