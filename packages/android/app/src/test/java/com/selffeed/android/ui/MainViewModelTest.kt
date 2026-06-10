@@ -9,6 +9,7 @@ import com.selffeed.android.network.ArticleReadStateChangedEvent
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticlesMarkedReadEvent
 import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.ReadStateScope
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -23,7 +24,6 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
-import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -53,10 +53,12 @@ class MainViewModelTest {
         every { repository.isLoggedIn() } returns false
         every { repository.clientId() } returns "android-client"
         every { repository.readStateEvents() } returns readStateEvents
-        every { repository.invalidateReadStateCaches(any()) } just runs
-        every { repository.invalidateReadStateCaches(null) } just runs
+        coEvery { repository.invalidateReadStateCaches(any()) } just runs
+        coEvery { repository.invalidateReadStateCaches(null) } just runs
         every { repository.getDebugResilienceSnapshot() } returns emptyMap()
         every { repository.resetDebugResilienceMetrics() } just runs
+        every { repository.cachedArticleDetail(any()) } returns null
+        every { repository.prefetchHeroImages(any()) } just runs
 
         coEvery { repository.me() } returns AppResult.Success(sampleUser())
         coEvery { repository.categories() } returns AppResult.Success(emptyList())
@@ -79,6 +81,17 @@ class MainViewModelTest {
         coEvery { repository.login(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.register(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.logout() } returns AppResult.Success(true)
+        coEvery { repository.prefetchArticle(any()) } coAnswers {
+            val articleId = invocation.args[0] as String
+            AppResult.Success(sampleArticleDetail(id = articleId, title = "Warm $articleId"))
+        }
+        coEvery { repository.refreshArticleDetail(any()) } coAnswers {
+            val articleId = invocation.args[0] as String
+            AppResult.Success(sampleArticleDetail(id = articleId, title = "Warm $articleId", isEnriched = true))
+        }
+        coEvery { repository.enrichArticle(any(), any()) } returns AppResult.Success(
+            EnrichArticleResponse(success = false, reason = "missing_canonical_url"),
+        )
     }
 
     @Test
@@ -330,7 +343,7 @@ class MainViewModelTest {
         assertEquals(1, state.categories.first { it.id == "category-1" }.unreadCount)
         assertEquals(9, state.stats?.totalUnread)
         assertEquals(21, state.stats?.totalRead)
-        verify { repository.invalidateReadStateCaches("a1") }
+        coVerify { repository.invalidateReadStateCaches("a1") }
     }
 
     @Test
@@ -346,8 +359,6 @@ class MainViewModelTest {
             sampleArticleDetail(id = "a1", title = "Unread 1", isRead = false),
         )
         coEvery { repository.markRead("a1", true) } returns AppResult.Success(true)
-        every { repository.invalidateArticleCaches("a1") } just runs
-
         val viewModel = MainViewModel(repository)
         advanceUntilIdle()
 
@@ -358,6 +369,80 @@ class MainViewModelTest {
         assertEquals(listOf("a1"), state.articles.map { it.id })
         assertTrue(state.articles.first().isRead)
         assertTrue(state.selectedArticle?.isRead == true)
+    }
+
+    @Test
+    fun openArticle_warmsNextFiveArticles() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery {
+            repository.articles(any(), any(), any(), any(), 30, null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                (1..7).map { index -> sampleArticle(id = "a$index", title = "Article $index") },
+                null,
+                false,
+            ),
+        )
+        coEvery { repository.article("a1", any()) } returns AppResult.Success(
+            sampleArticleDetail(id = "a1", title = "Article 1", isRead = true),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.loadArticles()
+        advanceUntilIdle()
+        viewModel.openArticle("a1")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.prefetchArticle("a2") }
+        coVerify(exactly = 1) { repository.prefetchArticle("a3") }
+        coVerify(exactly = 1) { repository.prefetchArticle("a4") }
+        coVerify(exactly = 1) { repository.prefetchArticle("a5") }
+        coVerify(exactly = 1) { repository.prefetchArticle("a6") }
+        coVerify(exactly = 0) { repository.prefetchArticle("a7") }
+    }
+
+    @Test
+    fun openArticle_enrichesAndRefreshesUnenrichedWarmedArticles() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery {
+            repository.articles(any(), any(), any(), any(), 30, null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Article 1"),
+                    sampleArticle(id = "a2", title = "Article 2"),
+                ),
+                null,
+                false,
+            ),
+        )
+        coEvery { repository.article("a1", any()) } returns AppResult.Success(
+            sampleArticleDetail(id = "a1", title = "Article 1", isRead = true),
+        )
+        coEvery { repository.prefetchArticle("a2") } returns AppResult.Success(
+            sampleArticleDetail(
+                id = "a2",
+                title = "Article 2",
+                canonicalUrl = "https://example.com/a2",
+                isEnriched = false,
+            ),
+        )
+        coEvery { repository.enrichArticle("a2", false) } returns AppResult.Success(
+            EnrichArticleResponse(success = true),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.loadArticles()
+        advanceUntilIdle()
+        viewModel.openArticle("a1")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.enrichArticle("a2", false) }
+        coVerify(exactly = 1) { repository.refreshArticleDetail("a2") }
     }
 
     @Test
@@ -395,7 +480,7 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertFalse(state.articles.first { it.id == "a1" }.isRead)
         assertEquals(2, state.feeds.first { it.id == "feed-1" }.unreadCount)
-        verify(exactly = 0) { repository.invalidateReadStateCaches("a1") }
+        coVerify(exactly = 0) { repository.invalidateReadStateCaches("a1") }
     }
 
     @Test
@@ -528,7 +613,7 @@ class MainViewModelTest {
         assertEquals(4, state.categories.first { it.id == "category-2" }.unreadCount)
         assertEquals(4, state.stats?.totalUnread)
         assertEquals(25, state.stats?.totalRead)
-        verify { repository.invalidateReadStateCaches(null) }
+        coVerify { repository.invalidateReadStateCaches(null) }
     }
 
     @Test
@@ -656,11 +741,13 @@ class MainViewModelTest {
         title: String,
         feedId: String = "feed-1",
         isRead: Boolean = false,
+        canonicalUrl: String? = null,
+        isEnriched: Boolean = false,
     ): ArticleDetail = ArticleDetail(
         id = id,
         feedId = feedId,
         guid = id,
-        canonicalUrl = null,
+        canonicalUrl = canonicalUrl,
         title = title,
         author = null,
         excerpt = "Excerpt",
@@ -675,6 +762,6 @@ class MainViewModelTest {
         feedSiteUrl = null,
         media = emptyList(),
         isRead = isRead,
-        isEnriched = false,
+        isEnriched = isEnriched,
     )
 }

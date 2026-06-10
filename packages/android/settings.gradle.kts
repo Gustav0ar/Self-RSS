@@ -19,3 +19,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "SelfFeed Android"
 include(":app")
+include(":macrobenchmark")

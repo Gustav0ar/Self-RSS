@@ -9,6 +9,8 @@ import com.selffeed.android.network.FeedWithCounts
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class OfflineCacheStore(
@@ -27,51 +29,55 @@ class OfflineCacheStore(
     )
     private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
 
-    fun writeCategories(categories: List<CategoryWithCounts>) {
+    suspend fun writeCategories(categories: List<CategoryWithCounts>) = withContext(Dispatchers.IO) {
         File(root, "categories.json").writeText(categoriesAdapter.toJson(categories))
         pruneCacheFiles()
     }
 
-    fun readCategories(): List<CategoryWithCounts> =
+    suspend fun readCategories(): List<CategoryWithCounts> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(root, "categories.json")
             if (!file.exists()) emptyList() else categoriesAdapter.fromJson(file.readText()) ?: emptyList()
         }.getOrDefault(emptyList())
+    }
 
-    fun writeFeeds(feeds: List<FeedWithCounts>) {
+    suspend fun writeFeeds(feeds: List<FeedWithCounts>) = withContext(Dispatchers.IO) {
         File(root, "feeds.json").writeText(feedsAdapter.toJson(feeds))
         pruneCacheFiles()
     }
 
-    fun readFeeds(): List<FeedWithCounts> =
+    suspend fun readFeeds(): List<FeedWithCounts> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(root, "feeds.json")
             if (!file.exists()) emptyList() else feedsAdapter.fromJson(file.readText()) ?: emptyList()
         }.getOrDefault(emptyList())
+    }
 
-    fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) {
+    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) = withContext(Dispatchers.IO) {
         File(root, sanitizeKey("articles-$key.json")).writeText(articleListAdapter.toJson(payload))
         pruneCacheFiles()
     }
 
-    fun readArticles(key: String): ApiListResponse<ArticleListItem>? =
+    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(root, sanitizeKey("articles-$key.json"))
             if (!file.exists()) null else articleListAdapter.fromJson(file.readText())
         }.getOrNull()
+    }
 
-    fun writeArticleDetail(article: ArticleDetail) {
+    suspend fun writeArticleDetail(article: ArticleDetail) = withContext(Dispatchers.IO) {
         File(root, sanitizeKey("article-${article.id}.json")).writeText(articleDetailAdapter.toJson(article))
         pruneCacheFiles()
     }
 
-    fun readArticleDetail(articleId: String): ArticleDetail? =
+    suspend fun readArticleDetail(articleId: String): ArticleDetail? = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(root, sanitizeKey("article-$articleId.json"))
             if (!file.exists()) null else articleDetailAdapter.fromJson(file.readText())
         }.getOrNull()
+    }
 
-    fun clearByPrefix(prefix: String) {
+    suspend fun clearByPrefix(prefix: String) = withContext(Dispatchers.IO) {
         root.listFiles()?.forEach { file ->
             if (file.name.startsWith(prefix)) {
                 file.delete()
@@ -79,7 +85,7 @@ class OfflineCacheStore(
         }
     }
 
-    fun clearAll() {
+    suspend fun clearAll() = withContext(Dispatchers.IO) {
         root.listFiles()?.forEach { it.deleteRecursively() }
     }
 

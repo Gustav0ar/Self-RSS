@@ -10,6 +10,7 @@ import {
 	usePreferences,
 	usePrefetchArticle,
 	useUpdatePreferences,
+	useWarmNextArticles,
 } from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
@@ -44,6 +45,7 @@ export function FeedView({
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
+	const warmNextArticles = useWarmNextArticles();
 
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
 		useInfiniteArticles({
@@ -94,14 +96,12 @@ export function FeedView({
 		}
 
 		const selectedIndex = selectedArticleId ? articleIds.indexOf(selectedArticleId) : -1;
-		const idsToPrefetch =
+		const idsToWarm =
 			selectedIndex >= 0
-				? articleIds.slice(selectedIndex, selectedIndex + 3)
-				: articleIds.slice(0, 2);
-		for (const id of idsToPrefetch) {
-			void prefetchArticle(id);
-		}
-	}, [articleIds, prefetchArticle, selectedArticleId]);
+				? articleIds.slice(selectedIndex + 1, selectedIndex + 6)
+				: articleIds.slice(0, 5);
+		warmNextArticles(idsToWarm);
+	}, [articleIds, selectedArticleId, warmNextArticles]);
 
 	function handleSelectArticle(id: string) {
 		if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {

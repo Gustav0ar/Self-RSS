@@ -25,6 +25,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -238,6 +239,7 @@ private fun EmbedPlayer(
     modifier: Modifier = Modifier
 ) {
     var heightDp by remember(embedUrl) { mutableStateOf(300) }
+    var loadEmbed by rememberSaveable(embedUrl) { mutableStateOf(false) }
     val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
     val youtubeShellHtml = remember(embedUrl, hexBackground) {
         if (isYouTubeEmbedUrl(embedUrl)) {
@@ -245,6 +247,14 @@ private fun EmbedPlayer(
         } else {
             null
         }
+    }
+
+    if (!loadEmbed) {
+        DeferredEmbedPlaceholder(
+            modifier = modifier,
+            onLoad = { loadEmbed = true },
+        )
+        return
     }
 
     AndroidView(
@@ -308,7 +318,31 @@ private fun EmbedPlayer(
                 }
             }
         },
+        onRelease = { webView ->
+            webView.releaseReaderResources()
+        },
     )
+}
+
+@Composable
+private fun DeferredEmbedPlaceholder(
+    modifier: Modifier,
+    onLoad: () -> Unit,
+) {
+    Surface(
+        modifier = modifier.height(220.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            OutlinedButton(onClick = onLoad) {
+                Text("Load media")
+            }
+        }
+    }
 }
 
 @Composable
@@ -556,7 +590,20 @@ private fun SecureHtmlContent(
                 )
             }
         },
+        onRelease = { webView ->
+            webView.releaseReaderResources()
+        },
     )
+}
+
+private fun WebView.releaseReaderResources() {
+    runCatching {
+        stopLoading()
+        loadUrl("about:blank")
+        removeJavascriptInterface("Android")
+        webViewClient = WebViewClient()
+        destroy()
+    }
 }
 
 private const val DefaultReaderDocumentBaseUrl = "https://self-feed.local/"

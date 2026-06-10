@@ -1,10 +1,6 @@
 package com.selffeed.android.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
@@ -39,11 +33,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -59,16 +51,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -77,19 +67,25 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.AppUiState
 import com.selffeed.android.ui.MainViewModel
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun FeedsTab(
@@ -324,10 +320,44 @@ private fun FeedRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
+fun ArticlesTab(
+    state: AppUiState,
+    viewModel: MainViewModel,
+    pagedArticles: LazyPagingItems<ArticleListItem>? = null,
+) {
     val listState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
     val density = LocalDensity.current
+    val readStateOverrides = remember(state.articles) {
+        state.articles.associate { it.id to it.isRead }
+    }
+
+    LaunchedEffect(
+        listState,
+        pagedArticles,
+        state.articles.size,
+        state.hasMoreArticles,
+        state.loadingMoreArticles,
+    ) {
+        if (pagedArticles != null) return@LaunchedEffect
+        snapshotFlow {
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            state.hasMoreArticles &&
+                !state.loadingMoreArticles &&
+                state.articles.isNotEmpty() &&
+                lastVisibleIndex >= state.articles.lastIndex - AUTO_LOAD_MORE_THRESHOLD
+        }
+            .distinctUntilChanged()
+            .collect { shouldLoadMore ->
+                if (shouldLoadMore) {
+                    viewModel.loadMoreArticles()
+                }
+            }
+    }
+
+    val isPagingInitialLoad = pagedArticles?.loadState?.refresh is LoadState.Loading
+    val articleCount = pagedArticles?.itemCount ?: state.articles.size
+    val isEmpty = articleCount == 0 && !isPagingInitialLoad && !state.isSyncingFeeds
 
     PullToRefreshBox(
         isRefreshing = state.isSyncingFeeds,
@@ -360,126 +390,141 @@ fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
                 },
             verticalArrangement = Arrangement.Top,
         ) {
-            if (state.articles.isEmpty() && !state.isSyncingFeeds) {
-                item {
+            if (isPagingInitialLoad && articleCount == 0) {
+                item(key = "articles-loading") {
                     Box(
                         modifier = Modifier
                             .fillParentMaxSize()
                             .padding(32.dp),
-                        contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                    }
+                }
+            }
+
+            if (isEmpty) {
+                item(key = "articles-empty") {
+                    Box(
+                        modifier = Modifier
+                            .fillParentMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                            verticalArrangement = Arrangement.Center,
                         ) {
                             Icon(
                                 imageVector = Icons.Default.MarkEmailRead,
                                 contentDescription = null,
                                 modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
                                 text = "No articles left to read",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = "Your queue is empty. Pull down to refresh or check other feeds.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                textAlign = TextAlign.Center
+                                textAlign = TextAlign.Center,
                             )
                         }
                     }
                 }
             }
 
-            items(state.articles, key = { it.id }) { article ->
-                val dismissState = rememberSwipeToDismissBoxState()
-                
-                // Track if we should update to avoid visual jumps during animation
-                var pendingToggle by remember { mutableStateOf(false) }
-
-                LaunchedEffect(dismissState.currentValue) {
-                    if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-                        pendingToggle = true
-                        delay(250) // Wait for settle animation
-                        viewModel.markRead(article.id, !article.isRead)
-                        dismissState.reset()
-                        pendingToggle = false
+            if (pagedArticles != null) {
+                items(
+                    count = pagedArticles.itemCount,
+                    key = { index -> pagedArticles[index]?.id ?: "article-placeholder-$index" },
+                ) { index ->
+                    val article = pagedArticles[index]
+                    if (article == null) {
+                        ArticlePlaceholderRow()
+                    } else {
+                        val isRead = readStateOverrides[article.id] ?: article.isRead
+                        ArticleListRow(
+                            article = article,
+                            isRead = isRead,
+                            selected = state.selectedArticle?.id == article.id,
+                            onClick = {
+                                viewModel.updateArticleQueueSnapshot(pagedArticles.itemSnapshotList.items)
+                                viewModel.openArticle(article.id)
+                            },
+                            onToggleRead = { read ->
+                                viewModel.updateArticleQueueSnapshot(pagedArticles.itemSnapshotList.items)
+                                viewModel.markRead(article.id, read)
+                            },
+                        )
                     }
                 }
 
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    backgroundContent = {
-                        val isRead = article.isRead
-                        val color = if (isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-                        val icon = if (isRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
-                        val label = if (isRead) "Mark unread" else "Mark read"
-                        
+                val appendLoadState = pagedArticles.loadState.append
+                if (appendLoadState is LoadState.Loading || appendLoadState is LoadState.Error) {
+                    item(key = "articles-paging-footer") {
                         Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(color.copy(alpha = 0.9f))
-                                .padding(horizontal = 24.dp),
-                            contentAlignment = Alignment.CenterEnd
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.graphicsLayer {
-                                    this.alpha = (dismissState.progress * 2f - 1f).coerceIn(0f, 1f)
-                                    this.translationX = (1f - dismissState.progress) * 100f
-                                }
-                            ) {
-                                Text(
-                                    text = label,
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Icon(
-                                    icon,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.scale(dismissState.progress.coerceIn(0.8f, 1.2f))
+                            if (appendLoadState is LoadState.Loading) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            } else if (appendLoadState is LoadState.Error) {
+                                AssistChip(
+                                    onClick = pagedArticles::retry,
+                                    label = { Text(appendLoadState.error.message ?: "Retry loading") },
                                 )
                             }
                         }
                     }
-                ) {
-                    // Content
-                    val effectiveIsRead = if (pendingToggle) !article.isRead else article.isRead
-                    Column {
-                        ArticleCard(
-                            article = article.copy(isRead = effectiveIsRead),
-                            selected = state.selectedArticle?.id == article.id,
-                            onClick = { viewModel.openArticle(article.id) },
-                        )
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
-                        )
+                }
+
+                val refreshLoadState = pagedArticles.loadState.refresh
+                if (refreshLoadState is LoadState.Error && pagedArticles.itemCount == 0) {
+                    item(key = "articles-refresh-error") {
+                        Box(
+                            modifier = Modifier
+                                .fillParentMaxSize()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            AssistChip(
+                                onClick = pagedArticles::retry,
+                                label = { Text(refreshLoadState.error.message ?: "Retry") },
+                            )
+                        }
                     }
                 }
-            }
+            } else {
+                items(state.articles, key = { it.id }) { article ->
+                    ArticleListRow(
+                        article = article,
+                        isRead = article.isRead,
+                        selected = state.selectedArticle?.id == article.id,
+                        onClick = { viewModel.openArticle(article.id) },
+                        onToggleRead = { read -> viewModel.markRead(article.id, read) },
+                    )
+                }
 
-            if (state.hasMoreArticles) {
-                item {
-                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                        if (state.loadingMoreArticles) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                        } else {
-                            AssistChip(
-                                onClick = viewModel::loadMoreArticles,
-                                label = { Text("Load more") },
-                            )
+                if (state.hasMoreArticles) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                            if (state.loadingMoreArticles) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            } else {
+                                AssistChip(
+                                    onClick = viewModel::loadMoreArticles,
+                                    label = { Text("Load more") },
+                                )
+                            }
                         }
                     }
                 }
@@ -489,12 +534,139 @@ fun ArticlesTab(state: AppUiState, viewModel: MainViewModel) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun ArticleListRow(
+    article: ArticleListItem,
+    isRead: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onToggleRead: (Boolean) -> Unit,
+) {
+    val dismissState = rememberSwipeToDismissBoxState()
+    var pendingToggle by remember { mutableStateOf(false) }
+
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+            pendingToggle = true
+            delay(250)
+            onToggleRead(!isRead)
+            dismissState.reset()
+            pendingToggle = false
+        }
+    }
+
+    val effectiveIsRead = if (pendingToggle) !isRead else isRead
+
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            val color = if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+            val icon = if (effectiveIsRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
+            val label = if (effectiveIsRead) "Mark unread" else "Mark read"
+
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(color.copy(alpha = 0.9f))
+                    .padding(horizontal = 24.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.graphicsLayer {
+                        this.alpha = (dismissState.progress * 2f - 1f).coerceIn(0f, 1f)
+                        this.translationX = (1f - dismissState.progress) * 100f
+                    },
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Icon(
+                        icon,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.scale(dismissState.progress.coerceIn(0.8f, 1.2f)),
+                    )
+                }
+            }
+        },
+    ) {
+        Column {
+            ArticleCard(
+                article = article,
+                selected = selected,
+                onClick = onClick,
+                isReadOverride = effectiveIsRead,
+            )
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArticlePlaceholderRow() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.35f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(18.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.72f)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            )
+        }
+    }
+}
+
+@Composable
 private fun ArticleCard(
     article: ArticleListItem,
     selected: Boolean,
     onClick: () -> Unit,
+    isReadOverride: Boolean? = null,
 ) {
-    val isRead = article.isRead
+    val isRead = isReadOverride ?: article.isRead
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -511,7 +683,7 @@ private fun ArticleCard(
             Column(modifier = Modifier.weight(1f)) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!article.isRead) {
+                        if (!isRead) {
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
@@ -526,25 +698,25 @@ private fun ArticleCard(
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
                         )
                     }
                     Text(
                         text = formatPublishedAt(article.displayedAt ?: article.publishedAt),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(start = if (article.isRead) 0.dp else 14.dp)
+                        modifier = Modifier.padding(start = if (isRead) 0.dp else 14.dp),
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = article.title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (article.isRead) FontWeight.Normal else FontWeight.SemiBold,
+                    fontWeight = if (isRead) FontWeight.Normal else FontWeight.SemiBold,
                     color = if (isRead && !selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f
+                    lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f,
                 )
                 article.excerpt?.takeIf { it.isNotBlank() }?.let {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -559,8 +731,18 @@ private fun ArticleCard(
             }
 
             article.heroImageUrl?.let { imageUrl ->
+                val context = LocalContext.current
+                val imageSizePx = with(LocalDensity.current) { 72.dp.roundToPx() }
+                val imageRequest = remember(context, imageUrl, imageSizePx) {
+                    ImageRequest.Builder(context)
+                        .data(imageUrl)
+                        .size(imageSizePx)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                }
                 AsyncImage(
-                    model = imageUrl,
+                    model = imageRequest,
                     contentDescription = null,
                     modifier = Modifier
                         .size(72.dp)
@@ -749,6 +931,8 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
 
 private fun normalizeThemePreference(theme: String): String =
     if (theme == "amoled") "dark" else theme
+
+private const val AUTO_LOAD_MORE_THRESHOLD = 5
 
 @Composable
 fun StatsTab(state: AppUiState, viewModel: MainViewModel) {
