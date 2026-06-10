@@ -1,6 +1,6 @@
-import type { SortOrder } from '@self-feed/shared';
+import type { ArticleListItem, SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import {
@@ -27,6 +27,11 @@ interface FeedViewProps {
 	categoryId?: string;
 	selectedArticleId: string | null;
 	onSelectArticle: (id: string) => void;
+}
+
+interface RetainedReadArticle {
+	article: ArticleListItem;
+	index: number;
 }
 
 export function FeedView({
@@ -58,8 +63,13 @@ export function FeedView({
 
 	const markRead = useMarkRead();
 	const markAllRead = useMarkAllRead();
+	const [retainedReadArticles, setRetainedReadArticles] = useState<
+		Map<string, RetainedReadArticle>
+	>(() => new Map());
+	const retentionScope = `${feedId ?? 'all'}:${categoryId ?? 'all'}:${sort}:${unreadOnly}`;
+	const previousRetentionScope = useRef(retentionScope);
 
-	const articles = useMemo(() => {
+	const fetchedArticles = useMemo(() => {
 		const seenArticleIds = new Set<string>();
 		return (
 			data?.pages
@@ -73,6 +83,25 @@ export function FeedView({
 				}) ?? []
 		);
 	}, [data?.pages]);
+	const articles = useMemo(() => {
+		if (!unreadOnly || retainedReadArticles.size === 0) {
+			return fetchedArticles;
+		}
+
+		const seenArticleIds = new Set(fetchedArticles.map((article) => article.id));
+		const retainedArticles = Array.from(retainedReadArticles.values())
+			.filter(({ article }) => !seenArticleIds.has(article.id))
+			.sort((a, b) => a.index - b.index);
+		if (retainedArticles.length === 0) {
+			return fetchedArticles;
+		}
+
+		const mergedArticles = [...fetchedArticles];
+		for (const retained of retainedArticles) {
+			mergedArticles.splice(Math.min(retained.index, mergedArticles.length), 0, retained.article);
+		}
+		return mergedArticles;
+	}, [fetchedArticles, retainedReadArticles, unreadOnly]);
 	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
 	const articleSearchParams = new URLSearchParams(
@@ -84,6 +113,39 @@ export function FeedView({
 	const handleLoadMore = useCallback(() => {
 		void fetchNextPage();
 	}, [fetchNextPage]);
+
+	const retainReadArticle = useCallback(
+		(article: ArticleListItem, index: number) => {
+			if (!unreadOnly) {
+				return;
+			}
+
+			setRetainedReadArticles((current) => {
+				const retainedArticle = { ...article, isRead: true };
+				const previous = current.get(article.id);
+				if (
+					previous?.index === index &&
+					previous.article.isRead === retainedArticle.isRead &&
+					previous.article.title === retainedArticle.title
+				) {
+					return current;
+				}
+
+				const next = new Map(current);
+				next.set(article.id, { article: retainedArticle, index });
+				return next;
+			});
+		},
+		[unreadOnly],
+	);
+
+	useEffect(() => {
+		if (previousRetentionScope.current === retentionScope) {
+			return;
+		}
+		previousRetentionScope.current = retentionScope;
+		setRetainedReadArticles(new Map());
+	}, [retentionScope]);
 
 	useEffect(() => {
 		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
@@ -106,10 +168,24 @@ export function FeedView({
 		warmNextArticles(idsToWarm);
 	}, [articleIds, selectedArticleId, warmNextArticles]);
 
+	useEffect(() => {
+		if (!unreadOnly || !selectedArticleId) {
+			return;
+		}
+
+		const selectedIndex = fetchedArticles.findIndex((article) => article.id === selectedArticleId);
+		const selectedArticle = selectedIndex >= 0 ? fetchedArticles[selectedIndex] : null;
+		if (selectedArticle?.isRead) {
+			retainReadArticle(selectedArticle, selectedIndex);
+		}
+	}, [fetchedArticles, retainReadArticle, selectedArticleId, unreadOnly]);
+
 	function handleSelectArticle(id: string) {
 		if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {
-			const nextArticle = articles.find((article) => article.id === id);
+			const nextArticleIndex = articles.findIndex((article) => article.id === id);
+			const nextArticle = nextArticleIndex >= 0 ? articles[nextArticleIndex] : null;
 			if (nextArticle && !nextArticle.isRead) {
+				retainReadArticle(nextArticle, nextArticleIndex);
 				markRead.mutate({ articleId: nextArticle.id, read: true });
 			}
 		}
@@ -146,10 +222,12 @@ export function FeedView({
 	});
 
 	function handleMarkAllRead() {
+		setRetainedReadArticles(new Map());
 		markAllRead.mutate({ feedId, categoryId });
 	}
 
 	function handleRefresh() {
+		setRetainedReadArticles(new Map());
 		if (feedId) {
 			void refreshFeed(feedId, { force: true });
 		} else {
@@ -184,6 +262,7 @@ export function FeedView({
 
 	function handleUnreadOnlyToggle() {
 		const nextUnreadOnly = !unreadOnly;
+		setRetainedReadArticles(new Map());
 		setUnreadOnly(nextUnreadOnly);
 		updatePrefs.mutate({ hideRead: nextUnreadOnly });
 	}

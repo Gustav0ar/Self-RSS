@@ -9,6 +9,10 @@ const useInfiniteArticlesMock = vi.fn();
 const updatePreferencesMutate = vi.fn();
 const markReadMutate = vi.fn();
 const warmNextArticlesMock = vi.fn();
+let articleListProps: {
+	articles: Array<{ id: string; isRead: boolean }>;
+	onSelect: (id: string) => void;
+} | null = null;
 let isRefreshingAllFeeds = false;
 let hideReadPreference = false;
 let defaultSortPreference = 'latest';
@@ -52,7 +56,13 @@ vi.mock('../../src/hooks/use-keyboard-nav', () => ({
 }));
 
 vi.mock('../../src/components/articles/article-list', () => ({
-	ArticleList: () => <div>Article list</div>,
+	ArticleList: (props: {
+		articles: Array<{ id: string; isRead: boolean }>;
+		onSelect: (id: string) => void;
+	}) => {
+		articleListProps = props;
+		return <div>Article list</div>;
+	},
 }));
 
 vi.mock('../../src/components/articles/reader-pane', () => ({
@@ -73,6 +83,7 @@ describe('FeedView refresh', () => {
 		defaultSortPreference = 'latest';
 		keyboardShortcutsEnabled = true;
 		autoMarkReadMode = 'on_navigate';
+		articleListProps = null;
 		useInfiniteArticlesMock.mockReturnValue({
 			data: {
 				pages: [
@@ -215,6 +226,62 @@ describe('FeedView refresh', () => {
 
 		expect(markReadMutate).not.toHaveBeenCalled();
 		expect(onSelectArticle).toHaveBeenCalledWith('article-8');
+	});
+
+	it('keeps a locally read selected article visible in unread-only view until manual refresh', async () => {
+		const onSelectArticle = vi.fn();
+		hideReadPreference = true;
+		useInfiniteArticlesMock.mockReturnValue({
+			data: {
+				pages: [
+					{
+						data: [{ id: 'article-7', feedId: 'feed-42', isRead: false }],
+					},
+				],
+			},
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+
+		const { rerender } = render(
+			<FeedView selectedArticleId={null} onSelectArticle={onSelectArticle} />,
+		);
+
+		await waitFor(() => {
+			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+				expect.objectContaining({ unreadOnly: true }),
+			);
+		});
+
+		articleListProps?.onSelect('article-7');
+
+		expect(markReadMutate).toHaveBeenCalledWith({ articleId: 'article-7', read: true });
+		expect(onSelectArticle).toHaveBeenCalledWith('article-7');
+
+		useInfiniteArticlesMock.mockReturnValue({
+			data: { pages: [{ data: [] }] },
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+
+		rerender(<FeedView selectedArticleId="article-7" onSelectArticle={onSelectArticle} />);
+
+		await waitFor(() => {
+			expect(articleListProps?.articles).toEqual([
+				expect.objectContaining({ id: 'article-7', isRead: true }),
+			]);
+		});
+
+		fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+		await waitFor(() => {
+			expect(articleListProps?.articles).toEqual([]);
+		});
 	});
 
 	it('leaves on-open auto-marking to the reader pane', () => {
