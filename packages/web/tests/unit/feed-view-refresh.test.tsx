@@ -55,6 +55,10 @@ vi.mock('../../src/hooks/use-keyboard-nav', () => ({
 	useKeyboardNav: (...args: unknown[]) => useKeyboardNavMock(...args),
 }));
 
+vi.mock('../../src/hooks/use-silent-article-refresh', () => ({
+	useSilentArticleRefresh: () => {},
+}));
+
 vi.mock('../../src/components/articles/article-list', () => ({
 	ArticleList: (props: {
 		articles: Array<{ id: string; isRead: boolean }>;
