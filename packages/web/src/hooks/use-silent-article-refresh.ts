@@ -1,5 +1,5 @@
 import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
-import { type InfiniteData, useQueryClient } from '@tanstack/react-query';
+import { type InfiniteData, type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { type ArticleQueryParams, buildArticleSearchParams } from './queries';
@@ -23,6 +23,19 @@ type Page = ApiListResponse<ArticleListItem>;
 type ArticleList = InfiniteData<Page, string | null>;
 
 /**
+ * Returns the active QueryClient, or null when no QueryClientProvider is
+ * mounted above (e.g. in isolated unit tests). When null, callers should
+ * treat the hook as a no-op.
+ */
+function useOptionalQueryClient(): QueryClient | null {
+	try {
+		return useQueryClient();
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Periodically re-fetches the first page of the article list and merges
  * any new items in front of the existing entries. Pages 2+ are never
  * touched, the cursor stays valid, and the active article / scroll
@@ -33,18 +46,19 @@ type ArticleList = InfiniteData<Page, string | null>;
  * than MIN_FRESH_MS or if a fetch is already in flight.
  */
 export function useSilentArticleRefresh(params: ArticleQueryParams) {
-	const qc = useQueryClient();
+	const qc = useOptionalQueryClient();
 	const queryKey = buildInfiniteKey(params);
 	const inFlightRef = useRef(false);
 	const lastFetchedAtRef = useRef(0);
 
 	const refresh = useCallback(async () => {
+		if (!qc) return;
 		if (document.visibilityState !== 'visible') return;
 		if (inFlightRef.current) return;
 		if (Date.now() - lastFetchedAtRef.current < MIN_FRESH_MS) return;
 
 		const cached = qc.getQueryData<ArticleList>(queryKey);
-		if (!cached || !cached.pages[0]) return;
+		if (!cached?.pages[0]) return;
 
 		inFlightRef.current = true;
 		try {
@@ -78,6 +92,8 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 	}, [qc, queryKey, params]);
 
 	useEffect(() => {
+		if (!qc) return;
+
 		const onFocus = () => {
 			void refresh();
 		};
@@ -94,5 +110,5 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.clearInterval(interval);
 		};
-	}, [refresh]);
+	}, [qc, refresh]);
 }
