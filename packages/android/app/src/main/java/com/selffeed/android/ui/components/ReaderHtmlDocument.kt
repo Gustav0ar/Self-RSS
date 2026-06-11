@@ -269,7 +269,19 @@ internal fun buildReaderHtmlDocument(
                     });
                 }
 
+                function prepareEmbeds() {
+                    document.querySelectorAll('iframe').forEach(iframe => {
+                        iframe.setAttribute('allowfullscreen', '');
+                        iframe.setAttribute(
+                            'allow',
+                            'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share'
+                        );
+                        iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+                    });
+                }
+
                 function measureContentHeight() {
+                    prepareEmbeds();
                     normalizeReadableColors();
 
                     const container = document.getElementById('content-container');

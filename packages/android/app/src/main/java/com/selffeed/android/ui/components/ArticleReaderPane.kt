@@ -1,5 +1,12 @@
 package com.selffeed.android.ui.components
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -45,6 +52,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -110,6 +122,7 @@ private fun ArticleDetailView(
 ) {
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
+    var fullscreenMedia by remember { mutableStateOf<FullscreenMediaView?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
 
     val backgroundColor = MaterialTheme.colorScheme.background
@@ -117,6 +130,22 @@ private fun ArticleDetailView(
     val surfaceColor = MaterialTheme.colorScheme.surfaceVariant
     val mutedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
+    val showFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit = { view, callback ->
+        val currentMedia = fullscreenMedia
+        if (currentMedia?.view !== view) {
+            currentMedia?.callback?.onCustomViewHidden()
+            currentMedia?.view?.detachFromParent()
+        }
+        view.detachFromParent()
+        fullscreenMedia = FullscreenMediaView(view = view, callback = callback)
+    }
+    val hideFullscreenMedia: (View?) -> Unit = { view ->
+        val currentMedia = fullscreenMedia
+        if (currentMedia != null && (view == null || currentMedia.view === view)) {
+            currentMedia.view.detachFromParent()
+            fullscreenMedia = null
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -176,6 +205,8 @@ private fun ArticleDetailView(
                     mutedTextColor = mutedTextColor,
                     linkColor = linkColor,
                     documentBaseUrl = documentBaseUrl,
+                    onShowFullscreenMedia = showFullscreenMedia,
+                    onHideFullscreenMedia = hideFullscreenMedia,
                 )
             } else {
                 Text(
@@ -206,6 +237,8 @@ private fun ArticleDetailView(
                                 embedUrl = media.embedUrl!!,
                                 backgroundColor = backgroundColor,
                                 documentBaseUrl = documentBaseUrl,
+                                onShowFullscreenMedia = showFullscreenMedia,
+                                onHideFullscreenMedia = hideFullscreenMedia,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 8.dp)
@@ -235,6 +268,17 @@ private fun ArticleDetailView(
 
         Spacer(modifier = Modifier.height(32.dp))
     }
+
+    FullscreenMediaHost(
+        media = fullscreenMedia,
+        onDismiss = { media ->
+            media.callback?.onCustomViewHidden()
+            if (fullscreenMedia == media) {
+                media.view.detachFromParent()
+                fullscreenMedia = null
+            }
+        },
+    )
 }
 
 @Composable
@@ -242,6 +286,8 @@ private fun EmbedPlayer(
     embedUrl: String,
     backgroundColor: Color,
     documentBaseUrl: String,
+    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
+    onHideFullscreenMedia: (View?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var heightDp by remember(embedUrl) { mutableStateOf(300) }
@@ -276,6 +322,10 @@ private fun EmbedPlayer(
                 settings.useWideViewPort = true
                 settings.mediaPlaybackRequiresUserGesture = false
                 setBackgroundColor(backgroundColor.toArgb())
+                webChromeClient = readerWebChromeClient(
+                    onShowFullscreenMedia = onShowFullscreenMedia,
+                    onHideFullscreenMedia = onHideFullscreenMedia,
+                )
 
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
@@ -379,6 +429,8 @@ private fun SecureHtmlContent(
     mutedTextColor: Color,
     linkColor: Color,
     documentBaseUrl: String,
+    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
+    onHideFullscreenMedia: (View?) -> Unit,
 ) {
     var webViewHeightDp by remember(html) { mutableStateOf(600) }
 
@@ -420,6 +472,10 @@ private fun SecureHtmlContent(
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
                 setBackgroundColor(backgroundColor.toArgb())
+                webChromeClient = readerWebChromeClient(
+                    onShowFullscreenMedia = onShowFullscreenMedia,
+                    onHideFullscreenMedia = onHideFullscreenMedia,
+                )
 
                 addJavascriptInterface(object {
                     @android.webkit.JavascriptInterface
@@ -472,9 +528,109 @@ private fun WebView.releaseReaderResources() {
         stopLoading()
         loadUrl("about:blank")
         removeJavascriptInterface("Android")
+        webChromeClient = WebChromeClient()
         webViewClient = WebViewClient()
         destroy()
     }
+}
+
+private data class FullscreenMediaView(
+    val view: View,
+    val callback: WebChromeClient.CustomViewCallback?,
+)
+
+@Composable
+private fun FullscreenMediaHost(
+    media: FullscreenMediaView?,
+    onDismiss: (FullscreenMediaView) -> Unit,
+) {
+    if (media == null) return
+
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+
+    androidx.compose.runtime.DisposableEffect(media, activity) {
+        val previousOrientation = activity?.requestedOrientation
+        val window = activity?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val previousBarsBehavior = insetsController?.systemBarsBehavior
+
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        insetsController?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+
+        onDispose {
+            media.view.detachFromParent()
+            previousOrientation?.let { activity?.requestedOrientation = it }
+            previousBarsBehavior?.let { insetsController?.systemBarsBehavior = it }
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    Dialog(
+        onDismissRequest = { onDismiss(media) },
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = {
+                    media.view.detachFromParent()
+                    media.view
+                },
+            )
+        }
+    }
+}
+
+private fun readerWebChromeClient(
+    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
+    onHideFullscreenMedia: (View?) -> Unit,
+): WebChromeClient = object : WebChromeClient() {
+    private var customView: View? = null
+
+    override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+        if (view == null || customView != null) {
+            callback?.onCustomViewHidden()
+            return
+        }
+
+        customView = view
+        onShowFullscreenMedia(view, callback)
+    }
+
+    override fun onShowCustomView(
+        view: View?,
+        requestedOrientation: Int,
+        callback: CustomViewCallback?,
+    ) {
+        onShowCustomView(view, callback)
+    }
+
+    override fun onHideCustomView() {
+        val view = customView
+        customView = null
+        onHideFullscreenMedia(view)
+    }
+}
+
+private fun View.detachFromParent() {
+    (parent as? ViewGroup)?.removeView(this)
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 private fun isYouTubeEmbedUrl(url: String): Boolean {

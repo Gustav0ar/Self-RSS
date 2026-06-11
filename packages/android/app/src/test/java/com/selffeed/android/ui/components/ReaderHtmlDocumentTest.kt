@@ -29,6 +29,9 @@ class ReaderHtmlDocumentTest {
         assertTrue(document.contains("textOnLightBackground: '#111827'"))
         assertTrue(document.contains("-webkit-text-fill-color"))
         assertTrue(document.contains("TL;DR"))
+        assertTrue(document.contains("prepareEmbeds()"))
+        assertTrue(document.contains("allowfullscreen"))
+        assertTrue(document.contains("picture-in-picture; web-share"))
     }
 
     @Test
