@@ -14,6 +14,7 @@ import {
 } from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
+import { useSilentArticleRefresh } from '@/hooks/use-silent-article-refresh';
 import {
 	normalizeAutoMarkReadPreference,
 	normalizeDensityPreference,
@@ -60,6 +61,8 @@ export function FeedView({
 			sort,
 			limit: 30,
 		});
+
+	useSilentArticleRefresh({ feedId, categoryId, unreadOnly, sort, limit: 30 });
 
 	const markRead = useMarkRead();
 	const markAllRead = useMarkAllRead();
