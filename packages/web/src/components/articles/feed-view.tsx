@@ -301,7 +301,11 @@ export function FeedView({
 							<Filter className="h-3.5 w-3.5" />
 						</ToolbarButton>
 						<ToolbarButton
-							onClick={() => setSort(sort === 'latest' ? 'oldest' : 'latest')}
+							onClick={() => {
+								const nextSort: SortOrder = sort === 'latest' ? 'oldest' : 'latest';
+								setSort(nextSort);
+								updatePrefs.mutate({ defaultSort: nextSort });
+							}}
 							label={sort === 'latest' ? 'Newest' : 'Oldest'}
 						>
 							<ArrowDownUp className="h-3.5 w-3.5" />
