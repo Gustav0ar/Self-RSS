@@ -258,7 +258,10 @@ export class ArticleRepository {
 			LEFT JOIN article_reads
 				ON article_reads.article_id = articles.id
 				AND article_reads.user_id = ${userId}
-			WHERE articles.feed_id IN (${sql.join(feedIds.map((id) => sql`${id}`), sql`, `)})
+			WHERE articles.feed_id IN (${sql.join(
+				feedIds.map((id) => sql`${id}`),
+				sql`, `,
+			)})
 				AND article_reads.user_id IS NULL
 			RETURNING article_id
 		`);
@@ -411,20 +414,21 @@ export class ArticleRepository {
 		updatedMediaByArticleId: Map<string, (typeof articleMedia.$inferInsert)[]>;
 	}) {
 		return this.db.transaction(async (tx) => {
-			const inserted = params.articlesToInsert.length > 0
-				? await tx
-						.insert(articles)
-						.values(params.articlesToInsert)
-						.onConflictDoNothing()
-						.returning()
-				: [];
+			const inserted =
+				params.articlesToInsert.length > 0
+					? await tx
+							.insert(articles)
+							.values(params.articlesToInsert)
+							.onConflictDoNothing()
+							.returning()
+					: [];
 
 			for (const article of inserted) {
 				const media = params.mediaByGuid.get(article.guid);
 				if (media && media.length > 0) {
-					await tx.insert(articleMedia).values(
-						media.map((row) => ({ ...row, articleId: article.id })),
-					);
+					await tx
+						.insert(articleMedia)
+						.values(media.map((row) => ({ ...row, articleId: article.id })));
 				}
 			}
 

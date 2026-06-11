@@ -69,13 +69,46 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const readerHtml = useMemo(() => {
 		const html = article?.contentHtml ?? '';
 		return prepareReaderHtml(html);
-		// Key on the article id as well: if the user navigates from article
-		// A back to article A, we want to skip re-running the (expensive)
-		// DOMParser even if the html string happens to match.
-	}, [article?.id, article?.contentHtml]);
+	}, [article?.contentHtml]);
 	const mediaToRender = useMemo(
-		() => (article?.media ?? []).filter((media) => media.type === 'video' || media.type === 'embed'),
+		() =>
+			(article?.media ?? []).filter((media) => media.type === 'video' || media.type === 'embed'),
 		[article?.media],
+	);
+	// The following `useMemo` calls must run unconditionally (before
+	// the loading / not-found early returns) to satisfy the rules of
+	// hooks. They default to safe values when `article` is null.
+	const publishedAt = useMemo(
+		() =>
+			article?.publishedAt
+				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
+				: null,
+		[article?.publishedAt],
+	);
+	const hasContent = useMemo(() => Boolean(readerHtml.trim()), [readerHtml]);
+	const currentIndex = useMemo(
+		() => (article ? articles.findIndex((item) => item.id === article.id) : -1),
+		[articles, article],
+	);
+	const previousArticle = useMemo(
+		() => (currentIndex > 0 ? (articles[currentIndex - 1] ?? null) : null),
+		[currentIndex, articles],
+	);
+	const nextArticle = useMemo(
+		() =>
+			currentIndex >= 0 && currentIndex < articles.length - 1
+				? (articles[currentIndex + 1] ?? null)
+				: null,
+		[currentIndex, articles],
+	);
+	const moreFromFeed = useMemo(
+		() =>
+			article
+				? articles
+						.filter((item) => item.feedId === article.feedId && item.id !== article.id)
+						.slice(0, 4)
+				: [],
+		[articles, article],
 	);
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
 
@@ -193,37 +226,6 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 			</div>
 		);
 	}
-
-	const publishedAt = useMemo(
-		() =>
-			article.publishedAt
-				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
-				: null,
-		[article.publishedAt],
-	);
-	const hasContent = useMemo(() => Boolean(readerHtml.trim()), [readerHtml]);
-	const currentIndex = useMemo(
-		() => articles.findIndex((item) => item.id === article.id),
-		[articles, article.id],
-	);
-	const previousArticle = useMemo(
-		() => (currentIndex > 0 ? (articles[currentIndex - 1] ?? null) : null),
-		[currentIndex, articles],
-	);
-	const nextArticle = useMemo(
-		() =>
-			currentIndex >= 0 && currentIndex < articles.length - 1
-				? (articles[currentIndex + 1] ?? null)
-				: null,
-		[currentIndex, articles],
-	);
-	const moreFromFeed = useMemo(
-		() =>
-			articles
-				.filter((item) => item.feedId === article.feedId && item.id !== article.id)
-				.slice(0, 4),
-		[articles, article.feedId, article.id],
-	);
 
 	function toggleRead() {
 		if (!articleId) {

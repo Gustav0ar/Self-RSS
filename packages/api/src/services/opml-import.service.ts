@@ -76,8 +76,9 @@ export class OpmlImportService {
 		// category and per feed. We build the inserts in memory and let the
 		// repository batch them in a single transaction.
 		const existingFeedUrls = new Set(
-			(await this.feedRepo.findByUrls(userId, feeds.map((entry) => entry.feedUrl).filter(Boolean)))
-				.map((feed) => feed.feedUrl),
+			(
+				await this.feedRepo.findByUrls(userId, feeds.map((entry) => entry.feedUrl).filter(Boolean))
+			).map((feed) => feed.feedUrl),
 		);
 		const existingCategories = await this.categoryRepo.findAllByUser(userId);
 		const categoryByPath = new Map<string, string>();
@@ -85,8 +86,11 @@ export class OpmlImportService {
 			categoryByPath.set(this.categoryPathKey(cat.parentCategoryId, cat.name), cat.id);
 		}
 
-		const categoriesToCreate: { row: typeof import('../db/schema.js').categories.$inferInsert; key: string }[] = [];
-		const feedsToCreate: (typeof import('../db/schema.js').feeds.$inferInsert)[] = [];
+		const categoriesToCreate: {
+			row: typeof import('../db/schema.js').categories.$inferInsert;
+			key: string;
+		}[] = [];
+		const feedsToCreate: typeof import('../db/schema.js').feeds.$inferInsert[] = [];
 
 		for (const entry of feeds) {
 			if (!entry.feedUrl) {
@@ -123,6 +127,13 @@ export class OpmlImportService {
 				});
 				continue;
 			}
+			// Mark the URL as seen so a second entry with the same URL
+			// within this import is correctly flagged as a duplicate.
+			// Without this, two entries with the same URL would both be
+			// queued and the second would either be rejected by the
+			// unique constraint or — with onConflictDoNothing — silently
+			// dropped without bumping `skippedDuplicates`.
+			existingFeedUrls.add(normalizedFeedUrl);
 
 			// Resolve category chain. We do not insert anything yet: we collect
 			// the desired categories and feeds and let the repository batch

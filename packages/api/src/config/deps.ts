@@ -106,12 +106,7 @@ export function createDeps(
 	const services: AppDeps['services'] = {
 		auth: new AuthService(repos.user, repos.settings, tokenUtils, redis),
 		category: new CategoryService(repos.category, repos.feed, repos.article),
-		feed: new FeedService(
-			repos.feed,
-			repos.category,
-			repos.article,
-			resolvedSyncConfig,
-		),
+		feed: new FeedService(repos.feed, repos.category, repos.article, resolvedSyncConfig),
 		opmlExport: new OpmlExportService(repos.category, repos.feed),
 		opmlImport,
 		preferences: new PreferencesService(repos.preferences),

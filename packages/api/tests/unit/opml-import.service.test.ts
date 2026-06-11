@@ -93,11 +93,8 @@ describe('OpmlImportService', () => {
 				}
 				return null;
 			}),
-			findByUrls: vi.fn(
-				async (_userId: string, urls: string[]) =>
-					urls
-						.filter((u) => u === 'https://example.com/already.xml')
-						.map((feedUrl) => ({ feedUrl })),
+			findByUrls: vi.fn(async (_userId: string, urls: string[]) =>
+				urls.filter((u) => u === 'https://example.com/already.xml').map((feedUrl) => ({ feedUrl })),
 			),
 			create: vi.fn(
 				async (data: {
@@ -114,12 +111,14 @@ describe('OpmlImportService', () => {
 				},
 			),
 			createMany: vi.fn(
-				async (rows: Array<{
-					userId: string;
-					categoryId: string;
-					feedUrl: string;
-					title: string;
-				}>) => {
+				async (
+					rows: Array<{
+						userId: string;
+						categoryId: string;
+						feedUrl: string;
+						title: string;
+					}>,
+				) => {
 					for (const row of rows) {
 						createdFeeds.push({
 							userId: row.userId,
