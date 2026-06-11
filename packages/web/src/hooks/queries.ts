@@ -46,7 +46,7 @@ export interface FeedSyncAllStatus {
 	active: boolean;
 }
 
-function buildArticleSearchParams(params: ArticleQueryParams, cursor?: string | null) {
+export function buildArticleSearchParams(params: ArticleQueryParams, cursor?: string | null) {
 	const searchParams = new URLSearchParams();
 	if (params.feedId) searchParams.set('feedId', params.feedId);
 	if (params.categoryId) searchParams.set('categoryId', params.categoryId);
@@ -664,7 +664,7 @@ export function useSyncAllFeedsStatus() {
 
 // --- Articles ---
 
-interface ArticleQueryParams {
+export interface ArticleQueryParams {
 	feedId?: string;
 	categoryId?: string;
 	unreadOnly?: boolean;
