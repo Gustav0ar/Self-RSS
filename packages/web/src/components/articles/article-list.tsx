@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from 'date-fns';
 import { Circle, CircleDot } from 'lucide-react';
-import { useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { DisplayDensityPreference } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 
@@ -52,6 +52,19 @@ export function ArticleList({
 		onLoadMore();
 	}, [hasMore, loadingMore, onLoadMore]);
 
+	// Stable callback for `onPrefetch` so the memoized ArticleRow does
+	// not see a fresh function on every parent render. The row receives
+	// the article's id via `data-article-id` and reads it from the
+	// event target, so we don't need a per-row closure.
+	const stablePrefetch = useCallback(
+		(event: React.FocusEvent<HTMLElement> | React.PointerEvent<HTMLElement>) => {
+			if (!onPrefetch) return;
+			const id = event.currentTarget.getAttribute('data-article-id');
+			if (id) onPrefetch(id);
+		},
+		[onPrefetch],
+	);
+
 	useEffect(() => {
 		if (!hasMore || !onLoadMore || loadingMore) {
 			return;
@@ -94,20 +107,26 @@ export function ArticleList({
 		return () => root.removeEventListener('scroll', checkScrollPosition);
 	}, [maybeLoadMore]);
 
+	// A ResizeObserver covers the case the previous setInterval was
+	// guarding against: when the list height changes without a user
+	// scroll (e.g. the user types into the search bar and the list
+	// shrinks). We only check on resize, not on a 250ms tick.
 	useEffect(() => {
 		const root = scrollRef.current;
-		if (!root || !hasMore || loadingMore) {
+		if (!root || !hasMore || loadingMore || typeof ResizeObserver === 'undefined') {
 			return;
 		}
 
-		const interval = window.setInterval(() => {
+		const checkScrollPosition = () => {
 			const remaining = root.scrollHeight - root.scrollTop - root.clientHeight;
 			if (remaining <= 240) {
 				maybeLoadMore();
 			}
-		}, 250);
+		};
 
-		return () => window.clearInterval(interval);
+		const observer = new ResizeObserver(checkScrollPosition);
+		observer.observe(root);
+		return () => observer.disconnect();
 	}, [hasMore, loadingMore, maybeLoadMore]);
 
 	useEffect(() => {
@@ -162,8 +181,8 @@ export function ArticleList({
 							key={article.id}
 							article={article}
 							isSelected={article.id === selectedId}
-							onSelect={() => onSelect(article.id)}
-							onPrefetch={() => onPrefetch?.(article.id)}
+							onSelect={onSelect}
+							onPrefetch={onPrefetch ? stablePrefetch : undefined}
 							index={index}
 							density={density}
 						/>
@@ -186,7 +205,7 @@ export function ArticleList({
 	);
 }
 
-function ArticleRow({
+function ArticleRowImpl({
 	article,
 	isSelected,
 	onSelect,
@@ -196,19 +215,23 @@ function ArticleRow({
 }: {
 	article: ArticleListItemData;
 	isSelected: boolean;
-	onSelect: () => void;
-	onPrefetch?: () => void;
+	onSelect: (id: string) => void;
+	onPrefetch?: (event: React.FocusEvent<HTMLElement> | React.PointerEvent<HTMLElement>) => void;
 	index: number;
 	density: DisplayDensityPreference;
 }) {
-	const timeAgo = article.publishedAt
-		? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
-		: null;
+	const timeAgo = useMemo(
+		() =>
+			article.publishedAt
+				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
+				: null,
+		[article.publishedAt],
+	);
 
 	return (
 		<button
 			type="button"
-			onClick={onSelect}
+			onClick={() => onSelect(article.id)}
 			onFocus={onPrefetch}
 			onPointerEnter={onPrefetch}
 			data-article-id={article.id}
@@ -283,3 +306,20 @@ function ArticleRow({
 		</button>
 	);
 }
+
+// Memoize the row so a parent re-render (selection, cache update,
+// scroll) doesn't re-render every visible row. With 50+ rows in the
+// viewport this is the single biggest web re-render win on the article
+// list. The `onSelect` and `onPrefetch` callbacks are still expected
+// to be stable from the parent — if they aren't, wrap them in
+// `useCallback` at the call site.
+const ArticleRow = memo(ArticleRowImpl, (prev, next) => {
+	return (
+		prev.article === next.article &&
+		prev.isSelected === next.isSelected &&
+		prev.onSelect === next.onSelect &&
+		prev.onPrefetch === next.onPrefetch &&
+		prev.index === next.index &&
+		prev.density === next.density
+	);
+});

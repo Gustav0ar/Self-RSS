@@ -146,6 +146,12 @@ export const feeds = sqliteTable(
 		description: text('description'),
 		pollingIntervalMinutes: integer('polling_interval_minutes').notNull().default(60),
 		lastSyncedAt: timestamp('last_synced_at'),
+		// Cached "next time the worker should look at this feed". The
+		// scheduler queries by this column with an index, so the due-feed
+		// query is an index range scan instead of a per-row function call.
+		nextSyncAt: timestamp('next_sync_at')
+			.$defaultFn(() => new Date())
+			.notNull(),
 		syncStatus: text('sync_status').notNull().default('idle'),
 		createdAt: timestamp('created_at')
 			.notNull()
@@ -158,6 +164,7 @@ export const feeds = sqliteTable(
 		uniqueIndex('feeds_user_feed_url_idx').on(t.userId, t.feedUrl),
 		index('feeds_user_id_idx').on(t.userId),
 		index('feeds_category_id_idx').on(t.categoryId),
+		index('feeds_next_sync_at_idx').on(t.nextSyncAt, t.syncStatus),
 	],
 );
 

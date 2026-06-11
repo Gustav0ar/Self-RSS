@@ -527,10 +527,20 @@ class RssRepository(
     }
 
     private fun invalidateByPrefix(prefix: String) {
-        val normalizedPrefix = "$prefix:"
+        // Treat the prefix as a *namespace* — a key is matched only if
+        // it is either exactly the prefix (for a bare key like
+        // `categories` or `preferences`) or it lives under the prefix
+        // with a `:` separator (e.g. `articles:foo` matches the prefix
+        // `articles`). This keeps an unrelated key like `articlesList`
+        // from being clobbered by `invalidateByPrefix("articles")`.
         var removedEntries = 0L
         cache.keys.removeIf { key ->
-            val shouldRemove = key == prefix || key.startsWith(normalizedPrefix)
+            val shouldRemove =
+                if (prefix.endsWith(':')) {
+                    key == prefix.dropLast(1) || key.startsWith(prefix)
+                } else {
+                    key == prefix || key.startsWith("$prefix:")
+                }
             if (shouldRemove) removedEntries++
             shouldRemove
         }
@@ -544,16 +554,15 @@ class RssRepository(
     }
 
     suspend fun invalidateArticleCaches(articleId: String) {
-        invalidateArticleDetailCache(articleId)
-        invalidateByPrefix("articles")
-        invalidateByPrefix("search")
-        invalidateByPrefix("feeds")
-        invalidateByPrefix("categories")
-        invalidateByPrefix("stats")
-        offlineCacheStore.clearByPrefix("articles-")
-        offlineCacheStore.clearByPrefix("feeds")
-        offlineCacheStore.clearByPrefix("categories")
-    }
+		// Targeted invalidation for a single markRead. The SSE read-state
+		// event handles the in-memory `state.articles` patch, so we
+		// don't need to blow away every cached list here. We only drop
+		// the article detail and the stats aggregate; feeds/categories
+		// are refreshed lazily on the next unread-count read.
+		invalidateArticleDetailCache(articleId)
+		invalidateByPrefix("stats")
+		offlineCacheStore.clearByPrefix("article-$articleId")
+	}
 
     private suspend fun invalidateArticleDetailCache(articleId: String) {
         invalidateByPrefix("article:$articleId")

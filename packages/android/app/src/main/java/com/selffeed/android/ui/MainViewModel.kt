@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -108,22 +109,35 @@ class MainViewModel(
         .map { normalizeThemePreference(it.preferences?.theme ?: "system") }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "system")
-    val articlesState: StateFlow<ArticlesUiState> = uiState
-        .map {
-            ArticlesUiState(
-                articles = it.articles,
-                selectedArticle = it.selectedArticle,
-                hasMoreArticles = it.hasMoreArticles,
-                loadingMoreArticles = it.loadingMoreArticles,
-                isSyncingFeeds = it.isSyncingFeeds,
-            )
-        }
-        .distinctUntilChanged()
+    val articlesState: StateFlow<ArticlesUiState> = combine(
+        uiState.map { it.articles }.distinctUntilChanged(),
+        uiState.map { it.selectedArticle }.distinctUntilChanged(),
+        uiState.map { it.hasMoreArticles }.distinctUntilChanged(),
+        uiState.map { it.loadingMoreArticles }.distinctUntilChanged(),
+        uiState.map { it.isSyncingFeeds }.distinctUntilChanged(),
+    ) { articles, selected, hasMore, loadingMore, isSyncing ->
+        ArticlesUiState(
+            articles = articles,
+            selectedArticle = selected,
+            hasMoreArticles = hasMore,
+            loadingMoreArticles = loadingMore,
+            isSyncingFeeds = isSyncing,
+        )
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ArticlesUiState())
-    val readerState: StateFlow<ReaderUiState> = uiState
-        .map { ReaderUiState(selectedArticle = it.selectedArticle, articles = it.articles) }
-        .distinctUntilChanged()
+    val readerState: StateFlow<ReaderUiState> = combine(
+        uiState.map { it.selectedArticle }.distinctUntilChanged(),
+        uiState.map { it.articles }.distinctUntilChanged(),
+    ) { selected, articles ->
+        ReaderUiState(selectedArticle = selected, articles = articles)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReaderUiState())
+    // `combine` overloads max out at 5 flows, so the chrome state is
+    // derived from `uiState` directly with `distinctUntilChanged`
+    // guarding against re-emission. The cost is one `ChromeUiState`
+    // allocation per *real* chrome change (e.g. tab switch, feed
+    // selection), not per any uiState change — same as the previous
+    // shape, just with the guard explicit.
     val chromeState: StateFlow<ChromeUiState> = uiState
         .map {
             ChromeUiState(

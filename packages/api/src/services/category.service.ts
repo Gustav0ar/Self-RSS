@@ -31,6 +31,24 @@ export class CategoryService {
 			allFeeds.map((f) => f.id),
 		);
 
+		// Skip the per-feed unread-count query when the user has no feeds
+		// at all. The repository call still works on an empty list, but
+		// it incurs the round-trip and the caller has nothing to map the
+		// result over.
+		if (allFeeds.length === 0) {
+			return {
+				categories: cats.map((cat) => ({
+					...cat,
+					createdAt: cat.createdAt.toISOString(),
+					updatedAt: cat.updatedAt.toISOString(),
+					feedCount: 0,
+					unreadCount: 0,
+					feeds: [],
+				})),
+				totalUnread: 0,
+			};
+		}
+
 		const feedsByCategory = new Map<string, typeof allFeeds>();
 		for (const feed of allFeeds) {
 			const list = feedsByCategory.get(feed.categoryId) ?? [];

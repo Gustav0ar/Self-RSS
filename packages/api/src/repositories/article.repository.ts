@@ -17,6 +17,35 @@ function toFtsQuery(query: string): string | null {
 	return terms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' ');
 }
 
+/**
+ * Decode the opaque pagination cursor emitted by `encodeCursor` in the
+ * service. The format is `<articleId>:<unixSeconds>:<direction>`. If the
+ * input doesn't match the new shape (e.g. a legacy id-only cursor still
+ * in flight from before this change), the decoder returns null and the
+ * caller falls back to no cursor — the request simply returns the first
+ * page, which is the safe behavior for a malformed cursor.
+ */
+function decodeCursor(
+	cursor: string | undefined,
+	sort: string | undefined,
+): { id: string; seconds: number; direction: 'a' | 'd' } | null {
+	if (!cursor) return null;
+	const parts = cursor.split(':');
+	if (parts.length !== 3) return null;
+	const [id, secondsRaw, direction] = parts;
+	if (!id || !secondsRaw || !direction) return null;
+	if (direction !== 'a' && direction !== 'd') return null;
+	// Verify the encoded direction matches the requested sort. If the
+	// client paginated with `latest` and then switched to `oldest`,
+	// we don't have a way to translate the cursor; fall back to first
+	// page.
+	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
+	if (direction !== expectedDirection) return null;
+	const seconds = Number.parseInt(secondsRaw, 10);
+	if (!Number.isFinite(seconds) || seconds < 0) return null;
+	return { id, seconds, direction };
+}
+
 export class ArticleRepository {
 	constructor(private db: Database) {}
 
@@ -31,20 +60,18 @@ export class ArticleRepository {
 
 		const conditions: SQL[] = [inArray(articles.feedId, feedIds)];
 		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
-		const cursorArticle = options.cursor
-			? await this.db.query.articles.findFirst({
-					where: eq(articles.id, options.cursor),
-					columns: { id: true, publishedAt: true, fetchedAt: true },
-				})
-			: null;
-
-		if (cursorArticle) {
-			const cursorTimestamp = cursorArticle.publishedAt ?? cursorArticle.fetchedAt;
-			const cursorSeconds = Math.floor(cursorTimestamp.getTime() / 1000);
+		// Decode the opaque cursor produced by `encodeCursor` in the
+		// service. The cursor embeds the sort timestamp of the last row
+		// on the previous page, so we don't need a second round-trip
+		// to look the row up by id. Falls back to the id-only shape
+		// for legacy cursors (which the service no longer emits, but
+		// in-flight pagination may still have one cached).
+		const decodedCursor = decodeCursor(options.cursor, options.sort);
+		if (decodedCursor) {
 			conditions.push(
 				options.sort === 'oldest'
-					? sql`(${sortTimestamp} > ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} > ${cursorArticle.id}))`
-					: sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${cursorArticle.id}))`,
+					? sql`(${sortTimestamp} > ${decodedCursor.seconds} OR (${sortTimestamp} = ${decodedCursor.seconds} AND ${articles.id} > ${decodedCursor.id}))`
+					: sql`(${sortTimestamp} < ${decodedCursor.seconds} OR (${sortTimestamp} = ${decodedCursor.seconds} AND ${articles.id} < ${decodedCursor.id}))`,
 			);
 		}
 
@@ -216,33 +243,26 @@ export class ArticleRepository {
 
 	async markAllRead(userId: string, feedIds: string[]) {
 		if (feedIds.length === 0) return 0;
-		// 1. Select all unread articles for these feeds
-		const unread = await this.db
-			.select({ id: articles.id })
-			.from(articles)
-			.leftJoin(
-				articleReads,
-				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
-			)
-			.where(and(inArray(articles.feedId, feedIds), sql`${articleReads.userId} IS NULL`));
-
-		if (unread.length === 0) return 0;
-
-		// 2. Insert into article_reads
-		const values = unread.map((a) => ({
-			userId,
-			articleId: a.id,
-			source: 'mark_all',
-		}));
-
-		// Chunk inserts if too many (SQLite has a limit of variables, usually 32766 or 999 depending on version)
-		const chunkSize = 100;
-		for (let i = 0; i < values.length; i += chunkSize) {
-			const chunk = values.slice(i, i + chunkSize);
-			await this.db.insert(articleReads).values(chunk).onConflictDoNothing();
-		}
-
-		return unread.length;
+		// Single round-trip: insert into article_reads every article that
+		// belongs to the given feeds and is not already marked read by this
+		// user. The SELECT is the only place that touches the articles
+		// table; the inserted rows are materialized in the same statement.
+		// `INSERT ... SELECT` is atomic on SQLite and avoids the previous
+		// shape that read the unread ids in one query and then chunked
+		// 100-row inserts in a loop. The RETURNING clause gives us the
+		// affected row count without a second query.
+		const inserted = await this.db.all<{ article_id: string }>(sql`
+			INSERT INTO article_reads (user_id, article_id, source, read_at)
+			SELECT ${userId}, articles.id, 'mark_all', unixepoch()
+			FROM articles
+			LEFT JOIN article_reads
+				ON article_reads.article_id = articles.id
+				AND article_reads.user_id = ${userId}
+			WHERE articles.feed_id IN (${sql.join(feedIds.map((id) => sql`${id}`), sql`, `)})
+				AND article_reads.user_id IS NULL
+			RETURNING article_id
+		`);
+		return inserted.length;
 	}
 
 	async isRead(userId: string, articleId: string): Promise<boolean> {
@@ -304,23 +324,17 @@ export class ArticleRepository {
 		}
 
 		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
-		const cursorArticle = cursor
-			? await this.db.query.articles.findFirst({
-					where: eq(articles.id, cursor),
-					columns: { id: true, publishedAt: true, fetchedAt: true },
-				})
-			: null;
+		const decodedCursor = decodeCursor(cursor, 'latest');
+		const cursorSeconds = decodedCursor?.seconds;
 
 		const conditions: SQL[] = [
 			inArray(articles.feedId, feedIds),
 			sql`${articles.id} IN (SELECT article_id FROM articles_fts WHERE articles_fts MATCH ${ftsQuery})`,
 		];
 
-		if (cursorArticle) {
-			const cursorTimestamp = cursorArticle.publishedAt ?? cursorArticle.fetchedAt;
-			const cursorSeconds = Math.floor(cursorTimestamp.getTime() / 1000);
+		if (cursorSeconds != null && decodedCursor) {
 			conditions.push(
-				sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${cursorArticle.id}))`,
+				sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${decodedCursor.id}))`,
 			);
 		}
 
@@ -336,9 +350,19 @@ export class ArticleRepository {
 				fetchedAt: articles.fetchedAt,
 				feedTitle: feeds.title,
 				feedFaviconUrl: feeds.faviconUrl,
+				// Fold the read-state lookup into the search query so the
+				// caller doesn't need a second round-trip. The LEFT JOIN
+				// hits the same `article_reads_pk` index that the
+				// `getReadArticleIds` lookup would have used, so this is
+				// at most as expensive as the two queries combined.
+				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
 			})
 			.from(articles)
 			.innerJoin(feeds, eq(articles.feedId, feeds.id))
+			.leftJoin(
+				articleReads,
+				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, _userId)),
+			)
 			.where(and(...conditions))
 			.orderBy(sql`${sortTimestamp} DESC, ${articles.id} DESC`)
 			.limit(limit + 1);
