@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import java.util.concurrent.atomic.AtomicLong
 
 enum class AuthMode { LOGIN, REGISTER }
 enum class HomeTab { FEEDS, ARTICLES, SEARCH, SETTINGS, STATS }
@@ -156,7 +157,11 @@ class MainViewModel(
     private var enrichArticleJob: Job? = null
     private var warmNextArticlesJob: Job? = null
     private var readStateSyncJob: Job? = null
-    private var articleRequestSequence = 0L
+    // Atomic request counter. The legacy `loadArticles`/`loadMoreArticles`
+    // snapshot path and the Pager share the same backing data, so the two
+    // must not race. We track the latest request id atomically and discard
+    // stale results on completion.
+    private val articleRequestSequence = AtomicLong(0)
     private var articlePagingGeneration = 0L
     private var lastVisibleRefreshAtMs = 0L
     private val manuallyUnread = mutableSetOf<String>()
@@ -299,7 +304,12 @@ class MainViewModel(
     fun refreshAll() {
         loadCategories()
         loadFeeds()
-        loadArticles()
+        // Re-drive the Pager with the current scope so the UI list and the
+        // snapshot stay in sync. Using setArticleScope here (not
+        // loadArticles) ensures the Pager's first page is also re-fetched
+        // after login.
+        val current = _uiState.value
+        setArticleScope(feedId = current.selectedFeedId, categoryId = current.selectedCategoryId)
         loadPreferences()
         loadStats()
         loadAdminSettings()
@@ -314,7 +324,8 @@ class MainViewModel(
 
         loadCategories()
         loadFeeds()
-        loadArticles()
+        val current = _uiState.value
+        setArticleScope(feedId = current.selectedFeedId, categoryId = current.selectedCategoryId)
         _uiState.value.selectedArticle?.id?.let { openArticle(it, forceRefresh = true) }
     }
 
@@ -510,20 +521,23 @@ class MainViewModel(
     }
 
     fun selectCategory(id: String?) {
-        _uiState.update { it.copy(selectedCategoryId = id, selectedFeedId = null, selectedArticle = null) }
-        loadArticles()
+        setArticleScope(feedId = null, categoryId = id)
     }
 
     fun selectFeed(id: String?) {
-        _uiState.update { it.copy(selectedFeedId = id, selectedCategoryId = null, selectedArticle = null) }
-        loadArticles()
+        setArticleScope(feedId = id, categoryId = null)
     }
 
+    /**
+     * Refresh the snapshot article list for the current scope. Does *not*
+     * drive the Pager — callers that need a Pager refresh on a real scope
+     * change should use [setArticleScope] or [setArticleFilter] instead.
+     * Background refreshes (after CRUD operations, mark-all-read, sync) use
+     * this method so they do not race the Pager's own first-page fetch.
+     */
     fun loadArticles() {
-        val requestId = nextArticleRequestId()
         val query = _uiState.value.articleQuery()
-        articlePagingGeneration += 1
-        articlePagingQuery.value = query.toArticlePageQuery(articlePagingGeneration)
+        val requestId = articleRequestSequence.incrementAndGet()
         _uiState.update {
             it.copy(
                 articleCursor = null,
@@ -564,13 +578,63 @@ class MainViewModel(
         }
     }
 
+    /**
+     * Apply a new visible scope (feed / category) and refresh both the
+     * legacy snapshot list and the Pager. Pager and snapshot are kept in
+     * lock-step so the UI can read from either without risking a stale
+     * state. The Pager is only re-driven on a true scope change so a
+     * background refresh that calls [loadArticles] does not re-fetch the
+     * Pager's first page on top of itself.
+     */
+    fun setArticleScope(feedId: String?, categoryId: String?) {
+        val previous = _uiState.value
+        val scopeChanged =
+            previous.selectedFeedId != feedId || previous.selectedCategoryId != categoryId
+        _uiState.update {
+            it.copy(
+                selectedFeedId = feedId,
+                selectedCategoryId = categoryId,
+                selectedArticle = null,
+            )
+        }
+        if (scopeChanged) {
+            val query = _uiState.value.articleQuery()
+            articlePagingGeneration += 1
+            articlePagingQuery.value = query.toArticlePageQuery(articlePagingGeneration)
+        }
+        loadArticles()
+    }
+
+    /**
+     * Apply a new sort or hide-read filter. The Pager is re-driven so the
+     * UI list and snapshot stay in sync. Callers are expected to have
+     * already updated the prefs in [_uiState]; this method just re-fetches
+     * the article list under the new query. Pass `null` for either
+     * parameter to keep the current value.
+     */
+    fun setArticleFilter(sort: String?, hideRead: Boolean?) {
+        val previous = _uiState.value
+        val currentPrefs = previous.preferences
+        val nextSort = sort ?: currentPrefs?.defaultSort
+        val nextHideRead = hideRead ?: currentPrefs?.hideRead ?: false
+        val query = ArticleQuery(
+            feedId = previous.selectedFeedId,
+            categoryId = previous.selectedCategoryId,
+            unreadOnly = nextHideRead,
+            sort = nextSort,
+        )
+        articlePagingGeneration += 1
+        articlePagingQuery.value = query.toArticlePageQuery(articlePagingGeneration)
+        loadArticles()
+    }
+
     fun loadMoreArticles() {
         val snapshot = _uiState.value
         if (!snapshot.hasMoreArticles || snapshot.loadingMoreArticles || snapshot.articleCursor.isNullOrBlank()) {
             return
         }
 
-        val requestId = articleRequestSequence
+        val requestId = articleRequestSequence.incrementAndGet()
         val query = snapshot.articleQuery()
         val cursor = snapshot.articleCursor
         _uiState.update { it.copy(loadingMoreArticles = true) }
@@ -901,7 +965,14 @@ class MainViewModel(
                     if (result.data.theme != normalizedPreferences.theme) {
                         persistNormalizedTheme(normalizedPreferences.theme)
                     }
-                    if (_uiState.value.isAuthenticated && _uiState.value.articleQuery() != previousQuery) {
+                    val currentQuery = _uiState.value.articleQuery()
+                    if (_uiState.value.isAuthenticated && currentQuery != previousQuery) {
+                        // The server returned a different sort or hide-read
+                        // than we have cached. Re-drive the Pager so the UI
+                        // list and snapshot stay in sync.
+                        articlePagingGeneration += 1
+                        articlePagingQuery.value =
+                            currentQuery.toArticlePageQuery(articlePagingGeneration)
                         loadArticles()
                     }
                 }
@@ -915,7 +986,7 @@ class MainViewModel(
             when (val result = repository.updatePreferences(UpdatePreferencesRequest(hideRead = hideRead))) {
                 is AppResult.Success -> {
                     _uiState.update { it.copy(preferences = result.data, statusMessage = "Preferences updated") }
-                    loadArticles()
+                    setArticleFilter(sort = null, hideRead = hideRead)
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -929,7 +1000,6 @@ class MainViewModel(
             when (val result = repository.updatePreferences(UpdatePreferencesRequest(textSize = clamped))) {
                 is AppResult.Success -> {
                     _uiState.update { it.copy(preferences = result.data, statusMessage = "Text size updated") }
-                    loadArticles()
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -951,7 +1021,7 @@ class MainViewModel(
             when (val result = repository.updatePreferences(UpdatePreferencesRequest(defaultSort = defaultSort))) {
                 is AppResult.Success -> {
                     _uiState.update { it.copy(preferences = result.data, statusMessage = "Sort updated") }
-                    loadArticles()
+                    setArticleFilter(sort = defaultSort, hideRead = null)
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -1212,13 +1282,8 @@ class MainViewModel(
             totalRead = (totalRead + readDelta).coerceAtLeast(0),
         )
 
-    private fun nextArticleRequestId(): Long {
-        articleRequestSequence += 1
-        return articleRequestSequence
-    }
-
     private fun isCurrentArticleRequest(requestId: Long): Boolean =
-        requestId == articleRequestSequence
+        requestId == articleRequestSequence.get()
 
     private fun AppUiState.articleQuery(): ArticleQuery =
         ArticleQuery(

@@ -69,6 +69,25 @@ export class OpmlImportService {
 			warnings: [],
 		};
 
+		// Pre-fetch the user's existing feed URLs and category tree in one
+		// round-trip each. Without this, a 500-entry OPML would issue 1500+
+		// individual `findByUrl` / `findByName` calls (1 per category, 1 per
+		// feed, plus 1 per feed for the dup check) and run an insert per
+		// category and per feed. We build the inserts in memory and let the
+		// repository batch them in a single transaction.
+		const existingFeedUrls = new Set(
+			(await this.feedRepo.findByUrls(userId, feeds.map((entry) => entry.feedUrl).filter(Boolean)))
+				.map((feed) => feed.feedUrl),
+		);
+		const existingCategories = await this.categoryRepo.findAllByUser(userId);
+		const categoryByPath = new Map<string, string>();
+		for (const cat of existingCategories) {
+			categoryByPath.set(this.categoryPathKey(cat.parentCategoryId, cat.name), cat.id);
+		}
+
+		const categoriesToCreate: { row: typeof import('../db/schema.js').categories.$inferInsert; key: string }[] = [];
+		const feedsToCreate: (typeof import('../db/schema.js').feeds.$inferInsert)[] = [];
+
 		for (const entry of feeds) {
 			if (!entry.feedUrl) {
 				summary.invalidEntries += 1;
@@ -94,8 +113,7 @@ export class OpmlImportService {
 				continue;
 			}
 
-			const existingFeed = await this.feedRepo.findByUrl(userId, normalizedFeedUrl);
-			if (existingFeed) {
+			if (existingFeedUrls.has(normalizedFeedUrl)) {
 				summary.skippedDuplicates += 1;
 				summary.warnings.push({
 					code: 'DUPLICATE_FEED',
@@ -106,31 +124,49 @@ export class OpmlImportService {
 				continue;
 			}
 
-			let categoryId: string | null = null;
+			// Resolve category chain. We do not insert anything yet: we collect
+			// the desired categories and feeds and let the repository batch
+			// the writes in a single transaction at the end of the loop.
+			let parentCategoryId: string | null = null;
 			for (const rawName of entry.categoryPath) {
 				const name = rawName.trim();
 				if (!name) {
 					continue;
 				}
-
-				const existingCategory = await this.categoryRepo.findByName(userId, name, categoryId);
-				if (existingCategory) {
-					categoryId = existingCategory.id;
+				const key = this.categoryPathKey(parentCategoryId, name);
+				// Resolve the parent for this segment. We check three sources,
+				// in order: a category that already exists in the database
+				// (looked up via `findAllByUser`), a category that this
+				// import has already queued for insertion in a previous
+				// entry, or nothing (in which case we queue a new insert).
+				let resolvedId = categoryByPath.get(key);
+				if (!resolvedId) {
+					const queuedIdx = categoriesToCreate.findIndex((c) => c.key === key);
+					if (queuedIdx >= 0) {
+						resolvedId = `__pending__:${queuedIdx}`;
+					}
+				}
+				if (resolvedId) {
+					parentCategoryId = resolvedId;
 					continue;
 				}
-
-				const createdCategory = await this.categoryRepo.create({
-					userId,
-					name,
-					slug: slugify(name),
-					parentCategoryId: categoryId,
-					sortOrder: 0,
+				categoriesToCreate.push({
+					key,
+					row: {
+						userId,
+						name,
+						slug: slugify(name),
+						parentCategoryId,
+						sortOrder: 0,
+					},
 				});
-				summary.createdCategories += 1;
-				categoryId = createdCategory.id;
+				// We don't know the new id yet, so we resolve the rest of the
+				// chain against the queue. For correctness, the actual parent
+				// id is patched after the batch insert below.
+				parentCategoryId = `__pending__:${categoriesToCreate.length - 1}`;
 			}
 
-			if (!categoryId) {
+			if (!parentCategoryId) {
 				summary.invalidEntries += 1;
 				summary.warnings.push({
 					code: 'UNCATEGORIZED_ENTRY',
@@ -140,29 +176,86 @@ export class OpmlImportService {
 				continue;
 			}
 
+			feedsToCreate.push({
+				userId,
+				// Patched after the category insert below.
+				categoryId: parentCategoryId as string,
+				feedUrl: normalizedFeedUrl,
+				title: entry.title?.trim() || titleFromUrl(normalizedFeedUrl),
+				siteUrl: null,
+				faviconUrl: null,
+				description: null,
+			});
+		}
+
+		// Insert the categories in one transaction. Newly created categories
+		// may be parents of other categories in the same batch, so we use a
+		// sequential insert helper that returns the new id for each row in
+		// order. The caller passes the parent id it has for each row
+		// (either a pre-existing id from `categoryByPath` or a placeholder
+		// pointing to the queue index of the yet-to-be-inserted parent);
+		// the helper rewrites the placeholder to the real id as the batch
+		// progresses. If anything fails, the whole transaction rolls back
+		// and the partial state is never visible.
+		const createdCategoryIdsByQueueIdx: string[] = [];
+		if (categoriesToCreate.length > 0) {
+			const rowsToInsert = categoriesToCreate.map(({ row }) => row);
+
 			try {
-				await this.feedRepo.create({
-					userId,
-					categoryId,
-					feedUrl: normalizedFeedUrl,
-					title: entry.title?.trim() || titleFromUrl(normalizedFeedUrl),
-					siteUrl: null,
-					faviconUrl: null,
-					description: null,
-				});
-				summary.createdFeeds += 1;
+				const insertedRows = await this.categoryRepo.createManyInTransaction(rowsToInsert);
+				summary.createdCategories = insertedRows.length;
+				for (let i = 0; i < insertedRows.length; i++) {
+					const row = insertedRows[i];
+					const queued = categoriesToCreate[i];
+					if (row && queued) {
+						categoryByPath.set(queued.key, row.id);
+						createdCategoryIdsByQueueIdx[i] = row.id;
+					}
+				}
 			} catch (error) {
-				summary.invalidEntries += 1;
 				summary.warnings.push({
 					code: 'IMPORT_FAILED',
-					message: error instanceof Error ? error.message : 'Failed to import feed',
-					feedUrl: normalizedFeedUrl,
-					categoryPath: entry.categoryPath,
+					message: error instanceof Error ? error.message : 'Failed to import categories',
 				});
+				return summary;
+			}
+		}
+
+		// Resolve the pending category placeholders to real ids and insert
+		// the feeds in one transaction.
+		if (feedsToCreate.length > 0) {
+			const rows = feedsToCreate.map((row) => {
+				const categoryId = row.categoryId;
+				if (typeof categoryId === 'string' && categoryId.startsWith('__pending__:')) {
+					const idx = Number.parseInt(categoryId.slice('__pending__:'.length), 10);
+					return { ...row, categoryId: createdCategoryIdsByQueueIdx[idx] ?? '' };
+				}
+				return row;
+			});
+			const insertable = rows.filter((row) => row.categoryId);
+			if (insertable.length > 0) {
+				try {
+					const inserted = await this.feedRepo.createMany(insertable);
+					summary.createdFeeds = inserted.length;
+					// Mark the URLs as already-known so the remaining loop
+					// (if any) won't try to re-create them.
+					for (const row of inserted) {
+						existingFeedUrls.add(row.feedUrl);
+					}
+				} catch (error) {
+					summary.warnings.push({
+						code: 'IMPORT_FAILED',
+						message: error instanceof Error ? error.message : 'Failed to import feeds',
+					});
+				}
 			}
 		}
 
 		return summary;
+	}
+
+	private categoryPathKey(parentCategoryId: string | null, name: string): string {
+		return `${parentCategoryId ?? '__root__'}::${name}`;
 	}
 
 	parse(content: string): ParsedOpmlFeed[] {

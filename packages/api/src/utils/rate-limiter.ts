@@ -22,6 +22,27 @@ export class RateLimiter {
 		const remaining = Math.max(0, config.maxRequests - current);
 		return { allowed: current <= config.maxRequests, remaining };
 	}
+
+	/**
+	 * Increment a daily counter and return the new value. The key is suffixed
+	 * with the current UTC date so the counter rolls over at midnight without
+	 * any cron. The key is created with a 48h TTL to bound its lifetime.
+	 *
+	 * Unlike `check`, this does not enforce a cap — the caller is expected
+	 * to compare the returned count against its own quota and decide
+	 * whether to reject. This lets the caller return a quota-specific error
+	 * code or message instead of the generic 429 from the rate limiter.
+	 */
+	async incrementDailyCount(baseKey: string): Promise<number> {
+		const today = new Date().toISOString().slice(0, 10);
+		const redisKey = CacheKeys.rateLimit(`${baseKey}:${today}`);
+		const current = await this.redis.incr(redisKey);
+		if (current === 1) {
+			// 48h covers the longest possible day boundary in any timezone.
+			await this.redis.expire(redisKey, 60 * 60 * 48);
+		}
+		return current;
+	}
 }
 
 export const RATE_LIMITS = {

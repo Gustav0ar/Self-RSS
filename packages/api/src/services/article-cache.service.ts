@@ -12,6 +12,35 @@ const CACHED_ARTICLE_LIMIT = 100;
 // Warming lock TTL - prevents duplicate warming within this window
 const WARMING_LOCK_TTL = 30; // seconds
 
+// SCAN COUNT hint. Larger batches are faster but increase per-call latency
+// against the event loop. 500 is a reasonable middle ground for the key
+// patterns we use here.
+const SCAN_BATCH = 500;
+
+/**
+ * Iterate every key matching `pattern` using SCAN, which is non-blocking
+ * even for very large keyspaces. We deliberately avoid the convenience
+ * `KEYS` command, which Redis documents as unsafe in production.
+ */
+async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
+	const matched: string[] = [];
+	let cursor = '0';
+	do {
+		const [nextCursor, batch] = await redis.scan(
+			cursor,
+			'MATCH',
+			pattern,
+			'COUNT',
+			SCAN_BATCH,
+		);
+		if (batch.length > 0) {
+			matched.push(...batch);
+		}
+		cursor = nextCursor;
+	} while (cursor !== '0');
+	return matched;
+}
+
 export interface CachedArticleList {
 	articles: CachedArticle[];
 	cursor: string | null;
@@ -430,9 +459,12 @@ export class ArticleCacheService {
 		const metaKey = CacheKeys.articleListCacheMeta(userId);
 		await this.redis.del(cacheKey, metaKey);
 
-		// Delete all feed/category scoped caches for this user
+		// Delete all feed/category scoped caches for this user. Use SCAN,
+		// not KEYS, so a large keyspace does not block Redis. The pattern
+		// excludes the generation and warming keys (which are managed
+		// elsewhere) by requiring the segment after the user id.
 		const pattern = `articles:list:${userId}:*`;
-		const keys = await this.redis.keys(pattern);
+		const keys = await scanKeys(this.redis, pattern);
 		if (keys.length > 0) {
 			await this.redis.del(...keys);
 		}
@@ -461,7 +493,7 @@ export class ArticleCacheService {
 	async getRecentlyActiveUserIds(withinMinutes: number = 10): Promise<string[]> {
 		const threshold = Date.now() - withinMinutes * 60 * 1000;
 		const pattern = `user:lastseen:*`;
-		const keys = await this.redis.keys(pattern);
+		const keys = await scanKeys(this.redis, pattern);
 
 		if (keys.length === 0) return [];
 

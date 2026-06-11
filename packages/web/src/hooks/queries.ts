@@ -24,6 +24,22 @@ export function invalidateReaderQueries(qc: QueryClient) {
 	qc.invalidateQueries({ queryKey: ['search'] });
 }
 
+/**
+ * Return the first cached query key under `prefix` that is currently in
+ * flight. Used by optimistic mutations to cancel only the scope the user is
+ * interacting with, instead of every query under a broad prefix.
+ */
+function findActiveQueryKey(qc: QueryClient, prefix: readonly unknown[]): QueryKey | null {
+	const cache = qc.getQueryCache();
+	const queries = cache.findAll({ queryKey: prefix });
+	for (const query of queries) {
+		if (query.state.fetchStatus === 'fetching') {
+			return query.queryKey;
+		}
+	}
+	return null;
+}
+
 export interface FeedSyncAllStatus {
 	queued: boolean;
 	running: boolean;
@@ -796,9 +812,17 @@ export function useMarkRead() {
 				body: JSON.stringify({ read }),
 			}),
 		onMutate: async ({ articleId, read }) => {
+			// Capture the active article-list query key (if any) so we only
+			// cancel in-flight fetches that would race with this optimistic
+			// update. Cancelling every `articles`/`feeds`/etc. query would also
+			// cancel fetches for *other* scopes the user is not currently
+			// viewing; if one of those refetches and then the optimistic
+			// snapshot is rolled back, the wrong scope's slot gets clobbered.
+			const activeArticlesKey = findActiveQueryKey(qc, ['articles']);
+
 			await Promise.all([
 				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
-				qc.cancelQueries({ queryKey: ['articles'] }),
+				activeArticlesKey ? qc.cancelQueries({ queryKey: activeArticlesKey }) : Promise.resolve(),
 				qc.cancelQueries({ queryKey: ['search'] }),
 				qc.cancelQueries({ queryKey: ['feeds'] }),
 				qc.cancelQueries({ queryKey: ['categories'] }),
@@ -806,6 +830,11 @@ export function useMarkRead() {
 
 			const previousSnapshot = findCachedArticleSnapshot(qc, articleId);
 			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
+			// Snapshot every matching cache entry keyed by its full query key
+			// tuple. The optimistic update may run while the user has multiple
+			// scopes cached (different feeds, categories, sorts), and the
+			// rollback must restore each one to its pre-mutation state without
+			// ever writing into a different scope's slot.
 			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
 			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
 			const previousFeeds = qc.getQueriesData({ queryKey: ['feeds'] });
@@ -825,7 +854,14 @@ export function useMarkRead() {
 			};
 		},
 		onError: (_error, { articleId }, context) => {
+			// Restore the article detail first; it is keyed by the article id
+			// only and is unambiguous.
 			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
+			// Restore list queries by their captured key tuples. Iterating the
+			// snapshot pairs (rather than re-running the filter) makes the
+			// rollback atomic with respect to the optimistic update: only the
+			// slots that existed at snapshot time are touched, and each one is
+			// restored to the exact pre-mutation value.
 			for (const [queryKey, data] of context?.previousArticles ?? []) {
 				qc.setQueryData(queryKey, data);
 			}

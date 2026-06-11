@@ -14,7 +14,7 @@ export const updateFeedSchema = z.object({
 
 export const importOpmlSchema = z.object({
 	filename: z.string().min(1).max(255),
-	content: z.string().min(1).max(2_000_000),
+	content: z.string().min(1).max(1_000_000),
 });
 
 export type CreateFeedInput = z.infer<typeof createFeedSchema>;
