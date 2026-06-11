@@ -18,8 +18,18 @@ export class CategoryService {
 	) {}
 
 	async getTree(userId: string) {
-		const cats = await this.categoryRepo.findAllByUser(userId);
-		const allFeeds = await this.feedRepo.findAllByUser(userId);
+		// Fetch categories and feeds in parallel, then issue the unread-count
+		// query as soon as the feed ids are known. This removes the serial
+		// chain that previously dominated the category tree endpoint.
+		const [cats, allFeeds] = await Promise.all([
+			this.categoryRepo.findAllByUser(userId),
+			this.feedRepo.findAllByUser(userId),
+		]);
+
+		const unreadCountByFeedId = await this.articleRepo.unreadCountByFeed(
+			userId,
+			allFeeds.map((f) => f.id),
+		);
 
 		const feedsByCategory = new Map<string, typeof allFeeds>();
 		for (const feed of allFeeds) {
@@ -28,9 +38,6 @@ export class CategoryService {
 			feedsByCategory.set(feed.categoryId, list);
 		}
 
-		// Compute unread counts per feed
-		const feedIds = allFeeds.map((f) => f.id);
-		const unreadCountByFeedId = await this.articleRepo.unreadCountByFeed(userId, feedIds);
 		const totalUnread = Array.from(unreadCountByFeedId.values()).reduce((a, b) => a + b, 0);
 
 		return {

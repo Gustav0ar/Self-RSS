@@ -78,24 +78,44 @@ export function createDeps(
 		preferences: new PreferencesRepository(db),
 	};
 
-	const services = {
+	const resolvedSyncConfig = syncConfig ?? {
+		timeoutMs: 30000,
+		maxContentLength: 5242880,
+		concurrency: 5,
+		allowPrivateHosts: false,
+	};
+
+	// Build dependencies in topological order: caches first, then services that
+	// depend on them. The final `services` object is assembled in one place so
+	// every property is defined at construction time and the type system stays
+	// honest.
+	const articleCache = new ArticleCacheService(repos.article, repos.feed, redis);
+
+	const realtime = new RealtimeService(redis);
+	const feedSync = new FeedSyncService(
+		repos.feed,
+		repos.article,
+		repos.syncRun,
+		repos.metrics,
+		redis,
+		resolvedSyncConfig,
+		articleCache,
+	);
+	const opmlImport = new OpmlImportService(repos.category, repos.feed);
+
+	const services: AppDeps['services'] = {
 		auth: new AuthService(repos.user, repos.settings, tokenUtils, redis),
 		category: new CategoryService(repos.category, repos.feed, repos.article),
 		feed: new FeedService(
 			repos.feed,
 			repos.category,
 			repos.article,
-			syncConfig ?? {
-				timeoutMs: 30000,
-				maxContentLength: 5242880,
-				concurrency: 5,
-				allowPrivateHosts: false,
-			},
+			resolvedSyncConfig,
 		),
 		opmlExport: new OpmlExportService(repos.category, repos.feed),
-		opmlImport: null as unknown as OpmlImportService,
+		opmlImport,
 		preferences: new PreferencesService(repos.preferences),
-		realtime: new RealtimeService(redis),
+		realtime,
 		stats: new StatsService(
 			repos.article,
 			repos.feed,
@@ -103,38 +123,18 @@ export function createDeps(
 			repos.syncRun,
 			repos.metrics,
 		),
-	} as AppDeps['services'];
-
-	// Create articleCache first so it can be injected into other services
-	const articleCache = new ArticleCacheService(repos.article, repos.feed, redis);
-	services.articleCache = articleCache;
-
-	// Create feedSync with articleCache dependency
-	services.feedSync = new FeedSyncService(
-		repos.feed,
-		repos.article,
-		repos.syncRun,
-		repos.metrics,
-		redis,
-		syncConfig ?? {
-			timeoutMs: 30000,
-			maxContentLength: 5242880,
-			concurrency: 5,
-			allowPrivateHosts: false,
-		},
 		articleCache,
-	);
-
-	services.opmlImport = new OpmlImportService(repos.category, repos.feed);
-	services.article = new ArticleService(
-		repos.article,
-		repos.feed,
-		repos.metrics,
-		redis,
-		services.feedSync,
-		services.realtime,
-		articleCache,
-	);
+		feedSync,
+		article: new ArticleService(
+			repos.article,
+			repos.feed,
+			repos.metrics,
+			redis,
+			feedSync,
+			realtime,
+			articleCache,
+		),
+	};
 
 	const rateLimiter = new RateLimiter(redis);
 

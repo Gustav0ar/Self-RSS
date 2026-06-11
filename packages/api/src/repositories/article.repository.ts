@@ -362,6 +362,70 @@ export class ArticleRepository {
 		});
 	}
 
+	/**
+	 * Persist the results of a feed sync in a single transaction: insert any
+	 * new articles, store their media rows, and apply content updates to
+	 * existing articles (each with its own media replacement). If any step
+	 * fails the whole batch rolls back so the feed is never left in a state
+	 * where articles exist with empty `contentHtml` or stale media.
+	 *
+	 * `mediaByGuid` and `updatedMediaByArticleId` are pre-extracted media
+	 * lists. For new articles we key by `guid` because the article id is
+	 * assigned by the database; the repository rewrites the rows to use
+	 * the freshly-inserted id after the insert returns.
+	 */
+	async persistSyncResults(params: {
+		articlesToInsert: (typeof articles.$inferInsert)[];
+		articlesToUpdate: {
+			id: string;
+			contentHtml: string | null;
+			contentText: string | null;
+			excerpt: string | null;
+			heroImageUrl: string | null;
+		}[];
+		mediaByGuid: Map<string, (typeof articleMedia.$inferInsert)[]>;
+		updatedMediaByArticleId: Map<string, (typeof articleMedia.$inferInsert)[]>;
+	}) {
+		return this.db.transaction(async (tx) => {
+			const inserted = params.articlesToInsert.length > 0
+				? await tx
+						.insert(articles)
+						.values(params.articlesToInsert)
+						.onConflictDoNothing()
+						.returning()
+				: [];
+
+			for (const article of inserted) {
+				const media = params.mediaByGuid.get(article.guid);
+				if (media && media.length > 0) {
+					await tx.insert(articleMedia).values(
+						media.map((row) => ({ ...row, articleId: article.id })),
+					);
+				}
+			}
+
+			for (const update of params.articlesToUpdate) {
+				await tx
+					.update(articles)
+					.set({
+						contentHtml: update.contentHtml,
+						contentText: update.contentText,
+						excerpt: update.excerpt,
+						heroImageUrl: update.heroImageUrl,
+					})
+					.where(eq(articles.id, update.id));
+
+				const replacement = params.updatedMediaByArticleId.get(update.id);
+				await tx.delete(articleMedia).where(eq(articleMedia.articleId, update.id));
+				if (replacement && replacement.length > 0) {
+					await tx.insert(articleMedia).values(replacement);
+				}
+			}
+
+			return inserted;
+		});
+	}
+
 	async deleteOlderThan(days: number) {
 		const cutoff = sql`unixepoch('now', '-' || ${days} || ' days')`;
 		const result = await this.db

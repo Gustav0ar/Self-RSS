@@ -40,6 +40,7 @@ describe('OpmlImportService', () => {
 		}> = [];
 
 		const categoryRepo = {
+			findAllByUser: vi.fn(async () => createdCategories),
 			findByName: vi.fn(async (_userId: string, name: string, parentCategoryId: string | null) => {
 				return (
 					createdCategories.find(
@@ -64,6 +65,25 @@ describe('OpmlImportService', () => {
 					return category;
 				},
 			),
+			createManyInTransaction: vi.fn(
+				async (rows: Array<{ name: string; parentCategoryId: string | null }>) => {
+					const inserted: Array<{
+						id: string;
+						name: string;
+						parentCategoryId: string | null;
+					}> = [];
+					for (const r of rows) {
+						const category = {
+							id: `category-${createdCategories.length + 1}`,
+							name: r.name,
+							parentCategoryId: r.parentCategoryId,
+						};
+						createdCategories.push(category);
+						inserted.push(category);
+					}
+					return inserted;
+				},
+			),
 		};
 
 		const feedRepo = {
@@ -73,6 +93,12 @@ describe('OpmlImportService', () => {
 				}
 				return null;
 			}),
+			findByUrls: vi.fn(
+				async (_userId: string, urls: string[]) =>
+					urls
+						.filter((u) => u === 'https://example.com/already.xml')
+						.map((feedUrl) => ({ feedUrl })),
+			),
 			create: vi.fn(
 				async (data: {
 					userId: string;
@@ -85,6 +111,27 @@ describe('OpmlImportService', () => {
 				}) => {
 					createdFeeds.push(data);
 					return { id: `feed-${createdFeeds.length}` };
+				},
+			),
+			createMany: vi.fn(
+				async (rows: Array<{
+					userId: string;
+					categoryId: string;
+					feedUrl: string;
+					title: string;
+				}>) => {
+					for (const row of rows) {
+						createdFeeds.push({
+							userId: row.userId,
+							categoryId: row.categoryId,
+							feedUrl: row.feedUrl,
+							title: row.title,
+							siteUrl: null,
+							faviconUrl: null,
+							description: null,
+						});
+					}
+					return rows.map((_, i) => ({ id: `feed-${createdFeeds.length - rows.length + i + 1}` }));
 				},
 			),
 		};
@@ -122,7 +169,8 @@ describe('OpmlImportService', () => {
 				description: null,
 			},
 		]);
-		expect(categoryRepo.create).toHaveBeenCalledTimes(2);
+		expect(categoryRepo.createManyInTransaction).toHaveBeenCalledTimes(1);
+		expect(feedRepo.createMany).toHaveBeenCalledTimes(1);
 	});
 
 	it('rejects malformed OPML documents', () => {
@@ -133,12 +181,16 @@ describe('OpmlImportService', () => {
 
 	it('reports invalid feed URLs without aborting the whole import', async () => {
 		const categoryRepo = {
+			findAllByUser: vi.fn(async () => []),
 			findByName: vi.fn(),
 			create: vi.fn(),
+			createManyInTransaction: vi.fn(),
 		};
 		const feedRepo = {
 			findByUrl: vi.fn(),
+			findByUrls: vi.fn(async () => []),
 			create: vi.fn(),
+			createMany: vi.fn(),
 		};
 		const service = new OpmlImportService(categoryRepo as never, feedRepo as never);
 
@@ -166,7 +218,7 @@ describe('OpmlImportService', () => {
 				categoryPath: ['Engineering'],
 			},
 		]);
-		expect(categoryRepo.create).not.toHaveBeenCalled();
-		expect(feedRepo.create).not.toHaveBeenCalled();
+		expect(categoryRepo.createManyInTransaction).not.toHaveBeenCalled();
+		expect(feedRepo.createMany).not.toHaveBeenCalled();
 	});
 });

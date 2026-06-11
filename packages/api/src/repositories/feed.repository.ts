@@ -54,6 +54,19 @@ export class FeedRepository {
 		return feed!;
 	}
 
+	/**
+	 * Bulk insert feeds inside a single transaction. Used by the OPML import
+	 * path to amortize round-trips when the file declares hundreds of feeds.
+	 * The caller is responsible for having pre-resolved category ids and for
+	 * de-duplicating against the user's existing feed list.
+	 */
+	async createMany(rows: (typeof feeds.$inferInsert)[]) {
+		if (rows.length === 0) return [];
+		return this.db.transaction(async (tx) => {
+			return tx.insert(feeds).values(rows).returning();
+		});
+	}
+
 	async update(id: string, userId: string, data: Partial<typeof feeds.$inferInsert>) {
 		const [feed] = await this.db
 			.update(feeds)

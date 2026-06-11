@@ -21,12 +21,10 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async (data: Array<Record<string, unknown>>) =>
-				data.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
 			),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
 		};
 
 		const syncRunRepo = {
@@ -76,13 +74,16 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.insertMany).toHaveBeenCalledWith([
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
 			expect.objectContaining({
-				contentHtml: 'Only text in the RSS feed',
-				heroImageUrl: null,
+				articlesToInsert: [
+					expect.objectContaining({
+						contentHtml: 'Only text in the RSS feed',
+						heroImageUrl: null,
+					}),
+				],
 			}),
-		]);
-		expect(articleRepo.insertMedia).not.toHaveBeenCalled();
+		);
 		expect(enrichSpy).toHaveBeenCalledWith([
 			expect.objectContaining({
 				articleId: 'article-1',
@@ -113,10 +114,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: null,
 				},
 			]),
-			insertMany: vi.fn(async () => []),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
+			persistSyncResults: vi.fn(async () => []),
 		};
 
 		const syncRunRepo = {
@@ -166,7 +164,6 @@ describe('FeedSyncService', () => {
 
 		await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.updateContent).not.toHaveBeenCalled();
 		expect(enrichSpy).toHaveBeenCalledWith([
 			expect.objectContaining({
 				articleId: 'article-1',
@@ -462,10 +459,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => ['guid-1', 'guid-2']),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async () => []),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
+			persistSyncResults: vi.fn(async () => []),
 		};
 
 		const syncRunRepo = {
@@ -514,7 +508,6 @@ describe('FeedSyncService', () => {
 		expect(articleRepo.findExistingGuids).toHaveBeenCalledWith('feed-1', ['guid-1', 'guid-2']);
 		expect(articleRepo.findByFeedAndGuids).not.toHaveBeenCalled();
 		expect(enrichSpy).not.toHaveBeenCalled();
-		expect(articleRepo.insertMany).not.toHaveBeenCalled();
 		expect(result).toEqual({ newArticles: 0, total: 2 });
 	});
 
@@ -538,10 +531,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: 'https://example.com/image.jpg',
 				},
 			]),
-			insertMany: vi.fn(async () => []),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
+			persistSyncResults: vi.fn(async () => []),
 		};
 
 		const syncRunRepo = {
@@ -592,8 +582,6 @@ describe('FeedSyncService', () => {
 		await service.syncFeed('feed-1', 'user-1');
 
 		expect(enrichSpy).not.toHaveBeenCalled();
-		expect(articleRepo.updateContent).not.toHaveBeenCalled();
-		expect(articleRepo.insertMany).not.toHaveBeenCalled();
 	});
 
 	it('handles malformed object content from feeds without failing the sync', async () => {
@@ -610,12 +598,10 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async (data: Array<Record<string, unknown>>) =>
-				data.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
 			),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
 		};
 
 		const syncRunRepo = {
@@ -658,12 +644,16 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.insertMany).toHaveBeenCalledWith([
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
 			expect.objectContaining({
-				contentHtml: 'Only text plus more',
-				contentText: 'Only text plus more',
+				articlesToInsert: [
+					expect.objectContaining({
+						contentHtml: 'Only text plus more',
+						contentText: 'Only text plus more',
+					}),
+				],
 			}),
-		]);
+		);
 		expect(result).toEqual({ newArticles: 1, total: 1 });
 	});
 
@@ -681,12 +671,10 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async (data: Array<Record<string, unknown>>) =>
-				data.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
 			),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
 		};
 
 		const syncRunRepo = {
@@ -737,7 +725,6 @@ describe('FeedSyncService', () => {
 
 		await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.insertMedia).not.toHaveBeenCalled();
 		expect(enrichSpy).toHaveBeenCalledWith([
 			expect.objectContaining({
 				articleId: 'article-1',
@@ -760,12 +747,10 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async (data: Array<Record<string, unknown>>) =>
-				data.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
 			),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
 		};
 
 		const syncRunRepo = {
@@ -815,11 +800,15 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.insertMany).toHaveBeenCalledWith([
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
 			expect.objectContaining({
-				contentHtml: 'Simple feed content',
+				articlesToInsert: [
+					expect.objectContaining({
+						contentHtml: 'Simple feed content',
+					}),
+				],
 			}),
-		]);
+		);
 		expect(enrichSpy).toHaveBeenCalled();
 		expect(result).toEqual({ newArticles: 1, total: 1 });
 	});
@@ -838,12 +827,10 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			insertMany: vi.fn(async (data: Array<Record<string, unknown>>) =>
-				data.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
 			),
-			insertMedia: vi.fn(async () => undefined),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
 		};
 
 		const syncRunRepo = {
@@ -890,15 +877,19 @@ describe('FeedSyncService', () => {
 
 		await service.syncFeed('feed-1', 'user-1');
 
-		expect(articleRepo.insertMany).toHaveBeenCalledWith([
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
 			expect.objectContaining({
-				guid: 'guid-1',
-				canonicalUrl: 'https://example.com/post-1',
-				title: 'Post 1',
-				author: 'Author',
-				excerpt: 'Description text',
+				articlesToInsert: [
+					expect.objectContaining({
+						guid: 'guid-1',
+						canonicalUrl: 'https://example.com/post-1',
+						title: 'Post 1',
+						author: 'Author',
+						excerpt: 'Description text',
+					}),
+				],
 			}),
-		]);
+		);
 		expect(feedRepo.update).toHaveBeenNthCalledWith(
 			2,
 			'feed-1',

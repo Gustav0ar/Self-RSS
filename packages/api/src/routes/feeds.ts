@@ -8,6 +8,12 @@ import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.
 import { createLogger } from '../utils/logger.js';
 import { parseBody, parseUuidParam } from '../utils/validation.js';
 
+// OPML import limits. 1 MB is enough for tens of thousands of feed
+// entries in a typical export; larger files should be split. The daily
+// cap is per-user and rolls over at UTC midnight.
+const OPML_IMPORT_MAX_BYTES = 1_048_576; // 1 MiB
+const OPML_IMPORT_DAILY_LIMIT = 10;
+
 export function createFeedRoutes(
 	feedService: FeedService,
 	syncService: FeedSyncService,
@@ -47,6 +53,23 @@ export function createFeedRoutes(
 	routes.post('/import/opml', async (c) => {
 		await enforceRateLimit(c, rateLimiter, 'feed-import', RATE_LIMITS.feedImport);
 		const userId = c.get('userId');
+
+		// Per-user daily import cap. Each successful import counts as one
+		// against the user's daily allowance; the counter is keyed by UTC
+		// date so it rolls over at midnight without any cron.
+		const dailyCount = await rateLimiter.incrementDailyCount(`opml-import:${userId}`);
+		if (dailyCount > OPML_IMPORT_DAILY_LIMIT) {
+			return c.json(
+				{
+					error: {
+						code: 'TOO_MANY_REQUESTS',
+						message: `OPML import daily limit reached (${OPML_IMPORT_DAILY_LIMIT})`,
+					},
+				},
+				429,
+			);
+		}
+
 		const formData = await c.req.formData().catch(() => null);
 		if (!formData) {
 			return c.json(
@@ -59,7 +82,7 @@ export function createFeedRoutes(
 		if (!(file instanceof File)) {
 			return c.json({ error: { code: 'BAD_REQUEST', message: 'OPML file is required' } }, 400);
 		}
-		if (file.size > 5_242_880) {
+		if (file.size > OPML_IMPORT_MAX_BYTES) {
 			return c.json(
 				{ error: { code: 'PAYLOAD_TOO_LARGE', message: 'OPML file exceeds maximum size' } },
 				413,
