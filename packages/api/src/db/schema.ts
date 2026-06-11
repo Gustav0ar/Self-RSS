@@ -149,6 +149,10 @@ export const feeds = sqliteTable(
 		// Cached "next time the worker should look at this feed". The
 		// scheduler queries by this column with an index, so the due-feed
 		// query is an index range scan instead of a per-row function call.
+		// New rows get a timestamp from Drizzle's `$defaultFn`; the
+		// migration that introduces the column also updates existing
+		// rows to a real timestamp, so the SQL default is not used at
+		// runtime.
 		nextSyncAt: timestamp('next_sync_at')
 			.$defaultFn(() => new Date())
 			.notNull(),
