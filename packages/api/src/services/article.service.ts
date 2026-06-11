@@ -97,7 +97,12 @@ export class ArticleService {
 
 		return {
 			data,
-			cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+			// The cursor is opaque to clients but embeds the sort timestamp
+			// for the last returned row so the next page query doesn't
+			// need a second round-trip to look the row up. The shape is
+			// `<articleId>:<unixSeconds>`; clients must pass it back
+			// verbatim.
+			cursor: hasMore ? encodeCursor(items[items.length - 1] ?? null, options.sort) : null,
 			hasMore,
 		};
 	}
@@ -135,18 +140,24 @@ export class ArticleService {
 		}
 
 		if (changed) {
-			await this.invalidateUnreadCache(userId, [article.feedId]);
-			await this.articleCache?.invalidateCache(userId);
-			await this.realtimeService?.publishReadStateEvent(userId, {
-				type: 'article.read_state_changed',
-				eventId: crypto.randomUUID(),
-				articleId,
-				feedId: article.feedId,
-				isRead: read,
-				source,
-				clientId,
-				updatedAt: new Date().toISOString(),
-			});
+			// The cache invalidations and the realtime publish are all
+			// independent of the DB write that just succeeded. Run them in
+			// parallel so the route returns as soon as the slowest of the
+			// three completes, not their sum.
+			await Promise.all([
+				this.invalidateUnreadCache(userId, [article.feedId]),
+				this.articleCache?.invalidateCache(userId),
+				this.realtimeService?.publishReadStateEvent(userId, {
+					type: 'article.read_state_changed',
+					eventId: crypto.randomUUID(),
+					articleId,
+					feedId: article.feedId,
+					isRead: read,
+					source,
+					clientId,
+					updatedAt: new Date().toISOString(),
+				}),
+			]);
 		}
 
 		return { success: true };
@@ -172,20 +183,29 @@ export class ArticleService {
 		}
 
 		const count = await this.articleRepo.markAllRead(userId, feedIds);
+
+		// Metrics, cache invalidation, and realtime publish are all
+		// independent. Run them in parallel so the route doesn't pay the
+		// sum of their latencies.
+		const fanOut: Promise<unknown>[] = [
+			this.invalidateUnreadCache(userId, feedIds),
+			this.articleCache?.invalidateCache(userId) ?? Promise.resolve(),
+		];
 		if (count > 0) {
-			await this.metricsRepo.incrementReadCount(userId, count);
-			await this.realtimeService?.publishReadStateEvent(userId, {
-				type: 'articles.marked_read',
-				eventId: crypto.randomUUID(),
-				feedIds,
-				scope: options,
-				markedCount: count,
-				clientId,
-				updatedAt: new Date().toISOString(),
-			});
+			fanOut.push(this.metricsRepo.incrementReadCount(userId, count));
+			fanOut.push(
+				this.realtimeService?.publishReadStateEvent(userId, {
+					type: 'articles.marked_read',
+					eventId: crypto.randomUUID(),
+					feedIds,
+					scope: options,
+					markedCount: count,
+					clientId,
+					updatedAt: new Date().toISOString(),
+				}) ?? Promise.resolve(),
+			);
 		}
-		await this.invalidateUnreadCache(userId, feedIds);
-		await this.articleCache?.invalidateCache(userId);
+		await Promise.all(fanOut);
 		return { markedCount: count };
 	}
 
@@ -240,21 +260,16 @@ export class ArticleService {
 		const hasMore = results.length > limit;
 		const items = results.slice(0, limit);
 
-		const readIds = await this.articleRepo.getReadArticleIds(
-			userId,
-			items.map((a) => a.id),
-		);
-
 		const data = items.map((a) => ({
 			...a,
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-			isRead: readIds.has(a.id),
+			isRead: a.isRead,
 		}));
 
 		return {
 			data,
-			cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+			cursor: hasMore ? encodeCursor(items[items.length - 1] ?? null, 'latest') : null,
 			hasMore,
 		};
 	}
@@ -266,4 +281,25 @@ export class ArticleService {
 		}
 		await this.redis.del(...keys);
 	}
+}
+
+/**
+ * Build an opaque pagination cursor that embeds the sort timestamp of
+ * the last article on the current page. The next request sends this
+ * back verbatim and the repository decodes it, avoiding a second
+ * round-trip to look the article up by id. Sort order matters because
+ * `coalesce(publishedAt, fetchedAt)` is the sort key.
+ */
+function encodeCursor(
+	item: { id: string; publishedAt: Date | null; fetchedAt: Date } | null,
+	sort: string | undefined,
+): string | null {
+	if (!item) return null;
+	const ts = (item.publishedAt ?? item.fetchedAt).getTime();
+	// Use `Math.floor(ts / 1000)` to match the integer column storage.
+	const seconds = Math.floor(ts / 1000);
+	// Prefix with the sort direction so the repository can apply the
+	// correct inequality without inspecting the query.
+	const direction = sort === 'oldest' ? 'a' : 'd';
+	return `${item.id}:${seconds}:${direction}`;
 }

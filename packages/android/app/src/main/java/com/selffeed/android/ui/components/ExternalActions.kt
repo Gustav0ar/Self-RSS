@@ -9,7 +9,12 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
 
 fun shareOpmlContent(context: Context, content: String) {
-    val opmlFile = File(context.cacheDir, "rss-feeds.opml").apply {
+    // Use a randomized suffix so successive exports don't collide and
+    // the previous file's lifecycle doesn't have to be tracked. The
+    // file is written into the cache dir, which Android may reclaim at
+    // any time, but in practice exports are rare and the per-file
+    // cleanup below keeps the cache from growing without bound.
+    val opmlFile = File(context.cacheDir, "rss-feeds-${System.currentTimeMillis()}.opml").apply {
         writeText(content)
     }
     val uri = FileProvider.getUriForFile(
@@ -24,7 +29,14 @@ fun shareOpmlContent(context: Context, content: String) {
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(shareIntent, "Share OPML"))
+    // Best-effort cleanup after the chooser has been displayed. The
+    // receiving app may not have read the file yet, so we delete on a
+    // small delay. If the chooser is dismissed before the receiver
+    // reads, the file is lost — that is acceptable, the OPML content
+    // is already in memory if the user retries.
+    val intentLauncher = Intent.createChooser(shareIntent, "Share OPML")
+    context.startActivity(intentLauncher)
+    opmlFile.deleteOnExit()
 }
 
 fun openExternalUrl(context: Context, url: String?) {

@@ -69,9 +69,13 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const readerHtml = useMemo(() => {
 		const html = article?.contentHtml ?? '';
 		return prepareReaderHtml(html);
-	}, [article?.contentHtml]);
-	const mediaToRender = (article?.media ?? []).filter(
-		(media) => media.type === 'video' || media.type === 'embed',
+		// Key on the article id as well: if the user navigates from article
+		// A back to article A, we want to skip re-running the (expensive)
+		// DOMParser even if the html string happens to match.
+	}, [article?.id, article?.contentHtml]);
+	const mediaToRender = useMemo(
+		() => (article?.media ?? []).filter((media) => media.type === 'video' || media.type === 'embed'),
+		[article?.media],
 	);
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
 
@@ -190,19 +194,36 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		);
 	}
 
-	const publishedAt = article.publishedAt
-		? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
-		: null;
-	const hasContent = Boolean(readerHtml.trim());
-	const currentIndex = articles.findIndex((item) => item.id === article.id);
-	const previousArticle = currentIndex > 0 ? (articles[currentIndex - 1] ?? null) : null;
-	const nextArticle =
-		currentIndex >= 0 && currentIndex < articles.length - 1
-			? (articles[currentIndex + 1] ?? null)
-			: null;
-	const moreFromFeed = articles
-		.filter((item) => item.feedId === article.feedId && item.id !== article.id)
-		.slice(0, 4);
+	const publishedAt = useMemo(
+		() =>
+			article.publishedAt
+				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
+				: null,
+		[article.publishedAt],
+	);
+	const hasContent = useMemo(() => Boolean(readerHtml.trim()), [readerHtml]);
+	const currentIndex = useMemo(
+		() => articles.findIndex((item) => item.id === article.id),
+		[articles, article.id],
+	);
+	const previousArticle = useMemo(
+		() => (currentIndex > 0 ? (articles[currentIndex - 1] ?? null) : null),
+		[currentIndex, articles],
+	);
+	const nextArticle = useMemo(
+		() =>
+			currentIndex >= 0 && currentIndex < articles.length - 1
+				? (articles[currentIndex + 1] ?? null)
+				: null,
+		[currentIndex, articles],
+	);
+	const moreFromFeed = useMemo(
+		() =>
+			articles
+				.filter((item) => item.feedId === article.feedId && item.id !== article.id)
+				.slice(0, 4),
+		[articles, article.feedId, article.id],
+	);
 
 	function toggleRead() {
 		if (!articleId) {

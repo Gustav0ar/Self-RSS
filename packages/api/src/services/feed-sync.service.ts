@@ -154,7 +154,13 @@ export class FeedSyncService {
 						? rawFeedContent
 						: (this.normalizeText(rawFeedContent) ?? '');
 				const sanitizedHtml = sanitizeHtml(rawHtml);
-				const textContent = stripHtml(rawHtml);
+				// Run the regex-based text extraction over the already-
+				// sanitized HTML, not the raw payload. DOMPurify strips
+				// script/style/iframe and the chrome elements, so the
+				// resulting plain text is closer to the reader output
+				// (matches the article reader's own extraction) and we
+				// skip one regex pass over a potentially huge string.
+				const textContent = stripHtml(sanitizedHtml);
 				const excerpt = textContent ? extractExcerpt(textContent) : null;
 				const heroImage = extractHeroImage(rawHtml) ?? extractHeroImage(sanitizedHtml);
 
@@ -286,9 +292,16 @@ export class FeedSyncService {
 				}
 			}
 
+			// Update `nextSyncAt` to `now + pollingIntervalMinutes` so the
+			// scheduler's index-backed due-feed query skips this feed until
+			// it's actually due. Without this, the worker would re-fetch
+			// the feed every minute regardless of the configured interval.
+			const nextSyncAt = new Date(Date.now() + feed.pollingIntervalMinutes * 60_000);
+
 			await this.feedRepo.update(feedId, userId, {
 				...feedUpdates,
 				lastSyncedAt: new Date(),
+				nextSyncAt,
 				syncStatus: 'idle',
 			});
 

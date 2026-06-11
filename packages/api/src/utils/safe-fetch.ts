@@ -150,11 +150,41 @@ export async function fetchWithValidatedRedirects(
 	const maxRedirects = options.maxRedirects ?? 3;
 	let currentUrl = await assertSafeRemoteUrl(input, options, lookupFn);
 
+	// Per-redirect timeout. The caller's `init.signal` only cancels the
+	// initial request; subsequent redirects inherit no signal and a
+	// slow remote can stall the worker indefinitely. Compose both
+	// signals so the caller's deadline still applies on every hop.
+	const callerSignal = init.signal;
+	const perRedirectTimeoutMs = 10_000;
+
 	for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-		const response = await fetchImpl(currentUrl, {
-			...init,
-			redirect: 'manual',
-		});
+		const perRedirectController = new AbortController();
+		const perRedirectTimer = setTimeout(
+			() => perRedirectController.abort(new Error('Redirect timeout')),
+			perRedirectTimeoutMs,
+		);
+		const onCallerAbort = () => perRedirectController.abort(callerSignal?.reason);
+		if (callerSignal) {
+			if (callerSignal.aborted) {
+				perRedirectController.abort(callerSignal.reason);
+			} else {
+				callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+			}
+		}
+
+		let response: Response;
+		try {
+			response = await fetchImpl(currentUrl, {
+				...init,
+				redirect: 'manual',
+				signal: perRedirectController.signal,
+			});
+		} finally {
+			clearTimeout(perRedirectTimer);
+			if (callerSignal) {
+				callerSignal.removeEventListener('abort', onCallerAbort);
+			}
+		}
 
 		if (!isRedirectStatus(response.status)) {
 			return response;

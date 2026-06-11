@@ -1,27 +1,34 @@
 {
-	"version": "7",
-	"dialect": "sqlite",
-	"entries": [
-		{
-			"idx": 0,
-			"version": "6",
-			"when": 1779801265909,
-			"tag": "0000_large_silver_fox",
-			"breakpoints": true
-		},
-		{
-			"idx": 1,
-			"version": "6",
-			"when": 1780318542246,
-			"tag": "0001_articles_fts",
-			"breakpoints": true
-		},
-		{
-			"idx": 2,
-			"version": "6",
-			"when": 1780969600000,
-			"tag": "0002_default_auto_mark_on_navigate",
-			"breakpoints": true
-		}
-	]
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1779801265909,
+      "tag": "0000_large_silver_fox",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1780318542246,
+      "tag": "0001_articles_fts",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780969600000,
+      "tag": "0002_default_auto_mark_on_navigate",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781178075394,
+      "tag": "0003_eager_spyke",
+      "breakpoints": true
+    }
+  ]
 }
