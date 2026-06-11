@@ -62,8 +62,18 @@ export class FeedRepository {
 	 */
 	async createMany(rows: (typeof feeds.$inferInsert)[]) {
 		if (rows.length === 0) return [];
+		// `nextSyncAt` has no SQL DEFAULT (the column was added with
+		// NOT NULL and no DEFAULT for backwards compatibility with the
+		// pre-existing migration), so we populate it client-side here.
+		// Drizzle's `$defaultFn` only runs for the single-row insert
+		// path; the array form below does not invoke it.
+		const now = new Date();
+		const populated = rows.map((row) => ({
+			...row,
+			nextSyncAt: row.nextSyncAt ?? now,
+		}));
 		return this.db.transaction(async (tx) => {
-			return tx.insert(feeds).values(rows).returning();
+			return tx.insert(feeds).values(populated).returning();
 		});
 	}
 

@@ -26,13 +26,7 @@ async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
 	const matched: string[] = [];
 	let cursor = '0';
 	do {
-		const [nextCursor, batch] = await redis.scan(
-			cursor,
-			'MATCH',
-			pattern,
-			'COUNT',
-			SCAN_BATCH,
-		);
+		const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', SCAN_BATCH);
 		if (batch.length > 0) {
 			matched.push(...batch);
 		}
