@@ -1,4 +1,5 @@
-import { LogOut, Monitor, Moon, Rss, Sun } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import { LogOut, Menu, Monitor, Moon, Rss, Sun } from 'lucide-react';
 import { PreferencesPanel } from '@/components/preferences/preferences-panel';
 import { SearchBar } from '@/components/search/search-bar';
 import { useUpdatePreferences } from '@/hooks/queries';
@@ -7,9 +8,10 @@ import { useTheme } from '@/providers/theme';
 
 interface TopBarProps {
 	onSelectArticle?: (id: string) => void;
+	onOpenSidebar?: () => void;
 }
 
-export function TopBar({ onSelectArticle }: TopBarProps) {
+export function TopBar({ onSelectArticle, onOpenSidebar }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
 	const { isAuthenticated, logout, username } = useAuth();
@@ -25,8 +27,18 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 	return (
 		<header className="relative z-30 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
 			<div className="surface-card surface-quiet motion-enter flex h-auto min-h-14 flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4">
-				<div className="flex min-w-0 items-center gap-3">
-					<div className="animate-pulse-glow flex h-10 w-10 items-center justify-center rounded-xl bg-primary/12 text-primary">
+				<div className="flex min-w-0 items-center gap-2 sm:gap-3">
+					{isAuthenticated && onOpenSidebar ? (
+						<button
+							type="button"
+							onClick={onOpenSidebar}
+							aria-label="Open menu"
+							className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground lg:hidden"
+						>
+							<Menu className="h-5 w-5" />
+						</button>
+					) : null}
+					<div className="animate-pulse-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary">
 						<Rss className="h-5 w-5" />
 					</div>
 					<div className="min-w-0">
@@ -66,6 +78,13 @@ export function TopBar({ onSelectArticle }: TopBarProps) {
 					</button>
 					{isAuthenticated ? (
 						<>
+							<Link
+								to="/stats"
+								aria-label="Stats"
+								className="hidden h-9 items-center justify-center rounded-xl px-3 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:inline-flex"
+							>
+								Stats
+							</Link>
 							{username ? (
 								<div className="surface-muted hidden max-w-52 items-center rounded-full px-3 py-1.5 text-xs text-muted-foreground lg:flex">
 									<span className="truncate">{username}</span>

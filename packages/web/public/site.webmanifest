@@ -1,0 +1,17 @@
+{
+	"name": "SelfFeed",
+	"short_name": "SelfFeed",
+	"description": "Modern RSS reading that feels calm, focused, and fast.",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#0b0b0e",
+	"theme_color": "#4f46e5",
+	"icons": [
+		{
+			"src": "/favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any"
+		}
+	]
+}
