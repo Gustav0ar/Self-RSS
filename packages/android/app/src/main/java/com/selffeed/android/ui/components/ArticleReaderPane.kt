@@ -219,6 +219,15 @@ private fun ArticleDetailView(
 
         Column(modifier = Modifier.fillMaxWidth()) {
             if (showHtml && !article.contentHtml.isNullOrBlank()) {
+                // Show a skeleton placeholder first so the reader opens
+                // instantly. The WebView (which does the HTML load +
+                // layout + JS height callback) swaps in once it has a
+                // first frame ready. This avoids a blank pane while the
+                // article body is rendering.
+                var htmlReady by rememberSaveable(article.id) { mutableStateOf(false) }
+                if (!htmlReady) {
+                    ArticleHtmlSkeleton()
+                }
                 SecureHtmlContent(
                     html = article.contentHtml,
                     backgroundColor = backgroundColor,
@@ -229,6 +238,7 @@ private fun ArticleDetailView(
                     documentBaseUrl = documentBaseUrl,
                     onShowFullscreenMedia = showFullscreenMedia,
                     onHideFullscreenMedia = hideFullscreenMedia,
+                    onReady = { htmlReady = true },
                 )
             } else {
                 Text(
@@ -442,6 +452,37 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
     }
 }
 
+/**
+ * Lightweight shimmer-style placeholder for the article body. Renders
+ * a stack of rounded grey blocks sized to look like paragraphs so the
+ * reader pane doesn't show a blank gap while the WebView is loading
+ * the full HTML. Replaced the moment `onPageFinished` fires on the
+ * WebView (see [SecureHtmlContent]'s `onReady` callback).
+ */
+@Composable
+private fun ArticleHtmlSkeleton() {
+    val placeholder = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Variable-width bars mimic real prose so the layout doesn't
+        // jump when the WebView swaps in.
+        val widths = listOf(0.95f, 0.88f, 0.92f, 0.7f, 0.85f, 0.6f, 0.9f, 0.75f)
+        widths.forEach { fraction ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(placeholder),
+            )
+        }
+    }
+}
+
 @Composable
 private fun SecureHtmlContent(
     html: String,
@@ -453,6 +494,7 @@ private fun SecureHtmlContent(
     documentBaseUrl: String,
     onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
     onHideFullscreenMedia: (View?) -> Unit,
+    onReady: (() -> Unit)? = null,
 ) {
     var webViewHeightDp by remember(html) { mutableIntStateOf(600) }
 
@@ -531,6 +573,7 @@ private fun SecureHtmlContent(
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
+                        onReady?.invoke()
                     }
                 }
             }

@@ -1,5 +1,5 @@
 import type Redis from 'ioredis';
-import { CacheKeys } from '../db/redis.js';
+import { CacheKeys, CacheTTL } from '../db/redis.js';
 import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
@@ -7,6 +7,11 @@ import type { MetricsRepository } from '../repositories/settings.repository.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
 import type { RealtimeService } from './realtime.service.js';
+
+// Shape of the JSON returned by `getArticle`. The cache stores this
+// verbatim, so the type also acts as the contract between the writer
+// (this service) and the reader (the route handler).
+type ArticleDetailResponse = Awaited<ReturnType<ArticleService['getArticle']>>;
 
 export class ArticleService {
 	constructor(
@@ -108,15 +113,41 @@ export class ArticleService {
 	}
 
 	async getArticle(userId: string, articleId: string) {
+		// Cache hit path: Redis lookup keyed by userId+articleId. The key
+		// namespace already enforces ownership (you can only read articles
+		// that are in your own namespace), so a hit is safe to return
+		// without a DB ownership check.
+		const cacheKey = CacheKeys.articleDetail(userId, articleId);
+		const cached = await this.redis.get(cacheKey);
+		if (cached) {
+			try {
+				return JSON.parse(cached) as ArticleDetailResponse;
+			} catch {
+				// Corrupt cache entry — fall through to the DB.
+				await this.redis.del(cacheKey);
+			}
+		}
+
 		const article = await this.articleRepo.findDetailForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
 
-		return {
+		const response: ArticleDetailResponse = {
 			...article,
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			fetchedAt: article.fetchedAt.toISOString(),
 			isEnriched: !!article.heroImageUrl || (article.media?.length ?? 0) > 0,
 		};
+
+		// Populate the cache for next time. Fire-and-forget — a cache
+		// write failure must not fail the request.
+		this.redis
+			.setex(cacheKey, CacheTTL.articleDetail, JSON.stringify(response))
+			.catch((err) => {
+				// Best-effort cache write. Log and continue.
+				void err;
+			});
+
+		return response;
 	}
 
 	async markRead(
@@ -146,6 +177,7 @@ export class ArticleService {
 			// three completes, not their sum.
 			await Promise.all([
 				this.invalidateUnreadCache(userId, [article.feedId]),
+				this.invalidateArticleDetailCache(userId, articleId),
 				this.articleCache?.invalidateCache(userId),
 				this.realtimeService?.publishReadStateEvent(userId, {
 					type: 'article.read_state_changed',
@@ -161,6 +193,20 @@ export class ArticleService {
 		}
 
 		return { success: true };
+	}
+
+	/**
+	 * Drop the per-article detail cache. Called whenever a field that
+	 * the response includes (isRead, media, heroImageUrl, etc.) changes
+	 * for a specific article.
+	 */
+	private async invalidateArticleDetailCache(userId: string, articleId: string): Promise<void> {
+		try {
+			await this.redis.del(CacheKeys.articleDetail(userId, articleId));
+		} catch {
+			// Best-effort. Stale entries expire on their own via the
+			// 5-minute TTL.
+		}
 	}
 
 	async markAllRead(
@@ -236,6 +282,10 @@ export class ArticleService {
 			heroImageUrl: article.heroImageUrl,
 			fetchedAt: article.fetchedAt,
 		});
+
+		// Enrichment adds hero image / media which are part of the detail
+		// response, so the cached copy is now stale.
+		await this.invalidateArticleDetailCache(userId, articleId);
 
 		return { success: true };
 	}

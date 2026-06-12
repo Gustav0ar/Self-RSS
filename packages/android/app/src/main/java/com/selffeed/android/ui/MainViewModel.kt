@@ -726,7 +726,7 @@ class MainViewModel(
                         markRead(id, true)
                     }
                     maybeEnrichSelectedArticle(result.data)
-                    warmNextArticlesAfter(id)
+                    warmAdjacentArticles(id)
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -836,22 +836,32 @@ class MainViewModel(
         }
     }
 
-    private fun warmNextArticlesAfter(articleId: String) {
+    private fun warmAdjacentArticles(articleId: String) {
         val state = _uiState.value
         val currentIndex = state.articles.indexOfFirst { it.id == articleId }
         if (currentIndex == -1) {
             return
         }
 
-        val articlesToWarm = state.articles
+        // Warm in both directions: the user is just as likely to swipe
+        // back to an earlier article (the original latency complaint)
+        // as they are to swipe forward. The list is sorted latest-first
+        // so "previous" indices are older articles — exactly the path
+        // that was slow before.
+        val previousIds = state.articles
+            .asReversed()
+            .drop(state.articles.size - 1 - currentIndex)
+            .take(NEXT_ARTICLE_WARM_LIMIT)
+        val nextIds = state.articles
             .drop(currentIndex + 1)
             .take(NEXT_ARTICLE_WARM_LIMIT)
+        val articlesToWarm = (previousIds + nextIds).distinct()
         if (articlesToWarm.isEmpty()) {
             return
         }
 
         repository.prefetchHeroImages(articlesToWarm.map { it.heroImageUrl })
-        val articleIds = articlesToWarm.map { it.id }.distinct()
+        val articleIds = articlesToWarm.map { it.id }
         warmNextArticlesJob?.cancel()
         warmNextArticlesJob = viewModelScope.launch {
             for (nextArticleId in articleIds) {
