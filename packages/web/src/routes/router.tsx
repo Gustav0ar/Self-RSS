@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, useRouter } from '@tanstack
 import { useEffect } from 'react';
 import { FeedView } from '@/components/articles/feed-view';
 import { RootLayout } from '@/components/layout/root-layout';
+import { StatsPanel } from '@/components/stats/stats-panel';
 import { useAppState } from '@/providers/app-state';
 
 interface ArticleSelectionSearch {
@@ -97,7 +98,19 @@ const articleRoute = createRoute({
 	},
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, articleRoute]);
+const statsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/stats',
+	component: function Stats() {
+		return (
+			<div className="motion-enter h-full overflow-auto p-4 sm:p-6">
+				<StatsPanel />
+			</div>
+		);
+	},
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, articleRoute, statsRoute]);
 
 export const router = createRouter({ routeTree });
 
