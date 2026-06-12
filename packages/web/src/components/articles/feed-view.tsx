@@ -27,7 +27,14 @@ interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
 	selectedArticleId: string | null;
-	onSelectArticle: (id: string) => void;
+	/**
+	 * True when the article id came from a deep link (`/articles/:id`),
+	 * false when the user is on the list view. Deep links must
+	 * always render their article even if the surrounding list is
+	 * empty — only clear the active article in the list-view case.
+	 */
+	fromDeepLink?: boolean;
+	onSelectArticle: (id: string | null) => void;
 }
 
 interface RetainedReadArticle {
@@ -39,6 +46,7 @@ export function FeedView({
 	feedId,
 	categoryId,
 	selectedArticleId,
+	fromDeepLink = false,
 	onSelectArticle,
 }: FeedViewProps) {
 	const [unreadOnly, setUnreadOnly] = useState(false);
@@ -106,6 +114,21 @@ export function FeedView({
 		return mergedArticles;
 	}, [fetchedArticles, retainedReadArticles, unreadOnly]);
 	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
+	// The article URL (`/articles/:articleId`) can be deep-linked or
+	// bookmarked. The article list is loaded asynchronously, so an
+	// incoming article id may briefly not be in the list while the
+	// query resolves. Only "clear" the active article once the list
+	// is fully loaded and the id is genuinely missing — never while
+	// we're still loading, otherwise deep links would flash the empty
+	// state during the first paint.
+	const articleIdsSet = useMemo(() => new Set(articleIds), [articleIds]);
+	const articleIsInLoadedList = selectedArticleId ? articleIdsSet.has(selectedArticleId) : false;
+	// On a deep link (`/articles/:id`) we must keep the article id even
+	// when the surrounding list is empty or hasn't loaded it yet. In the
+	// list-view case (`/`) the absence from the loaded list is what
+	// triggers the effect below to clear the selection.
+	const effectiveArticleId =
+		selectedArticleId && (articleIsInLoadedList || fromDeepLink) ? selectedArticleId : null;
 	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
@@ -158,6 +181,24 @@ export function FeedView({
 		void refreshFeed(feedId);
 	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
 
+	// If the user is on the list view (`/`) and a previously selected
+	// article is no longer in the loaded list, clear it. We only do
+	// this in the list-view case so that deep links to a specific
+	// article (`/articles/:id`) still render their target even when
+	// the surrounding list is empty (e.g. a deep link to an article
+	// that doesn't match the current All Feeds list — common after
+	// opening a search result). While the list is still loading, we
+	// preserve the URL.
+	useEffect(() => {
+		if (isLoading) return;
+		if (fromDeepLink) return;
+		if (!selectedArticleId) return;
+		if (articleIsInLoadedList) return;
+		// Either the list is empty or the article isn't in it. Drop
+		// the user back to the list view at the current scope.
+		onSelectArticle(null);
+	}, [articleIsInLoadedList, fromDeepLink, isLoading, onSelectArticle, selectedArticleId]);
+
 	useEffect(() => {
 		if (articleIds.length === 0) {
 			return;
@@ -198,7 +239,7 @@ export function FeedView({
 
 	useKeyboardNav({
 		articleIds,
-		selectedId: selectedArticleId,
+		selectedId: effectiveArticleId,
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
 			const article = articles.find((a) => a.id === id);
@@ -356,7 +397,7 @@ export function FeedView({
 				<div className="min-h-0 flex-1">
 					<ArticleList
 						articles={articles}
-						selectedId={selectedArticleId}
+						selectedId={effectiveArticleId}
 						onSelect={handleSelectArticle}
 						onPrefetch={prefetchArticle}
 						loading={showListLoader}
@@ -370,7 +411,7 @@ export function FeedView({
 
 			<div className="min-h-0 flex-1 bg-background/10">
 				<ReaderPane
-					articleId={selectedArticleId}
+					articleId={effectiveArticleId}
 					articles={articles}
 					onSelectArticle={handleSelectArticle}
 				/>

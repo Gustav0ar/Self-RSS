@@ -12,6 +12,7 @@ import {
 } from '@/lib/preferences';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
+import { useTheme } from '@/providers/theme';
 import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
 
@@ -146,6 +147,7 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 
 function PreferenceRuntimeStyles() {
 	const { data: prefs } = usePreferences();
+	const { resolvedTheme } = useTheme();
 
 	useEffect(() => {
 		const root = document.documentElement;
@@ -154,6 +156,7 @@ function PreferenceRuntimeStyles() {
 			root.style.removeProperty('--reader-text-size');
 			root.style.removeProperty('--app-accent-light');
 			root.style.removeProperty('--app-accent-dark');
+			removeAccentOverride(root);
 			root.dataset.density = 'comfortable';
 			return;
 		}
@@ -168,8 +171,11 @@ function PreferenceRuntimeStyles() {
 		if (accent) {
 			root.style.setProperty('--app-accent-light', accent.light);
 			root.style.setProperty('--app-accent-dark', accent.dark);
+			applyAccentOverride(root, accent, resolvedTheme);
+		} else {
+			removeAccentOverride(root);
 		}
-	}, [prefs]);
+	}, [prefs, resolvedTheme]);
 
 	useEffect(() => {
 		return () => {
@@ -178,9 +184,31 @@ function PreferenceRuntimeStyles() {
 			root.style.removeProperty('--reader-text-size');
 			root.style.removeProperty('--app-accent-light');
 			root.style.removeProperty('--app-accent-dark');
+			removeAccentOverride(root);
 			delete root.dataset.density;
 		};
 	}, []);
 
 	return null;
+}
+
+function applyAccentOverride(
+	root: HTMLElement,
+	accent: (typeof ACCENT_COLOR_OPTIONS)[number],
+	resolvedTheme: 'light' | 'dark',
+) {
+	// Tailwind v4 emits `--color-primary` and `--color-ring` inside its
+	// `@theme` block, which sits inside `@layer theme` — anything
+	// unlayered (including our `:root { … }` in globals.css) wins by
+	// cascade, but inline styles win by CSS specificity. We set inline
+	// overrides so the user's choice always takes effect, in both light
+	// and dark themes.
+	const tone = resolvedTheme === 'dark' ? accent.dark : accent.light;
+	root.style.setProperty('--color-primary', tone);
+	root.style.setProperty('--color-ring', tone);
+}
+
+function removeAccentOverride(root: HTMLElement) {
+	root.style.removeProperty('--color-primary');
+	root.style.removeProperty('--color-ring');
 }

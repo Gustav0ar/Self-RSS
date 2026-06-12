@@ -55,11 +55,12 @@
 	--color-foreground-soft: #cbd5e1;
 }
 
-/* Per-user accent color override. Falls back to the theme defaults
- * above when the runtime variables are absent (e.g. SSR or before the
- * preferences query resolves). The `var(--app-accent-light, ...)`
- * pattern keeps the surface styled with the default indigo if the
- * user has never picked an accent. */
+/* Per-user accent color. The runtime injector in `root-layout.tsx`
+ * sets `--color-primary` and `--color-ring` as inline styles on
+ * `<html>`, which beats the Tailwind `@theme` block by CSS specificity
+ * (inline > stylesheet). The `var(--app-accent-light, …)` references
+ * here remain as a fallback for the brief moment before React mounts
+ * and during SSR. */
 :root {
 	--color-primary: var(--app-accent-light, #4f46e5);
 	--color-ring: var(--app-accent-light, #4f46e5);
