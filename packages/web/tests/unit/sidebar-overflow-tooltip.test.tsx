@@ -35,6 +35,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	useDeleteCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useDeleteFeed: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useExportOpml: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useUpdateCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock('../../src/components/management/category-dialog', () => ({ CategoryDialog: () => null }));

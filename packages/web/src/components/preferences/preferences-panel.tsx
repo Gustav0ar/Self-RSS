@@ -2,7 +2,8 @@ import { Monitor, Moon, Settings, Sun } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { type Preferences, usePreferences, useUpdatePreferences } from '@/hooks/queries';
-import { FONT_FAMILY_OPTIONS } from '@/lib/preferences';
+import { ACCENT_COLOR_OPTIONS, FONT_FAMILY_OPTIONS, normalizeAccentColor } from '@/lib/preferences';
+import { cn } from '@/lib/utils';
 import { useTheme } from '@/providers/theme';
 
 type WebTheme = 'light' | 'dark' | 'system';
@@ -126,6 +127,48 @@ export function PreferencesPanel() {
 							<option value="light">Light</option>
 							<option value="dark">Dark</option>
 						</select>
+					</section>
+
+					<section className="surface-muted rounded-[1.5rem] p-5">
+						<fieldset>
+							<legend className="block text-sm font-medium">Accent color</legend>
+							<p className="mt-1 text-xs text-muted-foreground">
+								Tints buttons, links, and the focus ring.
+							</p>
+							<div className="mt-4 grid grid-cols-6 gap-2">
+								{ACCENT_COLOR_OPTIONS.map((option) => {
+									const isActive = normalizeAccentColor(draftPrefs.accentColor) === option.value;
+									return (
+										<label
+											key={option.value}
+											className={cn(
+												'relative flex h-10 cursor-pointer items-center justify-center rounded-2xl border transition-transform',
+												isActive
+													? 'scale-105 border-foreground/40 shadow-lg shadow-primary/20'
+													: 'border-border/60 hover:scale-105',
+											)}
+											style={{
+												background: `linear-gradient(135deg, ${option.light} 0%, ${option.dark} 100%)`,
+											}}
+											title={option.value}
+										>
+											<input
+												type="radio"
+												name="accent-color"
+												value={option.value}
+												checked={isActive}
+												onChange={() => handleChange('accentColor', option.value)}
+												className="sr-only"
+												aria-label={option.value}
+											/>
+											{isActive ? (
+												<span className="h-2 w-2 rounded-full bg-white shadow" aria-hidden="true" />
+											) : null}
+										</label>
+									);
+								})}
+							</div>
+						</fieldset>
 					</section>
 
 					<section className="surface-muted rounded-[1.5rem] p-5">

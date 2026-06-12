@@ -187,6 +187,7 @@ export const openApiSpec = {
 					hideRead: { type: 'boolean' },
 					keyboardShortcutsEnabled: { type: 'boolean' },
 					autoMarkReadMode: { type: 'string' },
+					accentColor: { type: 'string' },
 				},
 			},
 			Stats: {

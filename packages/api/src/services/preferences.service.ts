@@ -9,6 +9,7 @@ const DEFAULTS = {
 	hideRead: false,
 	keyboardShortcutsEnabled: true,
 	autoMarkReadMode: 'on_navigate',
+	accentColor: 'indigo',
 };
 
 export type PreferenceValues = typeof DEFAULTS;
@@ -32,6 +33,7 @@ export function resolvePreferences(
 			typeof stored.autoMarkReadMode === 'string'
 				? stored.autoMarkReadMode
 				: DEFAULTS.autoMarkReadMode,
+		accentColor: typeof stored.accentColor === 'string' ? stored.accentColor : DEFAULTS.accentColor,
 	};
 }
 
