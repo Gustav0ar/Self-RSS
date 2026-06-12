@@ -23,6 +23,7 @@
 	--color-sidebar: rgba(255, 255, 255, 0.74);
 	--color-sidebar-foreground: #475569;
 	--color-sidebar-active: #1e1b4b;
+	--color-foreground-soft: #334155;
 	--radius-sm: 0.375rem;
 	--radius-md: 0.75rem;
 	--radius-lg: 1.125rem;
@@ -51,6 +52,7 @@
 	--color-sidebar: rgba(0, 0, 0, 0.94);
 	--color-sidebar-foreground: #9ca3af;
 	--color-sidebar-active: #c4b5fd;
+	--color-foreground-soft: #cbd5e1;
 }
 
 html,
@@ -183,16 +185,131 @@ a:focus-visible {
 
 .dark .surface-card {
 	box-shadow:
-		0 8px 28px rgba(0, 0, 0, 0.52),
-		inset 0 1px 0 rgba(255, 255, 255, 0.03);
+		0 6px 18px rgba(0, 0, 0, 0.36),
+		inset 0 1px 0 rgba(255, 255, 255, 0.04);
 	backdrop-filter: blur(10px);
 }
 
 .dark .surface-quiet,
 .dark .surface-compact {
 	box-shadow:
-		0 6px 18px rgba(0, 0, 0, 0.42),
-		inset 0 1px 0 rgba(255, 255, 255, 0.025);
+		0 4px 12px rgba(0, 0, 0, 0.28),
+		inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* Mobile sidebar drawer — slides in from the left, with a dimmed backdrop. */
+.sidebar-drawer {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+}
+
+.sidebar-drawer__backdrop {
+	position: absolute;
+	inset: 0;
+	background: rgba(2, 6, 23, 0.55);
+	backdrop-filter: blur(6px);
+	animation: fade-in 180ms ease;
+}
+
+.sidebar-drawer__panel {
+	position: relative;
+	width: min(20rem, 86vw);
+	max-width: 86vw;
+	display: flex;
+	flex-direction: column;
+	background: var(--color-card);
+	border-right: 1px solid var(--color-border);
+	box-shadow: 24px 0 60px rgba(0, 0, 0, 0.25);
+	animation: drawer-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes drawer-in {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(0);
+	}
+}
+
+/* Always-on touch controls inside the sidebar. */
+@media (hover: none) {
+	.touch-only {
+		opacity: 1;
+	}
+}
+
+/* Reader scroll progress bar (2px at the top of the reader scroller). */
+.reader-scroll-progress {
+	position: sticky;
+	top: 0;
+	left: 0;
+	height: 2px;
+	background: color-mix(in srgb, var(--color-primary) 70%, transparent);
+	transform-origin: 0 50%;
+	z-index: 5;
+	pointer-events: none;
+	transition: opacity 180ms ease;
+}
+
+/* Reader mobile back bar (visible <lg). */
+.reader-mobile-bar {
+	position: sticky;
+	top: 0;
+	z-index: 4;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.625rem 0.25rem 0.5rem;
+	background: color-mix(in srgb, var(--color-background) 92%, transparent);
+	backdrop-filter: blur(8px);
+	border-bottom: 1px solid var(--color-border);
+	margin-bottom: 0.5rem;
+}
+
+@media (min-width: 1024px) {
+	.reader-mobile-bar {
+		display: none;
+	}
+}
+
+/* Skeleton shimmer for article list placeholders. */
+@keyframes skeleton-shimmer {
+	0% {
+		background-position: -240px 0;
+	}
+	100% {
+		background-position: 240px 0;
+	}
+}
+
+.skeleton-row {
+	background: linear-gradient(
+		90deg,
+		color-mix(in srgb, var(--color-muted) 70%, transparent) 0%,
+		color-mix(in srgb, var(--color-muted) 30%, transparent) 50%,
+		color-mix(in srgb, var(--color-muted) 70%, transparent) 100%
+	);
+	background-size: 480px 100%;
+	animation: skeleton-shimmer 1.4s ease-in-out infinite;
+	border-radius: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.skeleton-row {
+		animation: none;
+	}
 }
 
 .surface-muted {
