@@ -82,6 +82,7 @@ export const userPreferences = sqliteTable('user_preferences', {
 	hideRead: boolean('hide_read').notNull().default(false),
 	keyboardShortcutsEnabled: boolean('keyboard_shortcuts_enabled').notNull().default(true),
 	autoMarkReadMode: text('auto_mark_read_mode').notNull().default('on_navigate'),
+	accentColor: text('accent_color').notNull().default('indigo'),
 	createdAt: timestamp('created_at')
 		.notNull()
 		.$defaultFn(() => new Date()),

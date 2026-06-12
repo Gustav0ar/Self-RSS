@@ -4,7 +4,12 @@ import { LoginPage } from '@/components/auth/login-page';
 import { KeyboardHelp } from '@/components/help/keyboard-help';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
-import { fontFamilyCss, normalizeDensityPreference } from '@/lib/preferences';
+import {
+	ACCENT_COLOR_OPTIONS,
+	fontFamilyCss,
+	isAccentColor,
+	normalizeDensityPreference,
+} from '@/lib/preferences';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
 import { Sidebar } from './sidebar';
@@ -147,6 +152,8 @@ function PreferenceRuntimeStyles() {
 		if (!prefs) {
 			root.style.removeProperty('--app-font-family');
 			root.style.removeProperty('--reader-text-size');
+			root.style.removeProperty('--app-accent-light');
+			root.style.removeProperty('--app-accent-dark');
 			root.dataset.density = 'comfortable';
 			return;
 		}
@@ -154,6 +161,14 @@ function PreferenceRuntimeStyles() {
 		root.style.setProperty('--app-font-family', fontFamilyCss(prefs.fontFamily));
 		root.style.setProperty('--reader-text-size', `${prefs.textSize}px`);
 		root.dataset.density = normalizeDensityPreference(prefs.density);
+		const accent = ACCENT_COLOR_OPTIONS.find(
+			(option) =>
+				option.value === (isAccentColor(prefs.accentColor) ? prefs.accentColor : 'indigo'),
+		);
+		if (accent) {
+			root.style.setProperty('--app-accent-light', accent.light);
+			root.style.setProperty('--app-accent-dark', accent.dark);
+		}
 	}, [prefs]);
 
 	useEffect(() => {
@@ -161,6 +176,8 @@ function PreferenceRuntimeStyles() {
 			const root = document.documentElement;
 			root.style.removeProperty('--app-font-family');
 			root.style.removeProperty('--reader-text-size');
+			root.style.removeProperty('--app-accent-light');
+			root.style.removeProperty('--app-accent-dark');
 			delete root.dataset.density;
 		};
 	}, []);

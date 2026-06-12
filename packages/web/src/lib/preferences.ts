@@ -21,6 +21,25 @@ export type DisplayDensityPreference = 'comfortable' | 'compact';
 export type SortPreference = 'latest' | 'oldest';
 export type AutoMarkReadPreference = 'disabled' | 'on_navigate' | 'on_open';
 
+export const ACCENT_COLOR_OPTIONS = [
+	{ value: 'indigo', light: '#4f46e5', dark: '#8b5cf6' },
+	{ value: 'violet', light: '#7c3aed', dark: '#a78bfa' },
+	{ value: 'rose', light: '#e11d48', dark: '#fb7185' },
+	{ value: 'amber', light: '#d97706', dark: '#fbbf24' },
+	{ value: 'emerald', light: '#059669', dark: '#34d399' },
+	{ value: 'sky', light: '#0284c7', dark: '#38bdf8' },
+] as const;
+
+export type AccentColor = (typeof ACCENT_COLOR_OPTIONS)[number]['value'];
+
+export function isAccentColor(value: unknown): value is AccentColor {
+	return typeof value === 'string' && ACCENT_COLOR_OPTIONS.some((option) => option.value === value);
+}
+
+export function normalizeAccentColor(value?: string | null): AccentColor {
+	return isAccentColor(value) ? value : 'indigo';
+}
+
 export function normalizeDensityPreference(value?: string | null): DisplayDensityPreference {
 	return value === 'compact' ? 'compact' : 'comfortable';
 }

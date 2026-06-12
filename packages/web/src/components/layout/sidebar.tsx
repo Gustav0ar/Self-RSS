@@ -5,6 +5,7 @@ import {
 	Download,
 	Folder,
 	FolderPlus,
+	GripVertical,
 	Inbox,
 	Pencil,
 	Radio,
@@ -27,6 +28,7 @@ import {
 	useDeleteFeed,
 	useExportOpml,
 	useFeeds,
+	useUpdateCategory,
 } from '@/hooks/queries';
 import { cn } from '@/lib/utils';
 
@@ -87,6 +89,9 @@ export function Sidebar({
 	const deleteCategory = useDeleteCategory();
 	const deleteFeed = useDeleteFeed();
 	const exportOpml = useExportOpml();
+	const updateCategory = useUpdateCategory();
+	const [draggingId, setDraggingId] = useState<string | null>(null);
+	const [dragOverId, setDragOverId] = useState<string | null>(null);
 	const hydratedRef = useRef(false);
 	const [expandedCategories, setExpandedCategories] = useState<Set<string>>(() => new Set());
 	const [uncategorizedExpanded, setUncategorizedExpanded] = useState(true);
@@ -181,6 +186,62 @@ export function Sidebar({
 		setUncategorizedExpanded((prev) => !prev);
 	}
 
+	async function handleCategoryDrop(sourceId: string, targetId: string | null) {
+		if (!categories) return;
+		if (sourceId === targetId) return;
+
+		const ordered = [...categories];
+		const sourceIndex = ordered.findIndex((c) => c.id === sourceId);
+		if (sourceIndex < 0) return;
+		const [moved] = ordered.splice(sourceIndex, 1);
+		if (!moved) return;
+
+		// `targetId == null` is the "drop at the end" case. Otherwise we
+		// insert immediately *after* the target row so the user gets a
+		// "move my category below this one" semantic. Inserting before
+		// the target would force the user to drag the row a hair higher
+		// than the source to land the drop, which is harder to aim at.
+		let insertAt: number;
+		if (targetId == null) {
+			insertAt = ordered.length;
+		} else {
+			const targetIndex = ordered.findIndex((c) => c.id === targetId);
+			insertAt = targetIndex < 0 ? ordered.length : targetIndex + 1;
+			// If the source was originally before the target, the splice
+			// above shifted targetIndex down by one. The `+ 1` lands the
+			// row back in its original visual position when the user
+			// drops onto a row they did not move past.
+			if (sourceIndex < targetIndex) {
+				insertAt = targetIndex;
+			}
+		}
+		ordered.splice(insertAt, 0, moved);
+
+		const updates = ordered
+			.map((category, index) => ({ id: category.id, sortOrder: index }))
+			.filter((update, index) => {
+				const original = categories[index];
+				return !original || original.id !== update.id || original.sortOrder !== update.sortOrder;
+			});
+
+		if (updates.length === 0) return;
+
+		// Persist sequentially. The local query cache invalidation in
+		// `useUpdateCategory` will re-fetch categories after the last
+		// mutation completes, so the UI eventually reflects the new
+		// server order.
+		for (const update of updates) {
+			try {
+				await updateCategory.mutateAsync({ id: update.id, sortOrder: update.sortOrder });
+			} catch {
+				// The next successful invalidate will repaint, so we
+				// bail quietly on the first error rather than retrying
+				// with a partially-stale list.
+				break;
+			}
+		}
+	}
+
 	async function confirmDelete() {
 		if (!deleteState) {
 			return;
@@ -250,6 +311,18 @@ export function Sidebar({
 							onSelectCategory={onSelectCategory}
 							onToggleCategory={toggleCategory}
 							onToggleUncategorized={toggleUncategorized}
+							onReorderCategory={(sourceId, targetId) => handleCategoryDrop(sourceId, targetId)}
+							draggingCategoryId={draggingId}
+							dragOverCategoryId={dragOverId}
+							onCategoryDragStart={setDraggingId}
+							onCategoryDragEnd={() => {
+								setDraggingId(null);
+								setDragOverId(null);
+							}}
+							onCategoryDragOver={setDragOverId}
+							onCategoryDragLeave={(id) =>
+								setDragOverId((current) => (current === id ? null : current))
+							}
 							onAddFeed={() =>
 								setFeedDialogState({ mode: 'create', defaultCategoryId: selectedCategoryId })
 							}
@@ -294,6 +367,18 @@ export function Sidebar({
 						onSelectCategory={onSelectCategory}
 						onToggleCategory={toggleCategory}
 						onToggleUncategorized={toggleUncategorized}
+						onReorderCategory={(sourceId, targetId) => handleCategoryDrop(sourceId, targetId)}
+						draggingCategoryId={draggingId}
+						dragOverCategoryId={dragOverId}
+						onCategoryDragStart={setDraggingId}
+						onCategoryDragEnd={() => {
+							setDraggingId(null);
+							setDragOverId(null);
+						}}
+						onCategoryDragOver={setDragOverId}
+						onCategoryDragLeave={(id) =>
+							setDragOverId((current) => (current === id ? null : current))
+						}
 						onAddFeed={() =>
 							setFeedDialogState({ mode: 'create', defaultCategoryId: selectedCategoryId })
 						}
@@ -396,6 +481,13 @@ interface SidebarBodyProps {
 	onSelectCategory: (categoryId: string) => void;
 	onToggleCategory: (id: string) => void;
 	onToggleUncategorized: () => void;
+	onReorderCategory: (sourceId: string, targetId: string | null) => void;
+	draggingCategoryId: string | null;
+	dragOverCategoryId: string | null;
+	onCategoryDragStart: (id: string) => void;
+	onCategoryDragEnd: () => void;
+	onCategoryDragOver: (id: string) => void;
+	onCategoryDragLeave: (id: string) => void;
 	onAddFeed: () => void;
 	onAddCategory: () => void;
 	onImportOpml: () => void;
@@ -424,6 +516,13 @@ function SidebarBody({
 	onSelectCategory,
 	onToggleCategory,
 	onToggleUncategorized,
+	onReorderCategory,
+	draggingCategoryId,
+	dragOverCategoryId,
+	onCategoryDragStart,
+	onCategoryDragEnd,
+	onCategoryDragOver,
+	onCategoryDragLeave,
 	onAddFeed,
 	onAddCategory,
 	onImportOpml,
@@ -517,9 +616,38 @@ function SidebarBody({
 							(sum, feed) => sum + (feed.unreadCount ?? 0),
 							0,
 						);
+						const isDragging = draggingCategoryId === category.id;
+						const isDropTarget =
+							dragOverCategoryId === category.id && draggingCategoryId !== category.id;
 
 						return (
-							<div key={category.id} className="group rounded-xl">
+							// biome-ignore lint/a11y/noStaticElementInteractions: HTML5 drag-and-drop has no semantic primitive; the inner grip is a button.
+							<div
+								key={category.id}
+								className={cn(
+									'group rounded-xl transition-shadow',
+									isDragging && 'opacity-50',
+									isDropTarget && 'ring-2 ring-primary/60 ring-offset-2 ring-offset-sidebar',
+								)}
+								onDragOver={(event) => {
+									if (draggingCategoryId == null || draggingCategoryId === category.id) return;
+									event.preventDefault();
+									event.dataTransfer.dropEffect = 'move';
+									onCategoryDragOver(category.id);
+								}}
+								onDragLeave={(event) => {
+									if (event.currentTarget === event.target) {
+										onCategoryDragLeave(category.id);
+									}
+								}}
+								onDrop={(event) => {
+									event.preventDefault();
+									if (draggingCategoryId && draggingCategoryId !== category.id) {
+										onReorderCategory(draggingCategoryId, category.id);
+									}
+									onCategoryDragEnd();
+								}}
+							>
 								<div className="group/category relative">
 									<div
 										className={cn(
@@ -527,6 +655,21 @@ function SidebarBody({
 											selectedCategoryId === category.id && 'bg-accent text-sidebar-active',
 										)}
 									>
+										<button
+											type="button"
+											aria-label={`Drag to reorder ${category.name}`}
+											title="Drag to reorder"
+											draggable
+											onDragStart={(event) => {
+												event.dataTransfer.effectAllowed = 'move';
+												event.dataTransfer.setData('text/plain', category.id);
+												onCategoryDragStart(category.id);
+											}}
+											onDragEnd={onCategoryDragEnd}
+											className="-ml-1 inline-flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-opacity hover:bg-background/80 hover:text-muted-foreground group-hover/category:opacity-100 group-focus-within/category:opacity-100"
+										>
+											<GripVertical className="h-3.5 w-3.5" />
+										</button>
 										<button
 											type="button"
 											onClick={(event) => {
