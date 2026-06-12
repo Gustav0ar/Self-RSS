@@ -51,6 +51,11 @@ export const CacheKeys = {
 	articleListByFeed: (userId: string, feedId: string) => `articles:list:${userId}:feed:${feedId}`,
 	articleListByCategory: (userId: string, categoryId: string) =>
 		`articles:list:${userId}:cat:${categoryId}`,
+	// Per-article detail cache. Keyed by userId + articleId so the
+	// ownership check (article must belong to the caller) is implicit
+	// in the key namespace.
+	articleDetail: (userId: string, articleId: string) =>
+		`articles:detail:${userId}:${articleId}`,
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
 } as const;
@@ -58,4 +63,9 @@ export const CacheKeys = {
 // Cache TTL in seconds
 export const CacheTTL = {
 	articleList: 120, // 2 minutes - balanced between freshness and performance
+	// Single-article details change rarely once published; a 5-minute
+	// cache makes reopening an old article a Redis hit instead of a
+	// SQLite query. Invalidation happens on mark-read (see
+	// ArticleService.invalidateArticleDetailCache).
+	articleDetail: 300,
 } as const;

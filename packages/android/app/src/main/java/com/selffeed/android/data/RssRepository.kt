@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -87,6 +88,12 @@ class RssRepository(
     private val cacheInvalidationCount = AtomicLong(0)
     private val cacheInvalidatedEntriesCount = AtomicLong(0)
     private val sseLastEventId = AtomicLong(0)
+
+    // Detached scope for fire-and-forget background refreshes (e.g. the
+    // stale-while-revalidate path in `article()`). Using a supervisor
+    // scope tied to the repository means background work survives
+    // individual failures and is cleaned up when the process dies.
+    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val cache = ConcurrentHashMap<String, CacheEntry<Any?>>()
     private val cacheLocks = ConcurrentHashMap<String, Mutex>()
@@ -303,15 +310,50 @@ class RssRepository(
 
     suspend fun article(articleId: String, forceRefresh: Boolean = false) = safeReadCall {
         if (forceRefresh) invalidateArticleCaches(articleId)
+
+        // Fast path: in-memory hit. Instant.
+        getCached<ArticleDetail>("article:$articleId")?.let { return@safeReadCall it }
+
+        // Warm path: SQLite has a fresh copy. Return it now and refresh
+        // from the network in the background so the reader opens
+        // instantly for any article the user has ever opened. The
+        // background refresh updates the in-memory cache and SQLite on
+        // success; on failure the SQLite copy stays valid until its own
+        // 7-day expiry.
+        val sqliteCopy = localStore.readArticleDetail(articleId)
+        if (sqliteCopy != null) {
+            putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, sqliteCopy)
+            // Detached background refresh — does not block the caller.
+            // We swallow the result here on purpose: the caller already
+            // has a usable ArticleDetail. Errors are surfaced on the next
+            // explicit open or pull-to-refresh.
+            backgroundRefreshArticle(articleId)
+            return@safeReadCall sqliteCopy
+        }
+
+        // Cold path: nothing in memory or SQLite. Hit the network.
         try {
-            cachedGet(key = "article:$articleId", ttlMs = ARTICLE_DETAIL_TTL_MS) {
-                withRetry { api.article(articleId).data }.also { detail ->
-                    localStore.writeArticleDetail(detail)
-                    offlineCacheStore.writeArticleDetail(detail)
-                }
+            withRetry { api.article(articleId).data }.also { detail ->
+                putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+                localStore.writeArticleDetail(detail)
+                offlineCacheStore.writeArticleDetail(detail)
             }
         } catch (e: Exception) {
-            localStore.readArticleDetail(articleId) ?: offlineCacheStore.readArticleDetail(articleId) ?: throw e
+            offlineCacheStore.readArticleDetail(articleId) ?: throw e
+        }
+    }
+
+    private fun backgroundRefreshArticle(articleId: String) {
+        refreshScope.launch {
+            try {
+                val detail = withRetry { api.article(articleId).data }
+                putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+                localStore.writeArticleDetail(detail)
+                offlineCacheStore.writeArticleDetail(detail)
+            } catch (_: Exception) {
+                // Background refresh is best-effort. The SQLite copy the
+                // user is already reading is still valid.
+            }
         }
     }
 
@@ -822,7 +864,12 @@ class RssRepository(
         const val CATEGORIES_TTL_MS = 60_000L
         const val FEEDS_TTL_MS = 60_000L
         const val ARTICLES_TTL_MS = 30_000L
-        const val ARTICLE_DETAIL_TTL_MS = 60_000L
+        // Article details change rarely once published (only on enrichment
+        // or read-state flip, both of which invalidate explicitly). Keep
+        // them in the in-memory cache for a full day so reopening an old
+        // article is instant — the SQLite write-through is the durable
+        // source, this just avoids re-parsing on every cold start.
+        const val ARTICLE_DETAIL_TTL_MS = 24L * 60 * 60 * 1000
         const val SEARCH_TTL_MS = 30_000L
         const val PREFERENCES_TTL_MS = 60_000L
         const val STATS_TTL_MS = 30_000L

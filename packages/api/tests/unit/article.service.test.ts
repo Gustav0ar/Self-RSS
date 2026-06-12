@@ -29,7 +29,11 @@ describe('ArticleService', () => {
 			articleRepo as never,
 			{} as never,
 			{} as never,
-			{ del: vi.fn(async () => 0) } as never,
+			{
+				get: vi.fn(async () => null),
+				setex: vi.fn(async () => 'OK'),
+				del: vi.fn(async () => 0),
+			} as never,
 		);
 
 		const result = await service.getArticle('user-1', 'article-1');

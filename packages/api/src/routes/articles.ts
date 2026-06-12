@@ -23,7 +23,16 @@ export function createArticleRoutes(articleService: ArticleService) {
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const article = await articleService.getArticle(userId, articleId);
-		return c.json({ data: article });
+
+		// ETag = hash of content + read state. Both change on re-fetch
+		// (hash) or mark-read (isRead). Client sends back via
+		// If-None-Match; if unchanged, 304 avoids transferring the full
+		// HTML body — the dominant cost for old, long articles.
+		const etag = `"${article.hash ?? article.id}-${article.isRead ? 'r' : 'u'}"`;
+		if (c.req.header('If-None-Match') === etag) {
+			return c.body(null, 304, { ETag: etag });
+		}
+		return c.json({ data: article }, 200, { ETag: etag });
 	});
 
 	routes.post('/:articleId/enrich', async (c) => {
