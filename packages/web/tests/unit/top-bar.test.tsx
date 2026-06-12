@@ -4,6 +4,15 @@ import { TopBar } from '../../src/components/layout/top-bar';
 
 const setThemeMock = vi.fn();
 const mutateMock = vi.fn();
+const navigateMock = vi.fn();
+
+vi.mock('@tanstack/react-router', () => ({
+	Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string }) => (
+		<a href={to} {...rest}>
+			{children}
+		</a>
+	),
+}));
 
 vi.mock('../../src/components/preferences/preferences-panel', () => ({
 	PreferencesPanel: () => <div data-testid="preferences-panel" />,

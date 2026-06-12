@@ -1,7 +1,8 @@
+import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 
@@ -63,7 +64,35 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const { data: article, isLoading } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
+	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
+	const scrollerRef = useRef<HTMLDivElement | null>(null);
+	const [scrollProgress, setScrollProgress] = useState(0);
+
+	useEffect(() => {
+		const node = scrollerRef.current;
+		if (!node) return;
+
+		const updateProgress = () => {
+			const max = node.scrollHeight - node.clientHeight;
+			if (max <= 0) {
+				setScrollProgress(0);
+				return;
+			}
+			const ratio = Math.min(1, Math.max(0, node.scrollTop / max));
+			setScrollProgress(ratio);
+		};
+
+		updateProgress();
+		node.addEventListener('scroll', updateProgress, { passive: true });
+		const observer =
+			typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateProgress) : null;
+		observer?.observe(node);
+		return () => {
+			node.removeEventListener('scroll', updateProgress);
+			observer?.disconnect();
+		};
+	}, []);
 
 	const isRead = article?.isRead;
 	const readerHtml = useMemo(() => {
@@ -235,7 +264,31 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	}
 
 	return (
-		<div className="h-full overflow-auto">
+		<div ref={scrollerRef} className="h-full overflow-auto">
+			<div
+				className="reader-scroll-progress"
+				style={{ transform: `scaleX(${scrollProgress})` }}
+				aria-hidden="true"
+			/>
+			<div className="reader-mobile-bar">
+				<button
+					type="button"
+					onClick={() => {
+						if (window.history.length > 1) {
+							router.history.back();
+						} else {
+							void router.navigate({ to: '/' });
+						}
+					}}
+					className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-muted-foreground hover:bg-accent hover:text-foreground"
+					aria-label="Back to article list"
+				>
+					<ArrowLeft className="h-4 w-4" />
+				</button>
+				<p className="line-clamp-1 min-w-0 flex-1 text-sm font-medium text-foreground">
+					{article.title}
+				</p>
+			</div>
 			<article className="grid min-h-full gap-5 px-4 py-4 sm:px-5 lg:px-6 2xl:grid-cols-[minmax(0,1fr)_20rem]">
 				<div className="min-w-0">
 					<header className="motion-enter max-w-[82ch]">

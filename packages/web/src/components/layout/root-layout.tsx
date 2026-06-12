@@ -1,6 +1,7 @@
 import { Outlet, useRouter } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
+import { KeyboardHelp } from '@/components/help/keyboard-help';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import { fontFamilyCss, normalizeDensityPreference } from '@/lib/preferences';
@@ -13,6 +14,7 @@ export function RootLayout() {
 	const router = useRouter();
 	const { isAuthenticated, isLoading } = useAuth();
 	const { selectedFeedId, selectedCategoryId } = useAppState();
+	const [sidebarOpen, setSidebarOpen] = useState(false);
 	useReadStateSync(isAuthenticated);
 
 	function buildSelectionSearch() {
@@ -53,18 +55,21 @@ export function RootLayout() {
 		<div className="app-shell h-full p-2 sm:p-3 lg:p-4">
 			<PreferenceRuntimeStyles />
 			<div className="flex h-full min-h-0 flex-col rounded-2xl">
-				<TopBar onSelectArticle={navigateToArticle} />
+				<TopBar onSelectArticle={navigateToArticle} onOpenSidebar={() => setSidebarOpen(true)} />
 				<div className="flex min-h-0 flex-1 gap-2 px-2 pb-2 pt-0 sm:gap-3 sm:px-3 sm:pb-3">
 					<Sidebar
 						selectedFeedId={selectedFeedId}
 						selectedCategoryId={selectedCategoryId}
 						onSelectAll={() => {
+							setSidebarOpen(false);
 							void router.navigate({ to: '/' });
 						}}
 						onSelectFeed={(feedId) => {
+							setSidebarOpen(false);
 							void router.navigate({ to: '/', search: { feedId } });
 						}}
 						onSelectCategory={(categoryId) => {
+							setSidebarOpen(false);
 							void router.navigate({ to: '/', search: { categoryId } });
 						}}
 					/>
@@ -73,6 +78,63 @@ export function RootLayout() {
 					</main>
 				</div>
 			</div>
+
+			{sidebarOpen ? (
+				<MobileSidebarDrawer onClose={() => setSidebarOpen(false)}>
+					<Sidebar
+						variant="drawer"
+						selectedFeedId={selectedFeedId}
+						selectedCategoryId={selectedCategoryId}
+						onSelectAll={() => {
+							setSidebarOpen(false);
+							void router.navigate({ to: '/' });
+						}}
+						onSelectFeed={(feedId) => {
+							setSidebarOpen(false);
+							void router.navigate({ to: '/', search: { feedId } });
+						}}
+						onSelectCategory={(categoryId) => {
+							setSidebarOpen(false);
+							void router.navigate({ to: '/', search: { categoryId } });
+						}}
+					/>
+				</MobileSidebarDrawer>
+			) : null}
+
+			<KeyboardHelp />
+		</div>
+	);
+}
+
+interface MobileSidebarDrawerProps {
+	onClose: () => void;
+	children: React.ReactNode;
+}
+
+function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
+	useEffect(() => {
+		function handleKey(event: KeyboardEvent) {
+			if (event.key === 'Escape') {
+				onClose();
+			}
+		}
+		window.addEventListener('keydown', handleKey);
+		document.body.style.overflow = 'hidden';
+		return () => {
+			window.removeEventListener('keydown', handleKey);
+			document.body.style.overflow = '';
+		};
+	}, [onClose]);
+
+	return (
+		<div className="sidebar-drawer lg:hidden" role="dialog" aria-modal="true" aria-label="Feeds">
+			<button
+				type="button"
+				aria-label="Close menu"
+				className="sidebar-drawer__backdrop"
+				onClick={onClose}
+			/>
+			<div className="sidebar-drawer__panel">{children}</div>
 		</div>
 	);
 }
