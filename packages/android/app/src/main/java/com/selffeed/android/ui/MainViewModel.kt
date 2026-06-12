@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.selffeed.android.ui.utils.formatSyncSummary
@@ -51,6 +52,7 @@ data class AppUiState(
     val authMode: AuthMode = AuthMode.LOGIN,
     val registrationEnabled: Boolean = false,
     val activeTab: HomeTab = HomeTab.ARTICLES,
+    val isOnline: Boolean = true,
     val isSyncingFeeds: Boolean = false,
     val user: User? = null,
     val categories: List<CategoryWithCounts> = emptyList(),
@@ -75,9 +77,15 @@ data class AppUiState(
     val lastOpmlImportSummary: OpmlImportSummary? = null,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+    // Monotonic counters incremented each time a new message replaces the
+    // previous one — used by the snackbar effect to detect that a *new*
+    // message arrived (not just that the existing one changed) so we never
+    // drop a second message while the first is still being displayed.
+    val statusMessagesShown: Int = 0,
+    val errorMessagesShown: Int = 0,
 )
 
-data class ArticlesUiState(
+data class MainArticlesUiState(
     val articles: List<ArticleListItem> = emptyList(),
     val selectedArticle: ArticleDetail? = null,
     val hasMoreArticles: Boolean = false,
@@ -109,14 +117,14 @@ class MainViewModel(
         .map { normalizeThemePreference(it.preferences?.theme ?: "system") }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "system")
-    val articlesState: StateFlow<ArticlesUiState> = combine(
+    val articlesState: StateFlow<MainArticlesUiState> = combine(
         uiState.map { it.articles }.distinctUntilChanged(),
         uiState.map { it.selectedArticle }.distinctUntilChanged(),
         uiState.map { it.hasMoreArticles }.distinctUntilChanged(),
         uiState.map { it.loadingMoreArticles }.distinctUntilChanged(),
         uiState.map { it.isSyncingFeeds }.distinctUntilChanged(),
     ) { articles, selected, hasMore, loadingMore, isSyncing ->
-        ArticlesUiState(
+        MainArticlesUiState(
             articles = articles,
             selectedArticle = selected,
             hasMoreArticles = hasMore,
@@ -124,7 +132,7 @@ class MainViewModel(
             isSyncingFeeds = isSyncing,
         )
     }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ArticlesUiState())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainArticlesUiState())
     val readerState: StateFlow<ReaderUiState> = combine(
         uiState.map { it.selectedArticle }.distinctUntilChanged(),
         uiState.map { it.articles }.distinctUntilChanged(),
@@ -178,8 +186,12 @@ class MainViewModel(
     private val articleRequestSequence = AtomicLong(0)
     private var articlePagingGeneration = 0L
     private var lastVisibleRefreshAtMs = 0L
-    private val manuallyUnread = mutableSetOf<String>()
-    private val backgroundEnrichAttemptedAt = mutableMapOf<String, Long>()
+    // `manuallyUnread` and `backgroundEnrichAttemptedAt` are mutated from
+    // the SSE collector (Dispatchers.IO) and the warm-next coroutine. We use
+    // a synchronized view over each map/set to avoid data races that would
+    // otherwise corrupt the underlying HashMap.
+    private val manuallyUnread = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val backgroundEnrichAttemptedAt = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
 
     init {
         bootstrap()
@@ -226,6 +238,14 @@ class MainViewModel(
                         )
                     }
                 }
+            }
+        }
+
+        // Mirror the NetworkMonitor into the UI state so the shell can show
+        // an offline indicator without holding a separate StateFlow.
+        viewModelScope.launch {
+            repository.observeOnline().collect { online ->
+                _uiState.update { it.copy(isOnline = online) }
             }
         }
     }
@@ -1127,7 +1147,45 @@ class MainViewModel(
     }
 
     fun clearMessages() {
+        // Kept for compatibility with existing call sites that want to wipe
+        // both messages at once.
         _uiState.update { it.copy(statusMessage = null, errorMessage = null) }
+    }
+
+    fun acknowledgeError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun acknowledgeStatus() {
+        _uiState.update { it.copy(statusMessage = null) }
+    }
+
+    /** Replace the current error message and bump the snackbar counter. */
+    internal fun postError(message: String?) {
+        if (message == null) {
+            _uiState.update { it.copy(errorMessage = null) }
+        } else {
+            _uiState.update {
+                it.copy(
+                    errorMessage = message,
+                    errorMessagesShown = it.errorMessagesShown + 1,
+                )
+            }
+        }
+    }
+
+    /** Replace the current status message and bump the snackbar counter. */
+    internal fun postStatus(message: String?) {
+        if (message == null) {
+            _uiState.update { it.copy(statusMessage = null) }
+        } else {
+            _uiState.update {
+                it.copy(
+                    statusMessage = message,
+                    statusMessagesShown = it.statusMessagesShown + 1,
+                )
+            }
+        }
     }
 
     override fun onCleared() {
@@ -1140,11 +1198,31 @@ class MainViewModel(
     private fun startReadStateSync() {
         if (readStateSyncJob?.isActive == true) return
         readStateSyncJob = viewModelScope.launch {
-            repository.readStateEvents().collect { event ->
-                if (event.clientId != null && event.clientId == repository.clientId()) {
-                    return@collect
+            // The repository's readStateEvents() already handles exponential
+            // backoff reconnects internally. We wrap the outer collect in a
+            // while loop so that an unexpected throw (e.g. an OutOfMemoryError
+            // from a misbehaving server) doesn't kill the ViewModel — instead
+            // the loop restarts the collector and the user gets fresh
+            // cross-device sync on the next event.
+            val job = currentCoroutineContext()[Job]
+            while (job?.isActive == true) {
+                try {
+                    repository.readStateEvents().collect { event ->
+                        if (event.clientId != null && event.clientId == repository.clientId()) {
+                            return@collect
+                        }
+                        applyReadStateSyncEvent(event)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    android.util.Log.w("MainViewModel", "Read-state sync collector crashed; restarting", e)
                 }
-                applyReadStateSyncEvent(event)
+                // The repository's flow terminates only on cancellation or
+                // a max-attempts cap; if we got here while the scope is
+                // still active it means the server gave up. Wait a bit
+                // then try again.
+                kotlinx.coroutines.delay(READ_STATE_SYNC_RESTART_DELAY_MS)
             }
         }
     }
@@ -1353,6 +1431,7 @@ class MainViewModel(
         const val ARTICLE_ENRICH_REFRESH_DELAY_MS = 800L
         const val ARTICLE_BACKGROUND_ENRICH_RETRY_MS = 5 * 60_000L
         const val RESUME_REFRESH_MIN_INTERVAL_MS = 60_000L
+        const val READ_STATE_SYNC_RESTART_DELAY_MS = 5_000L
     }
 }
 

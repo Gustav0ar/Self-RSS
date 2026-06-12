@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        Pre-API 31 theme. The SplashScreen API (with brand background)
+        is only available on API 31+; on older devices the system uses
+        the default window background. The activity-level
+        `installSplashScreen()` call is a no-op on those versions.
+    -->
     <style name="Theme.SelfFeedAndroid" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>

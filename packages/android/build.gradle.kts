@@ -2,4 +2,6 @@ plugins {
     id("com.android.application") version "9.2.1" apply false
     id("com.android.test") version "9.2.1" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
+    // KSP for Moshi codegen. Tracks Kotlin 2.2.x.
+    id("com.google.devtools.ksp") version "2.2.0-2.0.2" apply false
 }

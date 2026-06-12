@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path name="cache" path="." />
+    <!--
+        Restrict the FileProvider to a dedicated "shared" subdirectory. The
+        previously broad `cache-path "."` exposed every cache file (including
+        the offline JSON cache, which contains user.email) to any Intent that
+        was granted a content:// URI for the cache.
+    -->
+    <cache-path name="shared" path="shared/" />
 </paths>

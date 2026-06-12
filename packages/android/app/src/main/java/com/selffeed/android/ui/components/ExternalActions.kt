@@ -2,19 +2,25 @@ package com.selffeed.android.ui.components
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import androidx.core.content.FileProvider
-import java.io.File
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.core.content.FileProvider
 import androidx.core.net.toUri
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.File
+
+private val opmlCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 fun shareOpmlContent(context: Context, content: String) {
-    // Use a randomized suffix so successive exports don't collide and
-    // the previous file's lifecycle doesn't have to be tracked. The
-    // file is written into the cache dir, which Android may reclaim at
-    // any time, but in practice exports are rare and the per-file
-    // cleanup below keeps the cache from growing without bound.
-    val opmlFile = File(context.cacheDir, "rss-feeds-${System.currentTimeMillis()}.opml").apply {
+    // Place exports in the FileProvider-allowlisted "shared/" subdirectory of
+    // cacheDir. The new file_paths.xml restricts the FileProvider to that
+    // path, so we must write the file there. A randomized suffix prevents
+    // collisions between successive exports.
+    val sharedDir = File(context.cacheDir, "shared").apply { mkdirs() }
+    val opmlFile = File(sharedDir, "rss-feeds-${System.currentTimeMillis()}.opml").apply {
         writeText(content)
     }
     val uri = FileProvider.getUriForFile(
@@ -29,14 +35,33 @@ fun shareOpmlContent(context: Context, content: String) {
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    // Best-effort cleanup after the chooser has been displayed. The
-    // receiving app may not have read the file yet, so we delete on a
-    // small delay. If the chooser is dismissed before the receiver
-    // reads, the file is lost — that is acceptable, the OPML content
-    // is already in memory if the user retries.
-    val intentLauncher = Intent.createChooser(shareIntent, "Share OPML")
-    context.startActivity(intentLauncher)
-    opmlFile.deleteOnExit()
+    val chooser = Intent.createChooser(shareIntent, "Share OPML")
+    context.startActivity(chooser)
+
+    // The Android docs guarantee `deleteOnExit` only fires on JVM shutdown,
+    // which essentially never happens on Android. Replace it with a deferred
+    // delete after the receiving app has had time to read the file. The file
+    // is also reaped on the next app start (we delete any stale files older
+    // than 1 hour from the shared dir).
+    opmlCleanupScope.launch {
+        delay(OPML_SHARE_DELETE_DELAY_MS)
+        runCatching { opmlFile.delete() }
+    }
+}
+
+/**
+ * Reap orphaned OPML exports from the shared cache directory. Intended to
+ * be called once at app start to keep the cache from accumulating.
+ */
+fun reapStaleOpmlExports(context: Context) {
+    val sharedDir = File(context.cacheDir, "shared")
+    if (!sharedDir.isDirectory) return
+    val cutoff = System.currentTimeMillis() - OPML_REAP_MAX_AGE_MS
+    sharedDir.listFiles()?.forEach { file ->
+        if (file.isFile && file.lastModified() < cutoff) {
+            file.delete()
+        }
+    }
 }
 
 fun openExternalUrl(context: Context, url: String?) {
@@ -52,3 +77,6 @@ fun openExternalUrl(context: Context, url: String?) {
         context.startActivity(intent)
     }
 }
+
+private const val OPML_SHARE_DELETE_DELAY_MS = 5 * 60_000L // 5 minutes
+private const val OPML_REAP_MAX_AGE_MS = 60 * 60_000L // 1 hour

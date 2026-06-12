@@ -1,5 +1,7 @@
+@file:SuppressLint("SetJavaScriptEnabled")
 package com.selffeed.android.ui.components
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -38,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -57,7 +60,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.utils.canPreviewMedia
@@ -73,7 +76,7 @@ fun ArticleReaderPane(
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
 ) {
-    val initialPage = remember {
+    val initialPage = remember(articles, selectedArticle.id) {
         articles.indexOfFirst { it.id == selectedArticle.id }.coerceAtLeast(0)
     }
 
@@ -90,8 +93,14 @@ fun ArticleReaderPane(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage) {
-        val articleId = articles[pagerState.currentPage].id
+    LaunchedEffect(pagerState.currentPage, articles) {
+        // Guard against the article list shrinking while the user is mid-swipe
+        // (e.g. SSE event marks-read + hideRead removes the current article
+        // from the list). Without this bounds check the previous code threw
+        // IndexOutOfBoundsException on the next frame.
+        if (articles.isEmpty()) return@LaunchedEffect
+        val page = pagerState.currentPage.coerceIn(0, articles.lastIndex)
+        val articleId = articles[page].id
         if (articleId != selectedArticle.id) {
             onArticleSelected(articleId)
         }
@@ -102,6 +111,7 @@ fun ArticleReaderPane(
         modifier = Modifier.fillMaxSize(),
         beyondViewportPageCount = 1,
     ) { page ->
+        if (articles.isEmpty()) return@HorizontalPager
         val articleItem = articles[page]
         if (articleItem.id == selectedArticle.id) {
             ArticleDetailView(
@@ -290,7 +300,7 @@ private fun EmbedPlayer(
     onHideFullscreenMedia: (View?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var heightDp by remember(embedUrl) { mutableStateOf(300) }
+    var heightDp by remember(embedUrl) { mutableIntStateOf(300) }
     var loadEmbed by rememberSaveable(embedUrl) { mutableStateOf(false) }
     val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
     val youtubeShellHtml = remember(embedUrl, hexBackground) {
@@ -432,7 +442,7 @@ private fun SecureHtmlContent(
     onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
     onHideFullscreenMedia: (View?) -> Unit,
 ) {
-    var webViewHeightDp by remember(html) { mutableStateOf(600) }
+    var webViewHeightDp by remember(html) { mutableIntStateOf(600) }
 
     val processedHtml = remember(
         html,

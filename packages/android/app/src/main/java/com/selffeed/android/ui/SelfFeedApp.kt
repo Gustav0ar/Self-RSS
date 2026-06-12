@@ -95,14 +95,24 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
         topBarLabel(state)
     }
 
-    LaunchedEffect(state.errorMessage, state.statusMessage) {
+    // Snackbar messages are now driven by a sequence counter so that a new
+    // message arriving while an earlier one is still showing doesn't get
+    // silently dropped. The previous implementation keyed the effect on
+    // (errorMessage, statusMessage), which left the second message invisible
+    // when the keys collided before the first was dismissed.
+    val errorSequence = remember(state.errorMessagesShown) { state.errorMessagesShown }
+    val statusSequence = remember(state.statusMessagesShown) { state.statusMessagesShown }
+
+    LaunchedEffect(errorSequence, state.errorMessage) {
         state.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            viewModel.acknowledgeError()
         }
+    }
+    LaunchedEffect(statusSequence, state.statusMessage) {
         state.statusMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            viewModel.acknowledgeStatus()
         }
     }
 
@@ -156,6 +166,7 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                     showMarkAllRead = state.activeTab == HomeTab.ARTICLES &&
                         state.selectedArticle == null &&
                         state.articles.isNotEmpty(),
+                    isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = viewModel::markAllRead,
                     onBack = viewModel::closeArticle,
@@ -173,7 +184,11 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                 )
             },
         ) { paddingValues ->
-            if (state.errorMessage == null) {
+            // Mount the resume observer whenever the user is authenticated —
+            // the previous condition (`state.errorMessage == null`) would
+            // unmount the observer on any error, leaving the app stale on
+            // the next foreground.
+            if (state.isAuthenticated) {
                 ResumeRefreshObserver(onResume = viewModel::refreshVisibleData)
             }
 
@@ -239,6 +254,21 @@ private fun LoadingScreen() {
     }
 }
 
+/**
+ * Tiny 8dp dot indicating offline state. Kept minimal so it doesn't
+ * compete with the title; the dot's color is the theme's error tone so it
+ * reads as a warning without text.
+ */
+@Composable
+private fun OnlineDot() {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error),
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppTopBar(
@@ -246,6 +276,7 @@ private fun AppTopBar(
     selectedArticle: ArticleDetail?,
     currentLabel: String,
     showMarkAllRead: Boolean,
+    isOnline: Boolean,
     onOpenDrawer: () -> Unit,
     onMarkAllRead: () -> Unit,
     onBack: () -> Unit,
@@ -255,13 +286,19 @@ private fun AppTopBar(
 
     CenterAlignedTopAppBar(
         title = {
-            Text(
-                text = currentLabel,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = currentLabel,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!isOnline) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OnlineDot()
+                }
+            }
         },
         navigationIcon = {
             if (isArticleSelected) {

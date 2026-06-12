@@ -9,6 +9,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.JankStats
 import androidx.metrics.performance.PerformanceMetricsState
@@ -25,8 +26,28 @@ class MainActivity : ComponentActivity() {
     private lateinit var performanceMetricsState: PerformanceMetricsState.Holder
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Install the splash screen *before* `super.onCreate` so the
+        // system uses the theme's `windowSplashScreenBackground` for
+        // the first frame. The default splash is dismissed as soon as
+        // the first composition is laid out — a typical "ready to
+        // show UI" marker.
+        val splash = installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // Keep the splash on screen while the cold-start path runs.
+        // This is the smallest "frozen frame" the user will ever see;
+        // for a more controlled dismissal, hook into your VM's
+        // `loading` state and call `splash.setKeepOnScreenCondition`.
+        var ready = false
+        splash.setKeepOnScreenCondition { ready }
+        // We dismiss once the very first frame is composed. Compose
+        // drives its own readiness; tying this to a frame callback is
+        // both simple and reliable.
+        window.decorView.post {
+            // Allow the next frame to render before dismissing so the
+            // splash-to-content transition doesn't flash.
+            window.decorView.post { ready = true }
+        }
         performanceMetricsState = PerformanceMetricsState.getHolderForHierarchy(window.decorView)
         jankStats = JankStats.createAndTrack(window) { frameData ->
             if (BuildConfig.DEBUG && frameData.isJank) {

@@ -1,5 +1,7 @@
+@file:SuppressLint("SetJavaScriptEnabled")
 package com.selffeed.android.ui.components
 
+import android.annotation.SuppressLint
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
