@@ -146,62 +146,76 @@ fun FeedsTab(
             }
         }
 
-        items(
-            items = state.categories,
-            key = { it.id },
-            contentType = { "category" },
-        ) { category ->
-            val isExpanded = expandedCategories[category.id] ?: true
-
-            FeedSurfaceCard {
-                DrawerItem(
-                    icon = {
-                        Icon(
-                            if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-                            null,
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    },
-                    label = category.name,
-                    subtitle = "${category.feedCount} feeds",
-                    count = category.unreadCount,
-                    selected = state.selectedCategoryId == category.id,
-                    onClick = {
-                        viewModel.selectCategory(category.id)
-                        onSelect()
-                    },
-                    onExpand = {
-                        expandedCategories[category.id] = !isExpanded
-                    }
-                )
+        // Build a single ordered list that interleaves each category with
+        // its feeds when expanded. The previous implementation rendered
+        // all expanded feeds as a single flat block at the bottom of the
+        // list, which broke the visual hierarchy — feeds should sit
+        // directly under the category they belong to.
+        val rows = buildList<Any> {
+            state.categories.forEach { category ->
+                add(category)
+                if (expandedCategories[category.id] ?: true) {
+                    state.feeds
+                        .filter { it.categoryId == category.id }
+                        .forEach { add(it) }
+                }
             }
         }
-
-        // Render the feed rows as siblings of the category items so the
-        // LazyColumn can virtualize them. The previous implementation
-        // composed all feeds (collapsed or not) inside each category's
-        // item lambda — every recomposition rebuilt every row.
-        val expandedFeedRows = state.categories
-            .filter { expandedCategories[it.id] ?: true }
-            .flatMap { category ->
-                state.feeds
-                    .filter { it.categoryId == category.id }
-                    .map { category to it }
-            }
         items(
-            items = expandedFeedRows,
-            key = { (category, feed) -> "feed-${category.id}-${feed.id}" },
-            contentType = { "feed" },
-        ) { (_, feed) ->
-            FeedRow(
-                feed = feed,
-                selected = state.selectedFeedId == feed.id,
-                onSelect = {
-                    viewModel.selectFeed(feed.id)
-                    onSelect()
-                },
-            )
+            items = rows,
+            key = { row ->
+                when (row) {
+                    is com.selffeed.android.network.CategoryWithCounts -> "cat-${row.id}"
+                    is com.selffeed.android.network.FeedWithCounts -> "feed-${row.id}"
+                    else -> row.hashCode().toString()
+                }
+            },
+            contentType = { row ->
+                when (row) {
+                    is com.selffeed.android.network.CategoryWithCounts -> "category"
+                    is com.selffeed.android.network.FeedWithCounts -> "feed"
+                    else -> "unknown"
+                }
+            },
+        ) { row ->
+            when (row) {
+                is com.selffeed.android.network.CategoryWithCounts -> {
+                    val isExpanded = expandedCategories[row.id] ?: true
+                    FeedSurfaceCard {
+                        DrawerItem(
+                            icon = {
+                                Icon(
+                                    if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                                    null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            },
+                            label = row.name,
+                            subtitle = "${row.feedCount} feeds",
+                            count = row.unreadCount,
+                            selected = state.selectedCategoryId == row.id,
+                            onClick = {
+                                viewModel.selectCategory(row.id)
+                                onSelect()
+                            },
+                            onExpand = {
+                                expandedCategories[row.id] = !isExpanded
+                            }
+                        )
+                    }
+                }
+                is com.selffeed.android.network.FeedWithCounts -> {
+                    FeedRow(
+                        feed = row,
+                        selected = state.selectedFeedId == row.id,
+                        onSelect = {
+                            viewModel.selectFeed(row.id)
+                            onSelect()
+                        },
+                    )
+                }
+            }
         }
     }
 }
