@@ -1,5 +1,6 @@
 package com.selffeed.android.network
 
+import android.content.Context
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
 import com.squareup.moshi.FromJson
@@ -9,6 +10,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.ToJson
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Authenticator
+import okhttp3.Cache
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -19,6 +21,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class PersistedRefreshCookieJar(
@@ -70,7 +73,13 @@ class TokenAuthenticator(
                     .build()
             }
 
-            val refreshedToken = refreshAccessToken(response.request.url) ?: return null
+            val refreshedToken = refreshAccessToken(response.request.url) ?: run {
+                // Refresh failed (e.g. revoked/expired refresh cookie). Clear the local
+                // access token so the next call goes unauthenticated and the UI can
+                // route to the login screen.
+                sessionStore.setAccessToken(null)
+                return null
+            }
             sessionStore.setAccessToken(refreshedToken)
             return response.request.newBuilder()
                 .header("Authorization", "Bearer $refreshedToken")
@@ -78,6 +87,12 @@ class TokenAuthenticator(
         }
     }
 
+    /**
+     * Performs a token refresh using a fresh one-shot OkHttpClient that shares
+     * the cookie jar (so the refresh cookie is attached) but no authenticator
+     * and no other application interceptors — to avoid recursion through
+     * [authenticate] and to keep the request path minimal.
+     */
     private fun refreshAccessToken(url: HttpUrl): String? {
         val baseUrl = url.newBuilder().encodedPath("/api/v1/auth/refresh").build()
         val request = Request.Builder()
@@ -87,17 +102,20 @@ class TokenAuthenticator(
 
         val client = OkHttpClient.Builder()
             .cookieJar(PersistedRefreshCookieJar(sessionStore))
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(REFRESH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val body = response.body?.string() ?: return null
-            val parsed = responseAdapter.fromJson(body) ?: return null
-            return parsed.data.tokens.accessToken
-        }
+        return runCatching {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val body = response.body?.string() ?: return@use null
+                val parsed = responseAdapter.fromJson(body) ?: return@use null
+                parsed.data.tokens.accessToken
+            }
+        }.getOrNull()
     }
 
     private fun responseCount(response: okhttp3.Response): Int {
@@ -109,15 +127,28 @@ class TokenAuthenticator(
         }
         return count
     }
+
+    companion object {
+        private const val REFRESH_CONNECT_TIMEOUT_SECONDS = 5L
+        private const val REFRESH_READ_TIMEOUT_SECONDS = 10L
+        private const val REFRESH_WRITE_TIMEOUT_SECONDS = 10L
+        private const val REFRESH_CALL_TIMEOUT_SECONDS = 15L
+    }
 }
 
 object NetworkModule {
     fun provideMoshi(): Moshi = Moshi.Builder()
         .add(FlexibleBooleanAdapter())
+        // KotlinJsonAdapterFactory (reflection) is included as a fallback for
+        // DTOs that haven't been pre-compiled to a generated adapter. The
+        // project's DTOs all carry @JsonClass(generateAdapter = true), so
+        // the generated adapter is found first; the reflective factory only
+        // serves as a safety net during early development.
         .add(KotlinJsonAdapterFactory())
         .build()
 
     fun provideOkHttpClient(
+        context: Context,
         sessionStore: SessionStore,
         moshi: Moshi,
     ): OkHttpClient {
@@ -125,12 +156,19 @@ object NetworkModule {
             level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
         }
 
+        val cache = Cache(
+            File(context.cacheDir, "http-cache"),
+            HTTP_CACHE_SIZE_BYTES,
+        )
+
+        val authenticator = TokenAuthenticator(sessionStore, moshi)
+
         return OkHttpClient.Builder()
             .cookieJar(PersistedRefreshCookieJar(sessionStore))
             .addInterceptor { chain ->
-                val original = chain.request()
+                val request = chain.request()
                 val accessToken = sessionStore.getAccessToken()
-                val requestBuilder = original.newBuilder()
+                val requestBuilder = request.newBuilder()
 
                 if (!accessToken.isNullOrBlank()) {
                     requestBuilder.header("Authorization", "Bearer $accessToken")
@@ -138,18 +176,21 @@ object NetworkModule {
 
                 requestBuilder.header("X-Self-Feed-Client-Id", sessionStore.getClientId())
 
-                if (original.body != null && original.header("Content-Type") == null) {
+                if (request.body != null && request.header("Content-Type") == null) {
                     requestBuilder.header("Content-Type", "application/json")
                 }
 
                 chain.proceed(requestBuilder.build())
             }
-            .authenticator(TokenAuthenticator(sessionStore, moshi))
+            .authenticator(authenticator)
             .addInterceptor(logging)
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .cache(cache)
+            .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .build()
     }
 
@@ -162,6 +203,13 @@ object NetworkModule {
 
         return retrofit.create(RssApi::class.java)
     }
+
+    private const val HTTP_CACHE_SIZE_BYTES = 10L * 1024 * 1024
+    private const val CONNECT_TIMEOUT_SECONDS = 10L
+    private const val READ_TIMEOUT_SECONDS = 15L
+    private const val WRITE_TIMEOUT_SECONDS = 15L
+    private const val CALL_TIMEOUT_SECONDS = 30L
+    private const val PING_INTERVAL_SECONDS = 30L
 }
 
 private object Types {
@@ -177,7 +225,14 @@ class FlexibleBooleanAdapter {
         return when (reader.peek()) {
             JsonReader.Token.BOOLEAN -> reader.nextBoolean()
             JsonReader.Token.NUMBER -> reader.nextInt() != 0
-            JsonReader.Token.STRING -> reader.nextString().toBoolean()
+            JsonReader.Token.STRING -> {
+                val s = reader.nextString().trim()
+                if (s.isEmpty()) false
+                else when (s.lowercase()) {
+                    "true", "1", "yes", "y" -> true
+                    else -> false
+                }
+            }
             JsonReader.Token.NULL -> {
                 reader.nextNull<Unit>()
                 false

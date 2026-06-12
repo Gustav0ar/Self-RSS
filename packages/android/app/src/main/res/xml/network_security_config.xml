@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <!--
+        Production: HTTPS only. Cleartext is explicitly disallowed to comply with
+        the release-build HTTPS enforcement in app/build.gradle.kts.
+    -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

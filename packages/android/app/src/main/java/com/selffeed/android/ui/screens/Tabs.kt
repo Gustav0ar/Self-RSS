@@ -145,8 +145,13 @@ fun FeedsTab(
             }
         }
 
-        items(state.categories, key = { it.id }) { category ->
+        items(
+            items = state.categories,
+            key = { it.id },
+            contentType = { "category" },
+        ) { category ->
             val isExpanded = expandedCategories[category.id] ?: true
+
             FeedSurfaceCard {
                 DrawerItem(
                     icon = {
@@ -169,23 +174,33 @@ fun FeedsTab(
                         expandedCategories[category.id] = !isExpanded
                     }
                 )
-
-                AnimatedVisibility(visible = isExpanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        state.feeds.filter { it.categoryId == category.id }.forEach { feed ->
-                            FeedRow(
-                                feed = feed,
-                                selected = state.selectedFeedId == feed.id,
-                                onSelect = {
-                                    viewModel.selectFeed(feed.id)
-                                    onSelect()
-                                },
-                            )
-                        }
-                    }
-                }
             }
+        }
+
+        // Render the feed rows as siblings of the category items so the
+        // LazyColumn can virtualize them. The previous implementation
+        // composed all feeds (collapsed or not) inside each category's
+        // item lambda — every recomposition rebuilt every row.
+        val expandedFeedRows = state.categories
+            .filter { expandedCategories[it.id] ?: true }
+            .flatMap { category ->
+                state.feeds
+                    .filter { it.categoryId == category.id }
+                    .map { category to it }
+            }
+        items(
+            items = expandedFeedRows,
+            key = { (category, feed) -> "feed-${category.id}-${feed.id}" },
+            contentType = { "feed" },
+        ) { (_, feed) ->
+            FeedRow(
+                feed = feed,
+                selected = state.selectedFeedId == feed.id,
+                onSelect = {
+                    viewModel.selectFeed(feed.id)
+                    onSelect()
+                },
+            )
         }
     }
 }
@@ -443,7 +458,14 @@ fun ArticlesTab(
             if (pagedArticles != null) {
                 items(
                     count = pagedArticles.itemCount,
-                    key = { index -> pagedArticles[index]?.id ?: "article-placeholder-$index" },
+                    // `peek` does not trigger a load on the paging source;
+                    // calling `pagedArticles[index]` instead forces a load
+                    // and is paid for twice (once here, once in the body).
+                    key = { index -> pagedArticles.peek(index)?.id ?: "article-placeholder-$index" },
+                    contentType = { index ->
+                        if (pagedArticles.peek(index) == null) "article-placeholder"
+                        else "article-row"
+                    },
                 ) { index ->
                     val article = pagedArticles[index]
                     if (article == null) {
@@ -504,7 +526,11 @@ fun ArticlesTab(
                     }
                 }
             } else {
-                items(state.articles, key = { it.id }) { article ->
+                items(
+                    items = state.articles,
+                    key = { it.id },
+                    contentType = { "article-row" },
+                ) { article ->
                     ArticleListRow(
                         article = article,
                         isRead = article.isRead,
@@ -544,12 +570,17 @@ private fun ArticleListRow(
 ) {
     val dismissState = rememberSwipeToDismissBoxState()
     var pendingToggle by remember { mutableStateOf(false) }
+    // Snapshot the read state at the moment the user started the swipe so
+    // a fast double-swipe (or a recomposition that flips `isRead`) cannot
+    // toggle the article twice in a row.
+    val readAtSwipeStart = remember { mutableStateOf(isRead) }
 
     LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart && !pendingToggle) {
+            readAtSwipeStart.value = isRead
             pendingToggle = true
             delay(250)
-            onToggleRead(!isRead)
+            onToggleRead(!readAtSwipeStart.value)
             dismissState.reset()
             pendingToggle = false
         }
@@ -790,7 +821,11 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
             }
         }
 
-        items(state.searchResults, key = { it.id }) { article ->
+        items(
+            items = state.searchResults,
+            key = { it.id },
+            contentType = { "search-result-row" },
+        ) { article ->
             ArticleCard(
                 article = article,
                 selected = state.selectedArticle?.id == article.id,

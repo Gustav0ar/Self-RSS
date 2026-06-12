@@ -73,7 +73,7 @@ fun ArticleReaderPane(
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
 ) {
-    val initialPage = remember {
+    val initialPage = remember(articles, selectedArticle.id) {
         articles.indexOfFirst { it.id == selectedArticle.id }.coerceAtLeast(0)
     }
 
@@ -90,8 +90,14 @@ fun ArticleReaderPane(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage) {
-        val articleId = articles[pagerState.currentPage].id
+    LaunchedEffect(pagerState.currentPage, articles) {
+        // Guard against the article list shrinking while the user is mid-swipe
+        // (e.g. SSE event marks-read + hideRead removes the current article
+        // from the list). Without this bounds check the previous code threw
+        // IndexOutOfBoundsException on the next frame.
+        if (articles.isEmpty()) return@LaunchedEffect
+        val page = pagerState.currentPage.coerceIn(0, articles.lastIndex)
+        val articleId = articles[page].id
         if (articleId != selectedArticle.id) {
             onArticleSelected(articleId)
         }
@@ -102,6 +108,7 @@ fun ArticleReaderPane(
         modifier = Modifier.fillMaxSize(),
         beyondViewportPageCount = 1,
     ) { page ->
+        if (articles.isEmpty()) return@HorizontalPager
         val articleItem = articles[page]
         if (articleItem.id == selectedArticle.id) {
             ArticleDetailView(
