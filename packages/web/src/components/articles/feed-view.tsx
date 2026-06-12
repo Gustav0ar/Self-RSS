@@ -27,7 +27,7 @@ interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
 	selectedArticleId: string | null;
-	onSelectArticle: (id: string) => void;
+	onSelectArticle: (id: string | null) => void;
 }
 
 interface RetainedReadArticle {
@@ -106,6 +106,16 @@ export function FeedView({
 		return mergedArticles;
 	}, [fetchedArticles, retainedReadArticles, unreadOnly]);
 	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
+	// The article URL (`/articles/:articleId`) can be deep-linked or
+	// bookmarked. The article list is loaded asynchronously, so an
+	// incoming article id may briefly not be in the list while the
+	// query resolves. Only "clear" the active article once the list
+	// is fully loaded and the id is genuinely missing — never while
+	// we're still loading, otherwise deep links would flash the empty
+	// state during the first paint.
+	const articleIdsSet = useMemo(() => new Set(articleIds), [articleIds]);
+	const articleIsInLoadedList = selectedArticleId ? articleIdsSet.has(selectedArticleId) : false;
+	const effectiveArticleId = selectedArticleId && articleIsInLoadedList ? selectedArticleId : null;
 	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
@@ -158,6 +168,30 @@ export function FeedView({
 		void refreshFeed(feedId);
 	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
 
+	// If the URL points at an article that's no longer in the current
+	// list — e.g. the user changed the filter, the feed was updated,
+	// or the article was marked read while the "Unread" filter is on —
+	// clear the active article so the reader shows its empty state and
+	// the URL drops back to the list view. This fires once the list
+	// has loaded (the `articles` array is non-empty) AND the article
+	// is genuinely missing. While the list is still loading, we
+	// preserve the URL so deep links don't flash the empty state
+	// during the first paint.
+	useEffect(() => {
+		if (isLoading) return;
+		if (articles.length === 0) {
+			// Empty list — clear the article. The article is
+			// definitely not there.
+			if (selectedArticleId) {
+				onSelectArticle(null);
+			}
+			return;
+		}
+		if (!selectedArticleId) return;
+		if (articleIsInLoadedList) return;
+		onSelectArticle(null);
+	}, [articles.length, articleIsInLoadedList, isLoading, onSelectArticle, selectedArticleId]);
+
 	useEffect(() => {
 		if (articleIds.length === 0) {
 			return;
@@ -198,7 +232,7 @@ export function FeedView({
 
 	useKeyboardNav({
 		articleIds,
-		selectedId: selectedArticleId,
+		selectedId: effectiveArticleId,
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
 			const article = articles.find((a) => a.id === id);
@@ -356,7 +390,7 @@ export function FeedView({
 				<div className="min-h-0 flex-1">
 					<ArticleList
 						articles={articles}
-						selectedId={selectedArticleId}
+						selectedId={effectiveArticleId}
 						onSelect={handleSelectArticle}
 						onPrefetch={prefetchArticle}
 						loading={showListLoader}
@@ -370,7 +404,7 @@ export function FeedView({
 
 			<div className="min-h-0 flex-1 bg-background/10">
 				<ReaderPane
-					articleId={selectedArticleId}
+					articleId={effectiveArticleId}
 					articles={articles}
 					onSelectArticle={handleSelectArticle}
 				/>

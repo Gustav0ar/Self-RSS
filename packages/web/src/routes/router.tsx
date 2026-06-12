@@ -63,6 +63,15 @@ function RoutedFeedView({
 			categoryId={categoryId}
 			selectedArticleId={articleId}
 			onSelectArticle={(nextArticleId) => {
+				// `null` is the "clear the active article" signal — drop
+				// the user back to the list view at the current scope.
+				if (nextArticleId == null) {
+					void router.navigate({
+						to: '/',
+						search: buildSelectionSearch(feedId, categoryId),
+					});
+					return;
+				}
 				void router.navigate({
 					to: '/articles/$articleId',
 					params: { articleId: nextArticleId },
