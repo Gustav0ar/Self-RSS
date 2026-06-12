@@ -20,6 +20,8 @@ export interface User {
 	updatedAt: string;
 }
 
+export type AccentColor = 'indigo' | 'violet' | 'rose' | 'amber' | 'emerald' | 'sky';
+
 export interface UserPreferences {
 	userId: string;
 	theme: Theme;
@@ -30,6 +32,7 @@ export interface UserPreferences {
 	hideRead: boolean;
 	keyboardShortcutsEnabled: boolean;
 	autoMarkReadMode: AutoMarkReadMode;
+	accentColor: AccentColor;
 	createdAt: string;
 	updatedAt: string;
 }

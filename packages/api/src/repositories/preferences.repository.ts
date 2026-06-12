@@ -22,6 +22,7 @@ export class PreferencesRepository {
 			hideRead: boolean;
 			keyboardShortcutsEnabled: boolean;
 			autoMarkReadMode: string;
+			accentColor: string;
 		}>,
 	) {
 		const [prefs] = await this.db
