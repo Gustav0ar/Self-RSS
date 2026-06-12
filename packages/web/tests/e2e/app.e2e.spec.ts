@@ -91,7 +91,15 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(page.getByRole('heading', { name: 'Beta Update' })).toBeVisible();
 
 	await page.getByPlaceholder('Search articles...').fill('Gamma');
-	await page.getByRole('button', { name: /Gamma World/ }).click();
+	const gammaButton = page.getByRole('button', { name: /Gamma World/ });
+	await expect(gammaButton).toBeVisible();
+	await gammaButton.click();
+	// The search-bar click navigates to /articles/:id. Wait for that
+	// navigation to land and the reader pane to render the heading,
+	// regardless of whether the surrounding feed-scope article list
+	// still contains the article (the deep-link path renders it
+	// directly from the single-article fetch).
+	await page.waitForURL(/\/articles\//);
 	await expect(page.getByRole('heading', { name: 'Gamma World' })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Preferences' }).click();
