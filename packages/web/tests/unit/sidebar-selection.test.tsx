@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../../src/components/layout/sidebar';
 
 const categories = [
@@ -68,6 +68,19 @@ function renderSidebar(props?: Partial<React.ComponentProps<typeof Sidebar>>) {
 }
 
 describe('Sidebar selection', () => {
+	beforeEach(() => {
+		// The Sidebar persists its expansion state in localStorage; tests
+		// share the same jsdom store, so we reset it before each test to
+		// avoid one test's expanded set bleeding into the next.
+		try {
+			window.localStorage?.clear();
+		} catch {
+			// Some test runners (bun) don't provide localStorage; the
+			// sidebar's load is wrapped in try/catch already, so this is
+			// safe to skip.
+		}
+	});
+
 	it('expands the parent category when the selected feed is active on load', async () => {
 		renderSidebar();
 
