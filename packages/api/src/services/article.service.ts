@@ -8,10 +8,20 @@ import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
-// Shape of the JSON returned by `getArticle`. The cache stores this
-// verbatim, so the type also acts as the contract between the writer
-// (this service) and the reader (the route handler).
-type ArticleDetailResponse = Awaited<ReturnType<ArticleService['getArticle']>>;
+// Shape of a single article as serialized for the API response and
+// stored in the per-article detail cache. Derived from the repository
+// query so adding a column there propagates here automatically. We
+// Omit the raw Date fields and re-add them as ISO strings, since the
+// repository returns Dates but the API contract (and the JSON we
+// stash in Redis) is string-only.
+type ArticleDetailResponse = Omit<
+	NonNullable<Awaited<ReturnType<ArticleRepository['findDetailForUser']>>>,
+	'publishedAt' | 'fetchedAt'
+> & {
+	publishedAt: string | null;
+	fetchedAt: string;
+	isEnriched: boolean;
+};
 
 export class ArticleService {
 	constructor(
@@ -112,7 +122,7 @@ export class ArticleService {
 		};
 	}
 
-	async getArticle(userId: string, articleId: string) {
+	async getArticle(userId: string, articleId: string): Promise<ArticleDetailResponse> {
 		// Cache hit path: Redis lookup keyed by userId+articleId. The key
 		// namespace already enforces ownership (you can only read articles
 		// that are in your own namespace), so a hit is safe to return
@@ -140,12 +150,10 @@ export class ArticleService {
 
 		// Populate the cache for next time. Fire-and-forget — a cache
 		// write failure must not fail the request.
-		this.redis
-			.setex(cacheKey, CacheTTL.articleDetail, JSON.stringify(response))
-			.catch((err) => {
-				// Best-effort cache write. Log and continue.
-				void err;
-			});
+		this.redis.setex(cacheKey, CacheTTL.articleDetail, JSON.stringify(response)).catch((err) => {
+			// Best-effort cache write. Log and continue.
+			void err;
+		});
 
 		return response;
 	}
