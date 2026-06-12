@@ -511,6 +511,7 @@ export function useUpdateCategory() {
 			id: string;
 			name?: string;
 			parentCategoryId?: string | null;
+			sortOrder?: number;
 		}) =>
 			apiFetch<ApiResponse<CategoryWithCounts>>(`/categories/${id}`, {
 				method: 'PATCH',
@@ -920,6 +921,7 @@ export interface Preferences {
 	hideRead: boolean;
 	keyboardShortcutsEnabled: boolean;
 	autoMarkReadMode: string;
+	accentColor: string;
 }
 
 export function usePreferences() {

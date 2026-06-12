@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
+import { sanitizeArticleHtml } from '@/lib/sanitize-article';
 
 interface ReaderPaneProps {
 	articleId: string | null;
@@ -26,38 +27,10 @@ export interface ReaderArticleSummary {
 }
 
 function prepareReaderHtml(html: string) {
-	const lowerHtml = html.toLowerCase();
-	if (
-		!lowerHtml.includes('<img') &&
-		!lowerHtml.includes('<iframe') &&
-		!lowerHtml.includes('embedded-media')
-	) {
-		return html;
-	}
-
-	const doc = new DOMParser().parseFromString(html, 'text/html');
-	doc.querySelectorAll('iframe.embedded-media').forEach((iframe) => {
-		const parent = iframe.parentElement;
-		iframe.remove();
-		if (
-			parent &&
-			['P', 'DIV', 'FIGURE', 'SECTION', 'ARTICLE'].includes(parent.tagName) &&
-			parent.childElementCount === 0 &&
-			!parent.textContent?.trim()
-		) {
-			parent.remove();
-		}
-	});
-	doc.querySelectorAll('img').forEach((img) => {
-		img.setAttribute('loading', 'lazy');
-		img.setAttribute('decoding', 'async');
-		img.setAttribute('fetchpriority', 'low');
-	});
-	doc.querySelectorAll('iframe').forEach((iframe) => {
-		iframe.setAttribute('loading', 'lazy');
-	});
-
-	return doc.body.innerHTML;
+	// The API sanitizes content before persisting; this client-side
+	// pass re-validates against the same allowlist (defense in depth)
+	// and adds presentation attributes for the web surface.
+	return sanitizeArticleHtml(html);
 }
 
 export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
