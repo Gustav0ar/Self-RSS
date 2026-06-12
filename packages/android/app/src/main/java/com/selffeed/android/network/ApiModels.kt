@@ -240,6 +240,7 @@ data class UserPreferences(
     val hideRead: Boolean,
     val keyboardShortcutsEnabled: Boolean,
     val autoMarkReadMode: String,
+    val accentColor: String? = null,
     val createdAt: String? = null,
     val updatedAt: String? = null,
 )

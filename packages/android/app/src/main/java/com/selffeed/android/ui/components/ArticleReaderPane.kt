@@ -80,11 +80,23 @@ fun ArticleReaderPane(
         articles.indexOfFirst { it.id == selectedArticle.id }.coerceAtLeast(0)
     }
 
+    BackHandler(onBack = onBackToList)
+
+    // When the list is empty (e.g. the user toggled "Unread only" while
+    // viewing a read article, filtering it out), there are no pages to
+    // swipe between. Render the selected article directly instead of
+    // creating a pager with zero pages, which throws.
+    if (articles.isEmpty()) {
+        ArticleDetailView(
+            article = selectedArticle,
+            onOpenOriginal = { onOpenOriginal(selectedArticle) },
+        )
+        return
+    }
+
     val pagerState = rememberPagerState(initialPage = initialPage) {
         articles.size
     }
-
-    BackHandler(onBack = onBackToList)
 
     LaunchedEffect(selectedArticle.id) {
         val targetPage = articles.indexOfFirst { it.id == selectedArticle.id }
@@ -480,7 +492,7 @@ private fun SecureHtmlContent(
                 settings.mediaPlaybackRequiresUserGesture = false
 
                 isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = true
                 setBackgroundColor(backgroundColor.toArgb())
                 webChromeClient = readerWebChromeClient(
                     onShowFullscreenMedia = onShowFullscreenMedia,
@@ -492,8 +504,17 @@ private fun SecureHtmlContent(
                     fun updateHeight(height: Float) {
                         post {
                             val newHeightDp = height.toInt()
-                            if (newHeightDp > 0 && newHeightDp != webViewHeightDp) {
-                                webViewHeightDp = newHeightDp
+                            // Clamp to a sane range: 0 is "not loaded yet" (the
+                            // default 600dp is used), and anything beyond
+                            // 50_000dp is almost certainly a measurement bug
+                            // (e.g. an element with an unbounded height in the
+                            // HTML). Without the upper bound, a runaway value
+                            // can produce constraints Compose refuses to
+                            // satisfy ("Can't represent a width of 0 and
+                            // height of N in Constraints").
+                            val clampedDp = newHeightDp.coerceIn(0, 50_000)
+                            if (clampedDp > 0 && clampedDp != webViewHeightDp) {
+                                webViewHeightDp = clampedDp
                             }
                         }
                     }
