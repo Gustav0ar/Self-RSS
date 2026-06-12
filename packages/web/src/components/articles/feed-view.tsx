@@ -123,7 +123,12 @@ export function FeedView({
 	// state during the first paint.
 	const articleIdsSet = useMemo(() => new Set(articleIds), [articleIds]);
 	const articleIsInLoadedList = selectedArticleId ? articleIdsSet.has(selectedArticleId) : false;
-	const effectiveArticleId = selectedArticleId && articleIsInLoadedList ? selectedArticleId : null;
+	// On a deep link (`/articles/:id`) we must keep the article id even
+	// when the surrounding list is empty or hasn't loaded it yet. In the
+	// list-view case (`/`) the absence from the loaded list is what
+	// triggers the effect below to clear the selection.
+	const effectiveArticleId =
+		selectedArticleId && (articleIsInLoadedList || fromDeepLink) ? selectedArticleId : null;
 	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
