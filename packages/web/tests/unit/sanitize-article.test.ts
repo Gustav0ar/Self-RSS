@@ -29,9 +29,7 @@ describe('sanitizeArticleHtml', () => {
 	});
 
 	it('strips inline style attributes (defense against exfiltration)', () => {
-		const result = sanitizeArticleHtml(
-			'<p style="background:url(javascript:alert(1))">hi</p>',
-		);
+		const result = sanitizeArticleHtml('<p style="background:url(javascript:alert(1))">hi</p>');
 		expect(result.toLowerCase()).not.toContain('style=');
 	});
 
@@ -48,16 +46,12 @@ describe('sanitizeArticleHtml', () => {
 	});
 
 	it('sandboxes iframes that are not approved embeds', () => {
-		const result = sanitizeArticleHtml(
-			'<iframe src="https://attacker.example/x"></iframe>',
-		);
+		const result = sanitizeArticleHtml('<iframe src="https://attacker.example/x"></iframe>');
 		expect(result.toLowerCase()).toContain('sandbox=');
 	});
 
 	it('adds rel and target to external anchor links', () => {
-		const result = sanitizeArticleHtml(
-			'<a href="https://example.com/post">read</a>',
-		);
+		const result = sanitizeArticleHtml('<a href="https://example.com/post">read</a>');
 		expect(result).toContain('target="_blank"');
 		expect(result).toContain('rel="noopener noreferrer nofollow"');
 	});
@@ -68,18 +62,14 @@ describe('sanitizeArticleHtml', () => {
 	});
 
 	it('adds loading=lazy and referrerpolicy=no-referrer to images', () => {
-		const result = sanitizeArticleHtml(
-			'<img src="https://example.com/x.png" alt="x" />',
-		);
+		const result = sanitizeArticleHtml('<img src="https://example.com/x.png" alt="x" />');
 		expect(result).toContain('loading="lazy"');
 		expect(result).toContain('decoding="async"');
 		expect(result).toContain('referrerpolicy="no-referrer"');
 	});
 
 	it('strips empty wrappers that no longer have content', () => {
-		const result = sanitizeArticleHtml(
-			'<p><script>alert(1)</script></p><p>kept</p>',
-		);
+		const result = sanitizeArticleHtml('<p><script>alert(1)</script></p><p>kept</p>');
 		expect(result).toContain('<p>kept</p>');
 		// We can't assert the empty <p> is gone in a strict way (the
 		// sanitizer may also leave it), but it must not contain

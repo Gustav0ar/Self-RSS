@@ -1,13 +1,6 @@
 import { z } from 'zod';
 
-export const accentColorSchema = z.enum([
-	'indigo',
-	'violet',
-	'rose',
-	'amber',
-	'emerald',
-	'sky',
-]);
+export const accentColorSchema = z.enum(['indigo', 'violet', 'rose', 'amber', 'emerald', 'sky']);
 export type AccentColorValue = z.infer<typeof accentColorSchema>;
 
 export const updatePreferencesSchema = z.object({
