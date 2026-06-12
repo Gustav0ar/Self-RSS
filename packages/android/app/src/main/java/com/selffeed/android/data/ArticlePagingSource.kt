@@ -18,26 +18,41 @@ class ArticlePagingSource(
 ) : PagingSource<String, ArticleListItem>() {
     override suspend fun load(params: LoadParams<String>): LoadResult<String, ArticleListItem> {
         val pageSize = params.loadSize.coerceAtMost(MAX_PAGE_SIZE)
-        return when (
-            val result = repository.articles(
-                feedId = query.feedId,
-                categoryId = query.categoryId,
-                unreadOnly = query.unreadOnly,
-                sort = query.sort,
-                limit = pageSize,
-                cursor = params.key,
-            )
-        ) {
-            is AppResult.Success -> LoadResult.Page(
-                data = result.data.data,
-                prevKey = null,
-                nextKey = result.data.cursor.takeIf { result.data.hasMore },
-            )
-            is AppResult.Error -> LoadResult.Error(IllegalStateException(result.message))
+        return try {
+            when (
+                val result = repository.articles(
+                    feedId = query.feedId,
+                    categoryId = query.categoryId,
+                    unreadOnly = query.unreadOnly,
+                    sort = query.sort,
+                    limit = pageSize,
+                    cursor = params.key,
+                )
+            ) {
+                is AppResult.Success -> LoadResult.Page(
+                    data = result.data.data,
+                    prevKey = null,
+                    nextKey = result.data.cursor.takeIf { result.data.hasMore },
+                )
+                is AppResult.Error -> LoadResult.Error(IllegalStateException(result.message))
+            }
+        } catch (e: Exception) {
+            LoadResult.Error(e)
         }
     }
 
-    override fun getRefreshKey(state: PagingState<String, ArticleListItem>): String? = null
+    /**
+     * Returns the key to refresh around. Returning a non-null value lets
+     * Paging 3 anchor the next refresh on the user's current scroll
+     * position, which is the right behavior for an "infinite scroll"
+     * article list. Returning `null` would force a top-of-list refresh
+     * on every pull-to-refresh.
+     */
+    override fun getRefreshKey(state: PagingState<String, ArticleListItem>): String? {
+        val anchor = state.anchorPosition ?: return null
+        val closest = state.closestPageToPosition(anchor) ?: return null
+        return closest.prevKey ?: closest.nextKey
+    }
 
     private companion object {
         const val MAX_PAGE_SIZE = 60

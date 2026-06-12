@@ -3,6 +3,7 @@ package com.selffeed.android.data
 import android.content.Context
 import android.util.Log
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.network.ApiErrorEnvelope
 import com.selffeed.android.network.ApiListResponse
@@ -13,6 +14,7 @@ import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.LoginRequest
 import com.selffeed.android.network.MarkAllReadRequest
 import com.selffeed.android.network.MarkReadRequest
+import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.ReadStateEventPayload
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RssApi
@@ -25,18 +27,23 @@ import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.toReadStateEvent
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
-import coil.ImageLoader
-import coil.request.CachePolicy
-import coil.request.ImageRequest
+import coil3.ImageLoader
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
@@ -45,19 +52,20 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
 
 sealed interface AppResult<out T> {
     data class Success<T>(val data: T) : AppResult<T>
-    data class Error(val message: String) : AppResult<Nothing>
+    data class Error(val message: String, val cause: Throwable? = null) : AppResult<Nothing>
 }
 
 class RssRepository(
@@ -66,8 +74,10 @@ class RssRepository(
     okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val offlineCacheStore: OfflineCacheStore,
+    private val localStore: LocalStore,
     private val imageRequestContext: Context,
     private val imageLoader: ImageLoader,
+    private val networkMonitor: NetworkMonitor,
 ) {
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
@@ -76,13 +86,38 @@ class RssRepository(
     private val cacheStoreCount = AtomicLong(0)
     private val cacheInvalidationCount = AtomicLong(0)
     private val cacheInvalidatedEntriesCount = AtomicLong(0)
+    private val sseLastEventId = AtomicLong(0)
 
     private val cache = ConcurrentHashMap<String, CacheEntry<Any?>>()
     private val cacheLocks = ConcurrentHashMap<String, Mutex>()
     private val apiErrorAdapter: JsonAdapter<ApiErrorEnvelope> = moshi.adapter(ApiErrorEnvelope::class.java)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
-    private val readStateClient = okHttpClient.newBuilder()
+
+    /**
+     * The SSE client intentionally reuses the main client (instead of building a
+     * fresh one) so the [com.selffeed.android.network.TokenAuthenticator] can
+     * refresh the access token if the stream hits a 401. We still override the
+     * read timeout to zero so a long-lived stream doesn't get cut by the SSE
+     * keep-alive.
+     */
+    private val readStateClient: OkHttpClient = okHttpClient.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .writeTimeout(0, TimeUnit.MILLISECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .addInterceptor { chain ->
+            // The main client's interceptor already adds the Authorization header
+            // and X-Self-Feed-Client-Id. The newBuilder().build() chain still
+            // keeps the application's interceptors, so this is just a sanity hook
+            // for the SSE request: ensure Last-Event-ID is forwarded for
+            // resume-after-disconnect.
+            val original = chain.request()
+            val builder = original.newBuilder()
+            val lastId = sseLastEventId.get()
+            if (lastId > 0) {
+                builder.header("Last-Event-ID", lastId.toString())
+            }
+            chain.proceed(builder.build())
+        }
         .build()
 
     suspend fun registrationStatus() = safeReadCall {
@@ -118,11 +153,14 @@ class RssRepository(
         try {
             cachedGet(key = "categories", ttlMs = CATEGORIES_TTL_MS) {
                 withRetry { api.categories().data.categories }.also { categories ->
+                    localStore.writeCategories(categories)
                     offlineCacheStore.writeCategories(categories)
                 }
             }
         } catch (e: Exception) {
-            offlineCacheStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
+            val fromSqlite = localStore.readCategories()
+            if (fromSqlite.isNotEmpty()) fromSqlite
+            else offlineCacheStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
         }
     }
 
@@ -132,7 +170,11 @@ class RssRepository(
             invalidateByPrefix("feeds")
             invalidateByPrefix("stats")
             offlineCacheStore.clearByPrefix("categories")
+
+            localStore.clearTable(LocalStore.TABLE_CATEGORIES)
             offlineCacheStore.clearByPrefix("feeds")
+
+            localStore.clearTable(LocalStore.TABLE_FEEDS)
         }
     }
 
@@ -143,8 +185,14 @@ class RssRepository(
             invalidateByPrefix("articles")
             invalidateByPrefix("search")
             offlineCacheStore.clearByPrefix("categories")
+
+            localStore.clearTable(LocalStore.TABLE_CATEGORIES)
             offlineCacheStore.clearByPrefix("feeds")
+
+            localStore.clearTable(LocalStore.TABLE_FEEDS)
             offlineCacheStore.clearByPrefix("articles")
+
+            localStore.clearTable(LocalStore.TABLE_ARTICLES)
         }
     }
 
@@ -156,8 +204,14 @@ class RssRepository(
             invalidateByPrefix("search")
             invalidateByPrefix("stats")
             offlineCacheStore.clearByPrefix("categories")
+
+            localStore.clearTable(LocalStore.TABLE_CATEGORIES)
             offlineCacheStore.clearByPrefix("feeds")
+
+            localStore.clearTable(LocalStore.TABLE_FEEDS)
             offlineCacheStore.clearByPrefix("articles")
+
+            localStore.clearTable(LocalStore.TABLE_ARTICLES)
         }
     }
 
@@ -165,11 +219,12 @@ class RssRepository(
         try {
             cachedGet(key = "feeds:${categoryId.orEmpty()}", ttlMs = FEEDS_TTL_MS) {
                 withRetry { api.feeds(categoryId).data }.also { feeds ->
+                    localStore.writeFeeds(feeds)
                     offlineCacheStore.writeFeeds(feeds)
                 }
             }
         } catch (e: Exception) {
-            val cached = offlineCacheStore.readFeeds()
+            val cached = localStore.readFeeds().ifEmpty { offlineCacheStore.readFeeds() }
             val filtered = categoryId?.let { id -> cached.filter { it.categoryId == id } } ?: cached
             filtered.takeIf { it.isNotEmpty() } ?: throw e
         }
@@ -237,11 +292,12 @@ class RssRepository(
         try {
             cachedGet(key = key, ttlMs = ARTICLES_TTL_MS) {
                 withRetry { api.articles(feedId, categoryId, unreadOnly, sort, limit, cursor) }.also { response ->
+                    localStore.writeArticles(key, response)
                     offlineCacheStore.writeArticles(key, response)
                 }
             }
         } catch (e: Exception) {
-            offlineCacheStore.readArticles(key) ?: throw e
+            localStore.readArticles(key) ?: offlineCacheStore.readArticles(key) ?: throw e
         }
     }
 
@@ -250,11 +306,12 @@ class RssRepository(
         try {
             cachedGet(key = "article:$articleId", ttlMs = ARTICLE_DETAIL_TTL_MS) {
                 withRetry { api.article(articleId).data }.also { detail ->
+                    localStore.writeArticleDetail(detail)
                     offlineCacheStore.writeArticleDetail(detail)
                 }
             }
         } catch (e: Exception) {
-            offlineCacheStore.readArticleDetail(articleId) ?: throw e
+            localStore.readArticleDetail(articleId) ?: offlineCacheStore.readArticleDetail(articleId) ?: throw e
         }
     }
 
@@ -265,11 +322,13 @@ class RssRepository(
     suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> = safeReadCall {
         withRetry { api.article(articleId).data }.also { detail ->
             putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+            localStore.writeArticleDetail(detail)
             offlineCacheStore.writeArticleDetail(detail)
         }
     }
 
     fun prefetchHeroImages(imageUrls: Iterable<String?>) {
+        if (!networkMonitor.online.value) return // Skip prefetch on cellular/metered when offline
         imageUrls
             .asSequence()
             .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
@@ -297,9 +356,32 @@ class RssRepository(
         }
     }
 
+    /**
+     * Marks an article read/unread with **optimistic cache write** so the UI
+     * reflects the new state immediately, even before the server confirms.
+     * The cached entry is rolled back to its previous state if the request
+     * fails.
+     */
     suspend fun markRead(articleId: String, read: Boolean) = safeCall {
-        api.markRead(articleId, MarkReadRequest(read = read)).data.success.let { read }.also {
-            invalidateArticleCaches(articleId)
+        val key = "article:$articleId"
+        val previous = getCached<ArticleDetail>(key)
+        // Optimistic write — visible to the reader screen and the next
+        // list query before the round-trip completes.
+        if (previous != null) {
+            putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
+        }
+        try {
+            api.markRead(articleId, MarkReadRequest(read = read)).data.success.let { read }.also {
+                // The detail is now authoritative; refresh the cached body.
+                invalidateArticleDetailCache(articleId)
+                invalidateByPrefix("stats")
+                offlineCacheStore.clearByPrefix("article-$articleId")
+            }
+        } catch (e: Exception) {
+            // Roll back the optimistic update so the next read is consistent
+            // with the server's eventual truth.
+            if (previous != null) putCached(key, ARTICLE_DETAIL_TTL_MS, previous)
+            throw e
         }
     }
 
@@ -311,12 +393,22 @@ class RssRepository(
 
     fun clientId(): String = sessionStore.getClientId()
 
+    /**
+     * Long-lived read-state stream. Reconnects with exponential backoff and
+     * tracks the most recently observed event id so reconnects can resume
+     * from where the server left off (Last-Event-ID).
+     *
+     * The flow is bounded by [maxAttempts] reconnects so a permanently broken
+     * server doesn't keep a half-sleeping coroutine alive forever; the
+     * collector can re-subscribe to retry.
+     */
     fun readStateEvents(): Flow<ReadStateSyncEvent> = flow {
-        var reconnectAttempt = 0
-        while (currentCoroutineContext().isActive && isLoggedIn()) {
+        var attempt = 0
+        while (coroutineContext.isActive && isLoggedIn()) {
             try {
                 readStateEventsOnce().collect { event ->
-                    reconnectAttempt = 0
+                    attempt = 0
+                    sseLastEventId.set(parseEventId(event.eventId))
                     emit(event)
                 }
             } catch (e: CancellationException) {
@@ -325,11 +417,13 @@ class RssRepository(
                 debugLog("Read-state stream disconnected: ${e.message ?: e::class.java.simpleName}")
             }
 
-            if (!currentCoroutineContext().isActive || !isLoggedIn()) {
+            if (!coroutineContext.isActive || !isLoggedIn()) break
+            if (attempt >= READ_STATE_RECONNECT_MAX_ATTEMPTS) {
+                debugLog("Read-state stream giving up after $attempt attempts")
                 break
             }
-            delay(readStateReconnectDelay(reconnectAttempt))
-            reconnectAttempt++
+            delay(readStateReconnectDelay(attempt))
+            attempt++
         }
     }
 
@@ -370,6 +464,10 @@ class RssRepository(
 
     fun isLoggedIn(): Boolean = !sessionStore.getAccessToken().isNullOrBlank()
 
+    fun isOnline(): Boolean = networkMonitor.online.value
+
+    fun observeOnline(): Flow<Boolean> = networkMonitor.online
+
     fun getDebugResilienceSnapshot(): Map<String, Long> = mapOf(
         "retryCount" to retryCount.get(),
         "retryExhaustedCount" to retryExhaustedCount.get(),
@@ -391,6 +489,18 @@ class RssRepository(
         debugLog("Debug resilience metrics reset")
     }
 
+    /**
+     * Drops in-memory caches (e.g. on [android.content.ComponentCallbacks2]
+     * trim memory) to free up heap when the system is under pressure.
+     */
+    fun trimMemoryCaches() {
+        val cleared = cache.size
+        cache.clear()
+        cacheLocks.clear()
+        cacheInvalidationCount.incrementAndGet()
+        cacheInvalidatedEntriesCount.addAndGet(cleared.toLong())
+    }
+
     private suspend fun <T> safeReadCall(block: suspend () -> T): AppResult<T> = safeCall { block() }
 
     private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> =
@@ -404,11 +514,20 @@ class RssRepository(
                 ?.takeIf { it.isNotBlank() && !it.startsWith("{") }
                 ?.take(240)
             val message = structuredMessage ?: plainBodyMessage ?: defaultHttpMessage(e.code())
-            AppResult.Error(message)
+            AppResult.Error(message, e)
         } catch (e: SocketTimeoutException) {
-            AppResult.Error("Connection timed out. Please check if the API server is running at ${BuildConfig.API_BASE_URL}")
+            AppResult.Error(
+                if (BuildConfig.DEBUG) {
+                    "Connection timed out. Please check if the API server is running at ${BuildConfig.API_BASE_URL}"
+                } else {
+                    "Connection timed out. Please try again."
+                },
+                e,
+            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            AppResult.Error(e.message ?: "Unexpected error")
+            AppResult.Error(e.message ?: "Unexpected error", e)
         }
 
     private fun extractApiErrorMessage(rawBody: String): String? {
@@ -421,6 +540,7 @@ class RssRepository(
         401 -> "Session expired. Please sign in again."
         403 -> "You do not have permission for this action."
         404 -> "Requested resource was not found."
+        408 -> "Request timed out. Please try again."
         409 -> "This action conflicts with current data."
         413 -> "Payload too large. Please reduce file/content size."
         415 -> "Unsupported content type."
@@ -438,11 +558,13 @@ class RssRepository(
     ): T {
         var currentDelayMs = initialDelayMs
         var attempt = 1
+        var lastException: Exception? = null
 
         while (true) {
             try {
                 return block()
             } catch (e: Exception) {
+                lastException = e
                 val canRetry = attempt < maxAttempts && isRetriableException(e)
                 if (!canRetry) {
                     if (isRetriableException(e)) retryExhaustedCount.incrementAndGet()
@@ -450,13 +572,16 @@ class RssRepository(
                 }
 
                 val retryAttempt = retryCount.incrementAndGet()
-                val jitter = Random.nextLong(40, 140)
-                delay((currentDelayMs + jitter).coerceAtMost(maxDelayMs))
-                debugLog("Retrying request (attempt=$attempt, totalRetries=$retryAttempt, delayMs=${currentDelayMs + jitter}, reason=${e::class.java.simpleName})")
+                val jitter = Random.nextLong(0, currentDelayMs / 2 + 1)
+                val totalDelay = (currentDelayMs + jitter).coerceAtMost(maxDelayMs)
+                debugLog("Retrying request (attempt=$attempt, totalRetries=$retryAttempt, delayMs=$totalDelay, reason=${e::class.java.simpleName})")
+                delay(totalDelay)
                 currentDelayMs = (currentDelayMs * 2).coerceAtMost(maxDelayMs)
                 attempt++
             }
         }
+        @Suppress("UNREACHABLE_CODE")
+        throw lastException ?: IllegalStateException("withRetry exited without resolution")
     }
 
     private fun isRetriableException(error: Exception): Boolean = when (error) {
@@ -495,30 +620,35 @@ class RssRepository(
             cacheLocks.remove(key)
             return null
         }
+        entry.lastAccessMs = System.currentTimeMillis()
         return entry.value as? T
     }
 
     private fun putCached(key: String, ttlMs: Long, value: Any?) {
         cacheStoreCount.incrementAndGet()
-        cache[key] = CacheEntry(value = value, expiresAt = System.currentTimeMillis() + ttlMs)
+        val now = System.currentTimeMillis()
+        cache[key] = CacheEntry(value = value, expiresAt = now + ttlMs, lastAccessMs = now)
         pruneMemoryCache()
     }
 
     private fun pruneMemoryCache() {
         val now = System.currentTimeMillis()
-        cache.entries.removeIf { (key, entry) ->
-            val expired = entry.expiresAt < now
-            if (expired) cacheLocks.remove(key)
-            expired
+        val expiredKeys = cache.entries
+            .filter { (_, entry) -> entry.expiresAt < now }
+            .map { it.key }
+        expiredKeys.forEach {
+            cache.remove(it)
+            cacheLocks.remove(it)
         }
 
-        if (cache.size <= MAX_MEMORY_CACHE_ENTRIES) {
-            return
-        }
+        if (cache.size <= MAX_MEMORY_CACHE_ENTRIES) return
 
         val overflow = cache.size - MAX_MEMORY_CACHE_ENTRIES
+        // LRU by last access, not by expiry. The previous code sorted by
+        // expiresAt ascending which evicted the shortest-lived entries first
+        // (e.g. the 8s article cache) — the opposite of what's wanted.
         cache.entries
-            .sortedBy { it.value.expiresAt }
+            .sortedBy { it.value.lastAccessMs }
             .take(overflow)
             .forEach { (key, _) ->
                 cache.remove(key)
@@ -549,20 +679,16 @@ class RssRepository(
         if (removedEntries > 0) cacheInvalidatedEntriesCount.addAndGet(removedEntries)
     }
 
-    fun clearMemoryCaches() {
-        clearCache()
-    }
-
     suspend fun invalidateArticleCaches(articleId: String) {
-		// Targeted invalidation for a single markRead. The SSE read-state
-		// event handles the in-memory `state.articles` patch, so we
-		// don't need to blow away every cached list here. We only drop
-		// the article detail and the stats aggregate; feeds/categories
-		// are refreshed lazily on the next unread-count read.
-		invalidateArticleDetailCache(articleId)
-		invalidateByPrefix("stats")
-		offlineCacheStore.clearByPrefix("article-$articleId")
-	}
+        // Targeted invalidation for a single markRead. The SSE read-state
+        // event handles the in-memory `state.articles` patch, so we
+        // don't need to blow away every cached list here. We only drop
+        // the article detail and the stats aggregate; feeds/categories
+        // are refreshed lazily on the next unread-count read.
+        invalidateArticleDetailCache(articleId)
+        invalidateByPrefix("stats")
+        offlineCacheStore.clearByPrefix("article-$articleId")
+    }
 
     private suspend fun invalidateArticleDetailCache(articleId: String) {
         invalidateByPrefix("article:$articleId")
@@ -579,6 +705,7 @@ class RssRepository(
 
     private suspend fun clearCacheAndDatabase() {
         clearCache()
+        localStore.clearAll()
         offlineCacheStore.clearAll()
     }
 
@@ -587,7 +714,7 @@ class RssRepository(
         cache.clear()
         cacheLocks.clear()
         cacheInvalidationCount.incrementAndGet()
-        if (clearedEntries > 0) cacheInvalidatedEntriesCount.addAndGet(clearedEntries)
+        cacheInvalidatedEntriesCount.addAndGet(clearedEntries)
     }
 
     private suspend fun invalidateFeedAndArticleCaches() {
@@ -597,14 +724,21 @@ class RssRepository(
         invalidateByPrefix("stats")
         invalidateByPrefix("categories")
         offlineCacheStore.clearByPrefix("feeds")
+
+        localStore.clearTable(LocalStore.TABLE_FEEDS)
         offlineCacheStore.clearByPrefix("categories")
+
+        localStore.clearTable(LocalStore.TABLE_CATEGORIES)
         offlineCacheStore.clearByPrefix("articles-")
+
+        localStore.clearTable(LocalStore.TABLE_ARTICLE_PAGES)
     }
 
     private fun readStateEventsOnce(): Flow<ReadStateSyncEvent> = callbackFlow stream@ {
         val request = Request.Builder()
             .url("${BuildConfig.API_BASE_URL.trimEnd('/')}/events/read-state")
             .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
             .build()
         val call = readStateClient.newCall(request)
         call.enqueue(
@@ -656,11 +790,13 @@ class RssRepository(
         )
 
         awaitClose { call.cancel() }
-    }
+    }.flowOn(Dispatchers.IO)
 
     private fun readStateReconnectDelay(attempt: Int): Long =
         (READ_STATE_RECONNECT_INITIAL_DELAY_MS * (1L shl attempt.coerceAtMost(5)))
             .coerceAtMost(READ_STATE_RECONNECT_MAX_DELAY_MS)
+
+    private fun parseEventId(raw: String): Long = raw.toLongOrNull() ?: 0L
 
     private fun debugLog(message: String) {
         if (!BuildConfig.DEBUG) return
@@ -670,26 +806,28 @@ class RssRepository(
     private data class CacheEntry<T>(
         val value: T,
         val expiresAt: Long,
+        var lastAccessMs: Long,
     )
 
     private companion object {
         const val READ_RETRY_MAX_ATTEMPTS = 3
-        const val READ_RETRY_INITIAL_DELAY_MS = 180L
-        const val READ_RETRY_MAX_DELAY_MS = 1000L
-        const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1000L
+        const val READ_RETRY_INITIAL_DELAY_MS = 300L
+        const val READ_RETRY_MAX_DELAY_MS = 2_000L
+        const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1_000L
         const val READ_STATE_RECONNECT_MAX_DELAY_MS = 30_000L
-        val RETRIABLE_HTTP_CODES = setOf(429, 500, 502, 503, 504)
+        const val READ_STATE_RECONNECT_MAX_ATTEMPTS = 50
+        val RETRIABLE_HTTP_CODES = setOf(408, 425, 429, 500, 502, 503, 504)
 
-        const val USER_TTL_MS = 15_000L
-        const val CATEGORIES_TTL_MS = 20_000L
-        const val FEEDS_TTL_MS = 20_000L
-        const val ARTICLES_TTL_MS = 8_000L
-        const val ARTICLE_DETAIL_TTL_MS = 20_000L
-        const val SEARCH_TTL_MS = 8_000L
-        const val PREFERENCES_TTL_MS = 20_000L
-        const val STATS_TTL_MS = 15_000L
-        const val ADMIN_SETTINGS_TTL_MS = 20_000L
-        const val OPML_EXPORT_TTL_MS = 10_000L
+        const val USER_TTL_MS = 30_000L
+        const val CATEGORIES_TTL_MS = 60_000L
+        const val FEEDS_TTL_MS = 60_000L
+        const val ARTICLES_TTL_MS = 30_000L
+        const val ARTICLE_DETAIL_TTL_MS = 60_000L
+        const val SEARCH_TTL_MS = 30_000L
+        const val PREFERENCES_TTL_MS = 60_000L
+        const val STATS_TTL_MS = 30_000L
+        const val ADMIN_SETTINGS_TTL_MS = 60_000L
+        const val OPML_EXPORT_TTL_MS = 30_000L
         const val ARTICLE_IMAGE_PREFETCH_LIMIT = 5
         const val MAX_MEMORY_CACHE_ENTRIES = 160
     }

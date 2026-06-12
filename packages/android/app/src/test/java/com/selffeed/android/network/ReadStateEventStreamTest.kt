@@ -1,16 +1,15 @@
 package com.selffeed.android.network
 
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadStateEventStreamTest {
-    private val adapter = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
+    // Use the production Moshi (no reflective fallback) to ensure the
+    // generated adapter is what the app actually uses.
+    private val adapter = NetworkModule.provideMoshi()
         .adapter(ReadStateEventPayload::class.java)
 
     @Test

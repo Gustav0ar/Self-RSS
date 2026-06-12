@@ -27,6 +27,7 @@ import io.mockk.runs
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -51,6 +52,8 @@ class MainViewModelTest {
         readStateEvents = MutableSharedFlow(extraBufferCapacity = 16)
 
         every { repository.isLoggedIn() } returns false
+        every { repository.isOnline() } returns true
+        every { repository.observeOnline() } returns MutableStateFlow(true)
         every { repository.clientId() } returns "android-client"
         every { repository.readStateEvents() } returns readStateEvents
         coEvery { repository.invalidateReadStateCaches(any()) } just runs
@@ -59,6 +62,7 @@ class MainViewModelTest {
         every { repository.resetDebugResilienceMetrics() } just runs
         every { repository.cachedArticleDetail(any()) } returns null
         every { repository.prefetchHeroImages(any()) } just runs
+        every { repository.trimMemoryCaches() } just runs
 
         coEvery { repository.me() } returns AppResult.Success(sampleUser())
         coEvery { repository.categories() } returns AppResult.Success(emptyList())
