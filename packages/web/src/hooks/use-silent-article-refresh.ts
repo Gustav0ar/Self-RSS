@@ -1,6 +1,6 @@
 import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
-import { type InfiniteData, type QueryClient, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef } from 'react';
+import { type InfiniteData, type QueryClient, QueryClientContext } from '@tanstack/react-query';
+import { useCallback, useContext, useEffect, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { type ArticleQueryParams, buildArticleSearchParams } from './queries';
 
@@ -28,11 +28,7 @@ type ArticleList = InfiniteData<Page, string | null>;
  * treat the hook as a no-op.
  */
 function useOptionalQueryClient(): QueryClient | null {
-	try {
-		return useQueryClient();
-	} catch {
-		return null;
-	}
+	return useContext(QueryClientContext) ?? null;
 }
 
 /**
