@@ -62,6 +62,7 @@ function RoutedFeedView({
 			feedId={feedId}
 			categoryId={categoryId}
 			selectedArticleId={articleId}
+			fromDeepLink={articleId != null}
 			onSelectArticle={(nextArticleId) => {
 				// `null` is the "clear the active article" signal — drop
 				// the user back to the list view at the current scope.

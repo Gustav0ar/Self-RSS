@@ -73,7 +73,7 @@ vi.mock('@/hooks/use-read-state-sync', () => ({
 }));
 
 describe('FeedView selected article sync', () => {
-	it('clears the active article when the article is not in the loaded list', () => {
+	it('clears the active article when the article is not in the loaded list (list view)', () => {
 		currentResult = {
 			data: { pages: [{ data: [], hasMore: false, cursor: null }] },
 			isFetching: false,
@@ -123,6 +123,26 @@ describe('FeedView selected article sync', () => {
 		};
 		onSelectArticle.mockClear();
 		render(<FeedView selectedArticleId="article-orphan" onSelectArticle={onSelectArticle} />);
+		expect(onSelectArticle).not.toHaveBeenCalled();
+	});
+
+	it('preserves a deep-linked article even when the list is empty', () => {
+		currentResult = {
+			data: { pages: [{ data: [], hasMore: false, cursor: null }] },
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		};
+		onSelectArticle.mockClear();
+		render(
+			<FeedView
+				selectedArticleId="article-orphan"
+				fromDeepLink
+				onSelectArticle={onSelectArticle}
+			/>,
+		);
 		expect(onSelectArticle).not.toHaveBeenCalled();
 	});
 });

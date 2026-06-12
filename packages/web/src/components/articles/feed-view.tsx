@@ -27,6 +27,13 @@ interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
 	selectedArticleId: string | null;
+	/**
+	 * True when the article id came from a deep link (`/articles/:id`),
+	 * false when the user is on the list view. Deep links must
+	 * always render their article even if the surrounding list is
+	 * empty — only clear the active article in the list-view case.
+	 */
+	fromDeepLink?: boolean;
 	onSelectArticle: (id: string | null) => void;
 }
 
@@ -39,6 +46,7 @@ export function FeedView({
 	feedId,
 	categoryId,
 	selectedArticleId,
+	fromDeepLink = false,
 	onSelectArticle,
 }: FeedViewProps) {
 	const [unreadOnly, setUnreadOnly] = useState(false);
@@ -168,29 +176,23 @@ export function FeedView({
 		void refreshFeed(feedId);
 	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
 
-	// If the URL points at an article that's no longer in the current
-	// list — e.g. the user changed the filter, the feed was updated,
-	// or the article was marked read while the "Unread" filter is on —
-	// clear the active article so the reader shows its empty state and
-	// the URL drops back to the list view. This fires once the list
-	// has loaded (the `articles` array is non-empty) AND the article
-	// is genuinely missing. While the list is still loading, we
-	// preserve the URL so deep links don't flash the empty state
-	// during the first paint.
+	// If the user is on the list view (`/`) and a previously selected
+	// article is no longer in the loaded list, clear it. We only do
+	// this in the list-view case so that deep links to a specific
+	// article (`/articles/:id`) still render their target even when
+	// the surrounding list is empty (e.g. a deep link to an article
+	// that doesn't match the current All Feeds list — common after
+	// opening a search result). While the list is still loading, we
+	// preserve the URL.
 	useEffect(() => {
 		if (isLoading) return;
-		if (articles.length === 0) {
-			// Empty list — clear the article. The article is
-			// definitely not there.
-			if (selectedArticleId) {
-				onSelectArticle(null);
-			}
-			return;
-		}
+		if (fromDeepLink) return;
 		if (!selectedArticleId) return;
 		if (articleIsInLoadedList) return;
+		// Either the list is empty or the article isn't in it. Drop
+		// the user back to the list view at the current scope.
 		onSelectArticle(null);
-	}, [articles.length, articleIsInLoadedList, isLoading, onSelectArticle, selectedArticleId]);
+	}, [articleIsInLoadedList, fromDeepLink, isLoading, onSelectArticle, selectedArticleId]);
 
 	useEffect(() => {
 		if (articleIds.length === 0) {
