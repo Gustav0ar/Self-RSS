@@ -73,10 +73,7 @@ class BaselineProfileGenerator {
         // exercise the feed → article open path. The benchmark stays
         // useful when logged out too — the cold-start path is the same.
         if (device.findObject(
-                androidx.test.uiautomator.By.res(
-                    // Settings tab is always present when authenticated.
-                    packageName: TARGET_PACKAGE,
-                ),
+                androidx.test.uiautomator.By.res(TARGET_PACKAGE),
             ) != null
         ) {
             // Open the first article in the list. The selector is
