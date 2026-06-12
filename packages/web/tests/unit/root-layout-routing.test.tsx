@@ -69,6 +69,14 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 }));
 
+vi.mock('../../src/providers/theme', () => ({
+	useTheme: () => ({
+		theme: 'system',
+		resolvedTheme: 'light',
+		setTheme: vi.fn(),
+	}),
+}));
+
 vi.mock('../../src/hooks/use-read-state-sync', () => ({
 	useReadStateSync: vi.fn(),
 }));
