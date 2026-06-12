@@ -54,7 +54,8 @@ internal fun buildReaderHtmlDocument(
                     color: var(--reader-text) !important;
                     margin: 0;
                     padding: 0;
-                    overflow-x: hidden;
+                    overflow-x: auto;
+                    overflow-y: hidden;
                     word-wrap: break-word;
                 }
                 body {
@@ -71,6 +72,7 @@ internal fun buildReaderHtmlDocument(
                 #content-container * {
                     box-sizing: border-box;
                     max-width: 100%;
+                    min-width: 0;
                 }
                 a {
                     color: var(--reader-link);
@@ -81,6 +83,25 @@ internal fun buildReaderHtmlDocument(
                 }
                 blockquote, aside, section, article, details, table, pre {
                     border-color: color-mix(in srgb, var(--reader-muted-text) 36%, transparent);
+                }
+                table {
+                    border-collapse: collapse;
+                    margin: 12px 0;
+                    width: 100%;
+                    table-layout: fixed;
+                    max-width: 100%;
+                }
+                th, td {
+                    padding: 8px 12px;
+                    white-space: normal;
+                    word-break: normal;
+                    overflow-wrap: break-word;
+                    border: 1px solid color-mix(in srgb, var(--reader-muted-text) 28%, transparent);
+                }
+                th {
+                    background: color-mix(in srgb, var(--reader-surface) 60%, transparent);
+                    font-weight: 600;
+                    text-align: left;
                 }
                 pre, code {
                     background: color-mix(in srgb, var(--reader-surface) 82%, transparent);
@@ -96,7 +117,8 @@ internal fun buildReaderHtmlDocument(
                 }
                 img, video {
                     max-width: 100% !important;
-                    height: auto;
+                    width: auto !important;
+                    height: auto !important;
                     border-radius: 12px;
                     display: block;
                     margin: 12px 0;
@@ -119,6 +141,10 @@ internal fun buildReaderHtmlDocument(
                 .embedded-media--videopress {
                     aspect-ratio: 16 / 9;
                     height: auto;
+                }
+                .table-scroll {
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
                 }
             </style>
         </head>
@@ -280,8 +306,21 @@ internal fun buildReaderHtmlDocument(
                     });
                 }
 
+                function wrapTables() {
+                    document.querySelectorAll('table').forEach(table => {
+                        if (table.parentElement && table.parentElement.classList.contains('table-scroll')) {
+                            return;
+                        }
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'table-scroll';
+                        table.parentNode.insertBefore(wrapper, table);
+                        wrapper.appendChild(table);
+                    });
+                }
+
                 function measureContentHeight() {
                     prepareEmbeds();
+                    wrapTables();
                     normalizeReadableColors();
 
                     const container = document.getElementById('content-container');

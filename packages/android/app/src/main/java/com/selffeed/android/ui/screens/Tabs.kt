@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -655,7 +656,11 @@ private fun ArticlePlaceholderRow() {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = true)
+                    .widthIn(min = 0.dp),
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.35f)
@@ -682,8 +687,8 @@ private fun ArticlePlaceholderRow() {
             }
             Box(
                 modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
             )
         }
@@ -711,7 +716,18 @@ private fun ArticleCard(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            // Text column. The `widthIn(min = 0)` lets Compose shrink
+            // the column below its intrinsic width when the row gets
+            // narrow (small phones, large text-size), so the title
+            // and date can wrap to multiple lines instead of being
+            // clipped. Without this guard, narrow screens render the
+            // text as "7 GB" + clipped fragments like "Co" / "Pli" /
+            // "Vi" at the right edge.
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = true)
+                    .widthIn(min = 0.dp),
+            ) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (!isRead) {
@@ -729,7 +745,7 @@ private fun ArticleCard(
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f, fill = true),
                         )
                     }
                     Text(
@@ -745,7 +761,7 @@ private fun ArticleCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = if (isRead) FontWeight.Normal else FontWeight.SemiBold,
                     color = if (isRead && !selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f,
                 )
@@ -761,9 +777,13 @@ private fun ArticleCard(
                 }
             }
 
+            // Hero image. Sized to 56dp instead of 72dp so the text
+            // column has at least 56 + 16 (gap) = 72 more dp on small
+            // screens. Hidden entirely when the article has no image
+            // URL, which is the common case for older feed entries.
             article.heroImageUrl?.let { imageUrl ->
                 val context = LocalContext.current
-                val imageSizePx = with(LocalDensity.current) { 72.dp.roundToPx() }
+                val imageSizePx = with(LocalDensity.current) { 56.dp.roundToPx() }
                 val imageRequest = remember(context, imageUrl, imageSizePx) {
                     ImageRequest.Builder(context)
                         .data(imageUrl)
@@ -776,8 +796,8 @@ private fun ArticleCard(
                     model = imageRequest,
                     contentDescription = null,
                     modifier = Modifier
-                        .size(72.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentScale = ContentScale.Crop,
                 )

@@ -1016,6 +1016,15 @@ class MainViewModel(
     }
 
     fun updateHideRead(hideRead: Boolean) {
+        // Optimistic update: flip the local preference immediately so the
+        // toggle feels responsive. The server call below either confirms
+        // the new value (replacing the snapshot with the server's view) or
+        // reverts on error.
+        val previousPrefs = _uiState.value.preferences
+        val optimisticPrefs = previousPrefs?.copy(hideRead = hideRead)
+        _uiState.update { it.copy(preferences = optimisticPrefs ?: it.preferences) }
+        setArticleFilter(sort = null, hideRead = hideRead)
+
         viewModelScope.launch {
             when (val result = repository.updatePreferences(UpdatePreferencesRequest(hideRead = hideRead))) {
                 is AppResult.Success -> {
@@ -1023,7 +1032,10 @@ class MainViewModel(
                     setArticleFilter(sort = null, hideRead = hideRead)
                 }
 
-                is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> {
+                    _uiState.update { it.copy(preferences = previousPrefs, errorMessage = result.message) }
+                    setArticleFilter(sort = null, hideRead = previousPrefs?.hideRead ?: false)
+                }
             }
         }
     }
