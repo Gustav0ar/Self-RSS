@@ -14,6 +14,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,7 +28,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -76,17 +76,16 @@ fun ArticleReaderPane(
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
 ) {
-    val initialPage = remember(articles, selectedArticle.id) {
-        articles.indexOfFirst { it.id == selectedArticle.id }.coerceAtLeast(0)
+    val selectedArticleIndex = remember(articles, selectedArticle.id) {
+        articles.indexOfFirst { it.id == selectedArticle.id }
     }
 
     BackHandler(onBack = onBackToList)
 
-    // When the list is empty (e.g. the user toggled "Unread only" while
-    // viewing a read article, filtering it out), there are no pages to
-    // swipe between. Render the selected article directly instead of
-    // creating a pager with zero pages, which throws.
-    if (articles.isEmpty()) {
+    // When the selected read article is filtered out of the unread queue,
+    // keep rendering it directly instead of letting the pager snap to the
+    // first remaining row and replace the user's reading context.
+    if (articles.isEmpty() || selectedArticleIndex == -1) {
         ArticleDetailView(
             article = selectedArticle,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
@@ -94,7 +93,7 @@ fun ArticleReaderPane(
         return
     }
 
-    val pagerState = rememberPagerState(initialPage = initialPage) {
+    val pagerState = rememberPagerState(initialPage = selectedArticleIndex) {
         articles.size
     }
 
@@ -144,6 +143,9 @@ private fun ArticleDetailView(
 ) {
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
+    val scrollState = rememberSaveable(article.id, saver = ScrollState.Saver) {
+        ScrollState(initial = 0)
+    }
     var fullscreenMedia by remember { mutableStateOf<FullscreenMediaView?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
 
@@ -172,7 +174,7 @@ private fun ArticleDetailView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {

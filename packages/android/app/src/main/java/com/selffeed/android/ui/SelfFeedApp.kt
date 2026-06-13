@@ -168,7 +168,10 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                         state.articles.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
-                    onMarkAllRead = viewModel::markAllRead,
+                    onMarkAllRead = {
+                        viewModel.updateArticleQueueSnapshot(articlePagingItems.itemSnapshotList.items)
+                        viewModel.markAllRead()
+                    },
                     onBack = viewModel::closeArticle,
                     onToggleRead = {
                         state.selectedArticle?.let { article ->
@@ -394,7 +397,7 @@ private fun topBarLabel(state: AppUiState): String = when (state.activeTab) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AuthScreen(
+internal fun AuthScreen(
     mode: AuthMode,
     registrationEnabled: Boolean,
     errorMessage: String?,

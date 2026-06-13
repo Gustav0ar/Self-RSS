@@ -110,6 +110,7 @@ data class ChromeUiState(
 
 class MainViewModel(
     private val repository: RssRepository,
+    private val elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
@@ -352,15 +353,19 @@ class MainViewModel(
 
     fun refreshVisibleData() {
         if (!_uiState.value.isAuthenticated || !repository.isLoggedIn()) return
-        val now = SystemClock.elapsedRealtime()
+        val now = elapsedRealtimeMs()
         if (now - lastVisibleRefreshAtMs < RESUME_REFRESH_MIN_INTERVAL_MS) return
         lastVisibleRefreshAtMs = now
 
         loadCategories()
         loadFeeds()
         val current = _uiState.value
-        setArticleScope(feedId = current.selectedFeedId, categoryId = current.selectedCategoryId)
-        _uiState.value.selectedArticle?.id?.let { openArticle(it, forceRefresh = true) }
+        val selectedArticleId = current.selectedArticle?.id
+        if (selectedArticleId == null) {
+            setArticleScope(feedId = current.selectedFeedId, categoryId = current.selectedCategoryId)
+        } else {
+            openArticle(selectedArticleId, forceRefresh = true)
+        }
     }
 
     fun loadCategories() {
@@ -628,7 +633,7 @@ class MainViewModel(
             it.copy(
                 selectedFeedId = feedId,
                 selectedCategoryId = categoryId,
-                selectedArticle = null,
+                selectedArticle = if (scopeChanged) null else it.selectedArticle,
             )
         }
         if (scopeChanged) {
@@ -797,8 +802,32 @@ class MainViewModel(
             val state = _uiState.value
             when (val result = repository.markAllRead(state.selectedFeedId, state.selectedCategoryId)) {
                 is AppResult.Success -> {
-                    _uiState.update { it.copy(statusMessage = "Marked ${result.data} articles as read") }
-                    loadArticles()
+                    _uiState.update { current ->
+                        current.copy(
+                            articles = current.articles.map { article ->
+                                if (current.articleMatchesCurrentScope(article)) {
+                                    article.copy(isRead = true)
+                                } else {
+                                    article
+                                }
+                            },
+                            searchResults = current.searchResults.map { article ->
+                                if (current.articleMatchesCurrentScope(article)) {
+                                    article.copy(isRead = true)
+                                } else {
+                                    article
+                                }
+                            },
+                            selectedArticle = current.selectedArticle?.let { article ->
+                                if (current.articleMatchesCurrentScope(article)) {
+                                    article.copy(isRead = true)
+                                } else {
+                                    article
+                                }
+                            },
+                            statusMessage = "Marked ${result.data} articles as read",
+                        )
+                    }
                     loadCategories()
                     loadStats()
                 }
@@ -1326,19 +1355,14 @@ class MainViewModel(
         val feedIds = event.feedIds.toSet()
 
         _uiState.update { state ->
-            val hideRead = state.preferences?.hideRead == true
             val categoryDeltas = state.feeds
                 .filter { it.id in feedIds && it.unreadCount > 0 }
                 .groupBy { it.categoryId }
                 .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
 
             state.copy(
-                articles = if (hideRead) {
-                    state.articles.filterNot { it.feedId in feedIds }
-                } else {
-                    state.articles.map { article ->
-                        if (article.feedId in feedIds) article.copy(isRead = true) else article
-                    }
+                articles = state.articles.map { article ->
+                    if (article.feedId in feedIds) article.copy(isRead = true) else article
                 },
                 searchResults = state.searchResults.map { article ->
                     if (article.feedId in feedIds) article.copy(isRead = true) else article
@@ -1368,6 +1392,20 @@ class MainViewModel(
         val feed = feeds.firstOrNull { it.id == feedId } ?: return selectedCategoryId == null
         selectedCategoryId?.let { return it == feed.categoryId }
         return true
+    }
+
+    private fun AppUiState.articleMatchesCurrentScope(article: ArticleListItem): Boolean {
+        selectedFeedId?.let { return article.feedId == it }
+        val categoryId = selectedCategoryId ?: return true
+        val feed = feeds.firstOrNull { it.id == article.feedId }
+        return feed?.categoryId == categoryId
+    }
+
+    private fun AppUiState.articleMatchesCurrentScope(article: ArticleDetail): Boolean {
+        selectedFeedId?.let { return article.feedId == it }
+        val categoryId = selectedCategoryId ?: return true
+        val feed = feeds.firstOrNull { it.id == article.feedId }
+        return feed?.categoryId == categoryId
     }
 
     private fun List<CategoryWithCounts>.withUnreadDelta(

@@ -160,7 +160,14 @@ class ArticlesViewModel(
     fun markAllRead(feedId: String? = null, categoryId: String? = null) {
         viewModelScope.launch {
             when (val result = repository.markAllRead(feedId, categoryId)) {
-                is AppResult.Success -> loadArticles()
+                is AppResult.Success -> {
+                    _state.update { state ->
+                        state.copy(
+                            items = state.items.map { it.copy(isRead = true) },
+                            selectedArticle = state.selectedArticle?.copy(isRead = true),
+                        )
+                    }
+                }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
             }
         }
