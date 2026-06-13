@@ -598,8 +598,9 @@ class MainViewModel(
                     if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
                         current
                     } else {
+                        val readStates = current.knownArticleReadStates()
                         current.copy(
-                            articles = result.data.data,
+                            articles = result.data.data.withReadStates(readStates),
                             articleCursor = result.data.cursor,
                             hasMoreArticles = result.data.hasMore,
                             loadingMoreArticles = false,
@@ -692,8 +693,9 @@ class MainViewModel(
                     if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
                         current
                     } else {
+                        val readStates = current.knownArticleReadStates()
                         current.copy(
-                            articles = current.articles + result.data.data,
+                            articles = current.articles + result.data.data.withReadStates(readStates),
                             articleCursor = result.data.cursor,
                             hasMoreArticles = result.data.hasMore,
                             loadingMoreArticles = false,
@@ -742,11 +744,9 @@ class MainViewModel(
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
         if (articles.isEmpty()) return
         _uiState.update { current ->
-            val readStates = current.articles.associate { it.id to it.isRead }
+            val readStates = current.knownArticleReadStates()
             current.copy(
-                articles = articles.map { article ->
-                    readStates[article.id]?.let { article.copy(isRead = it) } ?: article
-                },
+                articles = articles.withReadStates(readStates),
             )
         }
     }
@@ -778,6 +778,12 @@ class MainViewModel(
             when (val result = repository.markRead(articleId, read)) {
                 is AppResult.Success -> {
                     _uiState.update { state ->
+                        val previousReadState = state.articleReadState(articleId)
+                        val changed = previousReadState?.let { it != result.data } ?: false
+                        val unreadDelta = if (!changed) 0 else if (result.data) -1 else 1
+                        val feedId = state.articleFeedId(articleId)
+                        val feed = feedId?.let { id -> state.feeds.firstOrNull { it.id == id } }
+
                         state.copy(
                             articles = state.articles.map {
                                 if (it.id == articleId) it.copy(isRead = result.data) else it
@@ -786,10 +792,34 @@ class MainViewModel(
                                 if (it.id == articleId) it.copy(isRead = result.data) else it
                             },
                             selectedArticle = state.selectedArticle?.takeIf { it.id != articleId } ?: state.selectedArticle?.copy(isRead = result.data),
+                            feeds = if (unreadDelta == 0 || feedId == null) {
+                                state.feeds
+                            } else {
+                                state.feeds.map { currentFeed ->
+                                    if (currentFeed.id == feedId) {
+                                        currentFeed.copy(
+                                            unreadCount = (currentFeed.unreadCount + unreadDelta).coerceAtLeast(0),
+                                        )
+                                    } else {
+                                        currentFeed
+                                    }
+                                }
+                            },
+                            categories = if (unreadDelta == 0 || feed == null) {
+                                state.categories
+                            } else {
+                                state.categories.withUnreadDelta(feed.categoryId, unreadDelta)
+                            },
+                            stats = if (unreadDelta == 0) {
+                                state.stats
+                            } else {
+                                state.stats?.withReadDelta(
+                                    unreadDelta = unreadDelta,
+                                    readDelta = if (result.data) 1 else -1,
+                                )
+                            },
                         )
                     }
-                    loadCategories()
-                    loadStats()
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -803,6 +833,15 @@ class MainViewModel(
             when (val result = repository.markAllRead(state.selectedFeedId, state.selectedCategoryId)) {
                 is AppResult.Success -> {
                     _uiState.update { current ->
+                        val feedIds = current.feeds
+                            .filter { current.feedMatchesCurrentScope(it) }
+                            .map { it.id }
+                            .toSet()
+                        val categoryDeltas = current.feeds
+                            .filter { it.id in feedIds && it.unreadCount > 0 }
+                            .groupBy { it.categoryId }
+                            .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
+
                         current.copy(
                             articles = current.articles.map { article ->
                                 if (current.articleMatchesCurrentScope(article)) {
@@ -825,11 +864,17 @@ class MainViewModel(
                                     article
                                 }
                             },
+                            feeds = current.feeds.map { feed ->
+                                if (feed.id in feedIds) feed.copy(unreadCount = 0) else feed
+                            },
+                            categories = current.categories.withUnreadDeltas(categoryDeltas),
+                            stats = current.stats?.withReadDelta(
+                                unreadDelta = -result.data,
+                                readDelta = result.data,
+                            ),
                             statusMessage = "Marked ${result.data} articles as read",
                         )
                     }
-                    loadCategories()
-                    loadStats()
                 }
 
                 is AppResult.Error -> _uiState.update { it.copy(errorMessage = result.message) }
@@ -1387,6 +1432,25 @@ class MainViewModel(
             ?: articles.firstOrNull { it.id == articleId }?.isRead
             ?: searchResults.firstOrNull { it.id == articleId }?.isRead
 
+    private fun AppUiState.knownArticleReadStates(): Map<String, Boolean> =
+        buildMap {
+            articles.forEach { article -> put(article.id, article.isRead) }
+            searchResults.forEach { article -> put(article.id, article.isRead) }
+            selectedArticle?.let { article -> put(article.id, article.isRead) }
+        }
+
+    private fun List<ArticleListItem>.withReadStates(
+        readStates: Map<String, Boolean>,
+    ): List<ArticleListItem> =
+        map { article ->
+            readStates[article.id]?.let { article.copy(isRead = it) } ?: article
+        }
+
+    private fun AppUiState.articleFeedId(articleId: String): String? =
+        selectedArticle?.takeIf { it.id == articleId }?.feedId
+            ?: articles.firstOrNull { it.id == articleId }?.feedId
+            ?: searchResults.firstOrNull { it.id == articleId }?.feedId
+
     private fun AppUiState.isFeedVisible(feedId: String): Boolean {
         selectedFeedId?.let { return it == feedId }
         val feed = feeds.firstOrNull { it.id == feedId } ?: return selectedCategoryId == null
@@ -1406,6 +1470,12 @@ class MainViewModel(
         val categoryId = selectedCategoryId ?: return true
         val feed = feeds.firstOrNull { it.id == article.feedId }
         return feed?.categoryId == categoryId
+    }
+
+    private fun AppUiState.feedMatchesCurrentScope(feed: FeedWithCounts): Boolean {
+        selectedFeedId?.let { return feed.id == it }
+        selectedCategoryId?.let { return feed.categoryId == it }
+        return true
     }
 
     private fun List<CategoryWithCounts>.withUnreadDelta(
