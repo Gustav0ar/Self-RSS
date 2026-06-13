@@ -376,6 +376,102 @@ class MainViewModelTest {
     }
 
     @Test
+    fun openArticle_autoMarkReadUpdatesSidebarUnreadCounts() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 10, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Unread 1")), null, false),
+        )
+        coEvery { repository.article("a1", any()) } returns AppResult.Success(
+            sampleArticleDetail(id = "a1", title = "Unread 1", isRead = false),
+        )
+        coEvery { repository.markRead("a1", true) } returns AppResult.Success(true)
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.openArticle("a1")
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertEquals(1, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(1, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(9, state.stats?.totalUnread)
+        assertEquals(21, state.stats?.totalRead)
+    }
+
+    @Test
+    fun markRead_updatesSidebarUnreadCounts() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 2)),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 10, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Unread 1")), null, false),
+        )
+        coEvery { repository.markRead("a1", true) } returns AppResult.Success(true)
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.markRead("a1", true)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertEquals(1, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(1, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(9, state.stats?.totalUnread)
+        assertEquals(21, state.stats?.totalRead)
+    }
+
+    @Test
+    fun markUnread_updatesSidebarUnreadCounts() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 1)),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(id = "category-1", unreadCount = 1)),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 10, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Read 1", isRead = true)), null, false),
+        )
+        coEvery { repository.markRead("a1", false) } returns AppResult.Success(false)
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.markRead("a1", false)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.articles.first { it.id == "a1" }.isRead)
+        assertEquals(2, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(2, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(11, state.stats?.totalUnread)
+        assertEquals(19, state.stats?.totalRead)
+    }
+
+    @Test
     fun refreshVisibleData_keepsOpenHiddenReadArticleVisible() = runTest {
         every { repository.isLoggedIn() } returns true
         coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
@@ -415,6 +511,41 @@ class MainViewModelTest {
     }
 
     @Test
+    fun selectingAllFeedsAgainKeepsOpenArticleContext() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery {
+            repository.articles(any(), any(), any(), any(), 30, null)
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Article 1")), null, false),
+        )
+        coEvery { repository.article("a1", any()) } returns AppResult.Success(
+            sampleArticleDetail(id = "a1", title = "Article 1", isRead = true),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.loadArticles()
+        advanceUntilIdle()
+        viewModel.openArticle("a1")
+        advanceUntilIdle()
+
+        coEvery {
+            repository.articles(any(), any(), any(), any(), 30, null)
+        } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Stale unread", isRead = false)), null, false),
+        )
+
+        viewModel.selectCategory(null)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("a1", state.selectedArticle?.id)
+        assertEquals(listOf("a1"), state.articles.map { it.id })
+        assertTrue(state.articles.first().isRead)
+    }
+
+    @Test
     fun markAllRead_keepsHiddenReadArticlesVisibleUntilRefresh() = runTest {
         every { repository.isLoggedIn() } returns true
         coEvery { repository.preferences() } returns AppResult.Success(samplePreferences(hideRead = true))
@@ -446,6 +577,126 @@ class MainViewModelTest {
         assertEquals(listOf("a1", "a2"), state.articles.map { it.id })
         assertTrue(state.articles.all { it.isRead })
         coVerify { repository.markAllRead(null, null) }
+    }
+
+    @Test
+    fun markAllRead_updatesSidebarUnreadCountsLocally() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(
+                sampleFeed(id = "feed-1", categoryId = "category-1", unreadCount = 3),
+                sampleFeed(id = "feed-2", categoryId = "category-1", unreadCount = 2),
+                sampleFeed(id = "feed-3", categoryId = "category-2", unreadCount = 4),
+            ),
+        )
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(
+                sampleCategory(id = "category-1", unreadCount = 5),
+                sampleCategory(id = "category-2", unreadCount = 4),
+            ),
+        )
+        coEvery { repository.stats() } returns AppResult.Success(sampleStats(totalUnread = 9, totalRead = 20))
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), any())
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Feed 1", feedId = "feed-1"),
+                    sampleArticle(id = "a2", title = "Feed 2", feedId = "feed-2"),
+                    sampleArticle(id = "a3", title = "Feed 3", feedId = "feed-3"),
+                ),
+                null,
+                false,
+            ),
+        )
+        coEvery { repository.markAllRead(null, null) } returns AppResult.Success(9)
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.markAllRead()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.all { it.isRead })
+        assertEquals(0, state.feeds.first { it.id == "feed-1" }.unreadCount)
+        assertEquals(0, state.feeds.first { it.id == "feed-2" }.unreadCount)
+        assertEquals(0, state.feeds.first { it.id == "feed-3" }.unreadCount)
+        assertEquals(0, state.categories.first { it.id == "category-1" }.unreadCount)
+        assertEquals(0, state.categories.first { it.id == "category-2" }.unreadCount)
+        assertEquals(0, state.stats?.totalUnread)
+        assertEquals(29, state.stats?.totalRead)
+    }
+
+    @Test
+    fun markAllRead_keepsReadVisualStateWhenAllFeedsIsSelectedAgain() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Unread 1"),
+                    sampleArticle(id = "a2", title = "Unread 2"),
+                ),
+                null,
+                false,
+            ),
+        )
+        coEvery { repository.markAllRead(null, null) } returns AppResult.Success(2)
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.markAllRead()
+        advanceUntilIdle()
+
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Stale unread 1", isRead = false),
+                    sampleArticle(id = "a2", title = "Stale unread 2", isRead = false),
+                ),
+                null,
+                false,
+            ),
+        )
+
+        viewModel.selectCategory(null)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(listOf("a1", "a2"), state.articles.map { it.id })
+        assertTrue(state.articles.all { it.isRead })
+    }
+
+    @Test
+    fun updateArticleQueueSnapshotPreservesReadStateFromSearchResults() = runTest {
+        every { repository.isLoggedIn() } returns false
+        coEvery { repository.search("topic", any(), any()) } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle(id = "a1", title = "Search result", isRead = true)), null, false),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.updateSearchQuery("topic")
+        viewModel.search()
+        advanceTimeBy(300)
+        advanceUntilIdle()
+
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle(id = "a1", title = "Stale unread", isRead = false),
+                sampleArticle(id = "a2", title = "Still unread", isRead = false),
+            ),
+        )
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertFalse(state.articles.first { it.id == "a2" }.isRead)
     }
 
     @Test
