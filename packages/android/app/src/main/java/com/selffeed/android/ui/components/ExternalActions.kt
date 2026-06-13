@@ -64,7 +64,7 @@ fun reapStaleOpmlExports(context: Context) {
     }
 }
 
-fun openExternalUrl(context: Context, url: String?) {
+fun openExternalUrl(context: Context, url: String?, onCustomTabClosed: (() -> Unit)? = null) {
     val safeUrl = url?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return
     try {
         val customTabsIntent = CustomTabsIntent.Builder()
@@ -75,6 +75,8 @@ fun openExternalUrl(context: Context, url: String?) {
         // Fallback to regular browser if Custom Tabs fails
         val intent = Intent(Intent.ACTION_VIEW, safeUrl.toUri())
         context.startActivity(intent)
+        // Browser doesn't notify us, but we can still signal the callback
+        onCustomTabClosed?.invoke()
     }
 }
 

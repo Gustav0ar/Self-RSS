@@ -99,10 +99,14 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `markAllRead reloads articles`() = runTest {
+    fun `markAllRead marks loaded articles without reloading`() = runTest {
         val viewModel = ArticlesViewModel(repository)
+        viewModel.loadArticles()
         viewModel.markAllRead()
+        val s = viewModel.state.value
+        assertTrue(s.items.first().isRead)
         coVerify { repository.markAllRead(null, null) }
+        coVerify(exactly = 1) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(
