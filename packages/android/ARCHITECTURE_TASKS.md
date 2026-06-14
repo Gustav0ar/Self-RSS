@@ -20,11 +20,17 @@
 - Fixed article/feed/category cache invalidation to avoid stale article pages after category mutations.
 - Made the shell article queue prefer the current Paging snapshot over the legacy manual cursor list.
 - Removed manual article cursor/has-more/loading-more state from `ArticlesViewModel`; Paging 3 owns article pagination.
+- Split Retrofit calls out of `RssRepository` into dedicated auth, feed, article, search, and settings remote data sources.
+- Kept repository policy centralized while remote data sources own request-envelope translation.
+- Optimized Paging read-state override mapping by snapshotting overrides once per `PagingData` emission.
+- Added a database-version guard so future Room version bumps require registered migrations and migration tests.
+- Added a Hilt androidTest runner, fake repository graph, and replacement module for device UI tests.
+- Replaced placeholder Android UI coverage with real `ArticlesTab` behavior coverage and a Hilt-backed `MainActivity` smoke test.
 
 ## Remaining Deepening Work
 
-1. Split `RssRepository` into dedicated remote data sources if backend API surface area keeps growing.
-2. Add Hilt-specific instrumented test replacement modules before introducing device UI tests.
+1. Run connected Android UI tests in CI once emulator/device infrastructure is available.
+2. Introduce use-case classes only if multiple ViewModels start sharing the same multi-step workflows.
 
 ## Target Shape
 

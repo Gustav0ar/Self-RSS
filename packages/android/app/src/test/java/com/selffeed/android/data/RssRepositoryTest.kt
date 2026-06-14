@@ -5,6 +5,11 @@ import androidx.test.core.app.ApplicationProvider
 import coil3.ImageLoader
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.remote.ArticleRemoteDataSource
+import com.selffeed.android.data.remote.AuthRemoteDataSource
+import com.selffeed.android.data.remote.FeedRemoteDataSource
+import com.selffeed.android.data.remote.SearchRemoteDataSource
+import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -67,7 +72,11 @@ class RssRepositoryTest {
         onlineState = MutableStateFlow(true)
         every { networkMonitor.online } returns onlineState
         repository = RssRepository(
-            api = api,
+            authRemote = AuthRemoteDataSource(api),
+            feedRemote = FeedRemoteDataSource(api),
+            articleRemote = ArticleRemoteDataSource(api),
+            searchRemote = SearchRemoteDataSource(api),
+            settingsRemote = SettingsRemoteDataSource(api),
             sessionStore = sessionStore,
             okHttpClient = OkHttpClient(),
             moshi = moshi,

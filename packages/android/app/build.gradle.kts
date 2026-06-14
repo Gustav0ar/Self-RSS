@@ -45,7 +45,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.selffeed.android.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -173,6 +173,9 @@ dependencies {
     testImplementation("androidx.test:runner:1.7.0")
     testImplementation("androidx.room:room-testing:2.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("com.google.dagger:hilt-android-testing:2.59.2")
+    kspAndroidTest("com.google.dagger:hilt-compiler:2.59.2")
 }

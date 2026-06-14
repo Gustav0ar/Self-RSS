@@ -3,6 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -31,6 +32,14 @@ class LocalDatabaseMigrationTest {
             true,
             *LOCAL_DATABASE_MIGRATIONS,
         ).close()
+    }
+
+    @Test
+    fun `migration registry is updated when database version increases`() {
+        assertTrue(
+            "Add and register MIGRATION_1_2 before increasing LOCAL_DATABASE_VERSION.",
+            LOCAL_DATABASE_VERSION == 1 || LOCAL_DATABASE_MIGRATIONS.isNotEmpty(),
+        )
     }
 
     private companion object {
