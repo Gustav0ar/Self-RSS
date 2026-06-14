@@ -1,17 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Adaptive-icon foreground.
-
-    The launcher canvas is 108x108dp; the inner 72x72dp is the "safe zone"
-    (any visible content must live inside it). We translate a 72x72dp
-    design into the center so the launcher can mask it (circle, squircle,
-    teardrop) without clipping the artwork.
-
-    The design mirrors packages/web/public/favicon.svg: a rounded square
-    with an indigo->violet gradient and a white RSS glyph. The web version
-    uses 64x64 with rx=14, stroke 3.5, and the glyph spans roughly the
-    inner-right of the canvas. We rescale that to 72x72 with rx=16 here.
--->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
@@ -19,45 +6,45 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Rounded square, indigo->violet gradient, centered in safe zone. -->
     <path
-        android:pathData="M34,18 L74,18 A16,16 0 0 1 90,34 L90,74 A16,16 0 0 1 74,90 L34,90 A16,16 0 0 1 18,74 L18,34 A16,16 0 0 1 34,18 Z">
+        android:fillAlpha="0.18"
+        android:fillColor="#FF022C22"
+        android:pathData="M36,25 L72,25 A20,20 0,0 1 92,45 L92,78 A20,20 0,0 1 72,98 L36,98 A20,20 0,0 1 16,78 L16,45 A20,20 0,0 1 36,25 Z" />
+
+    <path
+        android:pathData="M34,18 L74,18 A18,18 0,0 1 92,36 L92,72 A18,18 0,0 1 74,90 L34,90 A18,18 0,0 1 16,72 L16,36 A18,18 0,0 1 34,18 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:startX="18"
-                android:startY="18"
-                android:endX="90"
-                android:endY="90"
+                android:startY="20"
+                android:endX="88"
+                android:endY="88"
                 android:type="linear">
-                <item android:offset="0.0" android:color="#FF4F46E5" />
-                <item android:offset="1.0" android:color="#FF8B5CF6" />
+                <item android:offset="0.0" android:color="#FFFFC857" />
+                <item android:offset="0.45" android:color="#FFFF7A1A" />
+                <item android:offset="1.0" android:color="#FFE9461A" />
             </gradient>
         </aapt:attr>
     </path>
 
-    <!--
-        RSS glyph, white. Coordinates mirror favicon.svg, scaled 72/64
-        and translated to fit centered on the square. The web favicon's
-        outer arc starts at (20,22) on a 64x64 canvas with a 16-radius
-        arc; on 72x72 that becomes (22.5,24.75) with an 18-radius arc.
-    -->
-    <group
-        android:translateX="4.5"
-        android:translateY="4.5">
-        <path
-            android:strokeColor="#FFF8FAFC"
-            android:strokeWidth="4"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M22.5,24.75 A18,18 0 0 1 40.5,42.75" />
-        <path
-            android:strokeColor="#FFF8FAFC"
-            android:strokeWidth="4"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M22.5,33.75 A9,9 0 0 1 31.5,42.75" />
-        <path
-            android:fillColor="#FFF8FAFC"
-            android:pathData="M24.75,42.75 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
-    </group>
+    <path
+        android:fillAlpha="0.22"
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M33,24 L75,24 A11,11 0,0 1 86,35 L86,42 A58,58 0,0 0 24,70 L24,35 A11,11 0,0 1 35,24 Z" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M35,72 m-7,0 a7,7 0,1 0 14,0 a7,7 0,1 0 -14,0" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,51 A25,25 0,0 1 57,76"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="8" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M32,34 A42,42 0,0 1 74,76"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="8" />
 </vector>
