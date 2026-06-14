@@ -45,8 +45,6 @@ import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -58,7 +56,6 @@ import okhttp3.Response
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
@@ -95,8 +92,7 @@ class RssRepository(
     // individual failures and is cleaned up when the process dies.
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val cache = ConcurrentHashMap<String, CacheEntry<Any?>>()
-    private val cacheLocks = ConcurrentHashMap<String, Mutex>()
+    private val memoryCache = MemoryCache(MAX_MEMORY_CACHE_ENTRIES)
     private val apiErrorAdapter: JsonAdapter<ApiErrorEnvelope> = moshi.adapter(ApiErrorEnvelope::class.java)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
 
@@ -536,9 +532,7 @@ class RssRepository(
      * trim memory) to free up heap when the system is under pressure.
      */
     fun trimMemoryCaches() {
-        val cleared = cache.size
-        cache.clear()
-        cacheLocks.clear()
+        val cleared = memoryCache.clear()
         cacheInvalidationCount.incrementAndGet()
         cacheInvalidatedEntriesCount.addAndGet(cleared.toLong())
     }
@@ -633,92 +627,29 @@ class RssRepository(
     }
 
     private suspend fun <T> cachedGet(key: String, ttlMs: Long, loader: suspend () -> T): T {
-        val cached = getCached<T>(key)
-        if (cached != null) {
-            cacheHitCount.incrementAndGet()
-            return cached
-        }
-
-        cacheMissCount.incrementAndGet()
-        val mutex = cacheLocks.getOrPut(key) { Mutex() }
-        return mutex.withLock {
-            val cachedInsideLock = getCached<T>(key)
-            if (cachedInsideLock != null) {
-                cacheHitCount.incrementAndGet()
-                return@withLock cachedInsideLock
-            }
-
-            val loaded = loader()
-            putCached(key, ttlMs, loaded)
-            loaded
-        }
+        return memoryCache.getOrLoad(
+            key = key,
+            ttlMs = ttlMs,
+            onHit = { cacheHitCount.incrementAndGet() },
+            onMiss = { cacheMissCount.incrementAndGet() },
+            onStore = { cacheStoreCount.incrementAndGet() },
+            loader = loader,
+        )
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun <T> getCached(key: String): T? {
-        val entry = cache[key] ?: return null
-        if (entry.expiresAt < System.currentTimeMillis()) {
-            cache.remove(key)
-            cacheLocks.remove(key)
-            return null
-        }
-        entry.lastAccessMs = System.currentTimeMillis()
-        return entry.value as? T
+        return memoryCache.get(key)
     }
 
     private fun putCached(key: String, ttlMs: Long, value: Any?) {
         cacheStoreCount.incrementAndGet()
-        val now = System.currentTimeMillis()
-        cache[key] = CacheEntry(value = value, expiresAt = now + ttlMs, lastAccessMs = now)
-        pruneMemoryCache()
-    }
-
-    private fun pruneMemoryCache() {
-        val now = System.currentTimeMillis()
-        val expiredKeys = cache.entries
-            .filter { (_, entry) -> entry.expiresAt < now }
-            .map { it.key }
-        expiredKeys.forEach {
-            cache.remove(it)
-            cacheLocks.remove(it)
-        }
-
-        if (cache.size <= MAX_MEMORY_CACHE_ENTRIES) return
-
-        val overflow = cache.size - MAX_MEMORY_CACHE_ENTRIES
-        // LRU by last access, not by expiry. The previous code sorted by
-        // expiresAt ascending which evicted the shortest-lived entries first
-        // (e.g. the 8s article cache) — the opposite of what's wanted.
-        cache.entries
-            .sortedBy { it.value.lastAccessMs }
-            .take(overflow)
-            .forEach { (key, _) ->
-                cache.remove(key)
-                cacheLocks.remove(key)
-            }
+        memoryCache.put(key, ttlMs, value)
     }
 
     private fun invalidateByPrefix(prefix: String) {
-        // Treat the prefix as a *namespace* — a key is matched only if
-        // it is either exactly the prefix (for a bare key like
-        // `categories` or `preferences`) or it lives under the prefix
-        // with a `:` separator (e.g. `articles:foo` matches the prefix
-        // `articles`). This keeps an unrelated key like `articlesList`
-        // from being clobbered by `invalidateByPrefix("articles")`.
-        var removedEntries = 0L
-        cache.keys.removeIf { key ->
-            val shouldRemove =
-                if (prefix.endsWith(':')) {
-                    key == prefix.dropLast(1) || key.startsWith(prefix)
-                } else {
-                    key == prefix || key.startsWith("$prefix:")
-                }
-            if (shouldRemove) removedEntries++
-            shouldRemove
-        }
-
+        val removedEntries = memoryCache.invalidateByPrefix(prefix)
         cacheInvalidationCount.incrementAndGet()
-        if (removedEntries > 0) cacheInvalidatedEntriesCount.addAndGet(removedEntries)
+        if (removedEntries > 0) cacheInvalidatedEntriesCount.addAndGet(removedEntries.toLong())
     }
 
     suspend fun invalidateArticleCaches(articleId: String) {
@@ -752,9 +683,7 @@ class RssRepository(
     }
 
     private fun clearCache() {
-        val clearedEntries = cache.size.toLong()
-        cache.clear()
-        cacheLocks.clear()
+        val clearedEntries = memoryCache.clear().toLong()
         cacheInvalidationCount.incrementAndGet()
         cacheInvalidatedEntriesCount.addAndGet(clearedEntries)
     }
@@ -800,15 +729,9 @@ class RssRepository(
                             return
                         }
 
-                        val body = response.body
-                        if (body == null) {
-                            this@stream.close(IOException("Read-state stream response did not include a body"))
-                            return
-                        }
-
                         val parser = SseEventParser()
                         try {
-                            val source = body.source()
+                            val source = response.body.source()
                             while (!call.isCanceled()) {
                                 val line = source.readUtf8Line() ?: break
                                 parser.pushLine(line)
@@ -844,12 +767,6 @@ class RssRepository(
         if (!BuildConfig.DEBUG) return
         Log.d("RssRepository", message)
     }
-
-    private data class CacheEntry<T>(
-        val value: T,
-        val expiresAt: Long,
-        var lastAccessMs: Long,
-    )
 
     private companion object {
         const val READ_RETRY_MAX_ATTEMPTS = 3

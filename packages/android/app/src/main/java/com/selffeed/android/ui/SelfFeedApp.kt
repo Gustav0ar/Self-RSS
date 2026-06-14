@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,18 +62,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.openExternalUrl
 import com.selffeed.android.ui.components.shareOpmlContent
+import com.selffeed.android.ui.screens.ArticleTabActions
+import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
+import com.selffeed.android.ui.screens.FeedTabActions
+import com.selffeed.android.ui.screens.FeedTabState
 import com.selffeed.android.ui.screens.FeedsTab
+import com.selffeed.android.ui.screens.SearchTabActions
+import com.selffeed.android.ui.screens.SearchTabState
 import com.selffeed.android.ui.screens.SearchTab
+import com.selffeed.android.ui.screens.SettingsTabActions
+import com.selffeed.android.ui.screens.SettingsTabState
 import com.selffeed.android.ui.screens.SettingsTab
 import com.selffeed.android.ui.screens.StatsTab
 import kotlinx.coroutines.launch
@@ -141,6 +152,93 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
     }
 
     val articlePagingItems = viewModel.articlePagingData.collectAsLazyPagingItems()
+    val feedTabState = remember(
+        state.categories,
+        state.feeds,
+        state.preferences?.hideRead,
+        state.stats?.totalUnread,
+        state.selectedCategoryId,
+        state.selectedFeedId,
+    ) {
+        FeedTabState(
+            categories = state.categories,
+            feeds = state.feeds,
+            hideRead = state.preferences?.hideRead ?: false,
+            totalUnread = state.stats?.totalUnread ?: 0,
+            selectedCategoryId = state.selectedCategoryId,
+            selectedFeedId = state.selectedFeedId,
+        )
+    }
+    val articleTabState = remember(
+        state.articles,
+        state.selectedArticle?.id,
+        state.hasMoreArticles,
+        state.loadingMoreArticles,
+        state.isSyncingFeeds,
+    ) {
+        ArticleTabState(
+            articles = state.articles,
+            selectedArticleId = state.selectedArticle?.id,
+            hasMoreArticles = state.hasMoreArticles,
+            loadingMoreArticles = state.loadingMoreArticles,
+            isSyncingFeeds = state.isSyncingFeeds,
+        )
+    }
+    val searchTabState = remember(
+        state.searchQuery,
+        state.searchResults,
+        state.selectedArticle?.id,
+        state.hasMoreSearchResults,
+        state.loadingMoreSearchResults,
+    ) {
+        SearchTabState(
+            query = state.searchQuery,
+            results = state.searchResults,
+            selectedArticleId = state.selectedArticle?.id,
+            hasMoreResults = state.hasMoreSearchResults,
+            loadingMoreResults = state.loadingMoreSearchResults,
+        )
+    }
+    val settingsTabState = remember(state.preferences, state.stats) {
+        SettingsTabState(
+            preferences = state.preferences,
+            stats = state.stats,
+        )
+    }
+    val feedActions = remember(viewModel) {
+        FeedTabActions(
+            onHideReadChanged = viewModel::updateHideRead,
+            onCategorySelected = viewModel::selectCategory,
+            onFeedSelected = viewModel::selectFeed,
+        )
+    }
+    val articleActions = remember(viewModel) {
+        ArticleTabActions(
+            onRefresh = viewModel::syncAllFeeds,
+            onLoadMore = viewModel::loadMoreArticles,
+            onOpenArticle = { id -> viewModel.openArticle(id) },
+            onToggleRead = viewModel::markRead,
+            onArticleSnapshot = viewModel::updateArticleQueueSnapshot,
+        )
+    }
+    val searchActions = remember(viewModel) {
+        SearchTabActions(
+            onQueryChanged = viewModel::updateSearchQuery,
+            onSearchRequested = viewModel::search,
+            onOpenArticle = { id -> viewModel.openArticle(id) },
+            onLoadMore = viewModel::loadMoreSearch,
+        )
+    }
+    val settingsActions = remember(viewModel) {
+        SettingsTabActions(
+            onThemeChanged = { preference -> viewModel.updateTheme(preference.apiValue) },
+            onHideReadChanged = viewModel::updateHideRead,
+            onSortChanged = { preference -> viewModel.updateDefaultSort(preference.apiValue) },
+            onDensityChanged = { preference -> viewModel.updateDensity(preference.apiValue) },
+            onTextSizeChanged = viewModel::updateTextSize,
+            onLogout = viewModel::logout,
+        )
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -150,7 +248,7 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                 drawerContentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.width(320.dp),
             ) {
-                FeedsTab(state, viewModel, onSelect = { scope.launch { drawerState.close() } })
+                FeedsTab(feedTabState, feedActions, onSelect = { scope.launch { drawerState.close() } })
             }
         },
     ) {
@@ -222,13 +320,13 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                                     },
                                 )
                             } else {
-                                ArticlesTab(state, viewModel, articlePagingItems)
+                                ArticlesTab(articleTabState, articleActions, articlePagingItems)
                             }
                         }
-                        HomeTab.SEARCH -> SearchTab(state, viewModel)
-                        HomeTab.SETTINGS -> SettingsTab(state, viewModel)
-                        HomeTab.STATS -> StatsTab(state, viewModel)
-                        HomeTab.FEEDS -> FeedsTab(state, viewModel, onSelect = { viewModel.setTab(HomeTab.ARTICLES) })
+                        HomeTab.SEARCH -> SearchTab(searchTabState, searchActions)
+                        HomeTab.SETTINGS -> SettingsTab(settingsTabState, settingsActions)
+                        HomeTab.STATS -> StatsTab(settingsTabState, settingsActions)
+                        HomeTab.FEEDS -> FeedsTab(feedTabState, feedActions, onSelect = { viewModel.setTab(HomeTab.ARTICLES) })
                     }
                 }
             }
@@ -436,12 +534,16 @@ internal fun AuthScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(64.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.RssFeed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Image(
+                        painter = painterResource(R.drawable.ic_self_feed_logo),
+                        contentDescription = null,
+                        modifier = Modifier.size(56.dp),
+                    )
                 }
                 Text(
                     "SelfFeed",
