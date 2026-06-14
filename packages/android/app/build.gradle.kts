@@ -90,9 +90,23 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("debug").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        getByName("test").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
+    }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     lint {
         disable += "MutableCollectionMutableState"
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -144,6 +158,8 @@ dependencies {
     implementation("androidx.core:core-splashscreen:1.2.0")
     implementation("com.google.dagger:hilt-android:2.59.2")
     ksp("com.google.dagger:hilt-compiler:2.59.2")
+    implementation("androidx.hilt:hilt-work:1.3.0")
+    ksp("androidx.hilt:hilt-compiler:1.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
@@ -154,6 +170,8 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.test:runner:1.7.0")
+    testImplementation("androidx.room:room-testing:2.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

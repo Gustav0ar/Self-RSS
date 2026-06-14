@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.SyncResponse
 import io.mockk.coEvery
 import io.mockk.every
@@ -19,9 +20,9 @@ import retrofit2.HttpException
  * scheduling layer. The schedule itself is covered by an integration smoke
  * test.
  *
- * The worker is `open` so tests can subclass it and override
- * `getApplicationContext` (which is `final` on ListenableWorker) to return
- * a mock [com.selffeed.android.SelfFeedApplication].
+ * The production worker is constructed by Hilt through WorkManager. These
+ * unit tests construct it directly with a mocked repository so the
+ * behavior matrix stays fast and deterministic.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -115,21 +116,14 @@ class FeedSyncWorkerTest {
     private fun buildWorker(
         loggedIn: Boolean,
         syncResult: AppResult<SyncResponse>?,
-    ): TestFeedSyncWorker {
-        val app = mockk<com.selffeed.android.SelfFeedApplication>(relaxed = true)
+    ): FeedSyncWorker {
         val repo = mockk<RssRepository>()
-        every { app.repository } returns repo
         coEvery { repo.isLoggedIn() } returns loggedIn
         if (syncResult != null) {
             coEvery { repo.syncAllFeeds() } returns syncResult
         }
         val params = mockk<androidx.work.WorkerParameters>(relaxed = true)
-        // We construct the worker directly with the mock application as
-        // its context. The Worker's `applicationContext` is `final` but
-        // its constructor stores the context we pass; FeedSyncWorker.doWork
-        // casts that stored context to SelfFeedApplication, so the cast
-        // succeeds as long as we pass a SelfFeedApplication mock.
-        return TestFeedSyncWorker(app, params)
+        return FeedSyncWorker(ApplicationProvider.getApplicationContext(), params, repo)
     }
 
     private fun buildHttpError(message: String, code: Int): AppResult.Error {
@@ -139,15 +133,3 @@ class FeedSyncWorkerTest {
         return AppResult.Error(message, exception)
     }
 }
-
-/**
- * Subclass of [FeedSyncWorker] used by the test suite. The parent
- * `getApplicationContext()` is `final`, so this is constructed by passing
- * the mock application as the context, which makes the
- * `applicationContext as SelfFeedApplication` cast inside `doWork`
- * succeed.
- */
-private class TestFeedSyncWorker(
-    mockApp: com.selffeed.android.SelfFeedApplication,
-    params: androidx.work.WorkerParameters,
-) : FeedSyncWorker(mockApp, params)

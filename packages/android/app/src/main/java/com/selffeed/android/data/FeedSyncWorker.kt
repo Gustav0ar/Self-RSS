@@ -12,22 +12,25 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.hilt.work.HiltWorker
 import com.selffeed.android.BuildConfig
-import com.selffeed.android.SelfFeedApplication
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
 
-open class FeedSyncWorker(
-    appContext: Context,
-    workerParams: WorkerParameters,
+@HiltWorker
+class FeedSyncWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val repository: RssRepository,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
-        val app = applicationContext as SelfFeedApplication
-        if (!app.repository.isLoggedIn()) {
+        if (!repository.isLoggedIn()) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Skipping sync — user is not logged in")
             return Result.success()
         }
-        return when (val result = app.repository.syncAllFeeds()) {
+        return when (val result = repository.syncAllFeeds()) {
             is AppResult.Success -> Result.success()
             is AppResult.Error -> {
                 val cause = result.cause
