@@ -1,6 +1,7 @@
 package com.selffeed.android.network
 
 import android.content.Context
+import android.util.Log
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
 import com.squareup.moshi.FromJson
@@ -29,15 +30,20 @@ class PersistedRefreshCookieJar(
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         val refresh = cookies.firstOrNull { it.name == REFRESH_COOKIE_NAME }
         if (refresh != null) {
-            sessionStore.setRefreshCookie(refresh.toString())
+            runCatching { sessionStore.setRefreshCookie(refresh.toString()) }
+                .onFailure { logCookieJarError("Failed to persist refresh cookie", it) }
         }
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
-        val rawCookie = sessionStore.getRefreshCookie() ?: return emptyList()
+        val rawCookie = runCatching { sessionStore.getRefreshCookie() }
+            .onFailure { logCookieJarError("Failed to read refresh cookie", it) }
+            .getOrNull()
+            ?: return emptyList()
         val cookie = Cookie.parse(url, rawCookie) ?: return emptyList()
         return if (cookie.expiresAt < System.currentTimeMillis()) {
-            sessionStore.setRefreshCookie(null)
+            runCatching { sessionStore.setRefreshCookie(null) }
+                .onFailure { logCookieJarError("Failed to clear expired refresh cookie", it) }
             emptyList()
         } else {
             listOf(cookie)
@@ -45,7 +51,12 @@ class PersistedRefreshCookieJar(
     }
 
     companion object {
+        private const val TAG = "PersistedRefreshCookieJar"
         private const val REFRESH_COOKIE_NAME = "rss_refresh_token"
+
+        private fun logCookieJarError(message: String, throwable: Throwable) {
+            runCatching { Log.e(TAG, message, throwable) }
+        }
     }
 }
 

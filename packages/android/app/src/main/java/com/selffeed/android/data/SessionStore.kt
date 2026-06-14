@@ -1,6 +1,8 @@
 package com.selffeed.android.data
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -13,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
@@ -165,12 +168,14 @@ class SessionStore(context: Context) {
         if (blob.size <= GCM_IV_LENGTH) return null
         val iv = blob.copyOfRange(0, GCM_IV_LENGTH)
         val ciphertext = blob.copyOfRange(GCM_IV_LENGTH, blob.size)
-        val key = masterKeyKey()
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
         return runCatching {
+            val key = masterKeyKey()
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        }.getOrNull()
+        }
+            .onFailure { Log.w(TAG, "Stored session value could not be decrypted", it) }
+            .getOrNull()
     }
 
     /**
@@ -181,8 +186,50 @@ class SessionStore(context: Context) {
      * is already a usable AES-256 key.)
      */
     private fun masterKeyKey(): SecretKey {
-        val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        return (ks.getEntry(MASTER_KEY_ALIAS, null) as java.security.KeyStore.SecretKeyEntry).secretKey
+        // Force androidx.security to create the alias before reading it
+        // directly. Some devices return null for an alias that has not
+        // been materialized yet, and casting that null crashes OkHttp
+        // when the refresh cookie is persisted after login.
+        runCatching { ensureMasterKeyExists() }
+            .onFailure { Log.w(TAG, "MasterKey initialization failed; falling back to direct key generation", it) }
+        val alias = MASTER_KEY_ALIAS
+        val ks = java.security.KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val existing = ks.getEntry(alias, null)
+        if (existing is java.security.KeyStore.SecretKeyEntry) {
+            return existing.secretKey
+        }
+
+        if (existing != null) {
+            Log.w(TAG, "Unexpected AndroidKeyStore entry for $alias; regenerating session key")
+            ks.deleteEntry(alias)
+        } else {
+            Log.w(TAG, "AndroidKeyStore entry for $alias was missing; generating session key")
+        }
+
+        return generateMasterKey(alias)
+    }
+
+    private fun generateMasterKey(alias: String): SecretKey {
+        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        keyGenerator.init(
+            KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setKeySize(256)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build(),
+        )
+        return keyGenerator.generateKey()
+    }
+
+    private fun ensureMasterKeyExists() {
+        // Accessing the lazy value runs MasterKey.Builder.build(), which
+        // creates the AndroidKeyStore alias when it is absent. The keyAlias
+        // accessor is not public in all androidx.security versions, so the
+        // app keeps using the documented default alias constant below.
+        masterKey.toString()
     }
 
     private fun migrateLegacyIfPresent() {
@@ -210,6 +257,7 @@ class SessionStore(context: Context) {
 
     companion object {
         private const val TAG = "SessionStore"
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_IV_LENGTH = 12
         private const val GCM_TAG_LENGTH = 128
