@@ -95,6 +95,20 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `applyStatsDelta keeps unread and read totals in sync`() = runTest {
+        coEvery { repository.stats() } returns AppResult.Success(
+            StatsResponse(totalUnread = 5, totalRead = 10, totalFeeds = 2, totalCategories = 1),
+        )
+        val viewModel = SettingsViewModel(repository)
+        viewModel.loadStats()
+
+        viewModel.applyStatsDelta(unreadDelta = -2, readDelta = 2)
+
+        assertEquals(3, viewModel.state.value.stats?.totalUnread)
+        assertEquals(12, viewModel.state.value.stats?.totalRead)
+    }
+
+    @Test
     fun `toggleRegistrationLock sends the new value`() = runTest {
         val viewModel = SettingsViewModel(repository)
         viewModel.toggleRegistrationLock(true)

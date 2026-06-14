@@ -7,10 +7,16 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -37,6 +43,13 @@ class ArticlesViewModelTest {
         coEvery { repository.article(any(), any()) } returns AppResult.Success(sampleDetail("a1"))
         coEvery { repository.markRead(any(), any()) } returns AppResult.Success(true)
         coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(0)
+        coEvery { repository.enrichArticle(any(), any()) } returns AppResult.Success(
+            com.selffeed.android.network.EnrichArticleResponse(success = false),
+        )
+        coEvery { repository.prefetchArticle(any()) } returns AppResult.Success(sampleDetail("a2"))
+        coEvery { repository.refreshArticleDetail(any()) } returns AppResult.Success(sampleDetail("a2"))
+        every { repository.cachedArticleDetail(any()) } returns null
+        every { repository.prefetchHeroImages(any()) } just runs
     }
 
     @After
@@ -59,6 +72,16 @@ class ArticlesViewModelTest {
         viewModel.setScope(feedId = "f-1", categoryId = null)
         assertEquals("f-1", viewModel.state.value.selectedFeedId)
         assertNull(viewModel.state.value.selectedCategoryId)
+        coVerify {
+            repository.articles(
+                feedId = "f-1",
+                categoryId = null,
+                unreadOnly = false,
+                sort = null,
+                limit = 30,
+                cursor = null,
+            )
+        }
     }
 
     @Test
@@ -99,6 +122,23 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `markRead emits unread and read deltas for sidebar and stats sync`() = runTest {
+        val viewModel = ArticlesViewModel(repository)
+        viewModel.loadArticles()
+
+        val event = backgroundScope.async { viewModel.events.first() }
+        runCurrent()
+        viewModel.markRead("a1", true)
+
+        val changed = event.await() as ArticleFeatureEvent.ArticleReadStateChanged
+        assertEquals("a1", changed.articleId)
+        assertEquals("f-1", changed.feedId)
+        assertEquals(true, changed.read)
+        assertEquals(-1, changed.unreadDelta)
+        assertEquals(1, changed.readDelta)
+    }
+
+    @Test
     fun `markAllRead marks loaded articles without reloading`() = runTest {
         val viewModel = ArticlesViewModel(repository)
         viewModel.loadArticles()
@@ -107,6 +147,41 @@ class ArticlesViewModelTest {
         assertTrue(s.items.first().isRead)
         coVerify { repository.markAllRead(null, null) }
         coVerify(exactly = 1) { repository.articles(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `markAllRead emits empty feed set for all-feeds scope so consumers clear entire scope`() = runTest {
+        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(4)
+        val viewModel = ArticlesViewModel(repository)
+        viewModel.loadArticles()
+
+        val event = backgroundScope.async { viewModel.events.first() }
+        runCurrent()
+        viewModel.markAllRead()
+
+        val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
+        assertNull(marked.feedId)
+        assertNull(marked.categoryId)
+        assertTrue(marked.affectedFeedIds.isEmpty())
+        assertEquals(4, marked.markedCount)
+    }
+
+    @Test
+    fun `setFilter reloads with unread and sort query`() = runTest {
+        val viewModel = ArticlesViewModel(repository)
+
+        viewModel.setFilter(sort = "oldest", hideRead = true)
+
+        coVerify {
+            repository.articles(
+                feedId = null,
+                categoryId = null,
+                unreadOnly = true,
+                sort = "oldest",
+                limit = 30,
+                cursor = null,
+            )
+        }
     }
 
     private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(

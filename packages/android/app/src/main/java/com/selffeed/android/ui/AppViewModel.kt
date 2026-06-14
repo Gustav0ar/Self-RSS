@@ -3,7 +3,7 @@ package com.selffeed.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.AppStatusRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +24,7 @@ data class AppChromeState(
 )
 
 class AppViewModel(
-    private val repository: RssRepository,
+    private val repository: AppStatusRepository,
 ) : ViewModel() {
     private val _chrome = MutableStateFlow(AppChromeState())
     val chrome: StateFlow<AppChromeState> = _chrome.asStateFlow()
@@ -53,7 +53,7 @@ class AppViewModel(
         _chrome.value = _chrome.value.copy(globalError = null, globalStatus = null)
     }
 
-    class Factory(private val repository: RssRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: AppStatusRepository) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
             return AppViewModel(repository) as T

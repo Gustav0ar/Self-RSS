@@ -120,22 +120,66 @@ class FeedsViewModelTest {
         assertEquals("boom", viewModel.state.value.errorMessage)
     }
 
-    private fun sampleCategory(): CategoryWithCounts = CategoryWithCounts(
+    @Test
+    fun `applyUnreadDelta keeps feed and category badges in sync`() = runTest {
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(unreadCount = 2)),
+        )
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(sampleFeed(unreadCount = 2)),
+        )
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+        viewModel.loadFeeds()
+
+        viewModel.applyUnreadDelta(feedId = "f-1", unreadDelta = -1)
+
+        assertEquals(1, viewModel.state.value.feeds.first().unreadCount)
+        assertEquals(1, viewModel.state.value.categories.first().unreadCount)
+    }
+
+    @Test
+    fun `applyScopeMarkedRead clears only targeted feed badges`() = runTest {
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(unreadCount = 5)),
+        )
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(
+                sampleFeed(id = "f-1", unreadCount = 2),
+                sampleFeed(id = "f-2", unreadCount = 3),
+            ),
+        )
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+        viewModel.loadFeeds()
+
+        viewModel.applyScopeMarkedRead(
+            feedId = null,
+            categoryId = null,
+            affectedFeedIds = setOf("f-1"),
+        )
+
+        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-1" }.unreadCount)
+        assertEquals(3, viewModel.state.value.feeds.first { it.id == "f-2" }.unreadCount)
+        assertEquals(3, viewModel.state.value.categories.first().unreadCount)
+    }
+
+    private fun sampleCategory(unreadCount: Int = 0): CategoryWithCounts = CategoryWithCounts(
         id = "c-1",
         name = "Tech",
         slug = "tech",
         sortOrder = 0,
         feedCount = 0,
-        unreadCount = 0,
+        unreadCount = unreadCount,
     )
 
-    private fun sampleFeed(): FeedWithCounts = FeedWithCounts(
-        id = "f-1",
+    private fun sampleFeed(id: String = "f-1", unreadCount: Int = 0): FeedWithCounts = FeedWithCounts(
+        id = id,
         categoryId = "c-1",
         title = "Feed",
         feedUrl = "https://example.com/feed.xml",
         pollingIntervalMinutes = 60,
         syncStatus = "idle",
-        unreadCount = 0,
+        unreadCount = unreadCount,
     )
 }

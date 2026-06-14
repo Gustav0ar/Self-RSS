@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.SearchRepository
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,7 +30,7 @@ data class SearchUiState(
  * round-trip with debounce.
  */
 class SearchViewModel(
-    private val repository: RssRepository,
+    private val repository: SearchRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SearchUiState())
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
@@ -67,6 +67,26 @@ class SearchViewModel(
         viewModelScope.launch {
             _state.update { it.copy(loadingMore = true) }
             runSearch(snapshot.query.trim(), snapshot.cursor)
+        }
+    }
+
+    fun applyArticleReadState(articleId: String, read: Boolean) {
+        _state.update { state ->
+            state.copy(
+                results = state.results.map { article ->
+                    if (article.id == articleId) article.copy(isRead = read) else article
+                },
+            )
+        }
+    }
+
+    fun applyScopeMarkedRead(feedIds: Set<String>) {
+        _state.update { state ->
+            state.copy(
+                results = state.results.map { article ->
+                    if (feedIds.isEmpty() || article.feedId in feedIds) article.copy(isRead = true) else article
+                },
+            )
         }
     }
 
@@ -110,7 +130,7 @@ class SearchViewModel(
         const val MIN_QUERY_LENGTH = 2
     }
 
-    class Factory(private val repository: RssRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: SearchRepository) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
             return SearchViewModel(repository) as T
