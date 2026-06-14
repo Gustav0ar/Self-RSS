@@ -75,6 +75,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.components.ArticleReaderPane
+import com.selffeed.android.ui.components.AnimatedLoadingIndicator
 import com.selffeed.android.ui.components.openExternalUrl
 import com.selffeed.android.ui.screens.ArticleTabActions
 import com.selffeed.android.ui.screens.ArticleTabState
@@ -229,13 +230,15 @@ fun SelfFeedApp(
         articleQueue,
         selectedArticle?.id,
         state.feeds.loading,
+        state.articles.loading,
     ) {
+        val isRefreshingArticles = state.feeds.loading || state.articles.loading
         ArticleTabState(
             articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
             hasMoreArticles = false,
             loadingMoreArticles = false,
-            isSyncingFeeds = state.feeds.loading,
+            isSyncingFeeds = isRefreshingArticles,
         )
     }
     val searchTabState = remember(
@@ -391,7 +394,7 @@ private fun LoadingScreen() {
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            androidx.compose.material3.CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            AnimatedLoadingIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Loading your reading workspace",

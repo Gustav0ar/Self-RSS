@@ -44,7 +44,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.pullToRefreshIndicator
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -87,6 +89,7 @@ import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ThemePreference
+import com.selffeed.android.ui.components.AnimatedLoadingIndicator
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -421,6 +424,8 @@ fun ArticlesTab(
     val listState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
     val density = LocalDensity.current
+    var keepTopAfterRefresh by remember { mutableStateOf(false) }
+    var wasRefreshing by remember { mutableStateOf(false) }
     val readStateOverrides = remember(state.articles) {
         state.articles.associate { it.id to it.isRead }
     }
@@ -450,13 +455,54 @@ fun ArticlesTab(
 
     val isPagingInitialLoad = pagedArticles?.loadState?.refresh is LoadState.Loading
     val articleCount = pagedArticles?.itemCount ?: state.articles.size
-    val isEmpty = articleCount == 0 && !isPagingInitialLoad && !state.isSyncingFeeds
+    val isRefreshing = state.isSyncingFeeds || (isPagingInitialLoad && articleCount > 0)
+    val isEmpty = articleCount == 0 && !isPagingInitialLoad && !isRefreshing
+
+    LaunchedEffect(isRefreshing, articleCount) {
+        if (!wasRefreshing && isRefreshing && listState.firstVisibleItemIndex == 0) {
+            keepTopAfterRefresh = true
+        }
+        if (wasRefreshing && !isRefreshing && keepTopAfterRefresh && articleCount > 0) {
+            listState.scrollToItem(0)
+            keepTopAfterRefresh = false
+        }
+        wasRefreshing = isRefreshing
+    }
 
     PullToRefreshBox(
-        isRefreshing = state.isSyncingFeeds,
-        onRefresh = actions.onRefresh,
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            keepTopAfterRefresh = listState.firstVisibleItemIndex == 0
+            actions.onRefresh()
+        },
         modifier = Modifier.fillMaxSize(),
         state = pullToRefreshState,
+        indicator = {
+            if (isRefreshing) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .pullToRefreshIndicator(
+                            state = pullToRefreshState,
+                            isRefreshing = true,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AnimatedLoadingIndicator(
+                        size = 24.dp,
+                        strokeWidth = 2.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            } else {
+                PullToRefreshDefaults.Indicator(
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    isRefreshing = false,
+                    state = pullToRefreshState,
+                )
+            }
+        },
     ) {
         LazyColumn(
             state = listState,

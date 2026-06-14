@@ -11,6 +11,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -63,6 +64,30 @@ class ArticlesViewModelTest {
         viewModel.loadArticles()
         val s = viewModel.state.value
         assertEquals(1, s.items.size)
+    }
+
+    @Test
+    fun `loadArticles keeps loading true until fetch completes`() = runTest {
+        val articlesResult = CompletableDeferred<AppResult<ApiListResponse<ArticleListItem>>>()
+        coEvery { repository.articles(any(), any(), any(), any(), any(), any()) } coAnswers {
+            articlesResult.await()
+        }
+        val viewModel = ArticlesViewModel(repository)
+
+        viewModel.loadArticles()
+        runCurrent()
+
+        assertEquals(true, viewModel.state.value.loading)
+
+        articlesResult.complete(
+            AppResult.Success(
+                ApiListResponse(data = listOf(sampleArticle("a2")), cursor = null, hasMore = false),
+            ),
+        )
+        runCurrent()
+
+        assertEquals(false, viewModel.state.value.loading)
+        assertEquals("a2", viewModel.state.value.items.single().id)
     }
 
     @Test

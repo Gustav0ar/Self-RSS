@@ -101,6 +101,21 @@ class FeedsViewModelTest {
         val s = viewModel.state.value
         assertEquals(false, s.loading)
         assertEquals(3, s.lastSyncSummary?.syncedFeeds)
+        assertEquals(1L, s.syncRevision)
+    }
+
+    @Test
+    fun `syncAllFeeds increments sync revision when summary is unchanged`() = runTest {
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+        val firstRevision = viewModel.state.value.syncRevision
+        val firstSummary = viewModel.state.value.lastSyncSummary
+
+        viewModel.syncAllFeeds()
+
+        assertEquals(firstSummary, viewModel.state.value.lastSyncSummary)
+        assertEquals(firstRevision + 1, viewModel.state.value.syncRevision)
     }
 
     @Test

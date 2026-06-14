@@ -24,6 +24,7 @@ data class FeedsUiState(
     val categories: List<CategoryWithCounts> = emptyList(),
     val feeds: List<FeedWithCounts> = emptyList(),
     val lastSyncSummary: SyncResponse? = null,
+    val syncRevision: Long = 0L,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
 )
@@ -146,7 +147,13 @@ class FeedsViewModel @Inject constructor(
             _state.update { it.copy(loading = true, errorMessage = null) }
             when (val result = repository.syncAllFeeds()) {
                 is AppResult.Success -> {
-                    _state.update { it.copy(loading = false, lastSyncSummary = result.data) }
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            lastSyncSummary = result.data,
+                            syncRevision = it.syncRevision + 1,
+                        )
+                    }
                     loadFeeds()
                 }
                 is AppResult.Error -> _state.update { it.copy(loading = false, errorMessage = result.message) }
