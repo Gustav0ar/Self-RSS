@@ -10,7 +10,7 @@ packages/web/test-results
 packages/web/playwright-report
 
 # SQLite database files
-data/
+/data/
 packages/api/data/
 *.db
 *.db-journal
