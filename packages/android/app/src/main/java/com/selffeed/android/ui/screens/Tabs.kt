@@ -89,7 +89,6 @@ import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ThemePreference
-import com.selffeed.android.ui.components.AnimatedLoadingIndicator
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -489,8 +488,8 @@ fun ArticlesTab(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    AnimatedLoadingIndicator(
-                        size = 24.dp,
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
                         strokeWidth = 2.5.dp,
                         color = MaterialTheme.colorScheme.primary,
                     )
