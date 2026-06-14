@@ -164,6 +164,23 @@ class FeedsViewModelTest {
         assertEquals(3, viewModel.state.value.categories.first().unreadCount)
     }
 
+    @Test
+    fun `applyScopeMarkedRead for all feeds clears category badges even before feeds load`() = runTest {
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(sampleCategory(unreadCount = 5)),
+        )
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+
+        viewModel.applyScopeMarkedRead(
+            feedId = null,
+            categoryId = null,
+            affectedFeedIds = emptySet(),
+        )
+
+        assertEquals(0, viewModel.state.value.categories.first().unreadCount)
+    }
+
     private fun sampleCategory(unreadCount: Int = 0): CategoryWithCounts = CategoryWithCounts(
         id = "c-1",
         name = "Tech",

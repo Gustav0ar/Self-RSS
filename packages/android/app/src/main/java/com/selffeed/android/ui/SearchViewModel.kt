@@ -81,12 +81,19 @@ class SearchViewModel(
     }
 
     fun applyScopeMarkedRead(feedIds: Set<String>) {
+        if (feedIds.isEmpty()) return
         _state.update { state ->
             state.copy(
                 results = state.results.map { article ->
-                    if (feedIds.isEmpty() || article.feedId in feedIds) article.copy(isRead = true) else article
+                    if (article.feedId in feedIds) article.copy(isRead = true) else article
                 },
             )
+        }
+    }
+
+    fun applyAllMarkedRead() {
+        _state.update { state ->
+            state.copy(results = state.results.map { it.copy(isRead = true) })
         }
     }
 

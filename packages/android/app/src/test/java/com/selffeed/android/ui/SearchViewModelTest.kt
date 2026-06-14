@@ -132,6 +132,50 @@ class SearchViewModelTest {
         assertEquals(false, viewModel.state.value.results.first { it.id == "a2" }.isRead)
     }
 
+    @Test
+    fun `applyScopeMarkedRead with empty feed set leaves results unchanged`() = runTest {
+        coEvery { repository.search(any(), any(), any()) } returns AppResult.Success(
+            ApiListResponse(
+                data = listOf(
+                    sampleArticle("a1", "f-1"),
+                    sampleArticle("a2", "f-2"),
+                ),
+                cursor = null,
+                hasMore = false,
+            ),
+        )
+        val viewModel = SearchViewModel(repository)
+        viewModel.setQuery("selffeed")
+        viewModel.search(debounceMs = 0L)
+
+        viewModel.applyScopeMarkedRead(emptySet())
+
+        assertEquals(false, viewModel.state.value.results.first { it.id == "a1" }.isRead)
+        assertEquals(false, viewModel.state.value.results.first { it.id == "a2" }.isRead)
+    }
+
+    @Test
+    fun `applyAllMarkedRead updates every search result`() = runTest {
+        coEvery { repository.search(any(), any(), any()) } returns AppResult.Success(
+            ApiListResponse(
+                data = listOf(
+                    sampleArticle("a1", "f-1"),
+                    sampleArticle("a2", "f-2"),
+                ),
+                cursor = null,
+                hasMore = false,
+            ),
+        )
+        val viewModel = SearchViewModel(repository)
+        viewModel.setQuery("selffeed")
+        viewModel.search(debounceMs = 0L)
+
+        viewModel.applyAllMarkedRead()
+
+        assertEquals(true, viewModel.state.value.results.first { it.id == "a1" }.isRead)
+        assertEquals(true, viewModel.state.value.results.first { it.id == "a2" }.isRead)
+    }
+
     private fun sampleArticle(id: String, feedId: String): ArticleListItem = ArticleListItem(
         id = id,
         feedId = feedId,
