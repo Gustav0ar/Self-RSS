@@ -1,10 +1,7 @@
 package com.selffeed.android.data.local
 
-import android.content.ContentValues
 import android.content.Context
-import androidx.sqlite.db.SupportSQLiteDatabase
-import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
-import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.room.Room
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -13,296 +10,256 @@ import com.selffeed.android.network.FeedWithCounts
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * SQLite-backed offline store using [androidx.sqlite] (the same framework
- * Room is built on, but without the annotation processor). Provides the
- * same offline-first guarantees as the previous JSON cache, with much
- * better concurrency and indexed lookups.
+ * Room-backed local source for offline reads and stale-while-revalidate flows.
  *
- * Schema:
- *   categories (id PK, name, parent_id, unread_count, sort_order, ...)
- *   feeds      (id PK, category_id, title, url, favicon_url, unread_count, ...)
- *   articles   (id PK, feed_id, title, url, hero_image_url, published_at,
- *               displayed_at, is_read, is_bookmarked, canonical_url, ...)
- *   article_details (id PK, content_html, content_text, excerpt, hero_image_url,
- *                    video_url, audio_url, is_enriched, ...)
- *
- * Each row is keyed by a single primary key (the upstream ID), so the
- * network response replaces the local row in a single upsert.
+ * Categories and feeds are stored as typed rows so they can become the durable
+ * source of truth for navigation and unread counts. Article pages and details
+ * still retain their network payloads because the API is cursor-based and the
+ * reader body is already a complete immutable document.
  */
 class LocalStore(
     context: Context,
     moshi: Moshi,
 ) {
-    private val openHelper: SupportSQLiteOpenHelper = FrameworkSQLiteOpenHelperFactory().create(
-        SupportSQLiteOpenHelper.Configuration.builder(context)
-            .name(DB_NAME)
-            .callback(Callback())
-            .build(),
+    private val database: LocalDatabase = Room.databaseBuilder(
+        context.applicationContext,
+        LocalDatabase::class.java,
+        DB_NAME,
     )
+        .fallbackToDestructiveMigration(dropAllTables = true)
+        .build()
+    private val dao = database.localStoreDao()
 
-    private val categoriesAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
+    private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
         Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
     )
-    private val feedsAdapter: JsonAdapter<List<FeedWithCounts>> = moshi.adapter(
-        Types.newParameterizedType(List::class.java, FeedWithCounts::class.java),
-    )
-    private val articleListAdapter: JsonAdapter<ApiListResponse<ArticleListItem>> = moshi.adapter(
-        Types.newParameterizedType(ApiListResponse::class.java, ArticleListItem::class.java),
+    private val articleIdsAdapter: JsonAdapter<List<String>> = moshi.adapter(
+        Types.newParameterizedType(List::class.java, String::class.java),
     )
     private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
 
-    // Lightweight invalidation signals. Compose can observe these instead
-    // of polling Room. The shared flow replays the latest value to new
-    // subscribers so the UI updates on subscription.
     private val _invalidations = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
     val invalidations = _invalidations.asSharedFlow()
     private val invalidationSeq = AtomicLong(0)
 
-    suspend fun writeCategories(categories: List<CategoryWithCounts>) = withContext(Dispatchers.IO) {
-        val db = openHelper.writableDatabase
-db.beginTransaction()
-try {
-                for (c in categories) {
-                    openHelper.writableDatabase.insert(
-                        TABLE_CATEGORIES,
-                        android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
-                        ContentValues().apply {
-                            put("id", c.id)
-                            put("name", c.name)
-                            put("parent_id", c.parentCategoryId)
-                            put("slug", c.slug)
-                            put("sort_order", c.sortOrder)
-                            put("feed_count", c.feedCount)
-                            put("unread_count", c.unreadCount)
-                            put("payload", categoriesAdapter.toJson(categories))
-                        },
-                    )
-                }
-db.setTransactionSuccessful()
-} finally {
-db.endTransaction()
-}
+    suspend fun writeCategories(categories: List<CategoryWithCounts>) {
+        dao.clearCategories()
+        if (categories.isNotEmpty()) {
+            dao.upsertCategories(categories.mapIndexed { index, category -> category.toEntity(index) })
+        }
         notifyInvalidation(TABLE_CATEGORIES)
     }
 
-    suspend fun readCategories(): List<CategoryWithCounts> = withContext(Dispatchers.IO) {
-        // The "payload" column stores the last full list; this is the
-        // simplest representation and supports offline reads in O(1).
-        readPayload(TABLE_CATEGORIES, categoriesAdapter) ?: emptyList()
-    }
+    suspend fun readCategories(): List<CategoryWithCounts> =
+        dao.readCategories().map { it.toModel() }
 
-    suspend fun writeFeeds(feeds: List<FeedWithCounts>) = withContext(Dispatchers.IO) {
-        val db = openHelper.writableDatabase
-db.beginTransaction()
-try {
-                for (f in feeds) {
-                    openHelper.writableDatabase.insert(
-                        TABLE_FEEDS,
-                        android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
-                        ContentValues().apply {
-                            put("id", f.id)
-                            put("category_id", f.categoryId)
-                            put("title", f.title)
-                            put("url", f.feedUrl)
-                            put("favicon_url", f.faviconUrl)
-                            put("unread_count", f.unreadCount)
-                            put("polling_interval", f.pollingIntervalMinutes)
-                            put("payload", feedsAdapter.toJson(feeds))
-                        },
-                    )
-                }
-db.setTransactionSuccessful()
-} finally {
-db.endTransaction()
-}
+    suspend fun writeFeeds(feeds: List<FeedWithCounts>) {
+        dao.clearFeeds()
+        if (feeds.isNotEmpty()) {
+            dao.upsertFeeds(feeds.mapIndexed { index, feed -> feed.toEntity(index) })
+        }
         notifyInvalidation(TABLE_FEEDS)
     }
 
-    suspend fun readFeeds(): List<FeedWithCounts> = withContext(Dispatchers.IO) {
-        readPayload(TABLE_FEEDS, feedsAdapter) ?: emptyList()
-    }
+    suspend fun readFeeds(): List<FeedWithCounts> =
+        dao.readFeeds().map { it.toModel() }
 
-    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) = withContext(Dispatchers.IO) {
-        openHelper.writableDatabase.insert(
-            TABLE_ARTICLE_PAGES,
-            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
-            ContentValues().apply {
-                put("cache_key", key)
-                put("payload", articleListAdapter.toJson(payload))
-                put("written_at", System.currentTimeMillis())
-            },
-        )
-        notifyInvalidation(TABLE_ARTICLES)
-    }
-
-    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? = withContext(Dispatchers.IO) {
-        openHelper.readableDatabase.query(
-            "SELECT payload, written_at FROM $TABLE_ARTICLE_PAGES WHERE cache_key = ?",
-            arrayOf(key),
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val writtenAt = cursor.getLong(1)
-            if (System.currentTimeMillis() - writtenAt > MAX_ARTICLE_PAGE_AGE_MS) {
-                return@use null
-            }
-            articleListAdapter.fromJson(cursor.getString(0))
+    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) {
+        if (payload.data.isNotEmpty()) {
+            dao.upsertArticles(payload.data.map { it.toEntity() })
         }
+        dao.upsertArticlePage(
+            ArticlePageEntity(
+                cacheKey = key,
+                articleIdsJson = articleIdsAdapter.toJson(payload.data.map { it.id }),
+                cursor = payload.cursor,
+                hasMore = payload.hasMore,
+                writtenAt = System.currentTimeMillis(),
+            ),
+        )
+        notifyInvalidation(TABLE_ARTICLE_PAGES)
     }
 
-    suspend fun writeArticleDetail(detail: ArticleDetail) = withContext(Dispatchers.IO) {
-        openHelper.writableDatabase.insert(
-            TABLE_ARTICLE_DETAILS,
-            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE,
-            ContentValues().apply {
-                put("id", detail.id)
-                put("feed_id", detail.feedId)
-                put("payload", articleDetailAdapter.toJson(detail))
-                put("written_at", System.currentTimeMillis())
-            },
+    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? {
+        val page = dao.readArticlePage(key) ?: return null
+        if (System.currentTimeMillis() - page.writtenAt > MAX_ARTICLE_PAGE_AGE_MS) {
+            return null
+        }
+        val ids = runCatching { articleIdsAdapter.fromJson(page.articleIdsJson) }.getOrNull()
+            ?: return null
+        if (ids.isEmpty()) {
+            return ApiListResponse(data = emptyList(), cursor = page.cursor, hasMore = page.hasMore)
+        }
+        val rowsById = dao.readArticlesByIds(ids).associateBy { it.id }
+        val orderedRows = ids.mapNotNull(rowsById::get)
+        if (orderedRows.size != ids.size) return null
+        return ApiListResponse(
+            data = orderedRows.map { it.toModel() },
+            cursor = page.cursor,
+            hasMore = page.hasMore,
+        )
+    }
+
+    suspend fun writeArticleDetail(detail: ArticleDetail) {
+        dao.upsertArticleDetail(
+            ArticleDetailEntity(
+                id = detail.id,
+                feedId = detail.feedId,
+                payloadJson = articleDetailAdapter.toJson(detail),
+                writtenAt = System.currentTimeMillis(),
+            ),
         )
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
-    suspend fun readArticleDetail(articleId: String): ArticleDetail? = withContext(Dispatchers.IO) {
-        openHelper.readableDatabase.query(
-            "SELECT payload, written_at FROM $TABLE_ARTICLE_DETAILS WHERE id = ?",
-            arrayOf(articleId),
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val writtenAt = cursor.getLong(1)
-            if (System.currentTimeMillis() - writtenAt > MAX_ARTICLE_DETAIL_AGE_MS) {
-                return@use null
-            }
-            articleDetailAdapter.fromJson(cursor.getString(0))
+    suspend fun readArticleDetail(articleId: String): ArticleDetail? {
+        val detail = dao.readArticleDetail(articleId) ?: return null
+        if (System.currentTimeMillis() - detail.writtenAt > MAX_ARTICLE_DETAIL_AGE_MS) {
+            return null
         }
+        return runCatching { articleDetailAdapter.fromJson(detail.payloadJson) }.getOrNull()
     }
 
-    suspend fun clearAll() = withContext(Dispatchers.IO) {
-        val db = openHelper.writableDatabase
-db.beginTransaction()
-try {
-                for (table in listOf(TABLE_CATEGORIES, TABLE_FEEDS, TABLE_ARTICLE_PAGES, TABLE_ARTICLE_DETAILS)) {
-                    openHelper.writableDatabase.delete(table, null, null)
-                }
-db.setTransactionSuccessful()
-} finally {
-db.endTransaction()
-}
+    suspend fun clearAll() {
+        dao.clearCategories()
+        dao.clearFeeds()
+        dao.clearArticles()
+        dao.clearArticlePages()
+        dao.clearArticleDetails()
         notifyInvalidation("all")
     }
 
-    /**
-     * Clears rows from a specific table. The prefix is the table name
-     * (one of [TABLE_CATEGORIES], [TABLE_FEEDS], [TABLE_ARTICLE_PAGES],
-     * [TABLE_ARTICLE_DETAILS]). Callers are expected to pass the right
-     * value — splitting storage by table is the only indexing we have.
-     */
-    suspend fun clearTable(table: String) = withContext(Dispatchers.IO) {
-        if (table in listOf(TABLE_CATEGORIES, TABLE_FEEDS, TABLE_ARTICLE_PAGES, TABLE_ARTICLE_DETAILS)) {
-            openHelper.writableDatabase.delete(table, null, null)
-            notifyInvalidation(table)
+    suspend fun clearTable(table: String) {
+        when (table) {
+            TABLE_CATEGORIES -> dao.clearCategories()
+            TABLE_FEEDS -> dao.clearFeeds()
+            TABLE_ARTICLES -> dao.clearArticles()
+            TABLE_ARTICLE_PAGES -> dao.clearArticlePages()
+            TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
+            else -> return
         }
+        notifyInvalidation(table)
     }
 
-    /**
-     * Subscribe to invalidation signals. Each emission is `seq:table`
-     * where seq is monotonic and table is one of the table names.
-     * Consumers can dedupe / filter by table.
-     */
     fun invalidationFlow(): Flow<String> = invalidations
-
-    private fun <T> readPayload(table: String, adapter: JsonAdapter<T>): T? {
-        openHelper.readableDatabase.query(
-            "SELECT payload FROM $table LIMIT 1",
-            arrayOf<Any?>(),
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-            return runCatching { adapter.fromJson(cursor.getString(0)) }.getOrNull()
-        }
-    }
 
     private suspend fun notifyInvalidation(table: String) {
         _invalidations.emit("${invalidationSeq.incrementAndGet()}:$table")
     }
 
-    private class Callback : SupportSQLiteOpenHelper.Callback(VERSION) {
-        override fun onCreate(db: SupportSQLiteDatabase) {
-            db.execSQL(
-                """
-                CREATE TABLE $TABLE_CATEGORIES (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    name TEXT NOT NULL,
-                    parent_id TEXT,
-                    slug TEXT,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    feed_count INTEGER NOT NULL DEFAULT 0,
-                    unread_count INTEGER NOT NULL DEFAULT 0,
-                    payload TEXT
-                )
-                """.trimIndent(),
-            )
-            db.execSQL("CREATE INDEX idx_categories_parent ON $TABLE_CATEGORIES(parent_id)")
-            db.execSQL(
-                """
-                CREATE TABLE $TABLE_FEEDS (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    category_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    favicon_url TEXT,
-                    unread_count INTEGER NOT NULL DEFAULT 0,
-                    polling_interval INTEGER NOT NULL DEFAULT 60,
-                    payload TEXT
-                )
-                """.trimIndent(),
-            )
-            db.execSQL("CREATE INDEX idx_feeds_category ON $TABLE_FEEDS(category_id)")
-            db.execSQL(
-                """
-                CREATE TABLE $TABLE_ARTICLE_PAGES (
-                    cache_key TEXT PRIMARY KEY NOT NULL,
-                    payload TEXT NOT NULL,
-                    written_at INTEGER NOT NULL
-                )
-                """.trimIndent(),
-            )
-            db.execSQL(
-                """
-                CREATE TABLE $TABLE_ARTICLE_DETAILS (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    feed_id TEXT,
-                    payload TEXT NOT NULL,
-                    written_at INTEGER NOT NULL
-                )
-                """.trimIndent(),
-            )
-            db.execSQL("CREATE INDEX idx_details_written ON $TABLE_ARTICLE_DETAILS(written_at)")
-        }
+    private fun CategoryWithCounts.toEntity(cacheOrder: Int): CategoryEntity =
+        CategoryEntity(
+            id = id,
+            userId = userId,
+            parentCategoryId = parentCategoryId,
+            name = name,
+            slug = slug,
+            sortOrder = sortOrder,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            feedCount = feedCount,
+            unreadCount = unreadCount,
+            childrenJson = children?.let(categoryChildrenAdapter::toJson),
+            cacheOrder = cacheOrder,
+        )
 
-        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // Future schema bumps land here. For now this is a no-op
-            // because the store was just introduced.
-        }
-    }
+    private fun CategoryEntity.toModel(): CategoryWithCounts =
+        CategoryWithCounts(
+            id = id,
+            userId = userId,
+            parentCategoryId = parentCategoryId,
+            name = name,
+            slug = slug,
+            sortOrder = sortOrder,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            feedCount = feedCount,
+            unreadCount = unreadCount,
+            children = childrenJson?.let { runCatching { categoryChildrenAdapter.fromJson(it) }.getOrNull() },
+        )
+
+    private fun FeedWithCounts.toEntity(cacheOrder: Int): FeedEntity =
+        FeedEntity(
+            id = id,
+            userId = userId,
+            categoryId = categoryId,
+            title = title,
+            siteUrl = siteUrl,
+            feedUrl = feedUrl,
+            faviconUrl = faviconUrl,
+            description = description,
+            pollingIntervalMinutes = pollingIntervalMinutes,
+            lastSyncedAt = lastSyncedAt,
+            syncStatus = syncStatus,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            unreadCount = unreadCount,
+            cacheOrder = cacheOrder,
+        )
+
+    private fun FeedEntity.toModel(): FeedWithCounts =
+        FeedWithCounts(
+            id = id,
+            userId = userId,
+            categoryId = categoryId,
+            title = title,
+            siteUrl = siteUrl,
+            feedUrl = feedUrl,
+            faviconUrl = faviconUrl,
+            description = description,
+            pollingIntervalMinutes = pollingIntervalMinutes,
+            lastSyncedAt = lastSyncedAt,
+            syncStatus = syncStatus,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            unreadCount = unreadCount,
+        )
+
+    private fun ArticleListItem.toEntity(): ArticleEntity =
+        ArticleEntity(
+            id = id,
+            feedId = feedId,
+            feedTitle = feedTitle,
+            feedFaviconUrl = feedFaviconUrl,
+            title = title,
+            author = author,
+            excerpt = excerpt,
+            heroImageUrl = heroImageUrl,
+            publishedAt = publishedAt,
+            displayedAt = displayedAt,
+            isRead = isRead,
+        )
+
+    private fun ArticleEntity.toModel(): ArticleListItem =
+        ArticleListItem(
+            id = id,
+            feedId = feedId,
+            feedTitle = feedTitle,
+            feedFaviconUrl = feedFaviconUrl,
+            title = title,
+            author = author,
+            excerpt = excerpt,
+            heroImageUrl = heroImageUrl,
+            publishedAt = publishedAt,
+            displayedAt = displayedAt,
+            isRead = isRead,
+        )
 
     companion object {
-        private const val VERSION = 1
         private const val DB_NAME = "selffeed.db"
-        const val TABLE_CATEGORIES = "categories"
-        const val TABLE_FEEDS = "feeds"
-        const val TABLE_ARTICLE_PAGES = "article_pages"
-        const val TABLE_ARTICLE_DETAILS = "article_details"
-        const val TABLE_ARTICLES = "articles"
+        const val TABLE_CATEGORIES = LocalTables.CATEGORIES
+        const val TABLE_FEEDS = LocalTables.FEEDS
+        const val TABLE_ARTICLES = LocalTables.ARTICLES
+        const val TABLE_ARTICLE_PAGES = LocalTables.ARTICLE_PAGES
+        const val TABLE_ARTICLE_DETAILS = LocalTables.ARTICLE_DETAILS
 
-        private const val MAX_ARTICLE_PAGE_AGE_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
-        private const val MAX_ARTICLE_DETAIL_AGE_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
+        private const val MAX_ARTICLE_PAGE_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        private const val MAX_ARTICLE_DETAIL_AGE_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

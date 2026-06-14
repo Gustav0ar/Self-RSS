@@ -136,8 +136,10 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
-    implementation("androidx.sqlite:sqlite:2.6.2")
-    implementation("androidx.sqlite:sqlite-framework:2.6.2")
+    implementation("androidx.room:room-runtime:2.7.0")
+    implementation("androidx.room:room-ktx:2.7.0")
+    implementation("androidx.room:room-paging:2.7.0")
+    ksp("androidx.room:room-compiler:2.7.0")
     implementation("androidx.core:core-splashscreen:1.2.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

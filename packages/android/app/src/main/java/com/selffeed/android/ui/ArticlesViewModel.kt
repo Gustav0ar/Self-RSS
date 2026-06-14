@@ -39,9 +39,6 @@ data class ArticlesUiState(
     val selectedArticle: ArticleDetail? = null,
     val selectedFeedId: String? = null,
     val selectedCategoryId: String? = null,
-    val articleCursor: String? = null,
-    val hasMoreArticles: Boolean = false,
-    val loadingMoreArticles: Boolean = false,
     val loading: Boolean = false,
     val sort: String? = null,
     val hideRead: Boolean = false,
@@ -112,9 +109,6 @@ class ArticlesViewModel(
                 selectedFeedId = feedId,
                 selectedCategoryId = categoryId,
                 selectedArticle = null,
-                articleCursor = null,
-                hasMoreArticles = false,
-                loadingMoreArticles = false,
                 errorMessage = null,
             )
         }
@@ -134,9 +128,6 @@ class ArticlesViewModel(
                 it.copy(
                     sort = nextSort,
                     hideRead = nextHideRead,
-                    articleCursor = null,
-                    hasMoreArticles = false,
-                    loadingMoreArticles = false,
                 )
             }
         }
@@ -156,9 +147,6 @@ class ArticlesViewModel(
         val requestId = requestSequence.incrementAndGet()
         _state.update {
             it.copy(
-                articleCursor = null,
-                hasMoreArticles = false,
-                loadingMoreArticles = false,
                 loading = true,
                 errorMessage = null,
             )
@@ -180,8 +168,6 @@ class ArticlesViewModel(
                     _state.update {
                         it.copy(
                             items = result.data.data.withReadStates(readStates),
-                            articleCursor = result.data.cursor,
-                            hasMoreArticles = result.data.hasMore,
                             loading = false,
                         )
                     }
@@ -196,43 +182,8 @@ class ArticlesViewModel(
     }
 
     fun loadMoreArticles() {
-        val snapshot = _state.value
-        if (!snapshot.hasMoreArticles || snapshot.loadingMoreArticles || snapshot.articleCursor.isNullOrBlank()) return
-
-        val query = snapshot.articleQuery()
-        val cursor = snapshot.articleCursor
-        val requestId = requestSequence.incrementAndGet()
-        _state.update { it.copy(loadingMoreArticles = true) }
-        viewModelScope.launch {
-            when (
-                val result = repository.articles(
-                    feedId = query.feedId,
-                    categoryId = query.categoryId,
-                    unreadOnly = query.unreadOnly,
-                    sort = query.sort,
-                    limit = ARTICLE_PAGE_SIZE,
-                    cursor = cursor,
-                )
-            ) {
-                is AppResult.Success -> {
-                    if (!isCurrentArticleRequest(requestId) || _state.value.articleQuery() != query) return@launch
-                    val readStates = knownArticleReadStates()
-                    _state.update {
-                        it.copy(
-                            items = it.items + result.data.data.withReadStates(readStates),
-                            articleCursor = result.data.cursor,
-                            hasMoreArticles = result.data.hasMore,
-                            loadingMoreArticles = false,
-                        )
-                    }
-                    repository.prefetchHeroImages(result.data.data.map { it.heroImageUrl })
-                }
-                is AppResult.Error -> {
-                    if (!isCurrentArticleRequest(requestId) || _state.value.articleQuery() != query) return@launch
-                    _state.update { it.copy(loadingMoreArticles = false, errorMessage = result.message) }
-                }
-            }
-        }
+        // Article pagination is owned by Paging 3. This method remains as a
+        // compatibility no-op for the fallback article tab contract.
     }
 
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
