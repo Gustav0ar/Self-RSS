@@ -177,12 +177,17 @@ class FeedsViewModel(
                 .filter { it.id in targetFeedIds && it.unreadCount > 0 }
                 .groupBy { it.categoryId }
                 .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
+            val shouldClearAllCategories = feedId == null && categoryId == null && affectedFeedIds.isEmpty()
 
             state.copy(
                 feeds = state.feeds.map { feed ->
                     if (feed.id in targetFeedIds) feed.copy(unreadCount = 0) else feed
                 },
-                categories = UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas),
+                categories = if (shouldClearAllCategories) {
+                    state.categories.map { it.copy(unreadCount = 0) }
+                } else {
+                    UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas)
+                },
             )
         }
     }

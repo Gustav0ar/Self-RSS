@@ -176,14 +176,14 @@ fun SelfFeedApp(
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
             actions.onClearMessages()
+            snackbarHostState.showSnackbar(it)
         }
     }
     LaunchedEffect(statusMessage) {
         statusMessage?.let {
-            snackbarHostState.showSnackbar(it)
             actions.onClearMessages()
+            snackbarHostState.showSnackbar(it)
         }
     }
 

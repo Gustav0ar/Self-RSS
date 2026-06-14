@@ -156,7 +156,15 @@ class MainActivity : ComponentActivity() {
                                         .toSet()
                                     else -> emptySet()
                                 }
-                                searchViewModel.applyScopeMarkedRead(searchFeedIds)
+                                if (
+                                    event.feedId == null &&
+                                    event.categoryId == null &&
+                                    event.affectedFeedIds.isEmpty()
+                                ) {
+                                    searchViewModel.applyAllMarkedRead()
+                                } else {
+                                    searchViewModel.applyScopeMarkedRead(searchFeedIds)
+                                }
                             }
                         }
                     }
