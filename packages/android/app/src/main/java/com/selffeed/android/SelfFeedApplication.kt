@@ -3,6 +3,8 @@ package com.selffeed.android
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.res.Configuration
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration as WorkConfiguration
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -15,7 +17,7 @@ import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
 @HiltAndroidApp
-class SelfFeedApplication : Application(), SingletonImageLoader.Factory {
+class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkConfiguration.Provider {
     @Inject
     lateinit var repository: RssRepository
 
@@ -27,6 +29,14 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory {
 
     @Inject
     lateinit var imageLoader: ImageLoader
+
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    override val workManagerConfiguration: WorkConfiguration
+        get() = WorkConfiguration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
 
     override fun onCreate() {
         super.onCreate()

@@ -11,6 +11,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.MarkReadRequest
+import com.selffeed.android.network.MarkReadResponse
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
 import com.squareup.moshi.Moshi
@@ -46,6 +47,7 @@ class RssRepositoryTest {
     private lateinit var localStore: LocalStore
     private lateinit var imageLoader: ImageLoader
     private lateinit var networkMonitor: NetworkMonitor
+    private lateinit var onlineState: MutableStateFlow<Boolean>
     private lateinit var repository: RssRepository
 
     @Before
@@ -62,7 +64,8 @@ class RssRepositoryTest {
         localStore = LocalStore(context, moshi)
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
-        every { networkMonitor.online } returns MutableStateFlow(true)
+        onlineState = MutableStateFlow(true)
+        every { networkMonitor.online } returns onlineState
         repository = RssRepository(
             api = api,
             sessionStore = sessionStore,
@@ -160,8 +163,39 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `offline markRead queues mutation and next online read flushes it`() = runTest {
+        val articleId = "article-pending"
+        onlineState.value = false
+        localStore.writeArticleRemotePage(
+            queryKey = ArticlePageQuery().remoteKey(),
+            payload = ApiListResponse(data = listOf(sampleArticle(articleId)), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+
+        val queuedResult = repository.markRead(articleId, true)
+
+        assertTrue(queuedResult is AppResult.Success)
+        assertEquals(1, localStore.readPendingReadStateMutations().size)
+        coVerify(exactly = 0) { api.markRead(any(), any()) }
+
+        onlineState.value = true
+        coEvery {
+            api.markRead(articleId, MarkReadRequest(read = true))
+        } returns com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true))
+        coEvery { api.categories() } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.CategoryTreeResponse(categories = emptyList(), totalUnread = 0),
+        )
+
+        val readResult = repository.categories()
+
+        assertTrue(readResult is AppResult.Success)
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        coVerify(exactly = 1) { api.markRead(articleId, MarkReadRequest(read = true)) }
+    }
+
+    @Test
     fun `prefetchHeroImages is a no-op when offline`() {
-        every { networkMonitor.online } returns MutableStateFlow(false)
+        onlineState.value = false
         val urls = listOf("https://example.com/a.jpg", "https://example.com/b.jpg")
         repository.prefetchHeroImages(urls)
         // ImageLoader.enqueue is never called when offline.
@@ -170,7 +204,7 @@ class RssRepositoryTest {
 
     @Test
     fun `prefetchHeroImages dispatches to the image loader when online`() {
-        every { networkMonitor.online } returns MutableStateFlow(true)
+        onlineState.value = true
         val urls = listOf("https://example.com/a.jpg")
         repository.prefetchHeroImages(urls)
         io.mockk.verify(atLeast = 1) { imageLoader.enqueue(any()) }
@@ -178,7 +212,7 @@ class RssRepositoryTest {
 
     @Test
     fun `prefetchHeroImages dedupes and trims to the configured cap`() {
-        every { networkMonitor.online } returns MutableStateFlow(true)
+        onlineState.value = true
         val urls = (1..20).map { "https://example.com/$it.jpg" } +
             // Duplicates that should be collapsed by distinct().
             (1..5).map { "https://example.com/$it.jpg" } +

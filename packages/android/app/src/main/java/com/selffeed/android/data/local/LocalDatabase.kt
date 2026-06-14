@@ -237,7 +237,7 @@ interface LocalStoreDao {
         ArticleDetailEntity::class,
     ],
     version = 1,
-    exportSchema = false,
+    exportSchema = true,
 )
 abstract class LocalDatabase : RoomDatabase() {
     abstract fun localStoreDao(): LocalStoreDao
