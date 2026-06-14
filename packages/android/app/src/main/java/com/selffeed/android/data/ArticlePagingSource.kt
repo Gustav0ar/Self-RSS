@@ -13,6 +13,9 @@ data class ArticlePageQuery(
     val generation: Long = 0L,
 )
 
+fun ArticlePageQuery.remoteKey(): String =
+    "articles:${feedId.orEmpty()}:${categoryId.orEmpty()}:$unreadOnly:${sort.orEmpty()}"
+
 class ArticlePagingSource(
     private val repository: ArticleRepository,
     private val query: ArticlePageQuery,

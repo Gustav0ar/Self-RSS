@@ -6,34 +6,36 @@ import android.content.res.Configuration
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import com.selffeed.android.data.FeedSyncWorker
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.local.LocalStore
-import com.selffeed.android.di.AppContainer
+import com.selffeed.android.di.AppModule
 import com.selffeed.android.network.NetworkMonitor
+import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
+@HiltAndroidApp
 class SelfFeedApplication : Application(), SingletonImageLoader.Factory {
-    lateinit var container: AppContainer
-        private set
-
+    @Inject
     lateinit var repository: RssRepository
-        private set
 
+    @Inject
     lateinit var networkMonitor: NetworkMonitor
-        private set
 
+    @Inject
     lateinit var localStore: LocalStore
-        private set
+
+    @Inject
+    lateinit var imageLoader: ImageLoader
 
     override fun onCreate() {
         super.onCreate()
         com.selffeed.android.ui.components.reapStaleOpmlExports(this)
 
-        container = AppContainer(this)
-        repository = container.repository
-        networkMonitor = container.networkMonitor
-        localStore = container.localStore
-
-        container.scheduleBackgroundSync()
+        FeedSyncWorker.schedule(this)
+        if (repository.isLoggedIn()) {
+            FeedSyncWorker.kickOnce(this)
+        }
     }
 
     /**
@@ -43,10 +45,10 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory {
      * runtime max heap, with a hard floor of 4 MB.
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader {
-        return if (::container.isInitialized) {
-            container.createImageLoader(context)
+        return if (::imageLoader.isInitialized) {
+            imageLoader
         } else {
-            AppContainer(this).createImageLoader(context)
+            AppModule.createImageLoader(context)
         }
     }
 

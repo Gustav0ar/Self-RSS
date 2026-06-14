@@ -1,14 +1,15 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.AuthRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * UI state for the authentication screen (login + register).
@@ -27,7 +28,8 @@ data class AuthUiState(
  *
  * Focused, easy-to-test state holder for auth screen state and events.
  */
-class AuthViewModel(
+@HiltViewModel
+class AuthViewModel @Inject constructor(
     private val repository: AuthRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(AuthUiState())
@@ -110,11 +112,4 @@ class AuthViewModel(
             is AppResult.Success -> result.data.registrationEnabled
             is AppResult.Error -> false
         }
-
-    class Factory(private val repository: AuthRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return AuthViewModel(repository) as T
-        }
-    }
 }

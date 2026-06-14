@@ -1,11 +1,11 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SettingsRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UpdateAppSettingsRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class SettingsUiState(
     val preferences: UserPreferences? = null,
@@ -30,7 +31,8 @@ data class SettingsUiState(
  * Owns the settings and stats tab: preferences, stats dashboard, admin
  * controls, and the debug resilience metrics.
  */
-class SettingsViewModel(
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
     private val repository: SettingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsUiState())
@@ -141,12 +143,5 @@ class SettingsViewModel(
     private fun UserPreferences.withNormalizedTheme(): UserPreferences {
         val normalized = if (theme == "amoled") "dark" else theme
         return if (theme == normalized) this else copy(theme = normalized)
-    }
-
-    class Factory(private val repository: SettingsRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return SettingsViewModel(repository) as T
-        }
     }
 }

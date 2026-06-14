@@ -1,11 +1,11 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SearchRepository
 import com.selffeed.android.network.ArticleListItem
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class SearchUiState(
     val query: String = "",
@@ -29,7 +30,8 @@ data class SearchUiState(
  * lightweight — search has no offline cache and no SSE, just an HTTP
  * round-trip with debounce.
  */
-class SearchViewModel(
+@HiltViewModel
+class SearchViewModel @Inject constructor(
     private val repository: SearchRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SearchUiState())
@@ -135,12 +137,5 @@ class SearchViewModel(
 
     companion object {
         const val MIN_QUERY_LENGTH = 2
-    }
-
-    class Factory(private val repository: SearchRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return SearchViewModel(repository) as T
-        }
     }
 }

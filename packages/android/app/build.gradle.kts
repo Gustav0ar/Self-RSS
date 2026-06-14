@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.dagger.hilt.android")
     // KSP for Moshi adapter codegen. See the matching version in
     // packages/android/build.gradle.kts.
     id("com.google.devtools.ksp")
@@ -141,6 +142,8 @@ dependencies {
     implementation("androidx.room:room-paging:2.7.0")
     ksp("androidx.room:room-compiler:2.7.0")
     implementation("androidx.core:core-splashscreen:1.2.0")
+    implementation("com.google.dagger:hilt-android:2.59.2")
+    ksp("com.google.dagger:hilt-compiler:2.59.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

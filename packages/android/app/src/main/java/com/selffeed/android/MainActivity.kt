@@ -16,26 +16,16 @@ import com.selffeed.android.ui.FeedsViewModel
 import com.selffeed.android.ui.SearchViewModel
 import com.selffeed.android.ui.SelfFeedAppRoute
 import com.selffeed.android.ui.SettingsViewModel
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    private val appViewModel: AppViewModel by viewModels {
-        AppViewModel.Factory((application as SelfFeedApplication).container.appStatusRepository)
-    }
-    private val authViewModel: AuthViewModel by viewModels {
-        AuthViewModel.Factory((application as SelfFeedApplication).container.authRepository)
-    }
-    private val feedsViewModel: FeedsViewModel by viewModels {
-        FeedsViewModel.Factory((application as SelfFeedApplication).container.feedRepository)
-    }
-    private val articlesViewModel: ArticlesViewModel by viewModels {
-        ArticlesViewModel.Factory((application as SelfFeedApplication).container.articleRepository)
-    }
-    private val searchViewModel: SearchViewModel by viewModels {
-        SearchViewModel.Factory((application as SelfFeedApplication).container.searchRepository)
-    }
-    private val settingsViewModel: SettingsViewModel by viewModels {
-        SettingsViewModel.Factory((application as SelfFeedApplication).container.settingsRepository)
-    }
+    private val appViewModel: AppViewModel by viewModels()
+    private val authViewModel: AuthViewModel by viewModels()
+    private val feedsViewModel: FeedsViewModel by viewModels()
+    private val articlesViewModel: ArticlesViewModel by viewModels()
+    private val searchViewModel: SearchViewModel by viewModels()
+    private val settingsViewModel: SettingsViewModel by viewModels()
     private var jankStats: JankStats? = null
     private lateinit var performanceMetricsState: PerformanceMetricsState.Holder
 
