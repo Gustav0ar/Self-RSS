@@ -3,8 +3,13 @@ package com.selffeed.android.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import coil3.ImageLoader
+import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
+import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
@@ -38,6 +43,7 @@ class RssRepositoryTest {
     private lateinit var api: RssApi
     private lateinit var sessionStore: SessionStore
     private lateinit var cacheStore: OfflineCacheStore
+    private lateinit var localStore: LocalStore
     private lateinit var imageLoader: ImageLoader
     private lateinit var networkMonitor: NetworkMonitor
     private lateinit var repository: RssRepository
@@ -53,6 +59,7 @@ class RssRepositoryTest {
         // same Moshi so writes through LocalStore can encode payloads.
         val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
         cacheStore = OfflineCacheStore(context, moshi)
+        localStore = LocalStore(context, moshi)
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
         every { networkMonitor.online } returns MutableStateFlow(true)
@@ -62,7 +69,7 @@ class RssRepositoryTest {
             okHttpClient = OkHttpClient(),
             moshi = moshi,
             offlineCacheStore = cacheStore,
-            localStore = com.selffeed.android.data.local.LocalStore(context, moshi),
+            localStore = localStore,
             imageRequestContext = context,
             imageLoader = imageLoader,
             networkMonitor = networkMonitor,
@@ -204,6 +211,51 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `categories return sqlite data before network refresh`() = runTest {
+        localStore.writeCategories(listOf(sampleCategory("c-local")))
+        coEvery { api.categories() } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.CategoryTreeResponse(
+                categories = listOf(sampleCategory("c-network")),
+                totalUnread = 0,
+            ),
+        )
+
+        val result = repository.categories()
+
+        assertTrue(result is AppResult.Success)
+        assertEquals("c-local", (result as AppResult.Success).data.first().id)
+    }
+
+    @Test
+    fun `feeds return sqlite data before network refresh`() = runTest {
+        localStore.writeFeeds(listOf(sampleFeed("f-local")))
+        coEvery { api.feeds(null) } returns com.selffeed.android.network.ApiEnvelope(
+            listOf(sampleFeed("f-network")),
+        )
+
+        val result = repository.feeds(null)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals("f-local", (result as AppResult.Success).data.first().id)
+    }
+
+    @Test
+    fun `first article page returns sqlite data before network refresh`() = runTest {
+        val key = "articles:::null::30:"
+        localStore.writeArticles(
+            key,
+            ApiListResponse(data = listOf(sampleArticle("a-local")), cursor = null, hasMore = false),
+        )
+        coEvery { api.articles(null, null, null, null, 30, null) } returns
+            ApiListResponse(data = listOf(sampleArticle("a-network")), cursor = null, hasMore = false)
+
+        val result = repository.articles(null, null, null, null, 30, null)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals("a-local", (result as AppResult.Success).data.data.first().id)
+    }
+
+    @Test
     fun `isLoggedIn mirrors the access token presence`() {
         every { sessionStore.getAccessToken() } returns null
         assertEquals(false, repository.isLoggedIn())
@@ -233,5 +285,32 @@ class RssRepositoryTest {
         media = emptyList(),
         isRead = isRead,
         isEnriched = false,
+    )
+
+    private fun sampleCategory(id: String): CategoryWithCounts = CategoryWithCounts(
+        id = id,
+        name = "Category $id",
+        slug = id,
+        sortOrder = 0,
+        feedCount = 1,
+        unreadCount = 1,
+    )
+
+    private fun sampleFeed(id: String): FeedWithCounts = FeedWithCounts(
+        id = id,
+        categoryId = "c-local",
+        title = "Feed $id",
+        feedUrl = "https://example.com/$id.xml",
+        pollingIntervalMinutes = 60,
+        syncStatus = "idle",
+        unreadCount = 1,
+    )
+
+    private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(
+        id = id,
+        feedId = "f-local",
+        feedTitle = "Feed",
+        title = "Article $id",
+        isRead = false,
     )
 }

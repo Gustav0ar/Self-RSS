@@ -67,12 +67,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
+import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.openExternalUrl
-import com.selffeed.android.ui.components.shareOpmlContent
 import com.selffeed.android.ui.screens.ArticleTabActions
 import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
@@ -86,157 +89,207 @@ import com.selffeed.android.ui.screens.SettingsTabActions
 import com.selffeed.android.ui.screens.SettingsTabState
 import com.selffeed.android.ui.screens.SettingsTab
 import com.selffeed.android.ui.screens.StatsTab
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+
+data class SelfFeedAppState(
+    val auth: AuthUiState,
+    val chrome: AppChromeState,
+    val feeds: FeedsUiState,
+    val articles: ArticlesUiState,
+    val search: SearchUiState,
+    val settings: SettingsUiState,
+    val isOnline: Boolean,
+)
+
+data class SelfFeedAppActions(
+    val onAuthModeChange: (AuthMode) -> Unit,
+    val onLogin: (String, String) -> Unit,
+    val onRegister: (String, String) -> Unit,
+    val onLogout: () -> Unit,
+    val onTabSelected: (HomeTab) -> Unit,
+    val onRefreshVisibleData: () -> Unit,
+    val onHideReadChanged: (Boolean) -> Unit,
+    val onCategorySelected: (String?) -> Unit,
+    val onFeedSelected: (String?) -> Unit,
+    val onRefreshArticles: () -> Unit,
+    val onLoadMoreArticles: () -> Unit,
+    val onOpenArticle: (String) -> Unit,
+    val onCloseArticle: () -> Unit,
+    val onToggleRead: (String, Boolean) -> Unit,
+    val onMarkAllRead: () -> Unit,
+    val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
+    val onSearchQueryChanged: (String) -> Unit,
+    val onSearchRequested: () -> Unit,
+    val onLoadMoreSearch: () -> Unit,
+    val onThemeChanged: (ThemePreference) -> Unit,
+    val onSortChanged: (ArticleSortPreference) -> Unit,
+    val onDensityChanged: (DensityPreference) -> Unit,
+    val onTextSizeChanged: (Int) -> Unit,
+    val onClearMessages: () -> Unit,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
+fun SelfFeedApp(
+    state: SelfFeedAppState,
+    actions: SelfFeedAppActions,
+    articlePagingData: Flow<PagingData<ArticleListItem>>,
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val activeTab = state.chrome.activeTab
+    val selectedArticle = state.articles.selectedArticle
+    val selectedFeedId = state.articles.selectedFeedId
+    val selectedCategoryId = state.articles.selectedCategoryId
     val topBarLabel = remember(
-        state.activeTab,
-        state.selectedArticle,
-        state.selectedFeedId,
-        state.selectedCategoryId,
-        state.feeds,
-        state.categories,
+        activeTab,
+        selectedArticle,
+        selectedFeedId,
+        selectedCategoryId,
+        state.feeds.feeds,
+        state.feeds.categories,
     ) {
-        topBarLabel(state)
+        topBarLabel(
+            activeTab = activeTab,
+            selectedArticle = selectedArticle,
+            selectedFeedId = selectedFeedId,
+            selectedCategoryId = selectedCategoryId,
+            feeds = state.feeds.feeds,
+            categories = state.feeds.categories,
+        )
     }
 
-    // Snackbar messages are now driven by a sequence counter so that a new
-    // message arriving while an earlier one is still showing doesn't get
-    // silently dropped. The previous implementation keyed the effect on
-    // (errorMessage, statusMessage), which left the second message invisible
-    // when the keys collided before the first was dismissed.
-    val errorSequence = remember(state.errorMessagesShown) { state.errorMessagesShown }
-    val statusSequence = remember(state.statusMessagesShown) { state.statusMessagesShown }
+    val errorMessage = state.auth.errorMessage
+        ?: state.feeds.errorMessage
+        ?: state.articles.errorMessage
+        ?: state.search.errorMessage
+        ?: state.settings.errorMessage
+        ?: state.chrome.globalError
+    val statusMessage = state.auth.statusMessage
+        ?: state.feeds.statusMessage
+        ?: state.articles.statusMessage
+        ?: state.settings.statusMessage
+        ?: state.chrome.globalStatus
 
-    LaunchedEffect(errorSequence, state.errorMessage) {
-        state.errorMessage?.let {
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.acknowledgeError()
+            actions.onClearMessages()
         }
     }
-    LaunchedEffect(statusSequence, state.statusMessage) {
-        state.statusMessage?.let {
+    LaunchedEffect(statusMessage) {
+        statusMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.acknowledgeStatus()
+            actions.onClearMessages()
         }
     }
 
-    LaunchedEffect(state.exportedOpml) {
-        state.exportedOpml?.let { content ->
-            shareOpmlContent(context, content)
-            viewModel.consumeExportedOpml()
-        }
-    }
-
-    if (state.loading) {
+    if (state.auth.loading) {
         LoadingScreen()
         return
     }
 
-    if (!state.isAuthenticated) {
+    if (!state.auth.isAuthenticated) {
         AuthScreen(
-            mode = state.authMode,
-            registrationEnabled = state.registrationEnabled,
-            errorMessage = state.errorMessage,
-            onModeChange = viewModel::setAuthMode,
-            onLogin = viewModel::login,
-            onRegister = viewModel::register,
+            mode = state.auth.authMode,
+            registrationEnabled = state.auth.registrationEnabled,
+            errorMessage = state.auth.errorMessage,
+            onModeChange = actions.onAuthModeChange,
+            onLogin = actions.onLogin,
+            onRegister = actions.onRegister,
         )
         return
     }
 
-    val articlePagingItems = viewModel.articlePagingData.collectAsLazyPagingItems()
+    val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
     val feedTabState = remember(
-        state.categories,
-        state.feeds,
-        state.preferences?.hideRead,
-        state.stats?.totalUnread,
-        state.selectedCategoryId,
-        state.selectedFeedId,
+        state.feeds.categories,
+        state.feeds.feeds,
+        state.articles.hideRead,
+        state.settings.stats?.totalUnread,
+        selectedCategoryId,
+        selectedFeedId,
     ) {
         FeedTabState(
-            categories = state.categories,
-            feeds = state.feeds,
-            hideRead = state.preferences?.hideRead ?: false,
-            totalUnread = state.stats?.totalUnread ?: 0,
-            selectedCategoryId = state.selectedCategoryId,
-            selectedFeedId = state.selectedFeedId,
+            categories = state.feeds.categories,
+            feeds = state.feeds.feeds,
+            hideRead = state.articles.hideRead,
+            totalUnread = state.settings.stats?.totalUnread ?: 0,
+            selectedCategoryId = selectedCategoryId,
+            selectedFeedId = selectedFeedId,
         )
     }
     val articleTabState = remember(
-        state.articles,
-        state.selectedArticle?.id,
-        state.hasMoreArticles,
-        state.loadingMoreArticles,
-        state.isSyncingFeeds,
+        state.articles.items,
+        selectedArticle?.id,
+        state.articles.hasMoreArticles,
+        state.articles.loadingMoreArticles,
+        state.feeds.loading,
     ) {
         ArticleTabState(
-            articles = state.articles,
-            selectedArticleId = state.selectedArticle?.id,
-            hasMoreArticles = state.hasMoreArticles,
-            loadingMoreArticles = state.loadingMoreArticles,
-            isSyncingFeeds = state.isSyncingFeeds,
+            articles = state.articles.items,
+            selectedArticleId = selectedArticle?.id,
+            hasMoreArticles = state.articles.hasMoreArticles,
+            loadingMoreArticles = state.articles.loadingMoreArticles,
+            isSyncingFeeds = state.feeds.loading,
         )
     }
     val searchTabState = remember(
-        state.searchQuery,
-        state.searchResults,
-        state.selectedArticle?.id,
-        state.hasMoreSearchResults,
-        state.loadingMoreSearchResults,
+        state.search.query,
+        state.search.results,
+        selectedArticle?.id,
+        state.search.hasMore,
+        state.search.loadingMore,
     ) {
         SearchTabState(
-            query = state.searchQuery,
-            results = state.searchResults,
-            selectedArticleId = state.selectedArticle?.id,
-            hasMoreResults = state.hasMoreSearchResults,
-            loadingMoreResults = state.loadingMoreSearchResults,
+            query = state.search.query,
+            results = state.search.results,
+            selectedArticleId = selectedArticle?.id,
+            hasMoreResults = state.search.hasMore,
+            loadingMoreResults = state.search.loadingMore,
         )
     }
-    val settingsTabState = remember(state.preferences, state.stats) {
+    val settingsTabState = remember(state.settings.preferences, state.settings.stats) {
         SettingsTabState(
-            preferences = state.preferences,
-            stats = state.stats,
+            preferences = state.settings.preferences,
+            stats = state.settings.stats,
         )
     }
-    val feedActions = remember(viewModel) {
+    val feedActions = remember(actions) {
         FeedTabActions(
-            onHideReadChanged = viewModel::updateHideRead,
-            onCategorySelected = viewModel::selectCategory,
-            onFeedSelected = viewModel::selectFeed,
+            onHideReadChanged = actions.onHideReadChanged,
+            onCategorySelected = actions.onCategorySelected,
+            onFeedSelected = actions.onFeedSelected,
         )
     }
-    val articleActions = remember(viewModel) {
+    val articleActions = remember(actions) {
         ArticleTabActions(
-            onRefresh = viewModel::syncAllFeeds,
-            onLoadMore = viewModel::loadMoreArticles,
-            onOpenArticle = { id -> viewModel.openArticle(id) },
-            onToggleRead = viewModel::markRead,
-            onArticleSnapshot = viewModel::updateArticleQueueSnapshot,
+            onRefresh = actions.onRefreshArticles,
+            onLoadMore = actions.onLoadMoreArticles,
+            onOpenArticle = actions.onOpenArticle,
+            onToggleRead = actions.onToggleRead,
+            onArticleSnapshot = actions.onArticleSnapshot,
         )
     }
-    val searchActions = remember(viewModel) {
+    val searchActions = remember(actions) {
         SearchTabActions(
-            onQueryChanged = viewModel::updateSearchQuery,
-            onSearchRequested = viewModel::search,
-            onOpenArticle = { id -> viewModel.openArticle(id) },
-            onLoadMore = viewModel::loadMoreSearch,
+            onQueryChanged = actions.onSearchQueryChanged,
+            onSearchRequested = actions.onSearchRequested,
+            onOpenArticle = actions.onOpenArticle,
+            onLoadMore = actions.onLoadMoreSearch,
         )
     }
-    val settingsActions = remember(viewModel) {
+    val settingsActions = remember(actions) {
         SettingsTabActions(
-            onThemeChanged = { preference -> viewModel.updateTheme(preference.apiValue) },
-            onHideReadChanged = viewModel::updateHideRead,
-            onSortChanged = { preference -> viewModel.updateDefaultSort(preference.apiValue) },
-            onDensityChanged = { preference -> viewModel.updateDensity(preference.apiValue) },
-            onTextSizeChanged = viewModel::updateTextSize,
-            onLogout = viewModel::logout,
+            onThemeChanged = actions.onThemeChanged,
+            onHideReadChanged = actions.onHideReadChanged,
+            onSortChanged = actions.onSortChanged,
+            onDensityChanged = actions.onDensityChanged,
+            onTextSizeChanged = actions.onTextSizeChanged,
+            onLogout = actions.onLogout,
         )
     }
 
@@ -258,39 +311,35 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             topBar = {
                 AppTopBar(
-                    activeTab = state.activeTab,
-                    selectedArticle = state.selectedArticle,
+                    activeTab = activeTab,
+                    selectedArticle = selectedArticle,
                     currentLabel = topBarLabel,
-                    showMarkAllRead = state.activeTab == HomeTab.ARTICLES &&
-                        state.selectedArticle == null &&
-                        state.articles.isNotEmpty(),
+                    showMarkAllRead = activeTab == HomeTab.ARTICLES &&
+                        selectedArticle == null &&
+                        state.articles.items.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = {
-                        viewModel.updateArticleQueueSnapshot(articlePagingItems.itemSnapshotList.items)
-                        viewModel.markAllRead()
+                        actions.onArticleSnapshot(articlePagingItems.itemSnapshotList.items)
+                        actions.onMarkAllRead()
                     },
-                    onBack = viewModel::closeArticle,
+                    onBack = actions.onCloseArticle,
                     onToggleRead = {
-                        state.selectedArticle?.let { article ->
-                            viewModel.markRead(article.id, !article.isRead)
+                        selectedArticle?.let { article ->
+                            actions.onToggleRead(article.id, !article.isRead)
                         }
                     },
                 )
             },
             bottomBar = {
                 AppBottomBar(
-                    activeTab = state.activeTab,
-                    onTabSelected = viewModel::setTab,
+                    activeTab = activeTab,
+                    onTabSelected = actions.onTabSelected,
                 )
             },
         ) { paddingValues ->
-            // Mount the resume observer whenever the user is authenticated —
-            // the previous condition (`state.errorMessage == null`) would
-            // unmount the observer on any error, leaving the app stale on
-            // the next foreground.
-            if (state.isAuthenticated) {
-                ResumeRefreshObserver(onResume = viewModel::refreshVisibleData)
+            if (state.auth.isAuthenticated) {
+                ResumeRefreshObserver(onResume = actions.onRefreshVisibleData)
             }
 
             Box(
@@ -299,25 +348,22 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                     .padding(paddingValues),
             ) {
                 AnimatedContent(
-                    targetState = state.activeTab,
+                    targetState = activeTab,
                     label = "android-main-tabs",
                 ) { tab ->
                     when (tab) {
                         HomeTab.ARTICLES -> {
-                            val selectedArticle = state.selectedArticle
                             if (selectedArticle != null) {
                                 ArticleReaderPane(
-                                    articles = state.articles,
+                                    articles = state.articles.items,
                                     selectedArticle = selectedArticle,
                                     onOpenOriginal = { article ->
                                         article.canonicalUrl?.let { url ->
                                             openExternalUrl(context, url)
                                         }
                                     },
-                                    onBackToList = viewModel::closeArticle,
-                                    onArticleSelected = { id ->
-                                        viewModel.openArticle(id)
-                                    },
+                                    onBackToList = actions.onCloseArticle,
+                                    onArticleSelected = actions.onOpenArticle,
                                 )
                             } else {
                                 ArticlesTab(articleTabState, articleActions, articlePagingItems)
@@ -326,7 +372,7 @@ fun SelfFeedApp(state: AppUiState, viewModel: MainViewModel) {
                         HomeTab.SEARCH -> SearchTab(searchTabState, searchActions)
                         HomeTab.SETTINGS -> SettingsTab(settingsTabState, settingsActions)
                         HomeTab.STATS -> StatsTab(settingsTabState, settingsActions)
-                        HomeTab.FEEDS -> FeedsTab(feedTabState, feedActions, onSelect = { viewModel.setTab(HomeTab.ARTICLES) })
+                        HomeTab.FEEDS -> FeedsTab(feedTabState, feedActions, onSelect = { actions.onTabSelected(HomeTab.ARTICLES) })
                     }
                 }
             }
@@ -479,12 +525,18 @@ private fun AppBottomBar(
     }
 }
 
-private fun topBarLabel(state: AppUiState): String = when (state.activeTab) {
+private fun topBarLabel(
+    activeTab: HomeTab,
+    selectedArticle: ArticleDetail?,
+    selectedFeedId: String?,
+    selectedCategoryId: String?,
+    feeds: List<FeedWithCounts>,
+    categories: List<CategoryWithCounts>,
+): String = when (activeTab) {
     HomeTab.ARTICLES -> when {
-        state.selectedArticle != null -> state.selectedArticle.feedTitle
-        state.selectedFeedId != null -> state.feeds.find { it.id == state.selectedFeedId }?.title ?: "Feed"
-        state.selectedCategoryId != null ->
-            state.categories.find { it.id == state.selectedCategoryId }?.name ?: "Category"
+        selectedArticle != null -> selectedArticle.feedTitle
+        selectedFeedId != null -> feeds.find { it.id == selectedFeedId }?.title ?: "Feed"
+        selectedCategoryId != null -> categories.find { it.id == selectedCategoryId }?.name ?: "Category"
         else -> "All Feeds"
     }
     HomeTab.SEARCH -> "Search"

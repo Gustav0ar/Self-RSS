@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.SettingsRepository
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UpdateAppSettingsRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
@@ -31,7 +31,7 @@ data class SettingsUiState(
  * controls, and the debug resilience metrics.
  */
 class SettingsViewModel(
-    private val repository: RssRepository,
+    private val repository: SettingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -88,6 +88,21 @@ class SettingsViewModel(
         }
     }
 
+    fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
+        if (unreadDelta == 0 && readDelta == 0) return
+        _state.update { state ->
+            state.copy(
+                stats = state.stats?.let {
+                    UnreadStateReducer.applyStatsDelta(
+                        stats = it,
+                        unreadDelta = unreadDelta,
+                        readDelta = readDelta,
+                    )
+                },
+            )
+        }
+    }
+
     fun loadAdminSettings() {
         viewModelScope.launch {
             when (val result = repository.adminSettings()) {
@@ -128,7 +143,7 @@ class SettingsViewModel(
         return if (theme == normalized) this else copy(theme = normalized)
     }
 
-    class Factory(private val repository: RssRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: SettingsRepository) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
             return SettingsViewModel(repository) as T

@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.FeedRepository
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
@@ -30,11 +30,11 @@ data class FeedsUiState(
 /**
  * Owns the Feeds drawer: categories, feeds, category CRUD, feed CRUD, sync,
  * and OPML import/export. Read paths mirror the relevant subset of
- * [MainViewModel]'s public API so the existing UI continues to work, but
- * the actual business logic now lives in the repository.
+ * the app shell consumes this ViewModel through a focused state/actions
+ * contract instead of routing feed operations through a root ViewModel.
  */
 class FeedsViewModel(
-    private val repository: RssRepository,
+    private val repository: FeedRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(FeedsUiState())
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
@@ -152,6 +152,41 @@ class FeedsViewModel(
         }
     }
 
+    fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
+        if (feedId == null || unreadDelta == 0) return
+        _state.update { state ->
+            val feed = state.feeds.firstOrNull { it.id == feedId }
+            state.copy(
+                feeds = UnreadStateReducer.applyFeedDelta(state.feeds, feedId, unreadDelta),
+                categories = feed?.let {
+                    UnreadStateReducer.applyCategoryDelta(state.categories, it.categoryId, unreadDelta)
+                } ?: state.categories,
+            )
+        }
+    }
+
+    fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>) {
+        _state.update { state ->
+            val targetFeedIds = when {
+                affectedFeedIds.isNotEmpty() -> affectedFeedIds
+                feedId != null -> setOf(feedId)
+                categoryId != null -> state.feeds.filter { it.categoryId == categoryId }.map { it.id }.toSet()
+                else -> state.feeds.map { it.id }.toSet()
+            }
+            val categoryDeltas = state.feeds
+                .filter { it.id in targetFeedIds && it.unreadCount > 0 }
+                .groupBy { it.categoryId }
+                .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
+
+            state.copy(
+                feeds = state.feeds.map { feed ->
+                    if (feed.id in targetFeedIds) feed.copy(unreadCount = 0) else feed
+                },
+                categories = UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas),
+            )
+        }
+    }
+
     fun importOpml(fileName: String, fileBytes: ByteArray) {
         viewModelScope.launch {
             when (val result = repository.importOpml(fileName, fileBytes)) {
@@ -169,7 +204,7 @@ class FeedsViewModel(
         _state.update { it.copy(errorMessage = null, statusMessage = null) }
     }
 
-    class Factory(private val repository: RssRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: FeedRepository) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
             return FeedsViewModel(repository) as T

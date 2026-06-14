@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
  * UI state for the authentication screen (login + register).
  */
 data class AuthUiState(
-    val loading: Boolean = false,
+    val loading: Boolean = true,
     val isAuthenticated: Boolean = false,
     val authMode: AuthMode = AuthMode.LOGIN,
     val registrationEnabled: Boolean = false,
@@ -25,12 +25,10 @@ data class AuthUiState(
 /**
  * Owns authentication flows: login, register, logout, and registration status.
  *
- * Extracted from the original `MainViewModel` so the auth screen has a
- * focused, easy-to-test surface and the parent VM can compose it as a
- * StateFlow.
+ * Focused, easy-to-test state holder for auth screen state and events.
  */
 class AuthViewModel(
-    private val repository: RssRepository,
+    private val repository: AuthRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
@@ -113,7 +111,7 @@ class AuthViewModel(
             is AppResult.Error -> false
         }
 
-    class Factory(private val repository: RssRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: AuthRepository) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
             return AuthViewModel(repository) as T

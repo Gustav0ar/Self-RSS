@@ -2,6 +2,7 @@ package com.selffeed.android.data
 
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleListItem
 
 data class ArticlePageQuery(
@@ -13,7 +14,7 @@ data class ArticlePageQuery(
 )
 
 class ArticlePagingSource(
-    private val repository: RssRepository,
+    private val repository: ArticleRepository,
     private val query: ArticlePageQuery,
     private val readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },
 ) : PagingSource<String, ArticleListItem>() {
