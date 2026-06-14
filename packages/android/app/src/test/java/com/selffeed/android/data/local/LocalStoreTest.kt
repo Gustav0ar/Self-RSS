@@ -1,6 +1,9 @@
 package com.selffeed.android.data.local
 
+import androidx.paging.PagingSource
 import androidx.test.core.app.ApplicationProvider
+import com.selffeed.android.data.ArticlePageQuery
+import com.selffeed.android.data.remoteKey
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -79,6 +82,77 @@ class LocalStoreTest {
         assertEquals(1, read!!.data.size)
         assertEquals("next-cursor", read.cursor)
         assertTrue(read.hasMore)
+    }
+
+    @Test
+    fun `article remote page writes query entries and remote key`() = runBlocking {
+        val payload = ApiListResponse(
+            data = listOf(sampleArticle("a-1"), sampleArticle("a-2")),
+            cursor = "next-cursor",
+            hasMore = true,
+        )
+
+        store.writeArticleRemotePage(
+            queryKey = "query-1",
+            payload = payload,
+            clearExisting = true,
+        )
+
+        val remoteKey = store.readArticleRemoteKey("query-1")
+        assertNotNull(remoteKey)
+        assertEquals("next-cursor", remoteKey!!.nextCursor)
+
+        val result = store.articlePagingSource("query-1").load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
+        val page = result as PagingSource.LoadResult.Page
+        assertEquals(listOf("a-1", "a-2"), page.data.map { it.id })
+    }
+
+    @Test
+    fun `article page query remote key is stable across refresh generations`() {
+        val base = ArticlePageQuery(feedId = "feed-1", unreadOnly = true, sort = "newest", generation = 1)
+        val refreshed = base.copy(generation = 2)
+
+        assertEquals(base.remoteKey(), refreshed.remoteKey())
+    }
+
+    @Test
+    fun `queued read state updates article row and can be cleared`() = runBlocking {
+        val payload = ApiListResponse(
+            data = listOf(sampleArticle("a-1")),
+            cursor = null,
+            hasMore = false,
+        )
+        store.writeArticleRemotePage(
+            queryKey = "query-read-state",
+            payload = payload,
+            clearExisting = true,
+        )
+
+        store.queueReadStateMutation("a-1", read = true)
+
+        val pending = store.readPendingReadStateMutations()
+        assertEquals(1, pending.size)
+        assertEquals("a-1", pending.first().articleId)
+        assertTrue(pending.first().read)
+
+        val result = store.articlePagingSource("query-read-state").load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
+        val page = result as PagingSource.LoadResult.Page
+        assertTrue(page.data.first().isRead)
+
+        store.deletePendingReadStateMutation("a-1")
+        assertTrue(store.readPendingReadStateMutations().isEmpty())
     }
 
     @Test

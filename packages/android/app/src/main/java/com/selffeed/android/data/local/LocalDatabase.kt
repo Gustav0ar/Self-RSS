@@ -9,11 +9,16 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.paging.PagingSource
+import com.selffeed.android.network.ArticleListItem
 
 object LocalTables {
     const val CATEGORIES = "categories"
     const val FEEDS = "feeds"
     const val ARTICLES = "articles"
+    const val ARTICLE_QUERY_ENTRIES = "article_query_entries"
+    const val ARTICLE_REMOTE_KEYS = "article_remote_keys"
+    const val PENDING_READ_STATE_MUTATIONS = "pending_read_state_mutations"
     const val ARTICLE_PAGES = "article_pages"
     const val ARTICLE_DETAILS = "article_details"
 }
@@ -77,6 +82,32 @@ data class ArticleEntity(
     val isRead: Boolean,
 )
 
+@Entity(
+    tableName = LocalTables.ARTICLE_QUERY_ENTRIES,
+    primaryKeys = ["queryKey", "articleId"],
+    indices = [Index("queryKey"), Index("articleId"), Index("position")],
+)
+data class ArticleQueryEntryEntity(
+    val queryKey: String,
+    val articleId: String,
+    val position: Int,
+)
+
+@Entity(tableName = LocalTables.ARTICLE_REMOTE_KEYS)
+data class ArticleRemoteKeyEntity(
+    @PrimaryKey val queryKey: String,
+    val nextCursor: String?,
+    val endReached: Boolean,
+    val updatedAt: Long,
+)
+
+@Entity(tableName = LocalTables.PENDING_READ_STATE_MUTATIONS)
+data class PendingReadStateMutationEntity(
+    @PrimaryKey val articleId: String,
+    val read: Boolean,
+    val updatedAt: Long,
+)
+
 @Entity(tableName = LocalTables.ARTICLE_PAGES)
 data class ArticlePageEntity(
     @PrimaryKey val cacheKey: String,
@@ -117,6 +148,46 @@ interface LocalStoreDao {
     @Query("SELECT * FROM articles WHERE id IN (:ids)")
     suspend fun readArticlesByIds(ids: List<String>): List<ArticleEntity>
 
+    @Query(
+        """
+        SELECT articles.* FROM article_query_entries
+        INNER JOIN articles ON articles.id = article_query_entries.articleId
+        WHERE article_query_entries.queryKey = :queryKey
+        ORDER BY article_query_entries.position ASC
+        """,
+    )
+    fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleQueryEntries(entries: List<ArticleQueryEntryEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleRemoteKey(remoteKey: ArticleRemoteKeyEntity)
+
+    @Query("SELECT * FROM article_remote_keys WHERE queryKey = :queryKey LIMIT 1")
+    suspend fun readArticleRemoteKey(queryKey: String): ArticleRemoteKeyEntity?
+
+    @Query("SELECT COALESCE(MAX(position), -1) FROM article_query_entries WHERE queryKey = :queryKey")
+    suspend fun maxArticleQueryPosition(queryKey: String): Int
+
+    @Query("DELETE FROM article_query_entries WHERE queryKey = :queryKey")
+    suspend fun clearArticleQueryEntries(queryKey: String)
+
+    @Query("DELETE FROM article_remote_keys WHERE queryKey = :queryKey")
+    suspend fun clearArticleRemoteKey(queryKey: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPendingReadStateMutation(mutation: PendingReadStateMutationEntity)
+
+    @Query("SELECT * FROM pending_read_state_mutations ORDER BY updatedAt ASC")
+    suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity>
+
+    @Query("DELETE FROM pending_read_state_mutations WHERE articleId = :articleId")
+    suspend fun deletePendingReadStateMutation(articleId: String)
+
+    @Query("UPDATE articles SET isRead = :read WHERE id = :articleId")
+    suspend fun updateArticleReadState(articleId: String, read: Boolean)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticlePage(page: ArticlePageEntity)
 
@@ -138,6 +209,15 @@ interface LocalStoreDao {
     @Query("DELETE FROM articles")
     suspend fun clearArticles()
 
+    @Query("DELETE FROM article_query_entries")
+    suspend fun clearArticleQueryEntries()
+
+    @Query("DELETE FROM article_remote_keys")
+    suspend fun clearArticleRemoteKeys()
+
+    @Query("DELETE FROM pending_read_state_mutations")
+    suspend fun clearPendingReadStateMutations()
+
     @Query("DELETE FROM article_pages")
     suspend fun clearArticlePages()
 
@@ -150,6 +230,9 @@ interface LocalStoreDao {
         CategoryEntity::class,
         FeedEntity::class,
         ArticleEntity::class,
+        ArticleQueryEntryEntity::class,
+        ArticleRemoteKeyEntity::class,
+        PendingReadStateMutationEntity::class,
         ArticlePageEntity::class,
         ArticleDetailEntity::class,
     ],

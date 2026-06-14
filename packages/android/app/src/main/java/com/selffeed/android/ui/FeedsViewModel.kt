@@ -1,10 +1,10 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.FeedRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class FeedsUiState(
     val loading: Boolean = false,
@@ -33,7 +34,8 @@ data class FeedsUiState(
  * the app shell consumes this ViewModel through a focused state/actions
  * contract instead of routing feed operations through a root ViewModel.
  */
-class FeedsViewModel(
+@HiltViewModel
+class FeedsViewModel @Inject constructor(
     private val repository: FeedRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(FeedsUiState())
@@ -207,12 +209,5 @@ class FeedsViewModel(
 
     fun clearMessages() {
         _state.update { it.copy(errorMessage = null, statusMessage = null) }
-    }
-
-    class Factory(private val repository: FeedRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return FeedsViewModel(repository) as T
-        }
     }
 }

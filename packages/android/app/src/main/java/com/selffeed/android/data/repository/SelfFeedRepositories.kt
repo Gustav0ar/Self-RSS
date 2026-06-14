@@ -1,6 +1,8 @@
 package com.selffeed.android.data.repository
 
+import androidx.paging.PagingData
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
@@ -56,6 +58,11 @@ interface ArticleRepository {
         limit: Int? = 30,
         cursor: String? = null,
     ): AppResult<ApiListResponse<ArticleListItem>>
+
+    fun articlePagingData(
+        query: ArticlePageQuery,
+        readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },
+    ): Flow<PagingData<ArticleListItem>>
 
     suspend fun article(articleId: String, forceRefresh: Boolean = false): AppResult<ArticleDetail>
     fun cachedArticleDetail(articleId: String): ArticleDetail?

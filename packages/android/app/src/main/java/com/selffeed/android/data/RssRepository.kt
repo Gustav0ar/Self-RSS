@@ -1,6 +1,11 @@
 package com.selffeed.android.data
 
 import android.content.Context
+import androidx.paging.ExperimentalPagingApi
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.map
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.data.repository.ReadStateStreamClient
@@ -33,19 +38,23 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
+import javax.inject.Inject
+import javax.inject.Singleton
 
 sealed interface AppResult<out T> {
     data class Success<T>(val data: T) : AppResult<T>
     data class Error(val message: String, val cause: Throwable? = null) : AppResult<Nothing>
 }
 
-class RssRepository(
+@Singleton
+class RssRepository @Inject constructor(
     private val api: RssApi,
     private val sessionStore: SessionStore,
     okHttpClient: OkHttpClient,
@@ -95,6 +104,7 @@ class RssRepository(
     }
 
     override suspend fun categories() = safeReadCall {
+        flushPendingReadStateMutations()
         runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
             runtime.recordCacheHit()
             return@safeReadCall it
@@ -148,6 +158,7 @@ class RssRepository(
     }
 
     override suspend fun feeds(categoryId: String?) = safeReadCall {
+        flushPendingReadStateMutations()
         val key = "feeds:${categoryId.orEmpty()}"
         runtime.getCached<List<FeedWithCounts>>(key)?.let {
             runtime.recordCacheHit()
@@ -232,6 +243,7 @@ class RssRepository(
         limit: Int?,
         cursor: String?,
     ): AppResult<ApiListResponse<ArticleListItem>> = safeReadCall {
+        flushPendingReadStateMutations()
         if (!cursor.isNullOrBlank()) {
             return@safeReadCall runtime.withRetry { api.articles(feedId, categoryId, unreadOnly, sort, limit, cursor) }
         }
@@ -268,7 +280,48 @@ class RssRepository(
         }
     }
 
+    @OptIn(ExperimentalPagingApi::class)
+    override fun articlePagingData(
+        query: ArticlePageQuery,
+        readStateOverrides: () -> Map<String, Boolean>,
+    ): Flow<PagingData<ArticleListItem>> {
+        val queryKey = query.remoteKey()
+        return Pager(
+            config = PagingConfig(
+                pageSize = ARTICLE_PAGE_SIZE,
+                initialLoadSize = ARTICLE_PAGE_SIZE,
+                prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
+                enablePlaceholders = false,
+            ),
+            remoteMediator = ArticleRemoteMediator(
+                queryKey = queryKey,
+                forceInitialRefresh = query.generation > 0L,
+                localStore = localStore,
+                loadPage = { limit, cursor ->
+                    runtime.safeCall {
+                        runtime.withRetry {
+                            api.articles(
+                                feedId = query.feedId,
+                                categoryId = query.categoryId,
+                                unreadOnly = query.unreadOnly,
+                                sort = query.sort,
+                                limit = limit,
+                                cursor = cursor,
+                            )
+                        }
+                    }
+                },
+            ),
+            pagingSourceFactory = { localStore.articlePagingSource(queryKey) },
+        ).flow.map { pagingData ->
+            pagingData.map { article ->
+                readStateOverrides()[article.id]?.let { article.copy(isRead = it) } ?: article
+            }
+        }
+    }
+
     override suspend fun article(articleId: String, forceRefresh: Boolean) = safeReadCall {
+        flushPendingReadStateMutations()
         if (forceRefresh) invalidateArticleCaches(articleId)
 
         // Fast path: in-memory hit. Instant.
@@ -421,6 +474,11 @@ class RssRepository(
         if (previous != null) {
             runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
         }
+        if (!networkMonitor.online.value) {
+            localStore.queueReadStateMutation(articleId, read)
+            runtime.invalidateByPrefix("stats")
+            return@safeCall read
+        }
         try {
             api.markRead(articleId, MarkReadRequest(read = read)).data.success.let { read }.also {
                 // The detail is now authoritative; refresh the cached body.
@@ -555,6 +613,23 @@ class RssRepository(
         localStore.clearTable(LocalStore.TABLE_ARTICLE_PAGES)
     }
 
+    private suspend fun flushPendingReadStateMutations() {
+        if (!networkMonitor.online.value) return
+        val pending = localStore.readPendingReadStateMutations()
+        if (pending.isEmpty()) return
+        for (mutation in pending) {
+            try {
+                runtime.withRetry {
+                    api.markRead(mutation.articleId, MarkReadRequest(read = mutation.read))
+                }
+                localStore.deletePendingReadStateMutation(mutation.articleId)
+            } catch (e: Exception) {
+                runtime.debugLog("Pending read-state flush failed for ${mutation.articleId}: ${e.message ?: e::class.java.simpleName}")
+                return
+            }
+        }
+    }
+
     private companion object {
         const val USER_TTL_MS = 30_000L
         const val CATEGORIES_TTL_MS = 60_000L
@@ -573,5 +648,7 @@ class RssRepository(
         const val OPML_EXPORT_TTL_MS = 30_000L
         const val ARTICLE_IMAGE_PREFETCH_LIMIT = 5
         const val MAX_MEMORY_CACHE_ENTRIES = 160
+        const val ARTICLE_PAGE_SIZE = 30
+        const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
     }
 }

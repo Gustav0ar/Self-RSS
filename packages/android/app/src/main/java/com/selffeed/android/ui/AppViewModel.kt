@@ -1,14 +1,15 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.data.repository.AppStatusRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import javax.inject.Inject
 
 /**
  * Holds cross-screen state that doesn't belong to a single feature: the
@@ -23,7 +24,8 @@ data class AppChromeState(
     val globalError: String? = null,
 )
 
-class AppViewModel(
+@HiltViewModel
+class AppViewModel @Inject constructor(
     private val repository: AppStatusRepository,
 ) : ViewModel() {
     private val _chrome = MutableStateFlow(AppChromeState())
@@ -51,12 +53,5 @@ class AppViewModel(
 
     fun clearMessages() {
         _chrome.value = _chrome.value.copy(globalError = null, globalStatus = null)
-    }
-
-    class Factory(private val repository: AppStatusRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return AppViewModel(repository) as T
-        }
     }
 }

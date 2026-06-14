@@ -1,7 +1,9 @@
 package com.selffeed.android.data.local
 
 import android.content.Context
+import androidx.paging.PagingSource
 import androidx.room.Room
+import androidx.room.withTransaction
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -32,7 +34,7 @@ class LocalStore(
         LocalDatabase::class.java,
         DB_NAME,
     )
-        .fallbackToDestructiveMigration(dropAllTables = true)
+        .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
         .build()
     private val dao = database.localStoreDao()
 
@@ -71,19 +73,83 @@ class LocalStore(
         dao.readFeeds().map { it.toModel() }
 
     suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) {
-        if (payload.data.isNotEmpty()) {
-            dao.upsertArticles(payload.data.map { it.toEntity() })
+        database.withTransaction {
+            if (payload.data.isNotEmpty()) {
+                dao.upsertArticles(payload.data.map { it.toEntity() })
+            }
+            dao.upsertArticlePage(
+                ArticlePageEntity(
+                    cacheKey = key,
+                    articleIdsJson = articleIdsAdapter.toJson(payload.data.map { it.id }),
+                    cursor = payload.cursor,
+                    hasMore = payload.hasMore,
+                    writtenAt = System.currentTimeMillis(),
+                ),
+            )
         }
-        dao.upsertArticlePage(
-            ArticlePageEntity(
-                cacheKey = key,
-                articleIdsJson = articleIdsAdapter.toJson(payload.data.map { it.id }),
-                cursor = payload.cursor,
-                hasMore = payload.hasMore,
-                writtenAt = System.currentTimeMillis(),
-            ),
-        )
         notifyInvalidation(TABLE_ARTICLE_PAGES)
+    }
+
+    fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem> =
+        dao.articlePagingSource(queryKey)
+
+    suspend fun readArticleRemoteKey(queryKey: String): ArticleRemoteKeyEntity? =
+        dao.readArticleRemoteKey(queryKey)
+
+    suspend fun writeArticleRemotePage(
+        queryKey: String,
+        payload: ApiListResponse<ArticleListItem>,
+        clearExisting: Boolean,
+    ) {
+        database.withTransaction {
+            if (clearExisting) {
+                dao.clearArticleQueryEntries(queryKey)
+                dao.clearArticleRemoteKey(queryKey)
+            }
+            if (payload.data.isNotEmpty()) {
+                dao.upsertArticles(payload.data.map { it.toEntity() })
+                val startPosition = dao.maxArticleQueryPosition(queryKey) + 1
+                dao.upsertArticleQueryEntries(
+                    payload.data.mapIndexed { index, article ->
+                        ArticleQueryEntryEntity(
+                            queryKey = queryKey,
+                            articleId = article.id,
+                            position = startPosition + index,
+                        )
+                    },
+                )
+            }
+            dao.upsertArticleRemoteKey(
+                ArticleRemoteKeyEntity(
+                    queryKey = queryKey,
+                    nextCursor = payload.cursor,
+                    endReached = !payload.hasMore || payload.cursor.isNullOrBlank(),
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+        notifyInvalidation(TABLE_ARTICLES)
+    }
+
+    suspend fun queueReadStateMutation(articleId: String, read: Boolean) {
+        database.withTransaction {
+            dao.updateArticleReadState(articleId, read)
+            dao.upsertPendingReadStateMutation(
+                PendingReadStateMutationEntity(
+                    articleId = articleId,
+                    read = read,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+        notifyInvalidation(TABLE_ARTICLES)
+    }
+
+    suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =
+        dao.readPendingReadStateMutations()
+
+    suspend fun deletePendingReadStateMutation(articleId: String) {
+        dao.deletePendingReadStateMutation(articleId)
     }
 
     suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? {
@@ -130,6 +196,9 @@ class LocalStore(
         dao.clearCategories()
         dao.clearFeeds()
         dao.clearArticles()
+        dao.clearArticleQueryEntries()
+        dao.clearArticleRemoteKeys()
+        dao.clearPendingReadStateMutations()
         dao.clearArticlePages()
         dao.clearArticleDetails()
         notifyInvalidation("all")
@@ -139,7 +208,12 @@ class LocalStore(
         when (table) {
             TABLE_CATEGORIES -> dao.clearCategories()
             TABLE_FEEDS -> dao.clearFeeds()
-            TABLE_ARTICLES -> dao.clearArticles()
+            TABLE_ARTICLES -> {
+                dao.clearArticles()
+                dao.clearArticleQueryEntries()
+                dao.clearArticleRemoteKeys()
+                dao.clearPendingReadStateMutations()
+            }
             TABLE_ARTICLE_PAGES -> dao.clearArticlePages()
             TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
             else -> return

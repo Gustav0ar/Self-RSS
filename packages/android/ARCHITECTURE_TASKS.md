@@ -6,9 +6,13 @@
 - Added feature-scoped repository implementations for auth, feeds, articles, search, settings, and app status.
 - Extracted shared repository runtime concerns for safe API calls, retry/backoff, memory caching, cache metrics, and debug resilience snapshots.
 - Extracted read-state SSE connection/reconnect handling into `ReadStateStreamClient`.
-- Changed ViewModel factories to receive feature repository interfaces from `AppContainer`.
+- Replaced the manual `AppContainer` object graph with Hilt application/activity/ViewModel injection.
+- Bound feature repository interfaces through Hilt so ViewModels depend on focused contracts instead of the monolithic repository.
 - Replaced the manual `androidx.sqlite` helper in `LocalStore` with a Room database, DAO, and typed local entities.
+- Removed destructive Room fallback behavior and centralized explicit migration registration.
 - Stored article summaries as typed Room rows, with page cache entries retaining only ordered article IDs and cursor metadata.
+- Added Room query entries, remote keys, and a Paging 3 `RemoteMediator` so article paging reads from Room while network calls fill the database.
+- Added a Room-backed pending read-state mutation queue so offline read/unread actions update the local source of truth and flush when reads resume online.
 - Preserved the existing `LocalStore` API so repository behavior and tests remain stable.
 - Fixed article/feed/category cache invalidation to avoid stale article pages after category mutations.
 - Made the shell article queue prefer the current Paging snapshot over the legacy manual cursor list.
@@ -16,8 +20,8 @@
 
 ## Remaining Deepening Work
 
-1. Replace cursor-backed article loading with Paging 3 `RemoteMediator` once API cursor metadata can be mapped to stable remote keys.
-2. Consider Hilt after repository implementations are fully separated; manual DI remains acceptable while the object graph is small.
+1. Split `RssRepository` into dedicated remote data sources if backend API surface area keeps growing.
+2. Add Hilt-specific instrumented test replacement modules before introducing device UI tests.
 
 ## Target Shape
 

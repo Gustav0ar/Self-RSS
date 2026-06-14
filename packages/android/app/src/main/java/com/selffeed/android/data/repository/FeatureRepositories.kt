@@ -1,6 +1,8 @@
 package com.selffeed.android.data.repository
 
+import androidx.paging.PagingData
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
@@ -17,8 +19,9 @@ import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
 import kotlinx.coroutines.flow.Flow
+import javax.inject.Inject
 
-class AuthRepositoryImpl(
+class AuthRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AuthRepository {
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> = source.registrationStatus()
@@ -29,7 +32,7 @@ class AuthRepositoryImpl(
     override fun isLoggedIn(): Boolean = source.isLoggedIn()
 }
 
-class FeedRepositoryImpl(
+class FeedRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : FeedRepository {
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> = source.categories()
@@ -63,7 +66,7 @@ class FeedRepositoryImpl(
     override suspend fun exportOpml(): AppResult<String> = source.exportOpml()
 }
 
-class ArticleRepositoryImpl(
+class ArticleRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : ArticleRepository {
     override suspend fun articles(
@@ -75,6 +78,11 @@ class ArticleRepositoryImpl(
         cursor: String?,
     ): AppResult<ApiListResponse<ArticleListItem>> =
         source.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
+
+    override fun articlePagingData(
+        query: ArticlePageQuery,
+        readStateOverrides: () -> Map<String, Boolean>,
+    ): Flow<PagingData<ArticleListItem>> = source.articlePagingData(query, readStateOverrides)
 
     override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> =
         source.article(articleId, forceRefresh)
@@ -99,7 +107,7 @@ class ArticleRepositoryImpl(
     override suspend fun invalidateReadStateCaches(articleId: String?) = source.invalidateReadStateCaches(articleId)
 }
 
-class SearchRepositoryImpl(
+class SearchRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : SearchRepository {
     override suspend fun search(
@@ -109,7 +117,7 @@ class SearchRepositoryImpl(
     ): AppResult<ApiListResponse<ArticleListItem>> = source.search(query, categoryId, cursor)
 }
 
-class SettingsRepositoryImpl(
+class SettingsRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : SettingsRepository {
     override suspend fun preferences(): AppResult<UserPreferences> = source.preferences()
@@ -125,7 +133,7 @@ class SettingsRepositoryImpl(
     override fun resetDebugResilienceMetrics() = source.resetDebugResilienceMetrics()
 }
 
-class AppStatusRepositoryImpl(
+class AppStatusRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AppStatusRepository {
     override fun isOnline(): Boolean = source.isOnline()

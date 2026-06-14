@@ -2,15 +2,12 @@ package com.selffeed.android.ui
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.paging.Pager
-import androidx.paging.PagingConfig
 import androidx.paging.cachedIn
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
-import com.selffeed.android.data.ArticlePagingSource
 import com.selffeed.android.data.repository.ArticleRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
@@ -33,6 +30,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
+import javax.inject.Inject
 
 data class ArticlesUiState(
     val items: List<ArticleListItem> = emptyList(),
@@ -63,7 +61,8 @@ sealed interface ArticleFeatureEvent {
     ) : ArticleFeatureEvent
 }
 
-class ArticlesViewModel(
+@HiltViewModel
+class ArticlesViewModel @Inject constructor(
     private val repository: ArticleRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(ArticlesUiState())
@@ -75,23 +74,7 @@ class ArticlesViewModel(
     private val articlePagingQuery = MutableStateFlow(ArticlePageQuery())
     @OptIn(ExperimentalCoroutinesApi::class)
     val articlePagingData = articlePagingQuery
-        .flatMapLatest { query ->
-            Pager(
-                config = PagingConfig(
-                    pageSize = ARTICLE_PAGE_SIZE,
-                    initialLoadSize = ARTICLE_PAGE_SIZE,
-                    prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
-                    enablePlaceholders = false,
-                ),
-                pagingSourceFactory = {
-                    ArticlePagingSource(
-                        repository = repository,
-                        query = query,
-                        readStateOverrides = ::knownArticleReadStates,
-                    )
-                },
-            ).flow
-        }
+        .flatMapLatest { query -> repository.articlePagingData(query, ::knownArticleReadStates) }
         .cachedIn(viewModelScope)
 
     private val requestSequence = AtomicLong(0)
@@ -596,14 +579,6 @@ class ArticlesViewModel(
         if (!changed) return 0 to 0
         return if (newReadState) -1 to 1 else 1 to -1
     }
-
-    class Factory(private val repository: ArticleRepository) : ViewModelProvider.Factory {
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            @Suppress("UNCHECKED_CAST")
-            return ArticlesViewModel(repository) as T
-        }
-    }
-
     private data class ArticleQuery(
         val feedId: String?,
         val categoryId: String?,
@@ -614,7 +589,6 @@ class ArticlesViewModel(
     private companion object {
         const val TAG = "ArticlesViewModel"
         const val ARTICLE_PAGE_SIZE = 30
-        const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
         const val ARTICLE_ENRICH_REFRESH_DELAY_MS = 600L
         const val ARTICLE_BACKGROUND_ENRICH_RETRY_MS = 10 * 60 * 1000L
         const val NEXT_ARTICLE_WARM_LIMIT = 2
