@@ -3,16 +3,6 @@ import { type APIRequestContext, expect, type Page, test } from '@playwright/tes
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://127.0.0.1:3100/api/v1';
 let cachedAdminAccessToken: string | null = null;
 
-function unreadBadgeName(name: string) {
-	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`^${escaped}(?: \\d+)?$`);
-}
-
-function articleTitleName(title: string) {
-	const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`\\b${escaped}\\b`);
-}
-
 async function loginThroughApi(request: APIRequestContext, email: string, password: string) {
 	const response = await request.post(`${apiBaseUrl}/auth/login`, {
 		data: { email, password },

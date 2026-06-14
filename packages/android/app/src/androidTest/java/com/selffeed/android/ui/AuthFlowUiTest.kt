@@ -1,18 +1,19 @@
 package com.selffeed.android.ui
 
+import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Rule
 import org.junit.Test
 
 class AuthFlowUiTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun authScreen_isShown_whenUserIsLoggedOut() {

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AppError } from '../../src/middleware/errors.js';
 import { clearEnvCache } from '../../src/config/env.js';
-import { RateLimiter, RATE_LIMITS } from '../../src/utils/rate-limiter.js';
+import { AppError } from '../../src/middleware/errors.js';
 import { enforceRateLimit } from '../../src/utils/rate-limit.js';
+import { RATE_LIMITS, RateLimiter } from '../../src/utils/rate-limiter.js';
 
 const originalEnv = { ...process.env };
 
@@ -22,11 +22,7 @@ afterEach(() => {
 	clearEnvCache();
 });
 
-function makeContext({ userId, trustProxy, forwardedFor }: {
-	userId?: string;
-	trustProxy: boolean;
-	forwardedFor?: string;
-}) {
+function makeContext({ userId, forwardedFor }: { userId?: string; forwardedFor?: string }) {
 	const headers = new Headers();
 	if (forwardedFor) headers.set('x-forwarded-for', forwardedFor);
 	const store = new Map<string, unknown>();
@@ -36,7 +32,7 @@ function makeContext({ userId, trustProxy, forwardedFor }: {
 		get: (key: string) => store.get(key),
 		set: (key: string, value: unknown) => store.set(key, value),
 		header: vi.fn(),
-	} as never;
+	};
 }
 
 describe('RateLimiter', () => {
@@ -44,8 +40,8 @@ describe('RateLimiter', () => {
 		const redis = {
 			incr: vi.fn().mockResolvedValue(1),
 			pexpire: vi.fn().mockResolvedValue(1),
-		} as never;
-		const limiter = new RateLimiter(redis);
+		};
+		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 		expect(result).toEqual({ allowed: true, remaining: 4 });
@@ -56,8 +52,8 @@ describe('RateLimiter', () => {
 		const redis = {
 			incr: vi.fn().mockResolvedValue(2),
 			pexpire: vi.fn().mockResolvedValue(0),
-		} as never;
-		const limiter = new RateLimiter(redis);
+		};
+		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 		expect(result.allowed).toBe(true);
@@ -68,8 +64,8 @@ describe('RateLimiter', () => {
 		const redis = {
 			incr: vi.fn().mockResolvedValue(6),
 			pexpire: vi.fn().mockResolvedValue(1),
-		} as never;
-		const limiter = new RateLimiter(redis);
+		};
+		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 		expect(result).toEqual({ allowed: false, remaining: 0 });
@@ -79,8 +75,8 @@ describe('RateLimiter', () => {
 		const redis = {
 			incr: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2),
 			expire: vi.fn().mockResolvedValue(1),
-		} as never;
-		const limiter = new RateLimiter(redis);
+		};
+		const limiter = new RateLimiter(redis as never);
 
 		expect(await limiter.incrementDailyCount('opml-import:user-1')).toBe(1);
 		expect(await limiter.incrementDailyCount('opml-import:user-1')).toBe(2);
@@ -107,10 +103,13 @@ describe('RATE_LIMITS', () => {
 
 describe('enforceRateLimit', () => {
 	it('sets the X-RateLimit-Remaining header on the response', async () => {
-		const c = makeContext({ userId: 'user-1', trustProxy: false });
-		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 7 }) } as never;
+		const c = makeContext({ userId: 'user-1' });
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 7 }) };
 
-		await enforceRateLimit(c, limiter, 'feed-create', { windowMs: 60_000, maxRequests: 10 });
+		await enforceRateLimit(c as never, limiter as never, 'feed-create', {
+			windowMs: 60_000,
+			maxRequests: 10,
+		});
 
 		expect(limiter.check).toHaveBeenCalledWith('feed-create:user-1', {
 			windowMs: 60_000,
@@ -122,10 +121,13 @@ describe('enforceRateLimit', () => {
 	it('falls back to the x-forwarded-for identity when not authenticated and proxy is trusted', async () => {
 		process.env.TRUST_PROXY = 'true';
 		clearEnvCache();
-		const c = makeContext({ userId: undefined, trustProxy: true, forwardedFor: '203.0.113.10' });
-		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) } as never;
+		const c = makeContext({ userId: undefined, forwardedFor: '203.0.113.10' });
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
 
-		await enforceRateLimit(c, limiter, 'search', { windowMs: 60_000, maxRequests: 60 });
+		await enforceRateLimit(c as never, limiter as never, 'search', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
 		expect(limiter.check).toHaveBeenCalledWith('search:203.0.113.10', {
 			windowMs: 60_000,
 			maxRequests: 60,
@@ -133,13 +135,16 @@ describe('enforceRateLimit', () => {
 	});
 
 	it('throws a 429 once the limit is exceeded', async () => {
-		const c = makeContext({ userId: 'user-1', trustProxy: false });
+		const c = makeContext({ userId: 'user-1' });
 		const limiter = {
 			check: vi.fn().mockResolvedValue({ allowed: false, remaining: 0 }),
-		} as never;
+		};
 
 		await expect(
-			enforceRateLimit(c, limiter, 'feed-create', { windowMs: 60_000, maxRequests: 10 }),
+			enforceRateLimit(c as never, limiter as never, 'feed-create', {
+				windowMs: 60_000,
+				maxRequests: 10,
+			}),
 		).rejects.toBeInstanceOf(AppError);
 	});
 });

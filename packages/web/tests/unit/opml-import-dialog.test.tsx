@@ -39,9 +39,13 @@ describe('OpmlImportDialog', () => {
 
 		render(<OpmlImportDialog onClose={onClose} />);
 
-		const file = new File(['<?xml version="1.0"?><opml version="2.0"><body/></opml>'], 'feeds.opml', {
-			type: 'text/xml',
-		});
+		const file = new File(
+			['<?xml version="1.0"?><opml version="2.0"><body/></opml>'],
+			'feeds.opml',
+			{
+				type: 'text/xml',
+			},
+		);
 		const input = screen.getByLabelText('OPML file') as HTMLInputElement;
 		fireEvent.change(input, { target: { files: [file] } });
 

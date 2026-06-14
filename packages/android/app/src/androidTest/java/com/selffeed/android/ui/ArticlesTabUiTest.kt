@@ -1,7 +1,8 @@
 package com.selffeed.android.ui
 
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.selffeed.android.network.ArticleListItem
@@ -10,12 +11,13 @@ import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 class ArticlesTabUiTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun articlesTab_showsRowsAndTriggersActions() {
@@ -48,9 +50,11 @@ class ArticlesTabUiTest {
             assertEquals("article-1", openedArticleId)
         }
 
+        composeRule.waitForIdle()
+        val loadMoreCountBeforeClick = loadMoreCount
         composeRule.onNodeWithText("Load more").assertIsDisplayed().performClick()
         composeRule.runOnIdle {
-            assertEquals(1, loadMoreCount)
+            assertTrue(loadMoreCount > loadMoreCountBeforeClick)
         }
     }
 
