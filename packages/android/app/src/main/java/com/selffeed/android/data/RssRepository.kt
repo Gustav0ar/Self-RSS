@@ -8,27 +8,22 @@ import androidx.paging.PagingData
 import androidx.paging.map
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.remote.ArticleRemoteDataSource
+import com.selffeed.android.data.remote.AuthRemoteDataSource
+import com.selffeed.android.data.remote.FeedRemoteDataSource
+import com.selffeed.android.data.remote.SearchRemoteDataSource
+import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.ReadStateStreamClient
 import com.selffeed.android.data.repository.RepositoryRuntime
 import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
-import com.selffeed.android.network.CreateCategoryRequest
-import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
-import com.selffeed.android.network.LoginRequest
-import com.selffeed.android.network.MarkAllReadRequest
-import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.ReadStateSyncEvent
-import com.selffeed.android.network.RssApi
-import com.selffeed.android.network.RegisterRequest
-import com.selffeed.android.network.UpdateAppSettingsRequest
-import com.selffeed.android.network.UpdateCategoryRequest
-import com.selffeed.android.network.UpdateFeedRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.squareup.moshi.Moshi
 import coil3.ImageLoader
@@ -55,7 +50,11 @@ sealed interface AppResult<out T> {
 
 @Singleton
 class RssRepository @Inject constructor(
-    private val api: RssApi,
+    private val authRemote: AuthRemoteDataSource,
+    private val feedRemote: FeedRemoteDataSource,
+    private val articleRemote: ArticleRemoteDataSource,
+    private val searchRemote: SearchRemoteDataSource,
+    private val settingsRemote: SettingsRemoteDataSource,
     private val sessionStore: SessionStore,
     okHttpClient: OkHttpClient,
     moshi: Moshi,
@@ -75,32 +74,32 @@ class RssRepository @Inject constructor(
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override suspend fun registrationStatus() = safeReadCall {
-        api.registrationStatus().data
+        authRemote.registrationStatus()
     }
 
     override suspend fun login(email: String, password: String) = safeCall {
-        val response = api.login(LoginRequest(email, password)).data
+        val response = authRemote.login(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
         response.user
     }
 
     override suspend fun register(email: String, password: String) = safeCall {
-        val response = api.register(RegisterRequest(email, password)).data
+        val response = authRemote.register(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
         response.user
     }
 
     override suspend fun logout() = safeCall {
-        api.logout()
+        authRemote.logout()
         sessionStore.clear()
         clearCacheAndDatabase()
         true
     }
 
     override suspend fun me() = safeReadCall {
-        runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { runtime.withRetry { api.me().data } }
+        runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { runtime.withRetry { authRemote.me() } }
     }
 
     override suspend fun categories() = safeReadCall {
@@ -119,7 +118,7 @@ class RssRepository @Inject constructor(
 
         try {
             runtime.cachedGet(key = "categories", ttlMs = CATEGORIES_TTL_MS) {
-                runtime.withRetry { api.categories().data.categories }.also { categories ->
+                runtime.withRetry { feedRemote.categories() }.also { categories ->
                     localStore.writeCategories(categories)
                     offlineCacheStore.writeCategories(categories)
                 }
@@ -132,7 +131,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun createCategory(name: String, parentCategoryId: String?) = safeCall {
-        api.createCategory(CreateCategoryRequest(name, parentCategoryId)).data.also {
+        feedRemote.createCategory(name, parentCategoryId).also {
             runtime.invalidateByPrefix("categories")
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("stats")
@@ -146,13 +145,13 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun updateCategory(id: String, name: String?, parentCategoryId: String?) = safeCall {
-        api.updateCategory(id, UpdateCategoryRequest(name, parentCategoryId)).data.also {
+        feedRemote.updateCategory(id, name, parentCategoryId).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun deleteCategory(id: String) = safeCall {
-        api.deleteCategory(id).data.success.also {
+        feedRemote.deleteCategory(id).also {
             invalidateFeedAndArticleCaches()
         }
     }
@@ -177,7 +176,7 @@ class RssRepository @Inject constructor(
 
         try {
             runtime.cachedGet(key = key, ttlMs = FEEDS_TTL_MS) {
-                runtime.withRetry { api.feeds(categoryId).data }.also { feeds ->
+                runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
                     localStore.writeFeeds(feeds)
                     offlineCacheStore.writeFeeds(feeds)
                 }
@@ -190,31 +189,31 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) = safeCall {
-        api.createFeed(CreateFeedRequest(feedUrl = feedUrl, categoryId = categoryId, title = title)).data.also {
+        feedRemote.createFeed(feedUrl, categoryId, title).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun updateFeed(id: String, categoryId: String?, title: String?, pollingIntervalMinutes: Int?) = safeCall {
-        api.updateFeed(id, UpdateFeedRequest(categoryId, title, pollingIntervalMinutes)).data.also {
+        feedRemote.updateFeed(id, categoryId, title, pollingIntervalMinutes).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun deleteFeed(id: String) = safeCall {
-        api.deleteFeed(id).data.success.also {
+        feedRemote.deleteFeed(id).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun syncFeed(id: String) = safeCall {
-        api.syncFeed(id).data.also {
+        feedRemote.syncFeed(id).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun syncAllFeeds() = safeCall {
-        api.syncAllFeeds().data.also {
+        feedRemote.syncAllFeeds().also {
             invalidateFeedAndArticleCaches()
         }
     }
@@ -222,14 +221,14 @@ class RssRepository @Inject constructor(
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray) = safeCall {
         val body = fileBytes.toRequestBody("application/xml".toMediaType())
         val part = MultipartBody.Part.createFormData("file", fileName, body)
-        api.importOpml(part).data.also {
+        feedRemote.importOpml(part).also {
             invalidateFeedAndArticleCaches()
         }
     }
 
     override suspend fun exportOpml() = safeReadCall {
         runtime.cachedGet(key = "opml:export", ttlMs = OPML_EXPORT_TTL_MS) {
-            val response = runtime.withRetry { api.exportOpml() }
+            val response = runtime.withRetry { feedRemote.exportOpml() }
             if (!response.isSuccessful) throw HttpException(response)
             response.body()?.string().orEmpty()
         }
@@ -245,7 +244,9 @@ class RssRepository @Inject constructor(
     ): AppResult<ApiListResponse<ArticleListItem>> = safeReadCall {
         flushPendingReadStateMutations()
         if (!cursor.isNullOrBlank()) {
-            return@safeReadCall runtime.withRetry { api.articles(feedId, categoryId, unreadOnly, sort, limit, cursor) }
+            return@safeReadCall runtime.withRetry {
+                articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
+            }
         }
 
         val key = "articles:${feedId.orEmpty()}:${categoryId.orEmpty()}:${unreadOnly ?: "null"}:${sort.orEmpty()}:${limit ?: 0}:"
@@ -270,7 +271,9 @@ class RssRepository @Inject constructor(
 
         try {
             runtime.cachedGet(key = key, ttlMs = ARTICLES_TTL_MS) {
-                runtime.withRetry { api.articles(feedId, categoryId, unreadOnly, sort, limit, cursor) }.also { response ->
+                runtime.withRetry {
+                    articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
+                }.also { response ->
                     localStore.writeArticles(key, response)
                     offlineCacheStore.writeArticles(key, response)
                 }
@@ -300,7 +303,7 @@ class RssRepository @Inject constructor(
                 loadPage = { limit, cursor ->
                     runtime.safeCall {
                         runtime.withRetry {
-                            api.articles(
+                            articleRemote.articles(
                                 feedId = query.feedId,
                                 categoryId = query.categoryId,
                                 unreadOnly = query.unreadOnly,
@@ -314,8 +317,9 @@ class RssRepository @Inject constructor(
             ),
             pagingSourceFactory = { localStore.articlePagingSource(queryKey) },
         ).flow.map { pagingData ->
+            val readStates = readStateOverrides()
             pagingData.map { article ->
-                readStateOverrides()[article.id]?.let { article.copy(isRead = it) } ?: article
+                readStates[article.id]?.let { article.copy(isRead = it) } ?: article
             }
         }
     }
@@ -346,7 +350,7 @@ class RssRepository @Inject constructor(
 
         // Cold path: nothing in memory or SQLite. Hit the network.
         try {
-            runtime.withRetry { api.article(articleId).data }.also { detail ->
+            runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
                 runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
                 localStore.writeArticleDetail(detail)
                 offlineCacheStore.writeArticleDetail(detail)
@@ -361,7 +365,7 @@ class RssRepository @Inject constructor(
     private fun backgroundRefreshArticle(articleId: String) {
         refreshScope.launch {
             try {
-                val detail = runtime.withRetry { api.article(articleId).data }
+                val detail = runtime.withRetry { articleRemote.article(articleId) }
                 runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
                 localStore.writeArticleDetail(detail)
                 offlineCacheStore.writeArticleDetail(detail)
@@ -375,7 +379,7 @@ class RssRepository @Inject constructor(
     private fun refreshCategoriesInBackground() {
         refreshScope.launch {
             runCatching {
-                runtime.withRetry { api.categories().data.categories }.also { categories ->
+                runtime.withRetry { feedRemote.categories() }.also { categories ->
                     runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
                     localStore.writeCategories(categories)
                     offlineCacheStore.writeCategories(categories)
@@ -387,7 +391,7 @@ class RssRepository @Inject constructor(
     private fun refreshFeedsInBackground(categoryId: String?) {
         refreshScope.launch {
             runCatching {
-                runtime.withRetry { api.feeds(categoryId).data }.also { feeds ->
+                runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
                     runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
                     localStore.writeFeeds(feeds)
                     offlineCacheStore.writeFeeds(feeds)
@@ -406,7 +410,7 @@ class RssRepository @Inject constructor(
     ) {
         refreshScope.launch {
             runCatching {
-                runtime.withRetry { api.articles(feedId, categoryId, unreadOnly, sort, limit, cursor = null) }
+                runtime.withRetry { articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor = null) }
                     .also { response ->
                         runtime.putCached(key, ARTICLES_TTL_MS, response)
                         localStore.writeArticles(key, response)
@@ -421,7 +425,7 @@ class RssRepository @Inject constructor(
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> = article(articleId)
 
     override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> = safeReadCall {
-        runtime.withRetry { api.article(articleId).data }.also { detail ->
+        runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
             runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
             localStore.writeArticleDetail(detail)
             offlineCacheStore.writeArticleDetail(detail)
@@ -446,7 +450,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean) = safeCall {
-        api.enrichArticle(articleId).data.also {
+        articleRemote.enrichArticle(articleId).also {
             if (it.success || it.reason == "already_enriched") {
                 if (invalidateCaches) {
                     invalidateArticleCaches(articleId)
@@ -480,7 +484,7 @@ class RssRepository @Inject constructor(
             return@safeCall read
         }
         try {
-            api.markRead(articleId, MarkReadRequest(read = read)).data.success.let { read }.also {
+            articleRemote.markRead(articleId, read).let { read }.also {
                 // The detail is now authoritative; refresh the cached body.
                 invalidateArticleDetailCache(articleId)
                 runtime.invalidateByPrefix("stats")
@@ -495,7 +499,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall {
-        api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data.markedCount.also {
+        articleRemote.markAllRead(feedId, categoryId).also {
             invalidateFeedAndArticleCaches()
         }
     }
@@ -509,22 +513,24 @@ class RssRepository @Inject constructor(
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) = safeReadCall {
         if (!cursor.isNullOrBlank()) {
-            return@safeReadCall runtime.withRetry { api.search(query = query, categoryId = categoryId, cursor = cursor) }
+            return@safeReadCall runtime.withRetry { searchRemote.search(query = query, categoryId = categoryId, cursor = cursor) }
         }
 
         val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
-        runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) { runtime.withRetry { api.search(query = query, categoryId = categoryId, cursor = cursor) } }
+        runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) {
+            runtime.withRetry { searchRemote.search(query = query, categoryId = categoryId, cursor = cursor) }
+        }
     }
 
     suspend fun search(query: String): AppResult<ApiListResponse<ArticleListItem>> =
         search(query = query, categoryId = null, cursor = null)
 
     override suspend fun preferences() = safeReadCall {
-        runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) { runtime.withRetry { api.preferences().data } }
+        runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) { runtime.withRetry { settingsRemote.preferences() } }
     }
 
     override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall {
-        api.updatePreferences(request).data.also {
+        settingsRemote.updatePreferences(request).also {
             runtime.invalidateByPrefix("preferences")
             runtime.invalidateByPrefix("articles")
             runtime.invalidateByPrefix("search")
@@ -532,15 +538,15 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun stats() = safeReadCall {
-        runtime.cachedGet(key = "stats", ttlMs = STATS_TTL_MS) { runtime.withRetry { api.stats().data } }
+        runtime.cachedGet(key = "stats", ttlMs = STATS_TTL_MS) { runtime.withRetry { settingsRemote.stats() } }
     }
 
     override suspend fun adminSettings() = safeReadCall {
-        runtime.cachedGet(key = "admin:settings", ttlMs = ADMIN_SETTINGS_TTL_MS) { runtime.withRetry { api.adminSettings().data } }
+        runtime.cachedGet(key = "admin:settings", ttlMs = ADMIN_SETTINGS_TTL_MS) { runtime.withRetry { settingsRemote.adminSettings() } }
     }
 
     override suspend fun updateAdminSettings(registrationLocked: Boolean) = safeCall {
-        api.updateAdminSettings(UpdateAppSettingsRequest(registrationLocked)).data.also {
+        settingsRemote.updateAdminSettings(registrationLocked).also {
             runtime.invalidateByPrefix("admin:settings")
         }
     }
@@ -620,7 +626,7 @@ class RssRepository @Inject constructor(
         for (mutation in pending) {
             try {
                 runtime.withRetry {
-                    api.markRead(mutation.articleId, MarkReadRequest(read = mutation.read))
+                    articleRemote.markRead(mutation.articleId, mutation.read)
                 }
                 localStore.deletePendingReadStateMutation(mutation.articleId)
             } catch (e: Exception) {
