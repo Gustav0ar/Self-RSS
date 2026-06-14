@@ -15,6 +15,7 @@ data class ArticlePageQuery(
 class ArticlePagingSource(
     private val repository: RssRepository,
     private val query: ArticlePageQuery,
+    private val readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },
 ) : PagingSource<String, ArticleListItem>() {
     override suspend fun load(params: LoadParams<String>): LoadResult<String, ArticleListItem> {
         val pageSize = params.loadSize.coerceAtMost(MAX_PAGE_SIZE)
@@ -30,7 +31,7 @@ class ArticlePagingSource(
                 )
             ) {
                 is AppResult.Success -> LoadResult.Page(
-                    data = result.data.data,
+                    data = result.data.data.withReadStates(readStateOverrides()),
                     prevKey = null,
                     nextKey = result.data.cursor.takeIf { result.data.hasMore },
                 )
@@ -58,3 +59,10 @@ class ArticlePagingSource(
         const val MAX_PAGE_SIZE = 60
     }
 }
+
+private fun List<ArticleListItem>.withReadStates(
+    readStates: Map<String, Boolean>,
+): List<ArticleListItem> =
+    map { article ->
+        readStates[article.id]?.let { article.copy(isRead = it) } ?: article
+    }

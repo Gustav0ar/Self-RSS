@@ -15,6 +15,7 @@ import com.selffeed.android.network.ReadStateScope
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
@@ -670,6 +671,60 @@ class MainViewModelTest {
         val state = viewModel.uiState.value
         assertEquals(listOf("a1", "a2"), state.articles.map { it.id })
         assertTrue(state.articles.all { it.isRead })
+    }
+
+    @Test
+    fun syncAllFeeds_preservesLocalReadStateWhenRefreshReturnsStaleUnreadRows() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Article 1", isRead = false),
+                    sampleArticle(id = "a2", title = "Article 2", isRead = false),
+                ),
+                null,
+                false,
+            ),
+        )
+        coEvery { repository.markRead("a1", true) } returns AppResult.Success(true)
+        coEvery { repository.markRead("a2", true) } returns AppResult.Success(true)
+        coEvery { repository.syncAllFeeds() } returns AppResult.Success(
+            SyncResponse(syncedFeeds = 1, failedFeeds = 0, newArticles = 1),
+        )
+
+        val viewModel = MainViewModel(repository)
+        advanceUntilIdle()
+
+        viewModel.markRead("a1", true)
+        viewModel.markRead("a2", true)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.articles.first { it.id == "a1" }.isRead)
+        assertTrue(viewModel.uiState.value.articles.first { it.id == "a2" }.isRead)
+
+        coEvery {
+            repository.articles(any(), any(), any(), any(), any(), null)
+        } returns AppResult.Success(
+            ApiListResponse(
+                listOf(
+                    sampleArticle(id = "a1", title = "Stale unread 1", isRead = false),
+                    sampleArticle(id = "a2", title = "Stale unread 2", isRead = false),
+                    sampleArticle(id = "a3", title = "New unread", isRead = false),
+                ),
+                null,
+                false,
+            ),
+        )
+
+        viewModel.syncAllFeeds()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.articles.first { it.id == "a1" }.isRead)
+        assertTrue(state.articles.first { it.id == "a2" }.isRead)
+        assertFalse(state.articles.first { it.id == "a3" }.isRead)
     }
 
     @Test

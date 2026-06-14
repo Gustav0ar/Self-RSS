@@ -115,7 +115,7 @@ class MainViewModel(
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
     val themePreference: StateFlow<String> = uiState
-        .map { normalizeThemePreference(it.preferences?.theme ?: "system") }
+        .map { ThemePreference.fromApiValue(it.preferences?.theme).apiValue }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "system")
     val articlesState: StateFlow<MainArticlesUiState> = combine(
@@ -172,7 +172,13 @@ class MainViewModel(
                     prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
                     enablePlaceholders = false,
                 ),
-                pagingSourceFactory = { ArticlePagingSource(repository, query) },
+                pagingSourceFactory = {
+                    ArticlePagingSource(
+                        repository = repository,
+                        query = query,
+                        readStateOverrides = ::knownArticleReadStates,
+                    )
+                },
             ).flow
         }
         .cachedIn(viewModelScope)
@@ -192,6 +198,7 @@ class MainViewModel(
     // a synchronized view over each map/set to avoid data races that would
     // otherwise corrupt the underlying HashMap.
     private val manuallyUnread = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val articleReadStates = ArticleReadStateStore()
     private val backgroundEnrichAttemptedAt = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
 
     init {
@@ -201,6 +208,7 @@ class MainViewModel(
     fun bootstrap() {
         viewModelScope.launch {
             if (!repository.isLoggedIn()) {
+                clearSessionReadStateMemory()
                 val registrationEnabled = loadRegistrationEnabled()
                 _uiState.update {
                     it.copy(
@@ -228,6 +236,7 @@ class MainViewModel(
 
                 is AppResult.Error -> {
                     stopReadStateSync()
+                    clearSessionReadStateMemory()
                     val registrationEnabled = loadRegistrationEnabled()
                     _uiState.update {
                         it.copy(
@@ -270,6 +279,7 @@ class MainViewModel(
             _uiState.update { it.copy(loading = true, errorMessage = null, statusMessage = null) }
             when (val result = repository.login(email.trim(), password)) {
                 is AppResult.Success -> {
+                    clearSessionReadStateMemory()
                     _uiState.update {
                         it.copy(
                             loading = false,
@@ -306,6 +316,7 @@ class MainViewModel(
             _uiState.update { it.copy(loading = true, errorMessage = null, statusMessage = null) }
             when (val result = repository.register(email.trim(), password)) {
                 is AppResult.Success -> {
+                    clearSessionReadStateMemory()
                     _uiState.update {
                         it.copy(
                             loading = false,
@@ -329,6 +340,7 @@ class MainViewModel(
         viewModelScope.launch {
             stopReadStateSync()
             repository.logout()
+            clearSessionReadStateMemory()
             _uiState.value = AppUiState(
                 loading = false,
                 registrationEnabled = loadRegistrationEnabled(),
@@ -504,6 +516,7 @@ class MainViewModel(
                     }
                     loadFeeds()
                     loadArticles()
+                    refreshArticlePager()
                     loadStats()
                     _uiState.value.selectedArticle?.id?.let { openArticle(it, forceRefresh = true) }
                 }
@@ -598,7 +611,7 @@ class MainViewModel(
                     if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
                         current
                     } else {
-                        val readStates = current.knownArticleReadStates()
+                        val readStates = knownArticleReadStates()
                         current.copy(
                             articles = result.data.data.withReadStates(readStates),
                             articleCursor = result.data.cursor,
@@ -668,6 +681,12 @@ class MainViewModel(
         loadArticles()
     }
 
+    private fun refreshArticlePager() {
+        val query = _uiState.value.articleQuery()
+        articlePagingGeneration += 1
+        articlePagingQuery.value = query.toArticlePageQuery(articlePagingGeneration)
+    }
+
     fun loadMoreArticles() {
         val snapshot = _uiState.value
         if (!snapshot.hasMoreArticles || snapshot.loadingMoreArticles || snapshot.articleCursor.isNullOrBlank()) {
@@ -693,7 +712,7 @@ class MainViewModel(
                     if (!isCurrentArticleRequest(requestId) || current.articleQuery() != query) {
                         current
                     } else {
-                        val readStates = current.knownArticleReadStates()
+                        val readStates = knownArticleReadStates()
                         current.copy(
                             articles = current.articles + result.data.data.withReadStates(readStates),
                             articleCursor = result.data.cursor,
@@ -744,7 +763,7 @@ class MainViewModel(
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
         if (articles.isEmpty()) return
         _uiState.update { current ->
-            val readStates = current.knownArticleReadStates()
+            val readStates = knownArticleReadStates()
             current.copy(
                 articles = articles.withReadStates(readStates),
             )
@@ -777,6 +796,7 @@ class MainViewModel(
         viewModelScope.launch {
             when (val result = repository.markRead(articleId, read)) {
                 is AppResult.Success -> {
+                    rememberArticleReadState(articleId, result.data)
                     _uiState.update { state ->
                         val previousReadState = state.articleReadState(articleId)
                         val changed = previousReadState?.let { it != result.data } ?: false
@@ -795,28 +815,23 @@ class MainViewModel(
                             feeds = if (unreadDelta == 0 || feedId == null) {
                                 state.feeds
                             } else {
-                                state.feeds.map { currentFeed ->
-                                    if (currentFeed.id == feedId) {
-                                        currentFeed.copy(
-                                            unreadCount = (currentFeed.unreadCount + unreadDelta).coerceAtLeast(0),
-                                        )
-                                    } else {
-                                        currentFeed
-                                    }
-                                }
+                                UnreadStateReducer.applyFeedDelta(state.feeds, feedId, unreadDelta)
                             },
                             categories = if (unreadDelta == 0 || feed == null) {
                                 state.categories
                             } else {
-                                state.categories.withUnreadDelta(feed.categoryId, unreadDelta)
+                                UnreadStateReducer.applyCategoryDelta(state.categories, feed.categoryId, unreadDelta)
                             },
                             stats = if (unreadDelta == 0) {
                                 state.stats
                             } else {
-                                state.stats?.withReadDelta(
-                                    unreadDelta = unreadDelta,
-                                    readDelta = if (result.data) 1 else -1,
-                                )
+                                state.stats?.let { stats ->
+                                    UnreadStateReducer.applyStatsDelta(
+                                        stats = stats,
+                                        unreadDelta = unreadDelta,
+                                        readDelta = if (result.data) 1 else -1,
+                                    )
+                                }
                             },
                         )
                     }
@@ -841,6 +856,15 @@ class MainViewModel(
                             .filter { it.id in feedIds && it.unreadCount > 0 }
                             .groupBy { it.categoryId }
                             .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
+                        current.articles
+                            .filter { current.articleMatchesCurrentScope(it) }
+                            .forEach { rememberArticleReadState(it.id, true) }
+                        current.searchResults
+                            .filter { current.articleMatchesCurrentScope(it) }
+                            .forEach { rememberArticleReadState(it.id, true) }
+                        current.selectedArticle
+                            ?.takeIf { current.articleMatchesCurrentScope(it) }
+                            ?.let { rememberArticleReadState(it.id, true) }
 
                         current.copy(
                             articles = current.articles.map { article ->
@@ -867,11 +891,14 @@ class MainViewModel(
                             feeds = current.feeds.map { feed ->
                                 if (feed.id in feedIds) feed.copy(unreadCount = 0) else feed
                             },
-                            categories = current.categories.withUnreadDeltas(categoryDeltas),
-                            stats = current.stats?.withReadDelta(
-                                unreadDelta = -result.data,
-                                readDelta = result.data,
-                            ),
+                            categories = UnreadStateReducer.applyCategoryDeltas(current.categories, categoryDeltas),
+                            stats = current.stats?.let { stats ->
+                                UnreadStateReducer.applyStatsDelta(
+                                    stats = stats,
+                                    unreadDelta = -result.data,
+                                    readDelta = result.data,
+                                )
+                            },
                             statusMessage = "Marked ${result.data} articles as read",
                         )
                     }
@@ -1337,6 +1364,7 @@ class MainViewModel(
 
     private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
         repository.invalidateReadStateCaches(event.articleId)
+        rememberArticleReadState(event.articleId, event.isRead)
         var shouldReloadArticles = false
 
         _uiState.update { state ->
@@ -1364,28 +1392,23 @@ class MainViewModel(
                 feeds = if (unreadDelta == 0) {
                     state.feeds
                 } else {
-                    state.feeds.map { currentFeed ->
-                        if (currentFeed.id == event.feedId) {
-                            currentFeed.copy(
-                                unreadCount = (currentFeed.unreadCount + unreadDelta).coerceAtLeast(0),
-                            )
-                        } else {
-                            currentFeed
-                        }
-                    }
+                    UnreadStateReducer.applyFeedDelta(state.feeds, event.feedId, unreadDelta)
                 },
                 categories = if (unreadDelta == 0 || feed == null) {
                     state.categories
                 } else {
-                    state.categories.withUnreadDelta(feed.categoryId, unreadDelta)
+                    UnreadStateReducer.applyCategoryDelta(state.categories, feed.categoryId, unreadDelta)
                 },
                 stats = if (unreadDelta == 0) {
                     state.stats
                 } else {
-                    state.stats?.withReadDelta(
-                        unreadDelta = unreadDelta,
-                        readDelta = if (event.isRead) 1 else -1,
-                    )
+                    state.stats?.let { stats ->
+                        UnreadStateReducer.applyStatsDelta(
+                            stats = stats,
+                            unreadDelta = unreadDelta,
+                            readDelta = if (event.isRead) 1 else -1,
+                        )
+                    }
                 },
             )
         }
@@ -1407,22 +1430,40 @@ class MainViewModel(
 
             state.copy(
                 articles = state.articles.map { article ->
-                    if (article.feedId in feedIds) article.copy(isRead = true) else article
+                    if (article.feedId in feedIds) {
+                        rememberArticleReadState(article.id, true)
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
                 },
                 searchResults = state.searchResults.map { article ->
-                    if (article.feedId in feedIds) article.copy(isRead = true) else article
+                    if (article.feedId in feedIds) {
+                        rememberArticleReadState(article.id, true)
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
                 },
                 selectedArticle = state.selectedArticle?.let { article ->
-                    if (article.feedId in feedIds) article.copy(isRead = true) else article
+                    if (article.feedId in feedIds) {
+                        rememberArticleReadState(article.id, true)
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
                 },
                 feeds = state.feeds.map { feed ->
                     if (feed.id in feedIds) feed.copy(unreadCount = 0) else feed
                 },
-                categories = state.categories.withUnreadDeltas(categoryDeltas),
-                stats = state.stats?.withReadDelta(
-                    unreadDelta = -event.markedCount,
-                    readDelta = event.markedCount,
-                ),
+                categories = UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas),
+                stats = state.stats?.let { stats ->
+                    UnreadStateReducer.applyStatsDelta(
+                        stats = stats,
+                        unreadDelta = -event.markedCount,
+                        readDelta = event.markedCount,
+                    )
+                },
             )
         }
     }
@@ -1432,11 +1473,22 @@ class MainViewModel(
             ?: articles.firstOrNull { it.id == articleId }?.isRead
             ?: searchResults.firstOrNull { it.id == articleId }?.isRead
 
-    private fun AppUiState.knownArticleReadStates(): Map<String, Boolean> =
-        buildMap {
-            articles.forEach { article -> put(article.id, article.isRead) }
-            searchResults.forEach { article -> put(article.id, article.isRead) }
-            selectedArticle?.let { article -> put(article.id, article.isRead) }
+    private fun rememberArticleReadState(articleId: String, isRead: Boolean) {
+        articleReadStates.remember(articleId, isRead)
+    }
+
+    private fun clearSessionReadStateMemory() {
+        manuallyUnread.clear()
+        articleReadStates.clear()
+    }
+
+    private fun knownArticleReadStates(): Map<String, Boolean> =
+        _uiState.value.let { state ->
+            articleReadStates.snapshot(
+                articles = state.articles,
+                searchResults = state.searchResults,
+                selectedArticle = state.selectedArticle,
+            )
         }
 
     private fun List<ArticleListItem>.withReadStates(
@@ -1478,32 +1530,6 @@ class MainViewModel(
         return true
     }
 
-    private fun List<CategoryWithCounts>.withUnreadDelta(
-        categoryId: String,
-        delta: Int,
-    ): List<CategoryWithCounts> = withUnreadDeltas(mapOf(categoryId to delta))
-
-    private fun List<CategoryWithCounts>.withUnreadDeltas(
-        deltas: Map<String, Int>,
-    ): List<CategoryWithCounts> = map { category ->
-        val children = category.children?.withUnreadDeltas(deltas)
-        val delta = deltas[category.id] ?: 0
-        if (delta == 0 && children == category.children) {
-            category
-        } else {
-            category.copy(
-                unreadCount = (category.unreadCount + delta).coerceAtLeast(0),
-                children = children,
-            )
-        }
-    }
-
-    private fun StatsResponse.withReadDelta(unreadDelta: Int, readDelta: Int): StatsResponse =
-        copy(
-            totalUnread = (totalUnread + unreadDelta).coerceAtLeast(0),
-            totalRead = (totalRead + readDelta).coerceAtLeast(0),
-        )
-
     private fun isCurrentArticleRequest(requestId: Long): Boolean =
         requestId == articleRequestSequence.get()
 
@@ -1539,7 +1565,7 @@ class MainViewModel(
     }
 
     private fun normalizeThemePreference(theme: String): String =
-        if (theme == "amoled") "dark" else theme
+        ThemePreference.fromApiValue(theme).apiValue
 
     private suspend fun loadRegistrationEnabled(): Boolean =
         when (val result = repository.registrationStatus()) {
