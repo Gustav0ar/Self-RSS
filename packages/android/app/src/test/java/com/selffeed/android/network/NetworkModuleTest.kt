@@ -111,6 +111,32 @@ class NetworkModuleTest {
     }
 
     @Test
+    fun `saveFromResponse does not throw when secure storage fails`() {
+        val store = mockk<SessionStore>()
+        every { store.setRefreshCookie(any()) } throws IllegalStateException("missing keystore key")
+        val jar = PersistedRefreshCookieJar(store)
+        val refreshCookie = Cookie.Builder()
+            .name("rss_refresh_token")
+            .value("refresh-value")
+            .domain("example.com")
+            .path("/")
+            .build()
+
+        jar.saveFromResponse(url("https://example.com"), listOf(refreshCookie))
+    }
+
+    @Test
+    fun `loadForRequest returns empty when secure storage read fails`() {
+        val store = mockk<SessionStore>()
+        every { store.getRefreshCookie() } throws IllegalStateException("missing keystore key")
+        val jar = PersistedRefreshCookieJar(store)
+
+        val cookies = jar.loadForRequest(url("https://example.com/api/v1/auth/refresh"))
+
+        assertTrue(cookies.isEmpty())
+    }
+
+    @Test
     fun `saveFromResponse ignores non-refresh cookies`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
         val jar = PersistedRefreshCookieJar(store)
