@@ -46,7 +46,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.pullToRefreshIndicator
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -477,30 +476,21 @@ fun ArticlesTab(
         modifier = Modifier.fillMaxSize(),
         state = pullToRefreshState,
         indicator = {
-            if (isRefreshing) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .pullToRefreshIndicator(
-                            state = pullToRefreshState,
-                            isRefreshing = true,
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.5.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            } else {
-                PullToRefreshDefaults.Indicator(
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    isRefreshing = false,
-                    state = pullToRefreshState,
-                )
-            }
+            // Use the default Material3 indicator in both states. It
+            // owns the animation (arc sweep + global rotation) and the
+            // pull-arrow transition. Do NOT wrap it in a custom Box
+            // with `pullToRefreshIndicator` and then place a second
+            // `CircularProgressIndicator` inside that Box — the second
+            // indicator overlays the default one and the two together
+            // render as a single static dot, which is what the user
+            // sees as a "frozen spinner" during refresh.
+            PullToRefreshDefaults.Indicator(
+                modifier = Modifier.align(Alignment.TopCenter),
+                isRefreshing = isRefreshing,
+                state = pullToRefreshState,
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                color = MaterialTheme.colorScheme.primary,
+            )
         },
     ) {
         LazyColumn(

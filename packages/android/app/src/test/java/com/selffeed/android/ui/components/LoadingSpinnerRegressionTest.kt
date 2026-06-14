@@ -17,26 +17,37 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Regression test for the loading spinner animation.
+ * Regression test for the loading spinner.
  *
- * An earlier revision of the app wrapped Material3's indeterminate
- * [CircularProgressIndicator] in an extra
- * `Modifier.graphicsLayer { rotationZ = ... }` driven by its own
- * `rememberInfiniteTransition`. In some rendering contexts (the
- * app-startup loading screen and the pull-to-refresh indicator slot)
- * the cached graphics layer suppressed the inner draw updates and the
- * spinner froze on a single frame — visible to the user as a static
- * dot in the center of an otherwise-empty screen.
+ * Earlier revisions of the app stacked two indicators in the
+ * pull-to-refresh slot — a custom
+ * `Box(Modifier.pullToRefreshIndicator(state, isRefreshing = true))`
+ * wrapper that placed a `CircularProgressIndicator` inside, on top of
+ * the default `PullToRefreshDefaults.Indicator` in the parent slot.
+ * The two indicators together rendered as a single static dot that
+ * the user reported as a "frozen spinner" during refresh.
  *
- * The fix is to use [CircularProgressIndicator] directly, with no
- * outer rotation transform. This test guards that by walking the
- * indicator's [LayoutInfo] chain and failing if any
- * `graphicsLayer { ... }` block modifier is found wrapping the
- * spinner.
+ * The fix is to render the spinner exactly the way Material3 ships it
+ * — `CircularProgressIndicator` for the bare loading screen, and
+ * `PullToRefreshDefaults.Indicator` for the pull-to-refresh slot. The
+ * default indicator owns the animation (arc sweep + global rotation);
+ * we don't add any custom rotation transforms on top.
  *
- * `captureToImage`-based pixel diffing was considered but does not
- * work under Robolectric (window capture requires a real Surface).
- * The modifier-class check is stable, fast, and runs in unit tests.
+ * This test guards the loading-screen path: a bare
+ * `CircularProgressIndicator` in `SelfFeedTheme` must render with
+ * indeterminate progress semantics and must NOT carry a custom
+ * `graphicsLayer { ... }` block modifier in its layout chain. The
+ * `pullToRefresh` indicator slot is verified by the production code
+ * itself: it uses `PullToRefreshDefaults.Indicator` directly, which
+ * is Material3's own animated implementation.
+ *
+ * Note on animation testing: the test environment cannot verify that
+ * the spinner actually animates. `captureToImage` is broken under
+ * Robolectric (no real Surface), and `rememberInfiniteTransition` does
+ * not advance under the test frame clock in this configuration. The
+ * only reliable place to verify the spinner animates is on a real
+ * device — the structural check in this test is the guardrail that
+ * keeps a custom rotation wrapper from being reintroduced.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -45,13 +56,9 @@ class LoadingSpinnerRegressionTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun loadingSpinner_rendersIndeterminateWithoutOuterRotationLayer() {
+    fun bareSpinner_rendersIndeterminateWithoutOuterRotationLayer() {
         composeRule.setContent {
             SelfFeedTheme {
-                // Mirrors the call sites in SelfFeedApp.LoadingScreen and
-                // the PullToRefreshBox indicator slot: a bare
-                // CircularProgressIndicator with no outer rotation
-                // transform.
                 CircularProgressIndicator()
             }
         }
@@ -60,18 +67,18 @@ class LoadingSpinnerRegressionTest {
             .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertIsDisplayed()
 
-        val node = composeRule
-            .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
-            .fetchSemanticsNode()
-
-        val offenders = collectGraphicsLayerModifiers(node)
+        val offenders = collectGraphicsLayerModifiers(
+            composeRule
+                .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+                .fetchSemanticsNode(),
+        )
 
         assertFalse(
-            "Loading spinner has a `graphicsLayer { ... }` modifier in " +
-                "its layout chain. Do not wrap CircularProgressIndicator " +
-                "in an outer rotation transform — Material3's indeterminate " +
-                "indicator already animates correctly on its own, and an " +
-                "outer layer was the cause of the frozen-spinner bug. " +
+            "CircularProgressIndicator has a `graphicsLayer { ... }` " +
+                "modifier in its layout chain. Do not wrap it in an outer " +
+                "rotation transform — Material3's indeterminate indicator " +
+                "already animates correctly on its own, and an outer " +
+                "graphics layer was the cause of the frozen-spinner bug. " +
                 "Found: $offenders",
             offenders.isNotEmpty(),
         )
@@ -97,6 +104,3 @@ class LoadingSpinnerRegressionTest {
         return matches
     }
 }
-
-
-
