@@ -4,11 +4,7 @@ import { ArticleCacheService } from '../../src/services/article-cache.service.js
 describe('ArticleCacheService - getCachedArticleList', () => {
 	it('returns null on cache miss', async () => {
 		const redis = { get: vi.fn().mockResolvedValue(null) };
-		const service = new ArticleCacheService(
-			{} as never,
-			{} as never,
-			redis as never,
-		);
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
@@ -38,11 +34,7 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const redis = {
 			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('2'),
 		};
-		const service = new ArticleCacheService(
-			{} as never,
-			{} as never,
-			redis as never,
-		);
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
@@ -85,11 +77,7 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const redis = {
 			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
 		};
-		const service = new ArticleCacheService(
-			{} as never,
-			{} as never,
-			redis as never,
-		);
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20, unreadOnly: true });
 		expect(result?.articles).toHaveLength(1);
@@ -102,11 +90,7 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 			get: vi.fn().mockResolvedValueOnce('not json'),
 			del: vi.fn().mockResolvedValue(1),
 		};
-		const service = new ArticleCacheService(
-			{} as never,
-			{} as never,
-			redis as never,
-		);
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();

@@ -54,13 +54,7 @@ describe('FeedDialog - add mode', () => {
 		createMutateAsync.mockResolvedValue({});
 		const onClose = vi.fn();
 
-		render(
-			<FeedDialog
-				mode="create"
-				categories={sampleCategories}
-				onClose={onClose}
-			/>,
-		);
+		render(<FeedDialog mode="create" categories={sampleCategories} onClose={onClose} />);
 
 		fireEvent.change(screen.getByLabelText('Feed URL'), {
 			target: { value: 'https://example.com/feed.xml' },
@@ -123,12 +117,7 @@ describe('FeedDialog - edit mode', () => {
 
 	it('prefills the form with the existing feed values', () => {
 		render(
-			<FeedDialog
-				mode="edit"
-				categories={sampleCategories}
-				feed={sampleFeed}
-				onClose={() => {}}
-			/>,
+			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={() => {}} />,
 		);
 
 		expect((screen.getByLabelText('Custom name (optional)') as HTMLInputElement).value).toBe(
@@ -142,12 +131,7 @@ describe('FeedDialog - edit mode', () => {
 
 	it('does not show the feed URL field in edit mode', () => {
 		render(
-			<FeedDialog
-				mode="edit"
-				categories={sampleCategories}
-				feed={sampleFeed}
-				onClose={() => {}}
-			/>,
+			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={() => {}} />,
 		);
 
 		expect(screen.queryByLabelText('Feed URL')).toBeNull();
@@ -157,12 +141,7 @@ describe('FeedDialog - edit mode', () => {
 		updateMutateAsync.mockResolvedValue({});
 
 		render(
-			<FeedDialog
-				mode="edit"
-				categories={sampleCategories}
-				feed={sampleFeed}
-				onClose={vi.fn()}
-			/>,
+			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={vi.fn()} />,
 		);
 
 		fireEvent.change(screen.getByLabelText('Custom name (optional)'), {

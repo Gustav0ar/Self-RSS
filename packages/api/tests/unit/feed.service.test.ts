@@ -3,26 +3,21 @@ import { FeedService } from '../../src/services/feed.service.js';
 
 describe('FeedService - normalizeFeedUrl', () => {
 	it('rejects localhost when private hosts are not allowed', async () => {
-		const service = new FeedService(
-			{} as never,
-			{} as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: false },
-		);
+		const service = new FeedService({} as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: false,
+		});
 		await expect(service.normalizeFeedUrl('http://127.0.0.1/feed.xml')).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
 		});
 	});
 
 	it('accepts https URLs when private hosts are not allowed', async () => {
-		const service = new FeedService(
-			{} as never,
-			{} as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: false },
-		);
-		const lookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
-		const url = await service.normalizeFeedUrl('https://example.com/feed.xml', lookup as never);
+		const service = new FeedService({} as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: false,
+		});
+		const url = await service.normalizeFeedUrl('https://example.com/feed.xml');
 		expect(url).toBe('https://example.com/feed.xml');
 	});
 });
@@ -65,12 +60,10 @@ describe('FeedService - getAll', () => {
 		const articleRepo = {
 			unreadCountByFeed: vi.fn(async () => new Map([['feed-1', 4]])),
 		};
-		const service = new FeedService(
-			feedRepo as never,
-			{} as never,
-			articleRepo as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService(feedRepo as never, {} as never, articleRepo as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		const result = await service.getAll('user-1');
 
@@ -84,12 +77,10 @@ describe('FeedService - getAll', () => {
 describe('FeedService - create', () => {
 	it('returns 404 when the target category does not exist', async () => {
 		const categoryRepo = { findById: vi.fn().mockResolvedValue(null) };
-		const service = new FeedService(
-			{} as never,
-			categoryRepo as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService({} as never, categoryRepo as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		await expect(
 			service.create('user-1', {
@@ -106,12 +97,10 @@ describe('FeedService - update / delete', () => {
 			findById: vi.fn(async () => ({ id: 'feed-1' })),
 			update: vi.fn(async () => ({ id: 'feed-1', title: 'New' })),
 		};
-		const service = new FeedService(
-			feedRepo as never,
-			{} as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		await service.update('user-1', 'feed-1', { title: 'New' });
 		expect(feedRepo.update).toHaveBeenCalledWith('feed-1', 'user-1', { title: 'New' });
@@ -119,12 +108,10 @@ describe('FeedService - update / delete', () => {
 
 	it('returns 404 when updating a missing feed', async () => {
 		const feedRepo = { findById: vi.fn().mockResolvedValue(null) };
-		const service = new FeedService(
-			feedRepo as never,
-			{} as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		await expect(service.update('user-1', 'missing', { title: 'X' })).rejects.toMatchObject({
 			code: 'NOT_FOUND',
@@ -134,12 +121,10 @@ describe('FeedService - update / delete', () => {
 	it('validates the new category exists when moving a feed', async () => {
 		const feedRepo = { findById: vi.fn(async () => ({ id: 'feed-1' })) };
 		const categoryRepo = { findById: vi.fn().mockResolvedValue(null) };
-		const service = new FeedService(
-			feedRepo as never,
-			categoryRepo as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService(feedRepo as never, categoryRepo as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		await expect(
 			service.update('user-1', 'feed-1', { categoryId: 'cat-missing' }),
@@ -151,12 +136,10 @@ describe('FeedService - update / delete', () => {
 			findById: vi.fn().mockResolvedValue(null),
 			delete: vi.fn(),
 		};
-		const service = new FeedService(
-			feedRepo as never,
-			{} as never,
-			{} as never,
-			{ maxContentLength: 1024, allowPrivateHosts: true },
-		);
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
 
 		await expect(service.delete('user-1', 'missing')).rejects.toMatchObject({
 			code: 'NOT_FOUND',

@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
-import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { closeRedis, getRedis } from '../../src/db/redis.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
@@ -350,7 +349,10 @@ describe('API integration - additional flows', () => {
 		const userToken = userReg.body.data.tokens.accessToken;
 
 		// Sanity: the admin should be able to read settings
-		const adminAccess = await authedRequest('/api/v1/admin/settings', admin.body.data.tokens.accessToken);
+		const adminAccess = await authedRequest(
+			'/api/v1/admin/settings',
+			admin.body.data.tokens.accessToken,
+		);
 		expect(adminAccess.response.status).toBe(200);
 
 		const result = await authedRequest('/api/v1/admin/settings', userToken);

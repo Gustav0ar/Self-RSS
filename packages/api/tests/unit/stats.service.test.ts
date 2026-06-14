@@ -8,17 +8,10 @@ describe('StatsService', () => {
 			countReadByFeeds: vi.fn(async () => 4),
 		};
 		const feedRepo = {
-			findAllByUser: vi.fn(async () => [
-				{ id: 'feed-1' },
-				{ id: 'feed-2' },
-			]),
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1' }, { id: 'feed-2' }]),
 		};
 		const categoryRepo = {
-			findAllByUser: vi.fn(async () => [
-				{ id: 'cat-1' },
-				{ id: 'cat-2' },
-				{ id: 'cat-3' },
-			]),
+			findAllByUser: vi.fn(async () => [{ id: 'cat-1' }, { id: 'cat-2' }, { id: 'cat-3' }]),
 		};
 		const syncRunRepo = {
 			findRecentByUser: vi.fn(async () => [{ id: 'run-1' }]),

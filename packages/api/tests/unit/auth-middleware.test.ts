@@ -1,7 +1,7 @@
 import type { Context, Next } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
-import { AppError } from '../../src/middleware/errors.js';
 import { createAuthMiddleware, requireAdmin } from '../../src/middleware/auth.js';
+import { AppError } from '../../src/middleware/errors.js';
 
 function makeContext(authorizationHeader: string | undefined): Context {
 	const headers = new Headers();
@@ -64,7 +64,9 @@ describe('createAuthMiddleware', () => {
 
 	it('sets userId and userRole on the context for a valid access token', async () => {
 		const tokenUtils = {
-			verifyAccessToken: vi.fn().mockResolvedValue({ sub: 'user-1', type: 'access', role: 'admin' }),
+			verifyAccessToken: vi
+				.fn()
+				.mockResolvedValue({ sub: 'user-1', type: 'access', role: 'admin' }),
 		} as never;
 		const middleware = createAuthMiddleware(tokenUtils);
 		const c = makeContext('Bearer good');
@@ -80,7 +82,9 @@ describe('createAuthMiddleware', () => {
 
 describe('requireAdmin', () => {
 	it('lets admin users through', async () => {
-		const c = { get: (key: string) => (key === 'userRole' ? 'admin' : undefined) } as unknown as Context;
+		const c = {
+			get: (key: string) => (key === 'userRole' ? 'admin' : undefined),
+		} as unknown as Context;
 		const next = vi.fn(async () => undefined) as unknown as Next;
 
 		await requireAdmin(c, next);

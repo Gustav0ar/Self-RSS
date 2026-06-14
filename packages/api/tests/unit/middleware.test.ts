@@ -2,13 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { errorHandler, requestIdMiddleware } from '../../src/middleware/common.js';
 import { AppError } from '../../src/middleware/errors.js';
 
-function buildContext({
-	requestId,
-	status = 200,
-}: {
-	requestId?: string;
-	status?: number;
-}) {
+function buildContext({ requestId, status = 200 }: { requestId?: string; status?: number }) {
 	const headers = new Headers();
 	const setStatus = (s: number) => {
 		(context as { status: number }).status = s;
@@ -24,7 +18,7 @@ function buildContext({
 	} = {
 		req: { raw: { signal: new AbortController().signal } },
 		res: { status },
-		get: <T,>(key: string) => (key === 'requestId' ? (requestId as T | undefined) : undefined),
+		get: <T>(key: string) => (key === 'requestId' ? (requestId as T | undefined) : undefined),
 		set: () => undefined,
 		header: (name: string, value: string) => {
 			headers.set(name, value);

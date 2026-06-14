@@ -54,13 +54,7 @@ describe('CategoryDialog - create mode', () => {
 		createMutateAsync.mockResolvedValue({});
 		const onClose = vi.fn();
 
-		render(
-			<CategoryDialog
-				mode="create"
-				categories={sampleCategories}
-				onClose={onClose}
-			/>,
-		);
+		render(<CategoryDialog mode="create" categories={sampleCategories} onClose={onClose} />);
 
 		fireEvent.change(screen.getByLabelText('Name'), {
 			target: { value: 'Frontend' },
@@ -105,9 +99,7 @@ describe('CategoryDialog - create mode', () => {
 	it('surfaces the server error message on failure', async () => {
 		createMutateAsync.mockRejectedValue(new Error('Name is already taken'));
 
-		render(
-			<CategoryDialog mode="create" categories={sampleCategories} onClose={() => {}} />,
-		);
+		render(<CategoryDialog mode="create" categories={sampleCategories} onClose={() => {}} />);
 
 		fireEvent.change(screen.getByLabelText('Name'), {
 			target: { value: 'Tech' },
@@ -185,9 +177,7 @@ describe('CategoryDialog - cancel button', () => {
 	it('closes the dialog without calling any mutation when Cancel is clicked', () => {
 		const onClose = vi.fn();
 
-		render(
-			<CategoryDialog mode="create" categories={sampleCategories} onClose={onClose} />,
-		);
+		render(<CategoryDialog mode="create" categories={sampleCategories} onClose={onClose} />);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(onClose).toHaveBeenCalled();

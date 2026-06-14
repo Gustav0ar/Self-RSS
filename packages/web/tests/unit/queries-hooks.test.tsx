@@ -1,3 +1,4 @@
+import type { QueryClient } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiFetchMock = vi.fn();
@@ -9,8 +10,8 @@ vi.mock('../../src/lib/api', () => ({
 
 import {
 	applyReadStateSyncEvent,
-	invalidateReaderQueries,
 	buildArticleSearchParams,
+	invalidateReaderQueries,
 } from '../../src/hooks/queries';
 
 beforeEach(() => {
@@ -25,10 +26,10 @@ describe('applyReadStateSyncEvent', () => {
 			setQueryData: vi.fn(),
 			setQueriesData: vi.fn(),
 			invalidateQueries: vi.fn(),
-		} as never;
+		};
 
 		applyReadStateSyncEvent(
-			qc,
+			qc as unknown as QueryClient,
 			{
 				type: 'article.read_state_changed',
 				eventId: 'e1',
@@ -50,11 +51,7 @@ describe('applyReadStateSyncEvent', () => {
 	it('updates cached article detail and bumps feed unread count for foreign events', () => {
 		const qc = {
 			getQueryData: (key: unknown) => {
-				if (
-					Array.isArray(key) &&
-					key[0] === 'article' &&
-					key[1] === 'a-1'
-				) {
+				if (Array.isArray(key) && key[0] === 'article' && key[1] === 'a-1') {
 					return { id: 'a-1', feedId: 'f-1', isRead: false };
 				}
 				return undefined;
@@ -70,10 +67,10 @@ describe('applyReadStateSyncEvent', () => {
 			setQueryData: vi.fn(),
 			setQueriesData: vi.fn(),
 			invalidateQueries: vi.fn(),
-		} as never;
+		};
 
 		applyReadStateSyncEvent(
-			qc,
+			qc as unknown as QueryClient,
 			{
 				type: 'article.read_state_changed',
 				eventId: 'e1',
@@ -90,12 +87,9 @@ describe('applyReadStateSyncEvent', () => {
 		// Article detail is updated through an updater function. Invoke the
 		// updater with the cached snapshot to confirm it produces the right
 		// new value.
-		expect(qc.setQueryData).toHaveBeenCalledWith(
-			['article', 'a-1'],
-			expect.any(Function),
-		);
+		expect(qc.setQueryData).toHaveBeenCalledWith(['article', 'a-1'], expect.any(Function));
 		const setDetailCall = qc.setQueryData.mock.calls.find(
-			(c) => Array.isArray(c[0]) && c[0][0] === 'article' && c[0][1] === 'a-1',
+			(c: unknown[]) => Array.isArray(c[0]) && c[0][0] === 'article' && c[0][1] === 'a-1',
 		);
 		const updater = setDetailCall?.[1] as (s: { isRead: boolean }) => { isRead: boolean };
 		expect(updater({ isRead: false })).toEqual({ isRead: true });
@@ -127,10 +121,10 @@ describe('applyReadStateSyncEvent', () => {
 			setQueryData: vi.fn(),
 			setQueriesData: vi.fn(),
 			invalidateQueries: vi.fn(),
-		} as never;
+		};
 
 		applyReadStateSyncEvent(
-			qc,
+			qc as unknown as QueryClient,
 			{
 				type: 'articles.marked_read',
 				eventId: 'e2',
@@ -146,7 +140,7 @@ describe('applyReadStateSyncEvent', () => {
 		// Stats should be updated to drop unread by 3 and add 3 read. The
 		// updater is a function, so we call it with the cached value.
 		const setStatsCall = qc.setQueryData.mock.calls.find(
-			(c) => Array.isArray(c[0]) && c[0][0] === 'stats',
+			(c: unknown[]) => Array.isArray(c[0]) && c[0][0] === 'stats',
 		);
 		expect(setStatsCall).toBeDefined();
 		const statsUpdater = setStatsCall?.[1] as (s: { totalUnread: number; totalRead: number }) => {
@@ -171,10 +165,10 @@ describe('applyReadStateSyncEvent', () => {
 			setQueryData: vi.fn(),
 			setQueriesData: vi.fn(),
 			invalidateQueries: vi.fn(),
-		} as never;
+		};
 
 		applyReadStateSyncEvent(
-			qc,
+			qc as unknown as QueryClient,
 			{
 				type: 'article.read_state_changed',
 				eventId: 'e3',
@@ -189,7 +183,7 @@ describe('applyReadStateSyncEvent', () => {
 		);
 
 		const invalidatedKeys = qc.invalidateQueries.mock.calls.map(
-			(c) => (c[0] as { queryKey: unknown[] }).queryKey,
+			(c: unknown[]) => (c[0] as { queryKey: unknown[] }).queryKey,
 		);
 		expect(invalidatedKeys).toEqual(expect.arrayContaining([['articles']]));
 	});
@@ -198,9 +192,9 @@ describe('applyReadStateSyncEvent', () => {
 describe('invalidateReaderQueries', () => {
 	it('invalidates the reader query family', () => {
 		const invalidateQueries = vi.fn();
-		const qc = { invalidateQueries } as never;
+		const qc = { invalidateQueries };
 
-		invalidateReaderQueries(qc);
+		invalidateReaderQueries(qc as unknown as QueryClient);
 
 		const calledKeys = invalidateQueries.mock.calls.map((c) => c[0].queryKey);
 		expect(calledKeys).toEqual(
