@@ -205,6 +205,9 @@ fun SelfFeedApp(
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
+    val articleQueue = articlePagingItems.itemSnapshotList.items
+        .takeIf { it.isNotEmpty() }
+        ?: state.articles.items
     val feedTabState = remember(
         state.feeds.categories,
         state.feeds.feeds,
@@ -223,17 +226,15 @@ fun SelfFeedApp(
         )
     }
     val articleTabState = remember(
-        state.articles.items,
+        articleQueue,
         selectedArticle?.id,
-        state.articles.hasMoreArticles,
-        state.articles.loadingMoreArticles,
         state.feeds.loading,
     ) {
         ArticleTabState(
-            articles = state.articles.items,
+            articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
-            hasMoreArticles = state.articles.hasMoreArticles,
-            loadingMoreArticles = state.articles.loadingMoreArticles,
+            hasMoreArticles = false,
+            loadingMoreArticles = false,
             isSyncingFeeds = state.feeds.loading,
         )
     }
@@ -316,7 +317,7 @@ fun SelfFeedApp(
                     currentLabel = topBarLabel,
                     showMarkAllRead = activeTab == HomeTab.ARTICLES &&
                         selectedArticle == null &&
-                        state.articles.items.isNotEmpty(),
+                        articleQueue.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = {
@@ -355,7 +356,7 @@ fun SelfFeedApp(
                         HomeTab.ARTICLES -> {
                             if (selectedArticle != null) {
                                 ArticleReaderPane(
-                                    articles = state.articles.items,
+                                    articles = articleQueue,
                                     selectedArticle = selectedArticle,
                                     onOpenOriginal = { article ->
                                         article.canonicalUrl?.let { url ->

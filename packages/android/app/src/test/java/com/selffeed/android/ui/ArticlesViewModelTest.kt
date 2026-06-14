@@ -58,12 +58,11 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `loadArticles populates the list and respects hasMore`() = runTest {
+    fun `loadArticles populates the list snapshot`() = runTest {
         val viewModel = ArticlesViewModel(repository)
         viewModel.loadArticles()
         val s = viewModel.state.value
         assertEquals(1, s.items.size)
-        assertEquals(false, s.hasMoreArticles)
     }
 
     @Test

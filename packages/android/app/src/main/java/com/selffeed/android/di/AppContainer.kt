@@ -10,6 +10,18 @@ import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.repository.AppStatusRepositoryImpl
+import com.selffeed.android.data.repository.ArticleRepositoryImpl
+import com.selffeed.android.data.repository.AuthRepositoryImpl
+import com.selffeed.android.data.repository.FeedRepositoryImpl
+import com.selffeed.android.data.repository.SearchRepositoryImpl
+import com.selffeed.android.data.repository.SettingsRepositoryImpl
+import com.selffeed.android.data.repository.AppStatusRepository
+import com.selffeed.android.data.repository.ArticleRepository
+import com.selffeed.android.data.repository.AuthRepository
+import com.selffeed.android.data.repository.FeedRepository
+import com.selffeed.android.data.repository.SearchRepository
+import com.selffeed.android.data.repository.SettingsRepository
 import com.selffeed.android.network.AndroidNetworkMonitor
 import com.selffeed.android.network.NetworkModule
 import com.selffeed.android.network.NetworkMonitor
@@ -41,6 +53,12 @@ class AppContainer(
             networkMonitor = networkMonitor,
         )
     }
+    val authRepository: AuthRepository by lazy { AuthRepositoryImpl(repository) }
+    val feedRepository: FeedRepository by lazy { FeedRepositoryImpl(repository) }
+    val articleRepository: ArticleRepository by lazy { ArticleRepositoryImpl(repository) }
+    val searchRepository: SearchRepository by lazy { SearchRepositoryImpl(repository) }
+    val settingsRepository: SettingsRepository by lazy { SettingsRepositoryImpl(repository) }
+    val appStatusRepository: AppStatusRepository by lazy { AppStatusRepositoryImpl(repository) }
 
     fun scheduleBackgroundSync() {
         FeedSyncWorker.schedule(appContext)
