@@ -51,6 +51,11 @@ import javax.crypto.spec.GCMParameterSpec
 class SessionStore(context: Context) {
     private val appContext = context.applicationContext
     private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
+    @Volatile private var accessTokenLoaded = false
+    @Volatile private var accessTokenCache: String? = null
+    @Volatile private var refreshCookieLoaded = false
+    @Volatile private var refreshCookieCache: String? = null
+    @Volatile private var clientIdCache: String? = null
 
     private val masterKey: MasterKey by lazy {
         MasterKey.Builder(appContext)
@@ -64,41 +69,58 @@ class SessionStore(context: Context) {
             .onFailure { Log.w(TAG, "Legacy session migration failed", it) }
     }
 
-    fun getAccessToken(): String? = runBlocking {
-        decrypt(dataStore.data.first()[KEY_ACCESS_TOKEN])
+    fun getAccessToken(): String? {
+        if (accessTokenLoaded) return accessTokenCache
+        return runBlocking {
+            decrypt(dataStore.data.first()[KEY_ACCESS_TOKEN]).also {
+                accessTokenCache = it
+                accessTokenLoaded = true
+            }
+        }
     }
 
     fun setAccessToken(token: String?) {
         runBlocking {
+            val encrypted = token?.let(::encrypt)
             dataStore.edit { prefs ->
-                if (token == null) prefs.remove(KEY_ACCESS_TOKEN) else prefs[KEY_ACCESS_TOKEN] = encrypt(token)
+                if (encrypted == null) prefs.remove(KEY_ACCESS_TOKEN) else prefs[KEY_ACCESS_TOKEN] = encrypted
             }
         }
+        accessTokenCache = token
+        accessTokenLoaded = true
     }
 
-    fun getRefreshCookie(): String? = runBlocking {
-        decrypt(dataStore.data.first()[KEY_REFRESH_COOKIE])
+    fun getRefreshCookie(): String? {
+        if (refreshCookieLoaded) return refreshCookieCache
+        return runBlocking {
+            decrypt(dataStore.data.first()[KEY_REFRESH_COOKIE]).also {
+                refreshCookieCache = it
+                refreshCookieLoaded = true
+            }
+        }
     }
 
     fun setRefreshCookie(rawCookie: String?) {
         runBlocking {
+            val encrypted = rawCookie?.let(::encrypt)
             dataStore.edit { prefs ->
-                if (rawCookie == null) prefs.remove(KEY_REFRESH_COOKIE) else prefs[KEY_REFRESH_COOKIE] = encrypt(rawCookie)
+                if (encrypted == null) prefs.remove(KEY_REFRESH_COOKIE) else prefs[KEY_REFRESH_COOKIE] = encrypted
             }
         }
+        refreshCookieCache = rawCookie
+        refreshCookieLoaded = true
     }
 
-    fun getClientId(): String = runBlocking {
-        dataStore.edit { prefs ->
-            val existing = prefs[KEY_CLIENT_ID]
-            if (existing.isNullOrBlank()) {
-                val generated = UUID.randomUUID().toString()
-                prefs[KEY_CLIENT_ID] = generated
-                generated
-            } else {
-                existing
-            }
-        }[KEY_CLIENT_ID] ?: UUID.randomUUID().toString()
+    fun getClientId(): String {
+        clientIdCache?.let { return it }
+        return runBlocking {
+            dataStore.edit { prefs ->
+                val existing = prefs[KEY_CLIENT_ID]
+                if (existing.isNullOrBlank()) {
+                    prefs[KEY_CLIENT_ID] = UUID.randomUUID().toString()
+                }
+            }[KEY_CLIENT_ID] ?: UUID.randomUUID().toString()
+        }.also { clientIdCache = it }
     }
 
     fun clear() {
@@ -108,6 +130,11 @@ class SessionStore(context: Context) {
                 prefs.clear()
                 prefs[KEY_CLIENT_ID] = clientId
             }
+            accessTokenCache = null
+            accessTokenLoaded = true
+            refreshCookieCache = null
+            refreshCookieLoaded = true
+            clientIdCache = clientId
         }
     }
 
@@ -175,6 +202,9 @@ class SessionStore(context: Context) {
                 if (refreshCookie != null) prefs[KEY_REFRESH_COOKIE] = refreshCookie
                 if (clientId != null) prefs[KEY_CLIENT_ID] = clientId
             }
+            accessTokenLoaded = false
+            refreshCookieLoaded = false
+            clientIdCache = clientId
         }
     }
 

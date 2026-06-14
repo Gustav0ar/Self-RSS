@@ -80,22 +80,85 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
-import com.selffeed.android.ui.AppUiState
-import com.selffeed.android.ui.MainViewModel
+import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.network.UserPreferences
+import com.selffeed.android.ui.ArticleSortPreference
+import com.selffeed.android.ui.DensityPreference
+import com.selffeed.android.ui.ThemePreference
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 
+data class FeedTabState(
+    val categories: List<CategoryWithCounts>,
+    val feeds: List<FeedWithCounts>,
+    val hideRead: Boolean,
+    val totalUnread: Int,
+    val selectedCategoryId: String?,
+    val selectedFeedId: String?,
+)
+
+data class ArticleTabState(
+    val articles: List<ArticleListItem>,
+    val selectedArticleId: String?,
+    val hasMoreArticles: Boolean,
+    val loadingMoreArticles: Boolean,
+    val isSyncingFeeds: Boolean,
+)
+
+data class SearchTabState(
+    val query: String,
+    val results: List<ArticleListItem>,
+    val selectedArticleId: String?,
+    val hasMoreResults: Boolean,
+    val loadingMoreResults: Boolean,
+)
+
+data class SettingsTabState(
+    val preferences: UserPreferences?,
+    val stats: StatsResponse?,
+)
+
+data class FeedTabActions(
+    val onHideReadChanged: (Boolean) -> Unit,
+    val onCategorySelected: (String?) -> Unit,
+    val onFeedSelected: (String?) -> Unit,
+)
+
+data class ArticleTabActions(
+    val onRefresh: () -> Unit,
+    val onLoadMore: () -> Unit,
+    val onOpenArticle: (String) -> Unit,
+    val onToggleRead: (String, Boolean) -> Unit,
+    val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
+)
+
+data class SearchTabActions(
+    val onQueryChanged: (String) -> Unit,
+    val onSearchRequested: () -> Unit,
+    val onOpenArticle: (String) -> Unit,
+    val onLoadMore: () -> Unit,
+)
+
+data class SettingsTabActions(
+    val onThemeChanged: (ThemePreference) -> Unit,
+    val onHideReadChanged: (Boolean) -> Unit,
+    val onSortChanged: (ArticleSortPreference) -> Unit,
+    val onDensityChanged: (DensityPreference) -> Unit,
+    val onTextSizeChanged: (Int) -> Unit,
+    val onLogout: () -> Unit,
+)
+
 @Composable
 fun FeedsTab(
-    state: AppUiState,
-    viewModel: MainViewModel,
+    state: FeedTabState,
+    actions: FeedTabActions,
     onSelect: () -> Unit = {},
 ) {
     val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
-    val prefs = state.preferences
 
     LaunchedEffect(state.categories) {
         state.categories.forEach { category ->
@@ -123,8 +186,8 @@ fun FeedsTab(
                         fontWeight = FontWeight.SemiBold
                     )
                     Switch(
-                        checked = prefs?.hideRead ?: false,
-                        onCheckedChange = { viewModel.updateHideRead(it) }
+                        checked = state.hideRead,
+                        onCheckedChange = actions.onHideReadChanged,
                     )
                 }
             }
@@ -136,10 +199,10 @@ fun FeedsTab(
                     icon = { Icon(Icons.Default.RssFeed, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) },
                     label = "All Feeds",
                     subtitle = "Everything in one stream",
-                    count = state.stats?.totalUnread ?: 0,
+                    count = state.totalUnread,
                     selected = state.selectedCategoryId == null && state.selectedFeedId == null,
                     onClick = {
-                        viewModel.selectCategory(null)
+                        actions.onCategorySelected(null)
                         onSelect()
                     },
                 )
@@ -196,7 +259,7 @@ fun FeedsTab(
                             count = row.unreadCount,
                             selected = state.selectedCategoryId == row.id,
                             onClick = {
-                                viewModel.selectCategory(row.id)
+                                actions.onCategorySelected(row.id)
                                 onSelect()
                             },
                             onExpand = {
@@ -210,7 +273,7 @@ fun FeedsTab(
                         feed = row,
                         selected = state.selectedFeedId == row.id,
                         onSelect = {
-                            viewModel.selectFeed(row.id)
+                            actions.onFeedSelected(row.id)
                             onSelect()
                         },
                     )
@@ -351,8 +414,8 @@ private fun FeedRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArticlesTab(
-    state: AppUiState,
-    viewModel: MainViewModel,
+    state: ArticleTabState,
+    actions: ArticleTabActions,
     pagedArticles: LazyPagingItems<ArticleListItem>? = null,
 ) {
     val listState = rememberLazyListState()
@@ -380,7 +443,7 @@ fun ArticlesTab(
             .distinctUntilChanged()
             .collect { shouldLoadMore ->
                 if (shouldLoadMore) {
-                    viewModel.loadMoreArticles()
+                    actions.onLoadMore()
                 }
             }
     }
@@ -391,7 +454,7 @@ fun ArticlesTab(
 
     PullToRefreshBox(
         isRefreshing = state.isSyncingFeeds,
-        onRefresh = { viewModel.syncAllFeeds() },
+        onRefresh = actions.onRefresh,
         modifier = Modifier.fillMaxSize(),
         state = pullToRefreshState,
     ) {
@@ -490,14 +553,14 @@ fun ArticlesTab(
                         ArticleListRow(
                             article = article,
                             isRead = isRead,
-                            selected = state.selectedArticle?.id == article.id,
+                            selected = state.selectedArticleId == article.id,
                             onClick = {
-                                viewModel.updateArticleQueueSnapshot(pagedArticles.itemSnapshotList.items)
-                                viewModel.openArticle(article.id)
+                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
+                                actions.onOpenArticle(article.id)
                             },
                             onToggleRead = { read ->
-                                viewModel.updateArticleQueueSnapshot(pagedArticles.itemSnapshotList.items)
-                                viewModel.markRead(article.id, read)
+                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
+                                actions.onToggleRead(article.id, read)
                             },
                         )
                     }
@@ -549,9 +612,9 @@ fun ArticlesTab(
                     ArticleListRow(
                         article = article,
                         isRead = article.isRead,
-                        selected = state.selectedArticle?.id == article.id,
-                        onClick = { viewModel.openArticle(article.id) },
-                        onToggleRead = { read -> viewModel.markRead(article.id, read) },
+                        selected = state.selectedArticleId == article.id,
+                        onClick = { actions.onOpenArticle(article.id) },
+                        onToggleRead = { read -> actions.onToggleRead(article.id, read) },
                     )
                 }
 
@@ -562,7 +625,7 @@ fun ArticlesTab(
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                             } else {
                                 AssistChip(
-                                    onClick = viewModel::loadMoreArticles,
+                                    onClick = actions.onLoadMore,
                                     label = { Text("Load more") },
                                 )
                             }
@@ -821,7 +884,7 @@ private fun ArticleCard(
 }
 
 @Composable
-fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
+fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -830,10 +893,10 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
         item {
             FeedSurfaceCard {
                 OutlinedTextField(
-                    value = state.searchQuery,
+                    value = state.query,
                     onValueChange = {
-                        viewModel.updateSearchQuery(it)
-                        if (it.length >= 2) viewModel.search()
+                        actions.onQueryChanged(it)
+                        if (it.length >= 2) actions.onSearchRequested()
                     },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("Search titles and article content") },
@@ -845,9 +908,9 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
         }
 
         item {
-            if (state.searchQuery.length >= 2) {
+            if (state.query.length >= 2) {
                 Text(
-                    text = "${state.searchResults.size} results",
+                    text = "${state.results.size} results",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -856,24 +919,24 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
         }
 
         items(
-            items = state.searchResults,
+            items = state.results,
             key = { it.id },
             contentType = { "search-result-row" },
         ) { article ->
             ArticleCard(
                 article = article,
-                selected = state.selectedArticle?.id == article.id,
-                onClick = { viewModel.openArticle(article.id) },
+                selected = state.selectedArticleId == article.id,
+                onClick = { actions.onOpenArticle(article.id) },
             )
         }
 
-        if (state.hasMoreSearchResults) {
+        if (state.hasMoreResults) {
             item {
                 Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    if (state.loadingMoreSearchResults) {
+                    if (state.loadingMoreResults) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                     } else {
-                        AssistChip(onClick = viewModel::loadMoreSearch, label = { Text("Load more results") })
+                        AssistChip(onClick = actions.onLoadMore, label = { Text("Load more results") })
                     }
                 }
             }
@@ -882,9 +945,11 @@ fun SearchTab(state: AppUiState, viewModel: MainViewModel) {
 }
 
 @Composable
-fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
+fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
     val prefs = state.preferences ?: return
-    val selectedTheme = normalizeThemePreference(prefs.theme)
+    val selectedTheme = ThemePreference.fromApiValue(prefs.theme)
+    val selectedSort = ArticleSortPreference.fromApiValue(prefs.defaultSort)
+    val selectedDensity = DensityPreference.fromApiValue(prefs.density)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -908,9 +973,9 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                 Text("Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedTheme == "light", onClick = { viewModel.updateTheme("light") }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = null) })
-                    FilterChip(selected = selectedTheme == "dark", onClick = { viewModel.updateTheme("dark") }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) })
-                    FilterChip(selected = selectedTheme == "system", onClick = { viewModel.updateTheme("system") }, label = { Text("System") })
+                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = null) })
+                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) })
+                    FilterChip(selected = selectedTheme == ThemePreference.SYSTEM, onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) }, label = { Text("System") })
                 }
             }
         }
@@ -926,7 +991,7 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                         Text("Hide read articles", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text("Keep the main queue focused on unread items.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Switch(checked = prefs.hideRead, onCheckedChange = viewModel::updateHideRead)
+                    Switch(checked = prefs.hideRead, onCheckedChange = actions.onHideReadChanged)
                 }
             }
         }
@@ -936,8 +1001,8 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                 Text("Sort order", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = prefs.defaultSort == "latest", onClick = { viewModel.updateDefaultSort("latest") }, label = { Text("Newest") })
-                    FilterChip(selected = prefs.defaultSort == "oldest", onClick = { viewModel.updateDefaultSort("oldest") }, label = { Text("Oldest") })
+                    FilterChip(selected = selectedSort == ArticleSortPreference.LATEST, onClick = { actions.onSortChanged(ArticleSortPreference.LATEST) }, label = { Text("Newest") })
+                    FilterChip(selected = selectedSort == ArticleSortPreference.OLDEST, onClick = { actions.onSortChanged(ArticleSortPreference.OLDEST) }, label = { Text("Oldest") })
                 }
             }
         }
@@ -947,8 +1012,8 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                 Text("Density", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = prefs.density == "comfortable", onClick = { viewModel.updateDensity("comfortable") }, label = { Text("Comfortable") })
-                    FilterChip(selected = prefs.density == "compact", onClick = { viewModel.updateDensity("compact") }, label = { Text("Compact") })
+                    FilterChip(selected = selectedDensity == DensityPreference.COMFORTABLE, onClick = { actions.onDensityChanged(DensityPreference.COMFORTABLE) }, label = { Text("Comfortable") })
+                    FilterChip(selected = selectedDensity == DensityPreference.COMPACT, onClick = { actions.onDensityChanged(DensityPreference.COMPACT) }, label = { Text("Compact") })
                 }
             }
         }
@@ -959,7 +1024,7 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
                 Spacer(modifier = Modifier.height(10.dp))
                 androidx.compose.material3.Slider(
                     value = prefs.textSize.toFloat(),
-                    onValueChange = { viewModel.updateTextSize(it.toInt()) },
+                    onValueChange = { actions.onTextSizeChanged(it.toInt()) },
                     valueRange = 12f..24f,
                 )
                 Text("${prefs.textSize}sp", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -985,7 +1050,7 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
         item {
             FeedSurfaceCard {
                 Button(
-                    onClick = viewModel::logout,
+                    onClick = actions.onLogout,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
                 ) {
@@ -998,14 +1063,11 @@ fun SettingsTab(state: AppUiState, viewModel: MainViewModel) {
     }
 }
 
-private fun normalizeThemePreference(theme: String): String =
-    if (theme == "amoled") "dark" else theme
-
 private const val AUTO_LOAD_MORE_THRESHOLD = 5
 
 @Composable
-fun StatsTab(state: AppUiState, viewModel: MainViewModel) {
-    SettingsTab(state, viewModel)
+fun StatsTab(state: SettingsTabState, actions: SettingsTabActions) {
+    SettingsTab(state, actions)
 }
 
 @Composable
