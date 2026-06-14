@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Adaptive-icon background. Indigo so the launcher mask's outer ring
-    blends with the gradient start of the foreground. Solid color keeps
-    the icon visually identical to the rounded square in favicon.svg
-    even when a launcher applies a circular mask.
--->
+<!-- Adaptive-icon background. A deep teal field keeps the RSS mark distinct
+     on light, dark, circular, and squircle launcher masks. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <solid android:color="@color/ic_launcher_background" />
