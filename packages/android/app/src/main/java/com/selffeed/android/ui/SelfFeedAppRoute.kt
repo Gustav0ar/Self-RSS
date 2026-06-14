@@ -62,8 +62,8 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(feedsState.lastSyncSummary) {
-            if (feedsState.lastSyncSummary != null) {
+        LaunchedEffect(feedsState.syncRevision) {
+            if (feedsState.syncRevision > 0L) {
                 feedsViewModel.loadCategories()
                 feedsViewModel.loadFeeds()
                 settingsViewModel.loadStats()
