@@ -23,6 +23,7 @@ export function CategoryDialog({
 	const [name, setName] = useState('');
 	const [parentCategoryId, setParentCategoryId] = useState(defaultParentCategoryId ?? '');
 	const [error, setError] = useState<string | null>(null);
+	const categoryId = category?.id;
 
 	useEffect(() => {
 		if (mode === 'edit' && category) {
@@ -31,10 +32,11 @@ export function CategoryDialog({
 		}
 	}, [category, mode]);
 
-	const parentOptions = useMemo(
-		() => categories.filter((item) => item.id !== category?.id),
-		[categories, category?.id],
-	);
+	const parentOptions = useMemo(() => {
+		if (!categoryId) return categories;
+		const descendantIds = collectDescendantCategoryIds(categories, categoryId);
+		return categories.filter((item) => item.id !== categoryId && !descendantIds.has(item.id));
+	}, [categories, categoryId]);
 
 	async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -124,4 +126,24 @@ export function CategoryDialog({
 			</form>
 		</ModalShell>
 	);
+}
+
+function collectDescendantCategoryIds(categories: CategoryWithCounts[], categoryId: string) {
+	const childrenByParent = new Map<string, string[]>();
+	for (const category of categories) {
+		if (!category.parentCategoryId) continue;
+		const children = childrenByParent.get(category.parentCategoryId) ?? [];
+		children.push(category.id);
+		childrenByParent.set(category.parentCategoryId, children);
+	}
+
+	const descendants = new Set<string>();
+	const stack = [...(childrenByParent.get(categoryId) ?? [])];
+	while (stack.length > 0) {
+		const id = stack.pop();
+		if (!id || descendants.has(id)) continue;
+		descendants.add(id);
+		stack.push(...(childrenByParent.get(id) ?? []));
+	}
+	return descendants;
 }

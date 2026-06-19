@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { feeds } from '../db/schema.js';
 
@@ -95,7 +95,7 @@ export class FeedRepository {
 	}
 
 	/**
-	 * Feeds whose `nextSyncAt` is in the past and whose status is `idle`.
+	 * Feeds whose `nextSyncAt` is in the past and whose status is retryable.
 	 * Backed by the composite index `feeds_next_sync_at_idx`, so this is an
 	 * index range scan even for very large feed tables — the previous shape
 	 * ran a `datetime(...)` function call per row and could not use any
@@ -104,7 +104,7 @@ export class FeedRepository {
 	async findDueForSync(limit: number) {
 		return this.db.query.feeds.findMany({
 			where: and(
-				eq(feeds.syncStatus, 'idle'),
+				or(eq(feeds.syncStatus, 'idle'), eq(feeds.syncStatus, 'error')),
 				// nextSyncAt is stored as Unix seconds; the column's default
 				// fills the value at insert time, and the sync service
 				// updates it on every successful sync.

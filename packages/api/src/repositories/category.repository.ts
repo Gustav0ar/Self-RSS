@@ -119,6 +119,34 @@ export class CategoryRepository {
 		return cat;
 	}
 
+	async isDescendant(userId: string, ancestorId: string, candidateId: string) {
+		const allCategories = await this.findAllByUser(userId);
+		const byId = new Map(allCategories.map((category) => [category.id, category]));
+		const seen = new Set<string>();
+		let current = byId.get(candidateId);
+
+		while (current?.parentCategoryId) {
+			if (current.parentCategoryId === ancestorId) {
+				return true;
+			}
+			if (seen.has(current.parentCategoryId)) {
+				return false;
+			}
+			seen.add(current.parentCategoryId);
+			current = byId.get(current.parentCategoryId);
+		}
+
+		return false;
+	}
+
+	async childCount(categoryId: string, userId: string) {
+		const result = await this.db
+			.select({ count: sql<number>`count(*)` })
+			.from(categories)
+			.where(and(eq(categories.parentCategoryId, categoryId), eq(categories.userId, userId)));
+		return result[0]?.count ?? 0;
+	}
+
 	async feedCount(categoryId: string) {
 		const result = await this.db
 			.select({ count: sql<number>`count(*)` })

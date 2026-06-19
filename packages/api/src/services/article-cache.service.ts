@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
+import { encodeArticleCursor, encodeCachedArticleCursor } from '../utils/article-cursor.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger();
@@ -143,7 +144,9 @@ export class ArticleCacheService {
 
 			return {
 				articles: items,
-				cursor: hasMore ? (items[items.length - 1]?.id ?? null) : null,
+				cursor: hasMore
+					? encodeCachedArticleCursor(items[items.length - 1] ?? null, options.sort)
+					: null,
 				hasMore,
 				meta: data.meta,
 			};
@@ -264,7 +267,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
+				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
@@ -332,7 +335,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
+				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
@@ -413,7 +416,7 @@ export class ArticleCacheService {
 					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 					isRead: a.isRead,
 				})),
-				cursor: hasMore ? (result[result.length - 1]?.id ?? null) : null,
+				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
 				hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),

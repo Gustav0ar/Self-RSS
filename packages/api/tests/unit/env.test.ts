@@ -38,6 +38,14 @@ describe('getEnv', () => {
 		expect(env.ALLOW_REGISTRATION).toBe(false);
 	});
 
+	it('parses trusted proxy hop configuration', () => {
+		applyEnv({
+			TRUSTED_PROXY_HOPS: '2',
+		});
+
+		expect(getEnv().TRUSTED_PROXY_HOPS).toBe(2);
+	});
+
 	it('accepts development placeholder values', () => {
 		applyEnv({
 			NODE_ENV: 'development',

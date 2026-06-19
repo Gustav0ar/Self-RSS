@@ -76,6 +76,7 @@ describe('ArticleService', () => {
 
 		expect(feedSyncService.enrichArticleNow).toHaveBeenCalledWith({
 			articleId: 'article-1',
+			userId: 'user-1',
 			canonicalUrl: 'https://example.com/post-1',
 			contentHtml: 'Only text in the RSS feed',
 			heroImageUrl: null,

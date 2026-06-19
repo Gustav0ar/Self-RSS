@@ -22,9 +22,18 @@ afterEach(() => {
 	clearEnvCache();
 });
 
-function makeContext({ userId, forwardedFor }: { userId?: string; forwardedFor?: string }) {
+function makeContext({
+	userId,
+	forwardedFor,
+	realIp,
+}: {
+	userId?: string;
+	forwardedFor?: string;
+	realIp?: string;
+}) {
 	const headers = new Headers();
 	if (forwardedFor) headers.set('x-forwarded-for', forwardedFor);
+	if (realIp) headers.set('x-real-ip', realIp);
 	const store = new Map<string, unknown>();
 	store.set('userId', userId);
 	return {
@@ -118,8 +127,42 @@ describe('enforceRateLimit', () => {
 		expect(c.header).toHaveBeenCalledWith('X-RateLimit-Remaining', '7');
 	});
 
-	it('falls back to the x-forwarded-for identity when not authenticated and proxy is trusted', async () => {
+	it('keeps authenticated user identity ahead of proxy headers', async () => {
 		process.env.TRUST_PROXY = 'true';
+		process.env.TRUSTED_PROXY_HOPS = '0';
+		clearEnvCache();
+		const c = makeContext({ userId: 'user-1', forwardedFor: '203.0.113.10' });
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
+
+		await enforceRateLimit(c as never, limiter as never, 'search', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+		expect(limiter.check).toHaveBeenCalledWith('search:user-1', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+	});
+
+	it('uses the anonymous identity when not authenticated and proxy is not trusted', async () => {
+		process.env.TRUST_PROXY = 'false';
+		clearEnvCache();
+		const c = makeContext({ userId: undefined, forwardedFor: '203.0.113.10' });
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
+
+		await enforceRateLimit(c as never, limiter as never, 'search', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+		expect(limiter.check).toHaveBeenCalledWith('search:anonymous', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+	});
+
+	it('uses a single x-forwarded-for identity when no trusted proxy hop follows it', async () => {
+		process.env.TRUST_PROXY = 'true';
+		process.env.TRUSTED_PROXY_HOPS = '0';
 		clearEnvCache();
 		const c = makeContext({ userId: undefined, forwardedFor: '203.0.113.10' });
 		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
@@ -129,6 +172,47 @@ describe('enforceRateLimit', () => {
 			maxRequests: 60,
 		});
 		expect(limiter.check).toHaveBeenCalledWith('search:203.0.113.10', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+	});
+
+	it('uses the address before the configured trusted proxy hops', async () => {
+		process.env.TRUST_PROXY = 'true';
+		process.env.TRUSTED_PROXY_HOPS = '1';
+		clearEnvCache();
+		const c = makeContext({
+			userId: undefined,
+			forwardedFor: '203.0.113.10, 198.51.100.20',
+		});
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
+
+		await enforceRateLimit(c as never, limiter as never, 'search', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+		expect(limiter.check).toHaveBeenCalledWith('search:203.0.113.10', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+	});
+
+	it('falls back safely when forwarded headers are invalid or too short', async () => {
+		process.env.TRUST_PROXY = 'true';
+		process.env.TRUSTED_PROXY_HOPS = '2';
+		clearEnvCache();
+		const c = makeContext({
+			userId: undefined,
+			forwardedFor: 'not-an-ip, 203.0.113.10',
+			realIp: '198.51.100.20',
+		});
+		const limiter = { check: vi.fn().mockResolvedValue({ allowed: true, remaining: 5 }) };
+
+		await enforceRateLimit(c as never, limiter as never, 'search', {
+			windowMs: 60_000,
+			maxRequests: 60,
+		});
+		expect(limiter.check).toHaveBeenCalledWith('search:198.51.100.20', {
 			windowMs: 60_000,
 			maxRequests: 60,
 		});

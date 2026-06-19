@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ArticleCacheService } from '../../src/services/article-cache.service.js';
 
+function cachedArticle(id: string, displayedAt: string, isRead = false) {
+	return {
+		id,
+		feedId: 'f1',
+		feedTitle: 'Feed',
+		feedFaviconUrl: null,
+		title: id,
+		author: null,
+		excerpt: null,
+		heroImageUrl: null,
+		publishedAt: null,
+		displayedAt,
+		isRead,
+	};
+}
+
 describe('ArticleCacheService - getCachedArticleList', () => {
 	it('returns null on cache miss', async () => {
 		const redis = { get: vi.fn().mockResolvedValue(null) };
@@ -43,32 +59,8 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 	it('applies unread filter and sort from the cached snapshot', async () => {
 		const cached = {
 			articles: [
-				{
-					id: 'a2',
-					feedId: 'f1',
-					feedTitle: 'Feed',
-					feedFaviconUrl: null,
-					title: 'B',
-					author: null,
-					excerpt: null,
-					heroImageUrl: null,
-					publishedAt: null,
-					displayedAt: '2026-01-02T00:00:00.000Z',
-					isRead: true,
-				},
-				{
-					id: 'a1',
-					feedId: 'f1',
-					feedTitle: 'Feed',
-					feedFaviconUrl: null,
-					title: 'A',
-					author: null,
-					excerpt: null,
-					heroImageUrl: null,
-					publishedAt: null,
-					displayedAt: '2026-01-01T00:00:00.000Z',
-					isRead: false,
-				},
+				cachedArticle('a2', '2026-01-02T00:00:00.000Z', true),
+				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
 			],
 			cursor: null,
 			hasMore: false,
@@ -83,6 +75,52 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		expect(result?.articles).toHaveLength(1);
 		expect(result?.articles[0]?.id).toBe('a1');
 		expect(result?.meta.generation).toBe(1);
+	});
+
+	it('returns an opaque latest cursor from the last returned cached article', async () => {
+		const cached = {
+			articles: [
+				cachedArticle('a3', '2026-01-03T00:00:00.000Z'),
+				cachedArticle('a2', '2026-01-02T00:00:00.000Z'),
+				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
+			],
+			cursor: null,
+			hasMore: true,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const redis = {
+			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		const result = await service.getCachedArticleList('user-1', { limit: 2 });
+
+		expect(result?.articles.map((article) => article.id)).toEqual(['a3', 'a2']);
+		expect(result?.cursor).toBe(`a2:${Date.parse('2026-01-02T00:00:00.000Z') / 1000}:d`);
+		expect(result?.hasMore).toBe(true);
+	});
+
+	it('returns an opaque oldest cursor from the last returned cached article', async () => {
+		const cached = {
+			articles: [
+				cachedArticle('a3', '2026-01-03T00:00:00.000Z'),
+				cachedArticle('a2', '2026-01-02T00:00:00.000Z'),
+				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
+			],
+			cursor: null,
+			hasMore: true,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const redis = {
+			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		const result = await service.getCachedArticleList('user-1', { limit: 2, sort: 'oldest' });
+
+		expect(result?.articles.map((article) => article.id)).toEqual(['a1', 'a2']);
+		expect(result?.cursor).toBe(`a2:${Date.parse('2026-01-02T00:00:00.000Z') / 1000}:a`);
+		expect(result?.hasMore).toBe(true);
 	});
 
 	it('returns null and deletes the key when the cached payload is corrupt', async () => {

@@ -95,6 +95,7 @@ TRAEFIK_CERT_RESOLVER=le
 ALLOW_REGISTRATION=true
 ADMIN_EMAIL=you@example.com
 ADMIN_PASSWORD=<strong-password>
+TRUSTED_PROXY_HOPS=1
 EOF'
 sudo chmod 600 /mnt/storage/containers/selfrss/.env
 
@@ -118,6 +119,13 @@ to match.
 The default external Docker network is also `web`. Set
 `TRAEFIK_NETWORK` only if your Traefik container uses another external
 network name.
+
+`TRUSTED_PROXY_HOPS=1` matches the default Traefik → web nginx → API
+production path, where nginx appends the trusted Traefik hop to
+`X-Forwarded-For`. If the API is deployed behind only the bundled nginx
+proxy with no upstream proxy, set `TRUSTED_PROXY_HOPS=0`. Do not increase
+this value unless every hop counted from the right side of
+`X-Forwarded-For` is controlled by your infrastructure.
 
 The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
 by the unprivileged `bun` user inside the API container. If you create

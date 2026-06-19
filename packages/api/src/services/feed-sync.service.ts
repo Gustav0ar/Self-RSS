@@ -5,6 +5,7 @@ import { CacheKeys } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
+import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
@@ -21,6 +22,11 @@ import type { ArticleCacheService } from './article-cache.service.js';
 
 const logger = createLogger();
 
+const FAILED_SYNC_RETRY_MINUTES = {
+	min: 5,
+	max: 60,
+};
+
 interface SyncConfig {
 	timeoutMs: number;
 	maxContentLength: number;
@@ -35,6 +41,7 @@ interface SyncFeedOptions {
 
 interface PendingArticleEnrichment {
 	articleId: string;
+	userId: string;
 	canonicalUrl: string;
 	contentHtml: string | null;
 	heroImageUrl: string | null;
@@ -123,6 +130,7 @@ export class FeedSyncService {
 				contentText: string | null;
 				excerpt: string | null;
 				heroImageUrl: string | null;
+				hash: string;
 			}> = [];
 
 			const processItem = async (item: (typeof items)[0], index: number) => {
@@ -179,6 +187,15 @@ export class FeedSyncService {
 							contentText: textContent || null,
 							excerpt,
 							heroImageUrl: heroImage,
+							hash: createArticleContentHash({
+								canonicalUrl: existingArticle.canonicalUrl,
+								title: existingArticle.title,
+								author: existingArticle.author,
+								excerpt,
+								contentHtml: sanitizedHtml || null,
+								contentText: textContent || null,
+								heroImageUrl: heroImage,
+							}),
 						});
 					}
 					if (
@@ -187,6 +204,7 @@ export class FeedSyncService {
 					) {
 						pendingEnrichments.push({
 							articleId: existingArticle.id,
+							userId,
 							canonicalUrl: canonicalUrl!,
 							contentHtml: sanitizedHtml || null,
 							heroImageUrl: heroImage,
@@ -196,13 +214,22 @@ export class FeedSyncService {
 					return;
 				}
 
-				const hash = createHash('sha256').update(guid).digest('hex');
+				const hash = createArticleContentHash({
+					canonicalUrl,
+					title: articleTitle,
+					author,
+					excerpt,
+					contentHtml: sanitizedHtml || null,
+					contentText: textContent || null,
+					heroImageUrl: heroImage,
+				});
 				if (
 					shouldEnrichArticles &&
 					this.shouldAttemptArticleEnrichment(canonicalUrl, rawHtml, null)
 				) {
 					pendingInsertedEnrichmentsByGuid.set(guid, {
 						canonicalUrl: canonicalUrl!,
+						userId,
 						contentHtml: sanitizedHtml || null,
 						heroImageUrl: heroImage,
 						fetchedAt: publishedAt ?? now,
@@ -284,6 +311,10 @@ export class FeedSyncService {
 				mediaByGuid,
 				updatedMediaByArticleId,
 			});
+			await this.invalidateArticleDetailCaches(
+				userId,
+				articlesToUpdate.map((article) => article.id),
+			);
 
 			for (const article of insertedArticles) {
 				const pendingInsertedEnrichment = pendingInsertedEnrichmentsByGuid.get(article.guid);
@@ -337,7 +368,10 @@ export class FeedSyncService {
 
 			return { newArticles: insertedArticles.length, total: items.length };
 		} catch (err) {
-			await this.feedRepo.update(feedId, userId, { syncStatus: 'error' });
+			await this.feedRepo.update(feedId, userId, {
+				nextSyncAt: this.nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
+				syncStatus: 'error',
+			});
 			await this.syncRunRepo.complete(run.id, {
 				status: 'failed',
 				itemCount: 0,
@@ -544,13 +578,28 @@ export class FeedSyncService {
 			return;
 		}
 
+		const article = await this.articleRepo.findById(enrichment.articleId);
+		if (!article) {
+			return;
+		}
+
 		await this.articleRepo.updateContent(enrichment.articleId, {
 			contentHtml: sanitizedHtml || null,
 			contentText: textContent || null,
 			excerpt,
 			heroImageUrl: heroImage,
+			hash: createArticleContentHash({
+				canonicalUrl: article.canonicalUrl,
+				title: article.title,
+				author: article.author,
+				excerpt,
+				contentHtml: sanitizedHtml || null,
+				contentText: textContent || null,
+				heroImageUrl: heroImage,
+			}),
 		});
 		await this.replaceArticleMedia(enrichment.articleId, sanitizedHtml || null);
+		await this.invalidateArticleDetailCaches(enrichment.userId, [enrichment.articleId]);
 	}
 
 	private shouldAttemptArticleEnrichment(
@@ -758,6 +807,14 @@ export class FeedSyncService {
 		return stripHtml(nextContentHtml).length > stripHtml(existingContentHtml ?? '').length + 80;
 	}
 
+	private nextFailedSyncRetryAt(pollingIntervalMinutes: number) {
+		const retryMinutes = Math.min(
+			FAILED_SYNC_RETRY_MINUTES.max,
+			Math.max(FAILED_SYNC_RETRY_MINUTES.min, pollingIntervalMinutes),
+		);
+		return new Date(Date.now() + retryMinutes * 60_000);
+	}
+
 	private shouldProcessArticle(
 		existingArticle: {
 			contentHtml: string | null;
@@ -796,6 +853,13 @@ export class FeedSyncService {
 		if (keys.length > 0) {
 			await this.redis.del(...keys);
 		}
+	}
+
+	private async invalidateArticleDetailCaches(userId: string, articleIds: string[]) {
+		if (articleIds.length === 0) return;
+		await this.redis.del(
+			...articleIds.map((articleId) => CacheKeys.articleDetail(userId, articleId)),
+		);
 	}
 
 	private parsePublishedAt(value: unknown): Date | null {

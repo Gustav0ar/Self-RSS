@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import type { Context } from 'hono';
 import { getEnv } from '../config/index.js';
 import { AppError } from '../middleware/errors.js';
@@ -11,13 +12,28 @@ function getRateLimitIdentity(c: Context): string {
 		return 'anonymous';
 	}
 
-	const forwardedFor = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+	const forwardedFor = getForwardedIdentity(
+		c.req.header('x-forwarded-for'),
+		getEnv().TRUSTED_PROXY_HOPS,
+	);
 	if (forwardedFor) return forwardedFor;
 
 	const realIp = c.req.header('x-real-ip')?.trim();
-	if (realIp) return realIp;
+	if (realIp && isIP(realIp)) return realIp;
 
 	return 'anonymous';
+}
+
+function getForwardedIdentity(header: string | undefined, trustedProxyHops: number) {
+	const addresses =
+		header
+			?.split(',')
+			.map((part) => part.trim())
+			.filter((part) => isIP(part)) ?? [];
+	if (addresses.length === 0) return null;
+
+	const index = addresses.length - trustedProxyHops - 1;
+	return index >= 0 ? addresses[index] : null;
 }
 
 export async function enforceRateLimit(
