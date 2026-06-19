@@ -103,6 +103,30 @@ async function startFeedServer(xml: string) {
 	};
 }
 
+async function startMutableFeedServer(initialXml: string) {
+	let xml = initialXml;
+	const server = createServer((_req, res) => {
+		res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+		res.end(xml);
+	});
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+	const address = server.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Failed to start test RSS server');
+	}
+	return {
+		url: `http://127.0.0.1:${address.port}/feed.xml`,
+		setXml(nextXml: string) {
+			xml = nextXml;
+		},
+		async stop() {
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		},
+	};
+}
+
 beforeAll(async () => {
 	await redis.connect();
 });
@@ -161,6 +185,73 @@ describe('API integration - additional flows', () => {
 			});
 			expect(cached.status).toBe(304);
 			expect(cached.headers.get('ETag')).toBe(etag);
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
+	it('returns updated article detail when content changes behind an old ETag', async () => {
+		const registered = await registerUser('etag-change@example.com');
+		const token = registered.body.data.tokens.accessToken;
+
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Etag Change' }),
+		});
+
+		const feedForBody = (body: string) => `<?xml version="1.0" encoding="UTF-8"?>
+			<rss version="2.0"><channel>
+				<title>Etag Change Feed</title><link>https://example.com</link>
+				<item>
+					<title>Story</title>
+					<link>https://example.com/story</link>
+					<guid>etag-change-story</guid>
+					<description><![CDATA[${body}]]></description>
+				</item>
+			</channel></rss>`;
+
+		const feedServer = await startMutableFeedServer(feedForBody('<p>Story body.</p>'));
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+			await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, { method: 'POST' });
+
+			const articles = await authedRequest(
+				`/api/v1/articles?feedId=${feed.body.data.id}&limit=10`,
+				token,
+			);
+			const articleId = articles.body.data[0].id;
+			const detail = await authedRequest(`/api/v1/articles/${articleId}`, token);
+			const etag = detail.response.headers.get('ETag');
+			expect(etag).toBeTruthy();
+
+			feedServer.setXml(
+				feedForBody(
+					'<p>Story body with a much longer updated article body that exceeds the refresh threshold by more than eighty characters and should update the stored content hash.</p>',
+				),
+			);
+			await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, { method: 'POST' });
+
+			const changed = await app.request(`/api/v1/articles/${articleId}`, {
+				headers: { Authorization: `Bearer ${token}`, 'If-None-Match': etag! },
+			});
+			expect(changed.status).toBe(200);
+			const changedEtag = changed.headers.get('ETag');
+			expect(changedEtag).toBeTruthy();
+			expect(changedEtag).not.toBe(etag);
+			const changedBody = await changed.json();
+			expect(changedBody.data.contentHtml).toContain('much longer updated article body');
+
+			const cached = await app.request(`/api/v1/articles/${articleId}`, {
+				headers: { Authorization: `Bearer ${token}`, 'If-None-Match': changedEtag! },
+			});
+			expect(cached.status).toBe(304);
 		} finally {
 			await feedServer.stop();
 		}

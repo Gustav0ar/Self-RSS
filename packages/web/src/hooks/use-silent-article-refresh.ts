@@ -1,6 +1,6 @@
 import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
 import { type InfiniteData, type QueryClient, QueryClientContext } from '@tanstack/react-query';
-import { useCallback, useContext, useEffect, useRef } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { type ArticleQueryParams, buildArticleSearchParams } from './queries';
 
@@ -33,9 +33,8 @@ function useOptionalQueryClient(): QueryClient | null {
 
 /**
  * Periodically re-fetches the first page of the article list and merges
- * any new items in front of the existing entries. Pages 2+ are never
- * touched, the cursor stays valid, and the active article / scroll
- * position are preserved.
+ * any new items by invalidating the exact active article query. Query
+ * refetching keeps all pages and cursors aligned with the API.
  *
  * Triggers: window focus, tab becoming visible, and a 5-minute interval
  * (only while the tab is visible). Skipped if the cached data is fresher
@@ -43,7 +42,15 @@ function useOptionalQueryClient(): QueryClient | null {
  */
 export function useSilentArticleRefresh(params: ArticleQueryParams) {
 	const qc = useOptionalQueryClient();
-	const queryKey = buildInfiniteKey(params);
+	const feedId = params.feedId;
+	const categoryId = params.categoryId;
+	const unreadOnly = params.unreadOnly;
+	const sort = params.sort;
+	const limit = params.limit ?? 30;
+	const queryKey = useMemo(
+		() => buildInfiniteKey({ feedId, categoryId, unreadOnly, sort, limit }),
+		[feedId, categoryId, unreadOnly, sort, limit],
+	);
 	const inFlightRef = useRef(false);
 	const lastFetchedAtRef = useRef(0);
 
@@ -58,7 +65,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 
 		inFlightRef.current = true;
 		try {
-			const qs = buildArticleSearchParams({ ...params, limit: params.limit ?? 30 }, null);
+			const qs = buildArticleSearchParams({ feedId, categoryId, unreadOnly, sort, limit }, null);
 			const fresh = await apiFetch<Page>(`/articles${qs ? `?${qs}` : ''}`);
 
 			const existing = cached.pages[0].data;
@@ -67,25 +74,14 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 
 			if (newOnes.length === 0) return;
 
-			const limit = params.limit ?? 30;
-			const merged = [...newOnes, ...existing].slice(0, limit);
-			const firstPage: Page = {
-				...cached.pages[0],
-				data: merged,
-				hasMore: cached.pages[0].hasMore || fresh.hasMore,
-			};
-			const next: ArticleList = {
-				pages: [firstPage, ...cached.pages.slice(1)],
-				pageParams: cached.pageParams,
-			};
-			qc.setQueryData(queryKey, next);
+			await qc.invalidateQueries({ queryKey, exact: true });
 		} catch {
 			// Network errors are expected; the next tick will retry.
 		} finally {
 			inFlightRef.current = false;
 			lastFetchedAtRef.current = Date.now();
 		}
-	}, [qc, queryKey, params]);
+	}, [qc, queryKey, feedId, categoryId, unreadOnly, sort, limit]);
 
 	useEffect(() => {
 		if (!qc) return;

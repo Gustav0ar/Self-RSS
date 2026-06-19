@@ -1,5 +1,12 @@
 import { relations } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+	type AnySQLiteColumn,
+	index,
+	integer,
+	sqliteTable,
+	text,
+	uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 // Helper for generating UUIDs
 const uuid = (name: string) => text(name);
@@ -100,7 +107,9 @@ export const categories = sqliteTable(
 		userId: uuid('user_id')
 			.notNull()
 			.references(() => users.id, { onDelete: 'cascade' }),
-		parentCategoryId: uuid('parent_category_id'),
+		parentCategoryId: uuid('parent_category_id').references((): AnySQLiteColumn => categories.id, {
+			onDelete: 'restrict',
+		}),
 		name: text('name').notNull(),
 		slug: text('slug').notNull(),
 		sortOrder: integer('sort_order').notNull().default(0),

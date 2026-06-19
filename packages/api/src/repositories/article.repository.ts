@@ -207,6 +207,9 @@ export class ArticleRepository {
 			.select({
 				id: articles.id,
 				guid: articles.guid,
+				canonicalUrl: articles.canonicalUrl,
+				title: articles.title,
+				author: articles.author,
 				contentHtml: articles.contentHtml,
 				heroImageUrl: articles.heroImageUrl,
 			})
@@ -409,6 +412,7 @@ export class ArticleRepository {
 			contentText: string | null;
 			excerpt: string | null;
 			heroImageUrl: string | null;
+			hash: string;
 		}[];
 		mediaByGuid: Map<string, (typeof articleMedia.$inferInsert)[]>;
 		updatedMediaByArticleId: Map<string, (typeof articleMedia.$inferInsert)[]>;
@@ -440,6 +444,7 @@ export class ArticleRepository {
 						contentText: update.contentText,
 						excerpt: update.excerpt,
 						heroImageUrl: update.heroImageUrl,
+						hash: update.hash,
 					})
 					.where(eq(articles.id, update.id));
 

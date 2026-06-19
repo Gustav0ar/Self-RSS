@@ -43,6 +43,32 @@ const sampleCategories = [
 		unreadCount: 0,
 		feeds: [],
 	},
+	{
+		id: 'cat-3',
+		userId: 'user-1',
+		parentCategoryId: 'cat-2',
+		name: 'API',
+		slug: 'api',
+		sortOrder: 0,
+		createdAt: '2026-01-01T00:00:00.000Z',
+		updatedAt: '2026-01-01T00:00:00.000Z',
+		feedCount: 0,
+		unreadCount: 0,
+		feeds: [],
+	},
+	{
+		id: 'cat-4',
+		userId: 'user-1',
+		parentCategoryId: null,
+		name: 'News',
+		slug: 'news',
+		sortOrder: 0,
+		createdAt: '2026-01-01T00:00:00.000Z',
+		updatedAt: '2026-01-01T00:00:00.000Z',
+		feedCount: 0,
+		unreadCount: 0,
+		feeds: [],
+	},
 ];
 
 describe('CategoryDialog - create mode', () => {
@@ -131,19 +157,22 @@ describe('CategoryDialog - edit mode', () => {
 		expect((screen.getByLabelText('Parent category') as HTMLSelectElement).value).toBe('cat-1');
 	});
 
-	it('excludes the current category from the parent dropdown to prevent cycles', () => {
+	it('excludes the current category and descendants from the parent dropdown to prevent cycles', () => {
 		render(
 			<CategoryDialog
 				mode="edit"
 				categories={sampleCategories}
-				category={sampleCategories[1]}
+				category={sampleCategories[0]}
 				onClose={() => {}}
 			/>,
 		);
 
 		const parentSelect = screen.getByLabelText('Parent category') as HTMLSelectElement;
 		const optionIds = Array.from(parentSelect.options).map((o) => o.value);
+		expect(optionIds).not.toContain('cat-1');
 		expect(optionIds).not.toContain('cat-2');
+		expect(optionIds).not.toContain('cat-3');
+		expect(optionIds).toContain('cat-4');
 	});
 
 	it('submits the update and closes the dialog on success', async () => {

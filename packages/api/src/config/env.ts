@@ -27,6 +27,7 @@ const envSchema = z
 		API_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(600).default(120),
 		CORS_ALLOWED_ORIGINS: z.string().default(''),
 		TRUST_PROXY: booleanCoercible.default(false),
+		TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
 		ADMIN_EMAIL: z.string().email().optional(),
 		ADMIN_PASSWORD: z.string().min(8).optional(),
 		FEED_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),

@@ -117,6 +117,14 @@ export class CategoryService {
 		if (data.parentCategoryId) {
 			const parent = await this.categoryRepo.findById(data.parentCategoryId, userId);
 			if (!parent) throw AppError.notFound('Parent category not found');
+			const wouldCreateCycle = await this.categoryRepo.isDescendant(
+				userId,
+				categoryId,
+				data.parentCategoryId,
+			);
+			if (wouldCreateCycle) {
+				throw AppError.badRequest('Category cannot be moved under one of its descendants.');
+			}
 		}
 
 		const updates: Record<string, unknown> = {};
@@ -137,6 +145,12 @@ export class CategoryService {
 		const feedCount = await this.categoryRepo.feedCount(categoryId);
 		if (feedCount > 0) {
 			throw AppError.badRequest('Cannot delete category with feeds. Move or delete feeds first.');
+		}
+		const childCount = await this.categoryRepo.childCount(categoryId, userId);
+		if (childCount > 0) {
+			throw AppError.badRequest(
+				'Cannot delete category with subcategories. Move or delete subcategories first.',
+			);
 		}
 
 		return this.categoryRepo.delete(categoryId, userId);

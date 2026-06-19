@@ -163,6 +163,27 @@ describe('CategoryService - update', () => {
 		).rejects.toMatchObject({ code: 'BAD_REQUEST', statusCode: 400 });
 	});
 
+	it('refuses to move a category under one of its descendants', async () => {
+		const categoryRepo = {
+			findById: vi
+				.fn()
+				.mockResolvedValueOnce(buildCategory({ id: 'cat-1' }))
+				.mockResolvedValueOnce(buildCategory({ id: 'cat-child', parentCategoryId: 'cat-1' })),
+			isDescendant: vi.fn().mockResolvedValue(true),
+			update: vi.fn(),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await expect(
+			service.update('user-1', 'cat-1', { parentCategoryId: 'cat-child' }),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			statusCode: 400,
+			message: 'Category cannot be moved under one of its descendants.',
+		});
+		expect(categoryRepo.update).not.toHaveBeenCalled();
+	});
+
 	it('recomputes the slug when the name changes', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'cat-1', name: 'Old' })),
@@ -185,6 +206,7 @@ describe('CategoryService - delete', () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'cat-1' })),
 			feedCount: vi.fn().mockResolvedValue(3),
+			childCount: vi.fn(),
 			delete: vi.fn(),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -197,10 +219,28 @@ describe('CategoryService - delete', () => {
 		expect(categoryRepo.delete).not.toHaveBeenCalled();
 	});
 
+	it('rejects deletion when child categories still reference the category', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'cat-1' })),
+			feedCount: vi.fn().mockResolvedValue(0),
+			childCount: vi.fn().mockResolvedValue(1),
+			delete: vi.fn(),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await expect(service.delete('user-1', 'cat-1')).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			statusCode: 400,
+			message: 'Cannot delete category with subcategories. Move or delete subcategories first.',
+		});
+		expect(categoryRepo.delete).not.toHaveBeenCalled();
+	});
+
 	it('deletes when the category has no feeds', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'cat-1' })),
 			feedCount: vi.fn().mockResolvedValue(0),
+			childCount: vi.fn().mockResolvedValue(0),
 			delete: vi.fn().mockResolvedValue(undefined),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);

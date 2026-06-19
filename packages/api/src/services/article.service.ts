@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
+import { encodeArticleCursor } from '../utils/article-cursor.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
 import type { RealtimeService } from './realtime.service.js';
@@ -115,9 +116,9 @@ export class ArticleService {
 			// The cursor is opaque to clients but embeds the sort timestamp
 			// for the last returned row so the next page query doesn't
 			// need a second round-trip to look the row up. The shape is
-			// `<articleId>:<unixSeconds>`; clients must pass it back
+			// `<articleId>:<unixSeconds>:<direction>`; clients must pass it back
 			// verbatim.
-			cursor: hasMore ? encodeCursor(items[items.length - 1] ?? null, options.sort) : null,
+			cursor: hasMore ? encodeArticleCursor(items[items.length - 1] ?? null, options.sort) : null,
 			hasMore,
 		};
 	}
@@ -285,6 +286,7 @@ export class ArticleService {
 
 		await this.feedSyncService.enrichArticleNow({
 			articleId: article.id,
+			userId,
 			canonicalUrl,
 			contentHtml: article.contentHtml,
 			heroImageUrl: article.heroImageUrl,
@@ -327,7 +329,7 @@ export class ArticleService {
 
 		return {
 			data,
-			cursor: hasMore ? encodeCursor(items[items.length - 1] ?? null, 'latest') : null,
+			cursor: hasMore ? encodeArticleCursor(items[items.length - 1] ?? null, 'latest') : null,
 			hasMore,
 		};
 	}
@@ -339,25 +341,4 @@ export class ArticleService {
 		}
 		await this.redis.del(...keys);
 	}
-}
-
-/**
- * Build an opaque pagination cursor that embeds the sort timestamp of
- * the last article on the current page. The next request sends this
- * back verbatim and the repository decodes it, avoiding a second
- * round-trip to look the article up by id. Sort order matters because
- * `coalesce(publishedAt, fetchedAt)` is the sort key.
- */
-function encodeCursor(
-	item: { id: string; publishedAt: Date | null; fetchedAt: Date } | null,
-	sort: string | undefined,
-): string | null {
-	if (!item) return null;
-	const ts = (item.publishedAt ?? item.fetchedAt).getTime();
-	// Use `Math.floor(ts / 1000)` to match the integer column storage.
-	const seconds = Math.floor(ts / 1000);
-	// Prefix with the sort direction so the repository can apply the
-	// correct inequality without inspecting the query.
-	const direction = sort === 'oldest' ? 'a' : 'd';
-	return `${item.id}:${seconds}:${direction}`;
 }

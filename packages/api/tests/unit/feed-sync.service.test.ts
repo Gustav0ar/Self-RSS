@@ -5,6 +5,7 @@ describe('FeedSyncService', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it('stores feed content immediately and triggers lazy enrichment for new articles', async () => {
@@ -170,6 +171,131 @@ describe('FeedSyncService', () => {
 				canonicalUrl: 'https://example.com/post-1',
 			}),
 		]);
+	});
+
+	it('updates the article hash when existing article content is refreshed', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Refresh Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+			})),
+			update: vi.fn(async () => undefined),
+		};
+
+		const articleRepo = {
+			findByFeedAndGuids: vi.fn(async () => [
+				{
+					id: 'article-1',
+					guid: 'guid-1',
+					canonicalUrl: 'https://example.com/post-1',
+					title: 'Post 1',
+					author: 'Author',
+					contentHtml: '<p>Short</p>',
+					heroImageUrl: null,
+				},
+			]),
+			persistSyncResults: vi.fn(async () => []),
+		};
+
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+
+		const service = new FeedSyncService(
+			feedRepo as never,
+			articleRepo as never,
+			syncRunRepo as never,
+			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
+			{ del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		vi.spyOn(
+			service as unknown as { fetchAndParse: () => Promise<unknown> },
+			'fetchAndParse',
+		).mockResolvedValue({
+			title: 'Refresh Feed',
+			items: [
+				{
+					guid: 'guid-1',
+					link: 'https://example.com/post-1',
+					title: 'Post 1',
+					creator: 'Author',
+					description:
+						'<p>This is a much longer updated article body with enough extra text to exceed the refresh threshold by more than eighty characters.</p>',
+				},
+			],
+		} as never);
+
+		await service.syncFeed('feed-1', 'user-1');
+
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
+			expect.objectContaining({
+				articlesToUpdate: [
+					expect.objectContaining({
+						id: 'article-1',
+						contentHtml:
+							'<p>This is a much longer updated article body with enough extra text to exceed the refresh threshold by more than eighty characters.</p>',
+						hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+					}),
+				],
+			}),
+		);
+	});
+
+	it('keeps failed feeds retryable by storing a bounded next sync time', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Failing Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+				pollingIntervalMinutes: 15,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{
+				countByFeeds: vi.fn(async () => 1),
+			} as never,
+			syncRunRepo as never,
+			{} as never,
+			{ del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		vi.spyOn(
+			service as unknown as { fetchAndParse: () => Promise<unknown> },
+			'fetchAndParse',
+		).mockRejectedValue(new Error('network failed'));
+
+		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toThrow('network failed');
+
+		expect(feedRepo.update).toHaveBeenNthCalledWith(1, 'feed-1', 'user-1', {
+			syncStatus: 'syncing',
+		});
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				nextSyncAt: new Date('2026-01-01T00:15:00.000Z'),
+				syncStatus: 'error',
+			}),
+		);
+		expect(syncRunRepo.complete).toHaveBeenCalledWith(
+			'run-1',
+			expect.objectContaining({ status: 'failed' }),
+		);
 	});
 
 	it('syncs every non-active feed for a user with summary counts', async () => {

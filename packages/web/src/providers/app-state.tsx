@@ -31,7 +31,17 @@ interface AppStateValue {
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
-export function AppStateProvider({ children }: { children: ReactNode }) {
+export function AppStateProvider({
+	children,
+	resetKey,
+}: {
+	children: ReactNode;
+	resetKey?: string;
+}) {
+	return <AppStateStore key={resetKey ?? 'default'}>{children}</AppStateStore>;
+}
+
+function AppStateStore({ children }: { children: ReactNode }) {
 	const [selectedFeedId, setSelectedFeedId] = useState<string | undefined>();
 	const [selectedCategoryId, setSelectedCategoryId] = useState<string | undefined>();
 	const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);

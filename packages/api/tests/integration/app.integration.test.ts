@@ -361,6 +361,38 @@ describe('API integration', () => {
 			expect(childCategory.response.status).toBe(201);
 			expect(childCategory.body.data.parentCategoryId).toBe(parentCategory.body.data.id);
 
+			const grandchildCategory = await authedRequest('/api/v1/categories', token1, {
+				method: 'POST',
+				body: JSON.stringify({ name: 'Runtime', parentCategoryId: childCategory.body.data.id }),
+			});
+			expect(grandchildCategory.response.status).toBe(201);
+
+			const cycleUpdate = await authedRequest(
+				`/api/v1/categories/${parentCategory.body.data.id}`,
+				token1,
+				{
+					method: 'PATCH',
+					body: JSON.stringify({ parentCategoryId: grandchildCategory.body.data.id }),
+				},
+			);
+			expect(cycleUpdate.response.status).toBe(400);
+			expect(cycleUpdate.body.error.message).toContain('descendants');
+
+			const parentDeleteWithChild = await authedRequest(
+				`/api/v1/categories/${parentCategory.body.data.id}`,
+				token1,
+				{ method: 'DELETE' },
+			);
+			expect(parentDeleteWithChild.response.status).toBe(400);
+			expect(parentDeleteWithChild.body.error.message).toContain('subcategories');
+
+			const leafDelete = await authedRequest(
+				`/api/v1/categories/${grandchildCategory.body.data.id}`,
+				token1,
+				{ method: 'DELETE' },
+			);
+			expect(leafDelete.response.status).toBe(200);
+
 			const createFeed = await authedRequest('/api/v1/feeds', token1, {
 				method: 'POST',
 				body: JSON.stringify({
@@ -731,6 +763,87 @@ describe('API integration', () => {
 			expect(secondPage.body.hasMore).toBe(false);
 			expect(secondPage.body.data[0].title).toBe('Cursor Story 5');
 			expect(secondPage.body.data.at(-1)?.title).toBe('Cursor Story 1');
+
+			const firstPageIds = new Set(
+				firstPage.body.data.map((article: { id: string }) => article.id),
+			);
+			for (const article of secondPage.body.data as Array<{ id: string }>) {
+				expect(firstPageIds.has(article.id)).toBe(false);
+			}
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
+	it('paginates warm cached article lists with a stable cursor', async () => {
+		const registered = await registerUser('cached-pagination@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const userId = registered.body.data.user.id;
+
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Cached Pagination' }),
+		});
+
+		const items = Array.from({ length: 35 }, (_, index) => {
+			const storyNumber = 35 - index;
+			const publishedAt = new Date(Date.UTC(2026, 1, storyNumber, 12, 0, 0)).toUTCString();
+			return `<item>
+				<title>Cached Cursor Story ${storyNumber}</title>
+				<link>https://example.com/cached-cursor/${storyNumber}</link>
+				<guid>cached-cursor-story-${storyNumber}</guid>
+				<description><![CDATA[<p>Cached cursor story ${storyNumber} body.</p>]]></description>
+				<pubDate>${publishedAt}</pubDate>
+			</item>`;
+		}).join('');
+
+		const feedXml = `<?xml version="1.0" encoding="UTF-8"?>
+		<rss version="2.0">
+			<channel>
+				<title>Cached Cursor Feed</title>
+				<link>https://example.com/cached-cursor</link>
+				<description>Cached cursor pagination feed</description>
+				${items}
+			</channel>
+		</rss>`;
+
+		const feedServer = await startFeedServer(feedXml);
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+					title: 'Cached Cursor Feed',
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+
+			const sync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			expect(sync.response.status).toBe(200);
+			expect(sync.body.data.newArticles).toBe(35);
+
+			await deps.services.articleCache.populateCache(userId);
+
+			const firstPage = await authedRequest('/api/v1/articles?sort=latest&limit=30', token);
+			expect(firstPage.response.status).toBe(200);
+			expect(firstPage.body.data).toHaveLength(30);
+			expect(firstPage.body.hasMore).toBe(true);
+			expect(firstPage.body.cursor.split(':')).toHaveLength(3);
+			expect(firstPage.body.data[0].title).toBe('Cached Cursor Story 35');
+			expect(firstPage.body.data.at(-1)?.title).toBe('Cached Cursor Story 6');
+
+			const secondPage = await authedRequest(
+				`/api/v1/articles?sort=latest&limit=30&cursor=${encodeURIComponent(firstPage.body.cursor)}`,
+				token,
+			);
+			expect(secondPage.response.status).toBe(200);
+			expect(secondPage.body.data).toHaveLength(5);
+			expect(secondPage.body.hasMore).toBe(false);
+			expect(secondPage.body.data[0].title).toBe('Cached Cursor Story 5');
+			expect(secondPage.body.data.at(-1)?.title).toBe('Cached Cursor Story 1');
 
 			const firstPageIds = new Set(
 				firstPage.body.data.map((article: { id: string }) => article.id),
