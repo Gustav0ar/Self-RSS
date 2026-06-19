@@ -160,6 +160,8 @@ sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed
      the deployment.
    - The image tag matching the latest successful build.
 4. On approval, the workflow:
+   - Creates a pre-deploy SQLite backup under `data/backups` on the VPS
+     when `data/self-feed.db` already exists.
    - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Pulls the new images.
    - Restarts the stack with `docker compose up -d --remove-orphans`.
@@ -167,6 +169,15 @@ sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed
    - Prunes dangling images.
 5. A `deploy-summary` artifact is uploaded for public visibility
    (image tag, commit SHA, host fingerprint) — **no secrets**.
+
+SQLite migrations also run with application-level data guards. Before
+pending migrations are applied, the API creates a `VACUUM INTO` backup
+when protected tables already contain data. The migrator then applies
+pending journal entries in one transaction and checks protected table
+row counts, existing protected row keys, and `PRAGMA foreign_key_check`
+before commit. If a migration would remove protected rows or leave
+orphaned rows, it is rolled back and startup fails with the backup path
+in the error.
 
 ## Visibility recap
 
