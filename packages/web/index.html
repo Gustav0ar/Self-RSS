@@ -9,20 +9,7 @@
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<link rel="manifest" href="/site.webmanifest" />
 		<title>SelfFeed</title>
-		<script>
-			// Prevent theme flash
-			(() => {
-				const stored = localStorage.getItem('rss-theme');
-				const theme = stored === 'dark' || stored === 'amoled' || stored === 'light' ? stored : null;
-				if (
-					theme === 'dark' ||
-					theme === 'amoled' ||
-					(!theme && matchMedia('(prefers-color-scheme: dark)').matches)
-				) {
-					document.documentElement.classList.add('dark');
-				}
-			})();
-		</script>
+		<script src="/theme-init.js"></script>
 	</head>
 	<body class="h-full bg-background text-foreground antialiased">
 		<div id="root" class="h-full"></div>
