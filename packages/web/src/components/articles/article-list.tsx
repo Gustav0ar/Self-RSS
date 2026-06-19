@@ -31,8 +31,8 @@ interface ArticleListProps {
 }
 
 const ROW_HEIGHT_PX = {
-	comfortable: 92,
-	compact: 64,
+	comfortable: 82,
+	compact: 56,
 } as const;
 const ROW_GAP_PX = 6; // matches `space-y-1.5`
 const ROW_OVERSCAN = 6;
@@ -260,7 +260,7 @@ function ArticleRowImpl({
 			aria-current={isSelected ? 'true' : undefined}
 			style={style}
 			className={cn(
-				'motion-enter surface-card surface-compact relative flex w-full rounded-xl border text-left hover:bg-accent/45',
+				'motion-enter surface-card surface-compact relative flex w-full overflow-hidden rounded-xl border text-left hover:bg-accent/45',
 				density === 'compact' ? 'gap-2 px-2.5 py-2' : 'gap-2.5 px-3 py-2.5',
 				isSelected && 'border-l-4 !border-primary/60 !border-l-primary !bg-primary/12 shadow-sm',
 				!isSelected && !article.isRead && 'border-primary/12 bg-card/95',
@@ -291,7 +291,9 @@ function ArticleRowImpl({
 				<p
 					className={cn(
 						'mt-1 text-sm',
-						density === 'compact' ? 'line-clamp-1 leading-5' : 'line-clamp-2 leading-5',
+						density === 'compact'
+							? 'line-clamp-1 break-words leading-5'
+							: 'line-clamp-2 break-words leading-5',
 						isSelected
 							? 'font-semibold text-foreground'
 							: !article.isRead
@@ -301,30 +303,7 @@ function ArticleRowImpl({
 				>
 					{article.title}
 				</p>
-				{article.author ? (
-					<p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{article.author}</p>
-				) : null}
-				{article.excerpt && density !== 'compact' ? (
-					<p
-						className={cn(
-							'mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground',
-							isSelected && 'text-foreground/80',
-						)}
-					>
-						{article.excerpt}
-					</p>
-				) : null}
 			</div>
-			{article.heroImageUrl ? (
-				<img
-					src={article.heroImageUrl}
-					alt=""
-					className={cn(
-						'shrink-0 rounded-xl object-cover shadow-sm',
-						density === 'compact' ? 'h-10 w-10' : 'h-12 w-12',
-					)}
-				/>
-			) : null}
 		</button>
 	);
 }
