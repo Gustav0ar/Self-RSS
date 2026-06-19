@@ -127,8 +127,9 @@ jobs:
             COMPOSE_CMD="${{ vars.COMPOSE_COMMAND || 'docker compose' }}"
             REGISTRY="${{ vars.REGISTRY || 'ghcr.io' }}"
             HEAD_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+            HEAD_SHA_SHORT="$(printf '%s' "${HEAD_SHA}" | cut -c1-7)"
             IMAGE_OWNER="${{ vars.IMAGE_OWNER_LOWERCASE }}"
-            IMAGE_TAG="sha-${HEAD_SHA:0:7}"
+            IMAGE_TAG="sha-${HEAD_SHA_SHORT}"
             read -r -a COMPOSE_ARGS <<< "${COMPOSE_CMD}"
             if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
               echo "COMPOSE_COMMAND is empty"
@@ -215,6 +216,42 @@ jobs:
               fi
             }
 
+            backup_existing_database() {
+              db_file="data/self-feed.db"
+              if [ ! -f "${db_file}" ]; then
+                echo "No existing SQLite database found; skipping pre-deploy backup."
+                return 0
+              fi
+
+              mkdir -p data/backups
+              chmod 777 data/backups
+
+              timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+              backup_name="self-feed-${timestamp}-${HEAD_SHA_SHORT}.db"
+              backup_path="data/backups/${backup_name}"
+              running="$("${CONTAINER_CLI}" inspect -f '{{.State.Running}}' selffeed-api 2>/dev/null || true)"
+
+              if [ "${running}" = "true" ]; then
+                echo "Creating SQLite pre-deploy backup with VACUUM INTO: ${backup_path}"
+                "${CONTAINER_CLI}" exec selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();"
+                "${CONTAINER_CLI}" exec selffeed-api chmod 600 "/app/data/backups/${backup_name}"
+              else
+                echo "API container is not running; copying SQLite files for pre-deploy backup: ${backup_path}"
+                cp "${db_file}" "${backup_path}"
+                if [ -f "${db_file}-wal" ]; then
+                  cp "${db_file}-wal" "${backup_path}-wal"
+                fi
+                if [ -f "${db_file}-shm" ]; then
+                  cp "${db_file}-shm" "${backup_path}-shm"
+                fi
+                chmod 600 "${backup_path}"*
+              fi
+
+              find data/backups -maxdepth 1 -type f -name 'self-feed-*.db' | sort | head -n -10 | while read -r old_backup; do
+                rm -f "${old_backup}" "${old_backup}-wal" "${old_backup}-shm"
+              done
+            }
+
             # Ensure the data dir exists for the SQLite volume.
             mkdir -p data
             chmod 777 data
@@ -243,6 +280,8 @@ jobs:
             export IMAGE_TAG
             export IMAGE_OWNER_LOWERCASE="${IMAGE_OWNER}"
             export REGISTRY
+
+            backup_existing_database
 
             # Pull images, restart services, prune.
             "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull || fail_with_diagnostics

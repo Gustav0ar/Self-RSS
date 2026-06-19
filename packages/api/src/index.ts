@@ -1,10 +1,10 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { createApp } from './app.js';
 import { createDeps } from './config/deps.js';
 import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
+import { applyMigrations } from './db/migrations.js';
 import { closeRedis, getRedis } from './db/redis.js';
 import { createLogger } from './utils/logger.js';
 import { createTokenUtils } from './utils/tokens.js';
@@ -15,7 +15,7 @@ const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../dr
 try {
 	const env = getEnv();
 	const db = getDb(env.DATABASE_URL);
-	await migrate(db, { migrationsFolder });
+	applyMigrations(db, { migrationsFolder });
 	logger.info('Database migrations applied', { migrationsFolder });
 	const redis = getRedis(env.REDIS_URL);
 	await redis.connect();
