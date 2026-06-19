@@ -13,8 +13,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Run the app locally
 - Full local dev flow (engine-agnostic: stops dev containers, frees port 3000, boots Redis, the API, worker, and Web UI in watch/watch-reload mode): `bun run dev`
 - Run only the API in watch mode: `bun run dev:api`
+- Run only the API worker in watch mode: `bun run dev:worker`
 - Run only the web app: `bun run dev:web`
-- Stop local infra: `bun run dev:down`
+- Stop local infra containers: `bun run dev:down`
+
+Foreground local development:
+- Prefer `bun run dev` when working interactively in a terminal. It starts Redis, waits for API health on `http://localhost:3000/health`, then starts the worker and Vite web app at `http://localhost:5173/`.
+- Stop a foreground `bun run dev` session with `Ctrl-C`. If ports are still occupied afterward, check with `ss -ltnp | rg ':3000|:5173|:6379'`.
+- `bun run dev:api`, `bun run dev:worker`, and `bun run dev:web` are useful in separate terminals, but they assume Redis is already running; start Redis first with `bun run dev:infra`.
+
+Detached local browser-testing setup:
+- Do not rely on plain `nohup bun run dev ... &` for a persistent background setup; the dev orchestrator inherits child stdio and can exit when the launching shell exits.
+- Start detached services individually with `setsid` when the browser preview needs to keep working after the command returns:
+  ```bash
+  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/api && exec env API_HOST=0.0.0.0 bun --env-file=.env --env-file=../../.env.example --watch src/index.ts' > /tmp/self-feed-api.log 2>&1 & echo $! > /tmp/self-feed-api.pid
+  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/api && exec bun --env-file=.env --env-file=../../.env.example --watch src/worker.ts' > /tmp/self-feed-worker.log 2>&1 & echo $! > /tmp/self-feed-worker.pid
+  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/web && exec bun run dev' > /tmp/self-feed-web.log 2>&1 & echo $! > /tmp/self-feed-web.pid
+  ```
+- Verify detached services with `curl -fsS http://127.0.0.1:3000/health` and `ss -ltnp | rg ':3000|:5173|:6379'`.
+- Stop detached services with `kill $(cat /tmp/self-feed-api.pid /tmp/self-feed-worker.pid /tmp/self-feed-web.pid)`. Run `bun run dev:down` afterward if Redis or compose-managed containers should also be stopped.
+- Detached logs are written to `/tmp/self-feed-api.log`, `/tmp/self-feed-worker.log`, and `/tmp/self-feed-web.log`.
 
 ### Build, lint, typecheck
 - Lint all JS/TS: `bun run lint`
