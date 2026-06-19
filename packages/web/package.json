@@ -10,6 +10,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:unit": "vitest run tests/unit",
+		"playwright:install": "playwright install --with-deps chromium",
 		"test:e2e:runner": "playwright test"
 	},
 	"dependencies": {
