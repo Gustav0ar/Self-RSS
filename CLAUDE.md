@@ -40,6 +40,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - API integration test file: `bun run --filter '@self-feed/api' test:integration -- tests/integration/app.integration.test.ts`
 - Web unit test file: `bun run --filter '@self-feed/web' test -- tests/unit/keyboard-nav.test.ts`
 - Playwright spec: `bun run --filter '@self-feed/web' test:e2e:runner -- tests/e2e/app.e2e.spec.ts`
+- Install the web package's pinned Playwright browsers: `bun run --filter '@self-feed/web' playwright:install`
+
+Do not install Playwright browsers in CI with root-level `bun x playwright ...`; it can resolve a different Playwright version than `@self-feed/web` uses and leave E2E without the expected browser revision.
 
 ### Android
 Android is not part of the root Bun workspace. Build and test it with the Gradle wrapper under `packages/android`.
@@ -142,6 +145,14 @@ Important Android behavior:
 
 ## Testing and environment notes
 
+### Project navigation fast paths
+- Web article list and reader UI live under `packages/web/src/components/articles/`.
+- Web app-wide selection, filter, feed, and article state flows through `packages/web/src/providers/app-state-provider.tsx`.
+- Web API calls are centralized in `packages/web/src/lib/api.ts`; check this before changing auth retry, refresh, or envelope handling.
+- Web unit tests live in `packages/web/tests/unit/`; Playwright specs live in `packages/web/tests/e2e/`.
+- API route changes usually trace through `packages/api/src/routes/` -> `packages/api/src/services/` -> `packages/api/src/repositories/` -> `packages/api/src/db/schema.ts`.
+- Shared request/response contracts live in `packages/shared/src/`; update these before downstream consumers when payload shapes change.
+
 ### API and E2E harnesses
 The integration and E2E scripts under `scripts/` create a disposable Redis container and temporary SQLite database automatically using either Podman or Docker.
 
@@ -156,6 +167,21 @@ If integration or E2E tests fail, inspect these scripts before changing app code
 - Main local web URL: `http://localhost:5173`
 - Compose services provide Redis 8.8.
 - API defaults to `packages/api/.env` first, then falls back to root `.env.example` values where available.
+
+### Git, CI, and deployment workflow
+- Before committing or pushing, check `git status -sb` and `git log --oneline --decorate -5`. This repo can have local branches with unrelated user commits, so do not push `main` blindly.
+- When only the current work should go to production and local `main` has unrelated commits, create or use a clean branch based on `origin/main`, commit there, and push with `git push origin HEAD:main`.
+- If GitHub reports the PR-only rule was bypassed on direct push, that is expected for admin-authenticated deploy work, but still confirm the pushed commit list is exactly what was intended.
+- After pushing to `main`, watch GitHub Actions with `gh run list --branch main --limit 10 --json databaseId,workflowName,status,conclusion,headSha,createdAt,displayTitle,url` and `gh run watch <run-id> --exit-status`.
+- The important workflows for a production push are `CI`, `Security`, `Containers`, and then `Deploy`. `Deploy` is triggered by a successful `Containers` workflow run.
+- The `Security` workflow runs Trivy against `bun.lock`. If it flags a transitive package, prefer a root `package.json` `overrides` entry plus a regenerated lockfile, then verify with `bun audit --audit-level high` and `bun pm why <package>`.
+- The root `package.json` currently overrides `undici` to `7.28.0` to satisfy Trivy for `CVE-2026-9697`; keep that override until all transitive consumers naturally resolve to a fixed version.
+- The `Deploy` workflow uses the protected `production` environment and usually pauses in `waiting`. Check pending approvals with `gh api /repos/Gustav0ar/Self-RSS/actions/runs/<run-id>/pending_deployments`.
+- If `current_user_can_approve` is true and CI/Security/Containers are green for the same `headSha`, approve the latest deploy with:
+  `gh api --method POST /repos/Gustav0ar/Self-RSS/actions/runs/<run-id>/pending_deployments --input -`
+  using JSON like `{"environment_ids":[<environment-id>],"state":"approved","comment":"Approve deploy for <sha> after CI, Security, and Containers passed"}`.
+- Do not approve older waiting deploy runs after a newer commit has superseded them unless the user explicitly asks for that exact SHA.
+- Deployment details and one-time VPS setup are documented in `DEPLOY.md`; use that file as the source of truth for production secrets, environment variables, and VPS path assumptions.
 
 ### System-specific build notes
 On this system, use the following paths for manual builds if not using the wrapper:
