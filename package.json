@@ -27,6 +27,7 @@
 		"dev:prepare": "bun scripts/compose.ts stop api worker web || true && (command -v fuser >/dev/null && fuser -k 3000/tcp >/dev/null 2>&1 || true) && (command -v lsof >/dev/null && lsof -tiTCP:3000 -sTCP:LISTEN | xargs -r kill >/dev/null 2>&1 || true)",
 		"dev:infra": "bun scripts/compose.ts up -d redis",
 		"dev:down": "bun scripts/compose.ts down",
+		"seed:review": "bun scripts/seed-local-review.ts",
 		"build": "bun run --filter '*' build",
 		"android:check": "bash ./scripts/android-check.sh"
 	},
