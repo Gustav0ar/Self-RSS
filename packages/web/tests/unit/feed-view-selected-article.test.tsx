@@ -18,8 +18,25 @@ let currentResult: {
 	fetchNextPage: vi.fn(),
 	hasNextPage: false,
 };
+const categories = [
+	{
+		id: 'category-1',
+		userId: 'user-1',
+		parentCategoryId: null,
+		name: 'Review Feeds',
+		slug: 'review-feeds',
+		sortOrder: 0,
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+		feedCount: 1,
+		unreadCount: 0,
+		feeds: [],
+		children: [],
+	},
+];
 
 vi.mock('../../src/hooks/queries', () => ({
+	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: () => currentResult,
 	useArticle: () => ({ data: null, isLoading: false }),
 	useEnrichArticle: () => ({ mutate: vi.fn(), isPending: false }),

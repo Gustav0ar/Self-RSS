@@ -3,7 +3,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
+import { useArticle, useEnrichArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
 
@@ -37,8 +37,10 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const { data: article, isLoading } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
+	const enrichArticle = useEnrichArticle();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
+	const enrichmentAttemptedIds = useRef(new Set<string>());
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	const [scrollProgress, setScrollProgress] = useState(0);
 
@@ -113,6 +115,22 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		[articles, article],
 	);
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
+
+	useEffect(() => {
+		if (!article || article.isEnriched || !article.canonicalUrl?.trim()) {
+			return;
+		}
+		if (enrichmentAttemptedIds.current.has(article.id)) {
+			return;
+		}
+
+		enrichmentAttemptedIds.current.add(article.id);
+		enrichArticle.mutate(article.id, {
+			onError: () => {
+				enrichmentAttemptedIds.current.delete(article.id);
+			},
+		});
+	}, [article, enrichArticle]);
 
 	useEffect(() => {
 		const handleMessage = (event: MessageEvent) => {

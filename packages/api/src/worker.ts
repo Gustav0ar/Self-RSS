@@ -7,6 +7,7 @@ import {
 	startQueuedSyncWorker,
 	startRetentionCleanup,
 	startSyncScheduler,
+	startWorkerHeartbeat,
 } from './jobs/scheduler.js';
 import { createLogger } from './utils/logger.js';
 import { createTokenUtils } from './utils/tokens.js';
@@ -45,6 +46,7 @@ try {
 		deps.repos.user,
 		60 * 1000, // 1 minute interval
 	);
+	const stopWorkerHeartbeat = startWorkerHeartbeat(redis);
 
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
@@ -55,6 +57,7 @@ try {
 		stopQueuedSyncWorker();
 		stopRetentionCleanup();
 		stopCacheWarmer();
+		stopWorkerHeartbeat();
 		await Promise.allSettled([closeRedis(), closeDb()]);
 		process.exit(0);
 	};

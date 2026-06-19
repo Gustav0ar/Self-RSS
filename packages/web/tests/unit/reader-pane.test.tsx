@@ -45,10 +45,11 @@ const articleWithEmbeddedHtml = {
 const markReadMutate = vi.fn();
 const enrichMutate = vi.fn();
 let autoMarkReadMode = 'on_navigate';
+let currentArticle = articleWithEmbeddedHtml;
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
-		data: articleWithEmbeddedHtml,
+		data: currentArticle,
 		isLoading: false,
 	}),
 	useMarkRead: () => ({ mutate: markReadMutate }),
@@ -60,6 +61,7 @@ describe('ReaderPane', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		autoMarkReadMode = 'on_navigate';
+		currentArticle = articleWithEmbeddedHtml;
 	});
 
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
@@ -89,6 +91,21 @@ describe('ReaderPane', () => {
 				{ articleId: 'article-1', read: true },
 				expect.any(Object),
 			);
+		});
+	});
+
+	it('requests enrichment for the selected article when media is not enriched yet', async () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			isEnriched: false,
+			contentHtml: '<p>Text-only feed content</p>',
+			media: [],
+		};
+
+		render(<ReaderPane articleId="article-1" />);
+
+		await waitFor(() => {
+			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
 		});
 	});
 });

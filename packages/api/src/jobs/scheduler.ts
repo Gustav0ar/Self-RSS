@@ -1,3 +1,5 @@
+import type Redis from 'ioredis';
+import { CacheKeys, CacheTTL } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { ArticleCacheService } from '../services/article-cache.service.js';
 import type { FeedSyncService } from '../services/feed-sync.service.js';
@@ -157,6 +159,36 @@ export function startCacheWarmer(
 	void warmOnce();
 	const interval = setInterval(() => {
 		void warmOnce();
+	}, intervalMs);
+
+	return () => clearInterval(interval);
+}
+
+export function startWorkerHeartbeat(
+	redis: Redis,
+	name = 'feed-worker',
+	intervalMs: number = 15 * 1000,
+) {
+	logger.info('Worker heartbeat started', { name, intervalMs });
+
+	const writeHeartbeat = async () => {
+		try {
+			await redis.setex(
+				CacheKeys.workerHeartbeat(name),
+				CacheTTL.workerHeartbeat,
+				JSON.stringify({ timestamp: new Date().toISOString() }),
+			);
+		} catch (err) {
+			logger.warn('Failed to write worker heartbeat', {
+				name,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	};
+
+	void writeHeartbeat();
+	const interval = setInterval(() => {
+		void writeHeartbeat();
 	}, intervalMs);
 
 	return () => clearInterval(interval);

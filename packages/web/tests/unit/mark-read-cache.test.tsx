@@ -47,7 +47,16 @@ describe('useMarkRead cache updates', () => {
 		);
 
 		qc.setQueryData(['feeds'], [{ id: 'feed-1', categoryId: 'category-1', unreadCount: 1 }]);
-		qc.setQueryData(['categories'], [{ id: 'category-1', unreadCount: 1 }]);
+		qc.setQueryData(
+			['categories'],
+			[
+				{
+					id: 'category-1',
+					unreadCount: 1,
+					feeds: [{ id: 'feed-1', categoryId: 'category-1', unreadCount: 1 }],
+				},
+			],
+		);
 		qc.setQueryData(['articles', 'feed-1', null, true, 'latest', 30], {
 			pages: [listResponse([article('article-1', 'feed-1', false)])],
 			pageParams: [null],
@@ -84,5 +93,9 @@ describe('useMarkRead cache updates', () => {
 		expect(qc.getQueryData<Array<{ unreadCount: number }>>(['categories'])?.[0]?.unreadCount).toBe(
 			0,
 		);
+		expect(
+			qc.getQueryData<Array<{ feeds: Array<{ unreadCount: number }> }>>(['categories'])?.[0]
+				?.feeds[0]?.unreadCount,
+		).toBe(0);
 	});
 });

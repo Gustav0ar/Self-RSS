@@ -1,6 +1,6 @@
 import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { useSearch } from '@/hooks/queries';
 
@@ -15,6 +15,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(-1);
 	const [scope, setScope] = useState<'all' | 'category'>('all');
+	const listboxId = useId();
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const activeCategoryId = scope === 'category' ? categoryId : undefined;
@@ -75,6 +76,9 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 
 	const resultIds = useMemo(() => results?.pages.flatMap((page) => page.data) ?? [], [results]);
 	const showDropdown = isOpen && debouncedQuery.trim().length >= 2;
+	const activeArticle =
+		activeIndex >= 0 && activeIndex < resultIds.length ? resultIds[activeIndex] : undefined;
+	const activeOptionId = activeArticle ? `${listboxId}-option-${activeArticle.id}` : undefined;
 
 	const onInputKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -138,6 +142,8 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 					aria-autocomplete="list"
 					role="combobox"
 					aria-expanded={showDropdown}
+					aria-controls={showDropdown ? listboxId : undefined}
+					aria-activedescendant={activeOptionId}
 					className="input-surface h-9 w-full rounded-full py-2 pl-10 pr-10 text-sm outline-none"
 				/>
 				{query ? (
@@ -168,6 +174,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 								<button
 									type="button"
 									onClick={() => setScope('all')}
+									aria-pressed={scope === 'all'}
 									className={`rounded-full px-2.5 py-1 ${scope === 'all' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
 								>
 									All
@@ -175,6 +182,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 								<button
 									type="button"
 									onClick={() => setScope('category')}
+									aria-pressed={scope === 'category'}
 									className={`rounded-full px-2.5 py-1 ${scope === 'category' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
 								>
 									Current
@@ -182,64 +190,73 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 							</div>
 						) : null}
 					</div>
-					{isLoading ? (
-						<div className="px-4 py-4 text-sm text-muted-foreground">Searching...</div>
-					) : resultIds.length === 0 ? (
-						<div className="px-4 py-4 text-sm text-muted-foreground">No results found</div>
-					) : (
-						resultIds.map((article, index) => {
-							const displayedAt = article.displayedAt ? new Date(article.displayedAt) : null;
-							const timeAgo = displayedAt
-								? formatDistanceToNow(displayedAt, { addSuffix: true })
-								: null;
-							const isActive = index === activeIndex;
-							return (
-								<button
-									key={article.id}
-									type="button"
-									onClick={() => {
-										onSelectArticle(article.id);
-										setIsOpen(false);
-										setActiveIndex(-1);
-										setQuery('');
-										setDebouncedQuery('');
-									}}
-									onMouseEnter={() => setActiveIndex(index)}
-									className={`grid w-full gap-3 rounded-2xl px-4 py-4 text-left hover:bg-accent sm:px-5 md:grid-cols-[1fr_auto] ${
-										isActive ? 'bg-accent' : ''
-									}`}
-								>
-									<div className="min-w-0">
-										<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-											<span className="font-medium text-foreground/80">{article.feedTitle}</span>
-											<span className="hidden text-muted-foreground/70 sm:inline">•</span>
-											{timeAgo ? (
-												<span className="inline-flex items-center gap-1">
-													<CalendarDays className="h-3.5 w-3.5" />
-													{timeAgo}
-												</span>
+					<div id={listboxId} role="listbox" aria-label="Search results">
+						{isLoading ? (
+							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
+								Searching...
+							</div>
+						) : resultIds.length === 0 ? (
+							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
+								No results found
+							</div>
+						) : (
+							resultIds.map((article, index) => {
+								const displayedAt = article.displayedAt ? new Date(article.displayedAt) : null;
+								const timeAgo = displayedAt
+									? formatDistanceToNow(displayedAt, { addSuffix: true })
+									: null;
+								const isActive = index === activeIndex;
+								return (
+									<button
+										key={article.id}
+										id={`${listboxId}-option-${article.id}`}
+										type="button"
+										role="option"
+										aria-selected={isActive}
+										onClick={() => {
+											onSelectArticle(article.id);
+											setIsOpen(false);
+											setActiveIndex(-1);
+											setQuery('');
+											setDebouncedQuery('');
+										}}
+										onMouseEnter={() => setActiveIndex(index)}
+										className={`grid w-full gap-3 rounded-2xl px-4 py-4 text-left hover:bg-accent sm:px-5 md:grid-cols-[1fr_auto] ${
+											isActive ? 'bg-accent' : ''
+										}`}
+									>
+										<div className="min-w-0">
+											<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+												<span className="font-medium text-foreground/80">{article.feedTitle}</span>
+												<span className="hidden text-muted-foreground/70 sm:inline">•</span>
+												{timeAgo ? (
+													<span className="inline-flex items-center gap-1">
+														<CalendarDays className="h-3.5 w-3.5" />
+														{timeAgo}
+													</span>
+												) : null}
+											</div>
+											<div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-foreground sm:text-[0.95rem]">
+												{article.title}
+											</div>
+											{article.excerpt ? (
+												<p className="mt-2 line-clamp-4 text-sm leading-6 text-muted-foreground sm:line-clamp-3">
+													{article.excerpt}
+												</p>
 											) : null}
 										</div>
-										<div className="mt-1 line-clamp-2 text-sm font-semibold leading-6 text-foreground sm:text-[0.95rem]">
-											{article.title}
-										</div>
-										{article.excerpt ? (
-											<p className="mt-2 line-clamp-4 text-sm leading-6 text-muted-foreground sm:line-clamp-3">
-												{article.excerpt}
-											</p>
+										{article.heroImageUrl ? (
+											<img
+												src={article.heroImageUrl}
+												alt=""
+												className="hidden h-24 w-36 rounded-2xl object-cover md:block"
+											/>
 										) : null}
-									</div>
-									{article.heroImageUrl ? (
-										<img
-											src={article.heroImageUrl}
-											alt=""
-											className="hidden h-24 w-36 rounded-2xl object-cover md:block"
-										/>
-									) : null}
-								</button>
-							);
-						})
-					)}
+									</button>
+								);
+							})
+						)}
+					</div>
 					{hasNextPage ? (
 						<button
 							type="button"

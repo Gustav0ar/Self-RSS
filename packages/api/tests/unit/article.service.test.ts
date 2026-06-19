@@ -80,6 +80,7 @@ describe('ArticleService', () => {
 			canonicalUrl: 'https://example.com/post-1',
 			contentHtml: 'Only text in the RSS feed',
 			heroImageUrl: null,
+			fetchedAt: undefined,
 		});
 		expect(result).toEqual({ success: true });
 	});
@@ -99,6 +100,10 @@ describe('ArticleService', () => {
 		const realtime = {
 			publishReadStateEvent: vi.fn(async () => undefined),
 		};
+		const articleCache = {
+			updateCachedReadState: vi.fn(async () => undefined),
+			invalidateCache: vi.fn(async () => undefined),
+		};
 
 		const service = new ArticleService(
 			articleRepo as never,
@@ -107,6 +112,7 @@ describe('ArticleService', () => {
 			redis as never,
 			undefined,
 			realtime as never,
+			articleCache as never,
 		);
 
 		const result = await service.markRead('user-1', 'article-1', true, 'manual', 'client-1');
@@ -115,6 +121,9 @@ describe('ArticleService', () => {
 		expect(articleRepo.markRead).toHaveBeenCalledWith('user-1', 'article-1', 'manual');
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 1);
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
+		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
+		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
+		expect(articleCache.invalidateCache).not.toHaveBeenCalled();
 		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(
 			'user-1',
 			expect.objectContaining({

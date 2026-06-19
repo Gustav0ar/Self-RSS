@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import {
+	useCategories,
 	useInfiniteArticles,
 	useMarkAllRead,
 	useMarkRead,
@@ -15,6 +16,7 @@ import {
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
 import { useSilentArticleRefresh } from '@/hooks/use-silent-article-refresh';
+import { categoryPathLabel, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 import {
 	normalizeAutoMarkReadPreference,
 	normalizeDensityPreference,
@@ -60,6 +62,7 @@ export function FeedView({
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
 	const warmNextArticles = useWarmNextArticles();
+	const { data: categories } = useCategories();
 
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
 		useInfiniteArticles({
@@ -94,6 +97,35 @@ export function FeedView({
 				}) ?? []
 		);
 	}, [data?.pages]);
+	const categoryTree = categories ?? [];
+	const flatCategories = useMemo(() => flattenCategories(categoryTree), [categoryTree]);
+	const flatFeeds = useMemo(() => flattenCategoryFeeds(categoryTree), [categoryTree]);
+	const selectedFeed = useMemo(
+		() => (feedId ? flatFeeds.find((feed) => feed.id === feedId) : null),
+		[feedId, flatFeeds],
+	);
+	const selectedCategory = useMemo(
+		() => (categoryId ? flatCategories.find((category) => category.id === categoryId) : null),
+		[categoryId, flatCategories],
+	);
+	const viewTitle = useMemo(() => {
+		if (selectedFeed) {
+			return selectedFeed.title;
+		}
+		if (categoryId) {
+			return categoryPathLabel(categoryTree, categoryId) || selectedCategory?.name || 'Category';
+		}
+		return 'Latest articles';
+	}, [categoryId, categoryTree, selectedCategory?.name, selectedFeed]);
+	const scopeUnreadCount = useMemo(() => {
+		if (selectedFeed) {
+			return selectedFeed.unreadCount ?? 0;
+		}
+		if (selectedCategory) {
+			return selectedCategory.unreadCount ?? 0;
+		}
+		return flatFeeds.reduce((count, feed) => count + (feed.unreadCount ?? 0), 0);
+	}, [flatFeeds, selectedCategory, selectedFeed]);
 	const emptyState = useMemo(() => {
 		if (feedSyncError) {
 			return {
@@ -159,7 +191,10 @@ export function FeedView({
 	// triggers the effect below to clear the selection.
 	const effectiveArticleId =
 		selectedArticleId && (articleIsInLoadedList || fromDeepLink) ? selectedArticleId : null;
-	const unreadCount = articles.reduce((count, article) => count + (article.isRead ? 0 : 1), 0);
+	const loadedUnreadCount = articles.reduce(
+		(count, article) => count + (article.isRead ? 0 : 1),
+		0,
+	);
 	const articleSearchParams = new URLSearchParams(
 		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
 	).toString();
@@ -323,6 +358,7 @@ export function FeedView({
 		isLoading ||
 		(isFetching && articles.length === 0) ||
 		(isRefreshingCurrentSelection && articles.length === 0);
+	const unreadBadgeCount = Math.max(scopeUnreadCount, loadedUnreadCount);
 
 	useEffect(() => {
 		if (typeof prefs?.hideRead === 'boolean') {
@@ -362,11 +398,11 @@ export function FeedView({
 									{articles.length} loaded
 								</span>
 							</div>
-							<h1 className="mt-1 text-lg font-semibold tracking-tight">Latest articles</h1>
+							<h1 className="mt-1 truncate text-lg font-semibold tracking-tight">{viewTitle}</h1>
 						</div>
 						<div className="surface-muted flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-muted-foreground">
 							<Sparkles className="h-3.5 w-3.5 text-primary" />
-							<span>{unreadCount > 0 ? `${unreadCount} unread` : 'Caught up'}</span>
+							<span>{unreadBadgeCount > 0 ? `${unreadBadgeCount} unread` : 'Caught up'}</span>
 						</div>
 					</div>
 

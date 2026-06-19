@@ -1,4 +1,4 @@
-import type { CategoryWithCounts } from '@self-feed/shared';
+import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
 
 export function flattenCategories(categories: readonly CategoryWithCounts[]) {
 	const flattened: CategoryWithCounts[] = [];
@@ -14,6 +14,23 @@ export function flattenCategories(categories: readonly CategoryWithCounts[]) {
 	}
 
 	return flattened;
+}
+
+export function flattenCategoryFeeds(categories: readonly CategoryWithCounts[]) {
+	const feeds: FeedWithCounts[] = [];
+	const seenFeedIds = new Set<string>();
+
+	for (const category of flattenCategories(categories)) {
+		for (const feed of category.feeds ?? []) {
+			if (seenFeedIds.has(feed.id)) {
+				continue;
+			}
+			seenFeedIds.add(feed.id);
+			feeds.push(feed);
+		}
+	}
+
+	return feeds;
 }
 
 export function categoryAncestorIds(categories: readonly CategoryWithCounts[], categoryId: string) {

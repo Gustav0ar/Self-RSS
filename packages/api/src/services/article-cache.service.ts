@@ -91,6 +91,15 @@ export class ArticleCacheService {
 			limit: number;
 		},
 	): Promise<CachedArticleList | null> {
+		// The warmed list intentionally contains only the latest unread+read
+		// snapshot. It cannot faithfully answer oldest-first or unread-only
+		// initial pages because older unread rows may sit outside that bounded
+		// snapshot. Let those views hit SQLite, where the complete scoped set is
+		// available.
+		if (options.unreadOnly || options.sort === 'oldest') {
+			return null;
+		}
+
 		// Try scoped cache first
 		let cacheKey: string | null = null;
 
@@ -119,22 +128,9 @@ export class ArticleCacheService {
 				return null;
 			}
 
-			// Apply unread filter
-			let filtered = data.articles;
-			if (options.unreadOnly) {
-				filtered = filtered.filter((a) => !a.isRead);
-			}
-
-			// Apply sort
-			if (options.sort === 'oldest') {
-				filtered.sort(
-					(a, b) => new Date(a.displayedAt).getTime() - new Date(b.displayedAt).getTime(),
-				);
-			} else {
-				filtered.sort(
-					(a, b) => new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime(),
-				);
-			}
+			const filtered = [...data.articles].sort(
+				(a, b) => new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime(),
+			);
 
 			// Apply limit + cursor
 			const cursorIndex = options.limit > 0 ? options.limit : 20;
@@ -464,6 +460,56 @@ export class ArticleCacheService {
 		const keys = await scanKeys(this.redis, pattern);
 		if (keys.length > 0) {
 			await this.redis.del(...keys);
+		}
+	}
+
+	/**
+	 * Patch cached article-list rows after a single read-state toggle.
+	 * This keeps hot list caches coherent without bumping the generation and
+	 * deleting every scoped list on every navigation-driven mark-read event.
+	 */
+	async updateCachedReadState(userId: string, articleId: string, read: boolean): Promise<void> {
+		try {
+			const scopedKeys = await scanKeys(this.redis, `articles:list:${userId}:*`);
+			const keys = Array.from(new Set([CacheKeys.articleListCache(userId), ...scopedKeys]));
+
+			await Promise.allSettled(
+				keys.map(async (key) => {
+					const cached = await this.redis.get(key);
+					if (!cached) {
+						return;
+					}
+
+					let data: CachedArticleList;
+					try {
+						data = JSON.parse(cached) as CachedArticleList;
+					} catch {
+						await this.redis.del(key);
+						return;
+					}
+
+					let changed = false;
+					const articles = data.articles.map((article) => {
+						if (article.id !== articleId || article.isRead === read) {
+							return article;
+						}
+						changed = true;
+						return { ...article, isRead: read };
+					});
+
+					if (!changed) {
+						return;
+					}
+
+					await this.redis.setex(key, CacheTTL.articleList, JSON.stringify({ ...data, articles }));
+				}),
+			);
+		} catch (err) {
+			logger.warn('Failed to update cached article read state', {
+				userId,
+				articleId,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 

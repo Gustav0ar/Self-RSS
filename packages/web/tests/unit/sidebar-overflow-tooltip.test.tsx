@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../../src/components/layout/sidebar';
 
+const longTitle = 'A very long feed title that should show fully in a tooltip';
 const categories = [
 	{
 		id: 'category-1',
@@ -15,23 +16,20 @@ const categories = [
 		updatedAt: new Date().toISOString(),
 		feedCount: 1,
 		unreadCount: 7,
-	},
-];
-
-const longTitle = 'A very long feed title that should show fully in a tooltip';
-const feeds = [
-	{
-		id: 'feed-1',
-		categoryId: 'category-1',
-		title: longTitle,
-		faviconUrl: null,
-		unreadCount: 7,
+		feeds: [
+			{
+				id: 'feed-1',
+				categoryId: 'category-1',
+				title: longTitle,
+				faviconUrl: null,
+				unreadCount: 7,
+			},
+		],
 	},
 ];
 
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
-	useFeeds: () => ({ data: feeds }),
 	useDeleteCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useDeleteFeed: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useExportOpml: () => ({ mutateAsync: vi.fn(), isPending: false }),

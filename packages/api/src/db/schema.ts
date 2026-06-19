@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
 	type AnySQLiteColumn,
 	index,
@@ -216,6 +216,11 @@ export const articles = sqliteTable(
 		uniqueIndex('articles_feed_guid_idx').on(t.feedId, t.guid),
 		index('articles_feed_id_idx').on(t.feedId),
 		index('articles_published_at_idx').on(t.publishedAt),
+		index('articles_feed_sort_idx').on(
+			t.feedId,
+			sql`coalesce(${t.publishedAt}, ${t.fetchedAt})`,
+			t.id,
+		),
 	],
 );
 
@@ -268,6 +273,7 @@ export const articleReads = sqliteTable(
 	(t) => [
 		uniqueIndex('article_reads_pk').on(t.userId, t.articleId),
 		index('article_reads_user_id_idx').on(t.userId),
+		index('article_reads_article_id_idx').on(t.articleId),
 	],
 );
 
