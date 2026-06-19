@@ -34,6 +34,13 @@ Detached local browser-testing setup:
 - Stop detached services with `kill $(cat /tmp/self-feed-api.pid /tmp/self-feed-worker.pid /tmp/self-feed-web.pid)`. Run `bun run dev:down` afterward if Redis or compose-managed containers should also be stopped.
 - Detached logs are written to `/tmp/self-feed-api.log`, `/tmp/self-feed-worker.log`, and `/tmp/self-feed-web.log`.
 
+Local UI review data:
+- After the local API and web app are running, run `bun run seed:review` before browser verification. This ensures a review user exists and adds public RSS feeds with real articles.
+- Default review login: `reader@example.com` / `password123`.
+- `bun run seed:review` creates a `Review Feeds` category if needed, adds BBC World, The Verge, xkcd, and NASA News Releases feeds if missing, and triggers sync for those feeds.
+- If the app opens with no articles, run `bun run seed:review` again and check API health with `curl -fsS http://127.0.0.1:3000/health`.
+- Use `LOCAL_REVIEW_EMAIL`, `LOCAL_REVIEW_PASSWORD`, `LOCAL_REVIEW_CATEGORY`, or `LOCAL_REVIEW_API_BASE` to override the defaults.
+
 ### Build, lint, typecheck
 - Lint all JS/TS: `bun run lint`
 - Auto-fix lint issues: `bun run lint:fix`
