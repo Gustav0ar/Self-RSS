@@ -82,11 +82,19 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(page.getByRole('button', { name: unreadBadgeName('Tech') })).toBeVisible();
 	await page.getByRole('button', { name: unreadBadgeName('Tech') }).click();
 	await page.getByRole('button', { name: unreadBadgeName('Bun Blog') }).click();
-	await expect(page.getByRole('button', { name: /Alpha Launch/ })).toBeVisible();
+	const alphaRow = page.getByRole('button', { name: /Alpha Launch/ });
+	await expect(alphaRow).toBeVisible();
+	await expect(alphaRow).toContainText('Bun Blog');
+	await expect(alphaRow).not.toContainText('Bun Team');
+	await expect(alphaRow).not.toContainText('Alpha launch excerpt');
+	await expect(alphaRow.locator('img[src="https://example.com/images/alpha.png"]')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: /Beta Update/ })).toBeVisible();
 
 	await page.keyboard.press('j');
 	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
+	await expect(alphaRow).toHaveAttribute('aria-current', 'true');
+	const selectedAlphaBox = await alphaRow.boundingBox();
+	expect(selectedAlphaBox?.height).toBeLessThanOrEqual(84);
 	await page.keyboard.press('j');
 	await expect(page.getByRole('heading', { name: 'Beta Update' })).toBeVisible();
 
