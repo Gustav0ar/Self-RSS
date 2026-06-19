@@ -15,7 +15,7 @@ These plans cover every finding from the API/web review plus a final e2e release
 | [005](005-safe-silent-article-refresh.md) | Replace unsafe silent article refresh merging with safe refetch behavior | P2 | M | 001 | DONE |
 | [006](006-clear-web-state-on-auth-boundaries.md) | Clear web data and selection state on auth boundaries | P2 | S | - | DONE |
 | [007](007-harden-rate-limit-proxy-identity.md) | Harden unauthenticated rate-limit identity behind trusted proxies | P1 | M | - | DONE |
-| [008](008-e2e-release-and-deploy.md) | Verify, audit, deploy, and smoke test the complete fix set | P0 | M | 001-007 | IN PROGRESS |
+| [008](008-e2e-release-and-deploy.md) | Verify, audit, deploy, and smoke test the complete fix set | P0 | M | 001-007 | DONE |
 
 Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED: <reason>`, `REJECTED: <reason>`.
 
