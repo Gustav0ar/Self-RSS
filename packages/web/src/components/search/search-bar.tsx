@@ -1,21 +1,36 @@
 import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useSearch } from '@/hooks/queries';
 
 interface SearchBarProps {
 	onSelectArticle: (id: string) => void;
+	categoryId?: string;
 }
 
-export function SearchBar({ onSelectArticle }: SearchBarProps) {
+export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 	const [query, setQuery] = useState('');
 	const [debouncedQuery, setDebouncedQuery] = useState('');
 	const [isOpen, setIsOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(-1);
+	const [scope, setScope] = useState<'all' | 'category'>('all');
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
-	const { data: results, isLoading } = useSearch(debouncedQuery);
+	const activeCategoryId = scope === 'category' ? categoryId : undefined;
+	const {
+		data: results,
+		fetchNextPage,
+		hasNextPage,
+		isFetchingNextPage,
+		isLoading,
+	} = useSearch(debouncedQuery, activeCategoryId);
+
+	useEffect(() => {
+		if (!categoryId && scope === 'category') {
+			setScope('all');
+		}
+	}, [categoryId, scope]);
 
 	useEffect(() => {
 		const timeout = window.setTimeout(() => {
@@ -58,7 +73,7 @@ export function SearchBar({ onSelectArticle }: SearchBarProps) {
 		return () => window.removeEventListener('keydown', handleKey);
 	}, []);
 
-	const resultIds = results?.data ?? [];
+	const resultIds = useMemo(() => results?.pages.flatMap((page) => page.data) ?? [], [results]);
 	const showDropdown = isOpen && debouncedQuery.trim().length >= 2;
 
 	const onInputKeyDown = useCallback(
@@ -144,15 +159,35 @@ export function SearchBar({ onSelectArticle }: SearchBarProps) {
 
 			{showDropdown ? (
 				<div className="surface-card motion-enter absolute left-1/2 top-full z-50 mt-3 max-h-[32rem] w-[min(56rem,calc(100vw-1rem))] -translate-x-1/2 overflow-auto rounded-[1.5rem] p-2 shadow-2xl sm:w-[min(56rem,calc(100vw-2rem))] lg:left-0 lg:w-[min(56rem,calc(100vw-20rem))] lg:translate-x-0 xl:w-[56rem]">
-					<div className="mb-2 px-3 pt-2 text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
-						Results
+					<div className="mb-2 flex items-center justify-between gap-3 px-3 pt-2">
+						<div className="text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+							Results
+						</div>
+						{categoryId ? (
+							<div className="surface-muted inline-flex rounded-full p-0.5 text-[11px]">
+								<button
+									type="button"
+									onClick={() => setScope('all')}
+									className={`rounded-full px-2.5 py-1 ${scope === 'all' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
+								>
+									All
+								</button>
+								<button
+									type="button"
+									onClick={() => setScope('category')}
+									className={`rounded-full px-2.5 py-1 ${scope === 'category' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
+								>
+									Current
+								</button>
+							</div>
+						) : null}
 					</div>
 					{isLoading ? (
 						<div className="px-4 py-4 text-sm text-muted-foreground">Searching...</div>
-					) : results?.data.length === 0 ? (
+					) : resultIds.length === 0 ? (
 						<div className="px-4 py-4 text-sm text-muted-foreground">No results found</div>
 					) : (
-						results?.data.map((article, index) => {
+						resultIds.map((article, index) => {
 							const displayedAt = article.displayedAt ? new Date(article.displayedAt) : null;
 							const timeAgo = displayedAt
 								? formatDistanceToNow(displayedAt, { addSuffix: true })
@@ -205,6 +240,16 @@ export function SearchBar({ onSelectArticle }: SearchBarProps) {
 							);
 						})
 					)}
+					{hasNextPage ? (
+						<button
+							type="button"
+							onClick={() => fetchNextPage()}
+							disabled={isFetchingNextPage}
+							className="mt-1 w-full rounded-2xl px-4 py-3 text-sm font-medium text-primary hover:bg-accent disabled:text-muted-foreground"
+						>
+							{isFetchingNextPage ? 'Loading more...' : 'Load more results'}
+						</button>
+					) : null}
 					<div className="mt-1 flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
 						<span className="inline-flex items-center gap-1">
 							<kbd className="rounded-md border border-border bg-background/70 px-1.5 font-mono text-[10px]">

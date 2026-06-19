@@ -231,9 +231,9 @@ At minimum, the `production` environment needs:
 
 ### 3. Database Migrations & Administration
 - **Migrations:** The API service applies database migrations automatically on boot, so schema changes are handled seamlessly.
-- **Backups:** Back up `/opt/self-feed/data` before every deploy. The GitHub deploy workflow also creates a timestamped archive under `/opt/self-feed/backups` before restarting containers.
+- **Backups:** Back up the deploy `data` directory before every deploy. The GitHub deploy workflow creates a timestamped SQLite backup under `data/backups` before restarting containers, and the API creates a guarded pre-migration backup before applying pending migrations.
 - **Rollback:** Deploy immutable `sha-*` image tags where possible. If a deploy fails, restore the latest data archive and redeploy the previous known-good image tag.
-- **Admin Setup:** On a fresh database, register a new account on your site. The first registered user is automatically granted the `admin` role. Once your account is set up, change `ALLOW_REGISTRATION` to `false` in `/opt/self-feed/.env` and restart (`docker compose up -d`) to disable public signups.
+- **Admin Setup:** On a fresh database, register a new account on your site. The first registered user is automatically granted the `admin` role. Once your account is set up, change `ALLOW_REGISTRATION` to `false` in the production `.env` and restart (`docker compose up -d`) to disable public signups.
 
 ## License
 

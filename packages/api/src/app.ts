@@ -97,7 +97,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils) {
 		);
 
 		v1.use('/articles/*', authMiddleware);
-		v1.route('/articles', createArticleRoutes(deps.services.article));
+		v1.route('/articles', createArticleRoutes(deps.services.article, deps.rateLimiter));
 		v1.use('/search/*', authMiddleware);
 		v1.route('/search', createSearchRoutes(deps.services.article, deps.rateLimiter));
 

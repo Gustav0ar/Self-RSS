@@ -1,6 +1,7 @@
 import type { CategoryWithCounts } from '@self-feed/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { useCreateCategory, useUpdateCategory } from '@/hooks/queries';
+import { categoryPathLabel } from '@/lib/categories';
 import { ModalShell } from './modal-shell';
 
 interface CategoryDialogProps {
@@ -101,7 +102,7 @@ export function CategoryDialog({
 						<option value="">No parent</option>
 						{parentOptions.map((option) => (
 							<option key={option.id} value={option.id}>
-								{option.name}
+								{categoryPathLabel(categories, option.id) || option.name}
 							</option>
 						))}
 					</select>

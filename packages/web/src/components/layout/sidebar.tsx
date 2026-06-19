@@ -30,6 +30,7 @@ import {
 	useFeeds,
 	useUpdateCategory,
 } from '@/hooks/queries';
+import { categoryAncestorIds, flattenCategories } from '@/lib/categories';
 import { cn } from '@/lib/utils';
 
 interface SidebarProps {
@@ -86,6 +87,8 @@ export function Sidebar({
 }: SidebarProps) {
 	const { data: categories } = useCategories();
 	const { data: feeds } = useFeeds();
+	const categoryTree = categories ?? [];
+	const flatCategories = useMemo(() => flattenCategories(categoryTree), [categoryTree]);
 	const deleteCategory = useDeleteCategory();
 	const deleteFeed = useDeleteFeed();
 	const exportOpml = useExportOpml();
@@ -134,7 +137,7 @@ export function Sidebar({
 	const _isAllSelected = !selectedFeedId && !selectedCategoryId;
 	const totalUnread = feeds?.reduce((sum, feed) => sum + (feed.unreadCount ?? 0), 0) ?? 0;
 	const uncategorizedFeeds = feeds?.filter((feed) => !feed.categoryId) ?? [];
-	const hasCategories = (categories?.length ?? 0) > 0;
+	const hasCategories = flatCategories.length > 0;
 
 	const categoryFeedMap = useMemo(() => {
 		const map = new Map<string, FeedWithCounts[]>();
@@ -158,17 +161,23 @@ export function Sidebar({
 		if (!activeCategoryId) {
 			return;
 		}
+		const categoriesToExpand = categoryAncestorIds(categoryTree, activeCategoryId);
+		if (categoriesToExpand.length === 0) {
+			categoriesToExpand.push(activeCategoryId);
+		}
 
 		setExpandedCategories((prev) => {
-			if (prev.has(activeCategoryId)) {
+			if (categoriesToExpand.every((id) => prev.has(id))) {
 				return prev;
 			}
 
 			const next = new Set(prev);
-			next.add(activeCategoryId);
+			for (const id of categoriesToExpand) {
+				next.add(id);
+			}
 			return next;
 		});
-	}, [activeCategoryId]);
+	}, [activeCategoryId, categoryTree]);
 
 	function toggleCategory(id: string) {
 		setExpandedCategories((prev) => {
@@ -187,10 +196,19 @@ export function Sidebar({
 	}
 
 	async function handleCategoryDrop(sourceId: string, targetId: string | null) {
-		if (!categories) return;
 		if (sourceId === targetId) return;
 
-		const ordered = [...categories];
+		const source = flatCategories.find((category) => category.id === sourceId);
+		if (!source) return;
+		const target = targetId ? flatCategories.find((category) => category.id === targetId) : null;
+		const sourceParentId = source.parentCategoryId ?? null;
+		const targetParentId = target ? (target.parentCategoryId ?? null) : null;
+		if (sourceParentId !== targetParentId) return;
+
+		const originalOrder = flatCategories.filter(
+			(category) => (category.parentCategoryId ?? null) === sourceParentId,
+		);
+		const ordered = [...originalOrder];
 		const sourceIndex = ordered.findIndex((c) => c.id === sourceId);
 		if (sourceIndex < 0) return;
 		const [moved] = ordered.splice(sourceIndex, 1);
@@ -220,7 +238,7 @@ export function Sidebar({
 		const updates = ordered
 			.map((category, index) => ({ id: category.id, sortOrder: index }))
 			.filter((update, index) => {
-				const original = categories[index];
+				const original = originalOrder[index];
 				return !original || original.id !== update.id || original.sortOrder !== update.sortOrder;
 			});
 
@@ -300,7 +318,7 @@ export function Sidebar({
 							hasCategories={hasCategories}
 							selectedFeedId={selectedFeedId}
 							selectedCategoryId={selectedCategoryId}
-							categories={categories}
+							categories={categoryTree}
 							uncategorizedFeeds={uncategorizedFeeds}
 							uncategorizedExpanded={uncategorizedExpanded}
 							expandedCategories={expandedCategories}
@@ -356,7 +374,7 @@ export function Sidebar({
 						hasCategories={hasCategories}
 						selectedFeedId={selectedFeedId}
 						selectedCategoryId={selectedCategoryId}
-						categories={categories}
+						categories={categoryTree}
 						uncategorizedFeeds={uncategorizedFeeds}
 						uncategorizedExpanded={uncategorizedExpanded}
 						expandedCategories={expandedCategories}
@@ -408,7 +426,7 @@ export function Sidebar({
 			{feedDialogState ? (
 				<FeedDialog
 					mode={feedDialogState.mode}
-					categories={categories ?? []}
+					categories={flatCategories}
 					feed={feedDialogState.mode === 'edit' ? feedDialogState.feed : undefined}
 					defaultCategoryId={
 						feedDialogState.mode === 'create' ? feedDialogState.defaultCategoryId : undefined
@@ -420,7 +438,7 @@ export function Sidebar({
 			{categoryDialogState ? (
 				<CategoryDialog
 					mode={categoryDialogState.mode}
-					categories={categories ?? []}
+					categories={flatCategories}
 					category={categoryDialogState.mode === 'edit' ? categoryDialogState.category : undefined}
 					defaultParentCategoryId={
 						categoryDialogState.mode === 'create'
@@ -612,10 +630,9 @@ function SidebarBody({
 					{categories?.map((category) => {
 						const isExpanded = expandedCategories.has(category.id);
 						const categoryFeeds = categoryFeedMap.get(category.id) ?? [];
-						const categoryUnread = categoryFeeds.reduce(
-							(sum, feed) => sum + (feed.unreadCount ?? 0),
-							0,
-						);
+						const childCategories = category.children ?? [];
+						const categoryUnread = category.unreadCount ?? 0;
+						const hasNestedRows = categoryFeeds.length > 0 || childCategories.length > 0;
 						const isDragging = draggingCategoryId === category.id;
 						const isDropTarget =
 							dragOverCategoryId === category.id && draggingCategoryId !== category.id;
@@ -674,13 +691,15 @@ function SidebarBody({
 											type="button"
 											onClick={(event) => {
 												event.stopPropagation();
+												if (!hasNestedRows) return;
 												onToggleCategory(category.id);
 											}}
 											aria-label={
 												isExpanded ? `Collapse ${category.name}` : `Expand ${category.name}`
 											}
 											aria-expanded={isExpanded}
-											className="-ml-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80"
+											disabled={!hasNestedRows}
+											className="-ml-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 disabled:opacity-30"
 										>
 											{isExpanded ? (
 												<ChevronDown className="h-3.5 w-3.5" />
@@ -779,6 +798,23 @@ function SidebarBody({
 												</div>
 											</div>
 										))}
+										{childCategories.map((childCategory) => (
+											<NestedCategoryRow
+												key={childCategory.id}
+												category={childCategory}
+												selectedFeedId={selectedFeedId}
+												selectedCategoryId={selectedCategoryId}
+												expandedCategories={expandedCategories}
+												categoryFeedMap={categoryFeedMap}
+												onSelectFeed={onSelectFeed}
+												onSelectCategory={onSelectCategory}
+												onToggleCategory={onToggleCategory}
+												onEditCategory={onEditCategory}
+												onDeleteCategory={onDeleteCategory}
+												onEditFeed={onEditFeed}
+												onDeleteFeed={onDeleteFeed}
+											/>
+										))}
 									</div>
 								) : null}
 							</div>
@@ -864,6 +900,197 @@ function SidebarBody({
 				</div>
 			</nav>
 		</>
+	);
+}
+
+function NestedCategoryRow({
+	category,
+	selectedFeedId,
+	selectedCategoryId,
+	expandedCategories,
+	categoryFeedMap,
+	onSelectFeed,
+	onSelectCategory,
+	onToggleCategory,
+	onEditCategory,
+	onDeleteCategory,
+	onEditFeed,
+	onDeleteFeed,
+}: {
+	category: CategoryWithCounts;
+	selectedFeedId?: string;
+	selectedCategoryId?: string;
+	expandedCategories: Set<string>;
+	categoryFeedMap: Map<string, FeedWithCounts[]>;
+	onSelectFeed: (feedId: string) => void;
+	onSelectCategory: (categoryId: string) => void;
+	onToggleCategory: (id: string) => void;
+	onEditCategory: (category: CategoryWithCounts) => void;
+	onDeleteCategory: (category: CategoryWithCounts) => void;
+	onEditFeed: (feed: FeedWithCounts) => void;
+	onDeleteFeed: (feed: FeedWithCounts) => void;
+}) {
+	const isExpanded = expandedCategories.has(category.id);
+	const categoryFeeds = categoryFeedMap.get(category.id) ?? [];
+	const childCategories = category.children ?? [];
+	const categoryUnread = category.unreadCount ?? 0;
+	const hasNestedRows = categoryFeeds.length > 0 || childCategories.length > 0;
+
+	return (
+		<div className="space-y-0.5">
+			<div className="group/category relative">
+				<div
+					className={cn(
+						'flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 pr-20 text-left text-sm font-medium hover:bg-accent/80',
+						selectedCategoryId === category.id && 'bg-accent text-sidebar-active',
+					)}
+				>
+					<span className="h-7 w-3 shrink-0 border-l border-border/60" aria-hidden="true" />
+					<button
+						type="button"
+						onClick={(event) => {
+							event.stopPropagation();
+							if (!hasNestedRows) return;
+							onToggleCategory(category.id);
+						}}
+						aria-label={isExpanded ? `Collapse ${category.name}` : `Expand ${category.name}`}
+						aria-expanded={isExpanded}
+						disabled={!hasNestedRows}
+						className="-ml-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 disabled:opacity-30"
+					>
+						{isExpanded ? (
+							<ChevronDown className="h-3.5 w-3.5" />
+						) : (
+							<ChevronRight className="h-3.5 w-3.5" />
+						)}
+					</button>
+					<button
+						type="button"
+						onClick={() => onSelectCategory(category.id)}
+						aria-label={categoryUnread > 0 ? `${category.name} ${categoryUnread}` : category.name}
+						className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+					>
+						<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/80 text-primary">
+							<Folder className="h-3.5 w-3.5" />
+						</div>
+						<div className="min-w-0 flex-1 overflow-hidden">
+							<p className="truncate">{category.name}</p>
+							<p className="mt-0.5 truncate text-[11px] font-normal text-muted-foreground">
+								{category.feedCount} {category.feedCount === 1 ? 'feed' : 'feeds'}
+							</p>
+						</div>
+						{categoryUnread > 0 ? (
+							<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/category:opacity-0 group-focus-within/category:opacity-0">
+								{categoryUnread}
+							</span>
+						) : null}
+					</button>
+				</div>
+				<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/category:opacity-100 group-focus-within/category:opacity-100 touch-only">
+					<SidebarIconButton
+						label={`Edit ${category.name}`}
+						onClick={() => onEditCategory(category)}
+					>
+						<Pencil className="h-3.5 w-3.5" />
+					</SidebarIconButton>
+					<SidebarIconButton
+						label={`Delete ${category.name}`}
+						onClick={() => onDeleteCategory(category)}
+						className="hover:text-red-500"
+					>
+						<Trash2 className="h-3.5 w-3.5" />
+					</SidebarIconButton>
+				</div>
+			</div>
+
+			{isExpanded ? (
+				<div className="space-y-0.5 pl-5">
+					{categoryFeeds.map((feed) => (
+						<FeedTreeRow
+							key={feed.id}
+							feed={feed}
+							selectedFeedId={selectedFeedId}
+							onSelectFeed={onSelectFeed}
+							onEditFeed={onEditFeed}
+							onDeleteFeed={onDeleteFeed}
+						/>
+					))}
+					{childCategories.map((childCategory) => (
+						<NestedCategoryRow
+							key={childCategory.id}
+							category={childCategory}
+							selectedFeedId={selectedFeedId}
+							selectedCategoryId={selectedCategoryId}
+							expandedCategories={expandedCategories}
+							categoryFeedMap={categoryFeedMap}
+							onSelectFeed={onSelectFeed}
+							onSelectCategory={onSelectCategory}
+							onToggleCategory={onToggleCategory}
+							onEditCategory={onEditCategory}
+							onDeleteCategory={onDeleteCategory}
+							onEditFeed={onEditFeed}
+							onDeleteFeed={onDeleteFeed}
+						/>
+					))}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function FeedTreeRow({
+	feed,
+	selectedFeedId,
+	onSelectFeed,
+	onEditFeed,
+	onDeleteFeed,
+}: {
+	feed: FeedWithCounts;
+	selectedFeedId?: string;
+	onSelectFeed: (feedId: string) => void;
+	onEditFeed: (feed: FeedWithCounts) => void;
+	onDeleteFeed: (feed: FeedWithCounts) => void;
+}) {
+	return (
+		<div className="group/feed relative">
+			<button
+				type="button"
+				onClick={() => onSelectFeed(feed.id)}
+				aria-label={(feed.unreadCount ?? 0) > 0 ? `${feed.title} ${feed.unreadCount}` : feed.title}
+				className={cn(
+					'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 pr-20 text-left text-sm hover:bg-accent/70',
+					selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
+				)}
+			>
+				<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
+					{feed.faviconUrl ? (
+						<img src={feed.faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+					) : (
+						<RssIcon className="h-4 w-4 text-muted-foreground" />
+					)}
+				</div>
+				<div className="min-w-0 flex-1 overflow-hidden">
+					<SidebarOverflowText text={feed.title} />
+				</div>
+				{(feed.unreadCount ?? 0) > 0 ? (
+					<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
+						{feed.unreadCount}
+					</span>
+				) : null}
+			</button>
+			<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 touch-only">
+				<SidebarIconButton label={`Edit ${feed.title}`} onClick={() => onEditFeed(feed)}>
+					<Pencil className="h-3.5 w-3.5" />
+				</SidebarIconButton>
+				<SidebarIconButton
+					label={`Delete ${feed.title}`}
+					onClick={() => onDeleteFeed(feed)}
+					className="hover:text-red-500"
+				>
+					<Trash2 className="h-3.5 w-3.5" />
+				</SidebarIconButton>
+			</div>
+		</div>
 	);
 }
 

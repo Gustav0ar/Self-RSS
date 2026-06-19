@@ -141,6 +141,212 @@
 					}
 				}
 			},
+			"Category": {
+				"type": "object",
+				"required": [
+					"id",
+					"userId",
+					"parentCategoryId",
+					"name",
+					"slug",
+					"sortOrder",
+					"createdAt",
+					"updatedAt"
+				],
+				"properties": {
+					"id": {
+						"type": "string",
+						"format": "uuid"
+					},
+					"userId": {
+						"type": "string",
+						"format": "uuid"
+					},
+					"parentCategoryId": {
+						"type": [
+							"string",
+							"null"
+						],
+						"format": "uuid"
+					},
+					"name": {
+						"type": "string"
+					},
+					"slug": {
+						"type": "string"
+					},
+					"sortOrder": {
+						"type": "integer"
+					},
+					"createdAt": {
+						"type": "string",
+						"format": "date-time"
+					},
+					"updatedAt": {
+						"type": "string",
+						"format": "date-time"
+					}
+				}
+			},
+			"Feed": {
+				"type": "object",
+				"required": [
+					"id",
+					"userId",
+					"categoryId",
+					"title",
+					"siteUrl",
+					"feedUrl",
+					"faviconUrl",
+					"description",
+					"pollingIntervalMinutes",
+					"lastSyncedAt",
+					"syncStatus",
+					"createdAt",
+					"updatedAt"
+				],
+				"properties": {
+					"id": {
+						"type": "string",
+						"format": "uuid"
+					},
+					"userId": {
+						"type": "string",
+						"format": "uuid"
+					},
+					"categoryId": {
+						"type": "string",
+						"format": "uuid"
+					},
+					"title": {
+						"type": "string"
+					},
+					"siteUrl": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"feedUrl": {
+						"type": "string",
+						"format": "uri"
+					},
+					"faviconUrl": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"description": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"pollingIntervalMinutes": {
+						"type": "integer"
+					},
+					"lastSyncedAt": {
+						"type": [
+							"string",
+							"null"
+						],
+						"format": "date-time"
+					},
+					"nextSyncAt": {
+						"type": "string",
+						"format": "date-time"
+					},
+					"syncStatus": {
+						"type": "string",
+						"enum": [
+							"idle",
+							"syncing",
+							"error"
+						]
+					},
+					"createdAt": {
+						"type": "string",
+						"format": "date-time"
+					},
+					"updatedAt": {
+						"type": "string",
+						"format": "date-time"
+					}
+				}
+			},
+			"FeedWithCounts": {
+				"allOf": [
+					{
+						"$ref": "#/components/schemas/Feed"
+					},
+					{
+						"type": "object",
+						"required": [
+							"unreadCount"
+						],
+						"properties": {
+							"unreadCount": {
+								"type": "integer"
+							}
+						}
+					}
+				]
+			},
+			"CategoryWithCounts": {
+				"allOf": [
+					{
+						"$ref": "#/components/schemas/Category"
+					},
+					{
+						"type": "object",
+						"required": [
+							"feedCount",
+							"unreadCount",
+							"feeds",
+							"children"
+						],
+						"properties": {
+							"feedCount": {
+								"type": "integer"
+							},
+							"unreadCount": {
+								"type": "integer"
+							},
+							"feeds": {
+								"type": "array",
+								"items": {
+									"$ref": "#/components/schemas/FeedWithCounts"
+								}
+							},
+							"children": {
+								"type": "array",
+								"items": {
+									"$ref": "#/components/schemas/CategoryWithCounts"
+								}
+							}
+						}
+					}
+				]
+			},
+			"CategoryTreeResult": {
+				"type": "object",
+				"required": [
+					"categories",
+					"totalUnread"
+				],
+				"properties": {
+					"categories": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/CategoryWithCounts"
+						}
+					},
+					"totalUnread": {
+						"type": "integer"
+					}
+				}
+			},
 			"ArticleListItem": {
 				"type": "object",
 				"required": [
@@ -698,7 +904,15 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/CategoryTreeResult"
+										}
+									}
 								}
 							}
 						}
@@ -718,7 +932,28 @@
 					"content": {
 						"application/json": {
 							"schema": {
-								"type": "object"
+								"type": "object",
+								"required": [
+									"name"
+								],
+								"properties": {
+									"name": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 100
+									},
+									"parentCategoryId": {
+										"type": [
+											"string",
+											"null"
+										],
+										"format": "uuid"
+									},
+									"sortOrder": {
+										"type": "integer",
+										"minimum": 0
+									}
+								}
 							}
 						}
 					}
@@ -728,7 +963,15 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/Category"
+										}
+									}
 								}
 							}
 						}
@@ -760,7 +1003,25 @@
 					"content": {
 						"application/json": {
 							"schema": {
-								"type": "object"
+								"type": "object",
+								"properties": {
+									"name": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 100
+									},
+									"parentCategoryId": {
+										"type": [
+											"string",
+											"null"
+										],
+										"format": "uuid"
+									},
+									"sortOrder": {
+										"type": "integer",
+										"minimum": 0
+									}
+								}
 							}
 						}
 					}
@@ -770,7 +1031,15 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/Category"
+										}
+									}
 								}
 							}
 						}
@@ -824,7 +1093,18 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"type": "array",
+											"items": {
+												"$ref": "#/components/schemas/FeedWithCounts"
+											}
+										}
+									}
 								}
 							}
 						}
@@ -844,7 +1124,27 @@
 					"content": {
 						"application/json": {
 							"schema": {
-								"type": "object"
+								"type": "object",
+								"required": [
+									"categoryId",
+									"feedUrl"
+								],
+								"properties": {
+									"categoryId": {
+										"type": "string",
+										"format": "uuid"
+									},
+									"feedUrl": {
+										"type": "string",
+										"format": "uri",
+										"maxLength": 2048
+									},
+									"title": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 255
+									}
+								}
 							}
 						}
 					}
@@ -854,7 +1154,15 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/Feed"
+										}
+									}
 								}
 							}
 						}
@@ -945,7 +1253,23 @@
 					"content": {
 						"application/json": {
 							"schema": {
-								"type": "object"
+								"type": "object",
+								"properties": {
+									"categoryId": {
+										"type": "string",
+										"format": "uuid"
+									},
+									"title": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 255
+									},
+									"pollingIntervalMinutes": {
+										"type": "integer",
+										"minimum": 5,
+										"maximum": 1440
+									}
+								}
 							}
 						}
 					}
@@ -955,7 +1279,15 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object"
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/Feed"
+										}
+									}
 								}
 							}
 						}

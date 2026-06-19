@@ -105,6 +105,61 @@ describe('CategoryService - getTree', () => {
 		expect(news?.feedCount).toBe(1);
 		expect(news?.unreadCount).toBe(5);
 	});
+
+	it('returns nested categories with descendant feed and unread totals', async () => {
+		const cats = [
+			buildCategory({ id: 'cat-tech', name: 'Tech' }),
+			buildCategory({ id: 'cat-web', name: 'Web', parentCategoryId: 'cat-tech' }),
+			buildCategory({ id: 'cat-react', name: 'React', parentCategoryId: 'cat-web' }),
+		];
+		const now = new Date('2026-01-01T00:00:00.000Z');
+		const feeds = [
+			{
+				id: 'feed-parent',
+				categoryId: 'cat-tech',
+				title: 'Tech Feed',
+				createdAt: now,
+				updatedAt: now,
+				lastSyncedAt: null,
+			},
+			{
+				id: 'feed-child',
+				categoryId: 'cat-react',
+				title: 'React Feed',
+				createdAt: now,
+				updatedAt: now,
+				lastSyncedAt: null,
+			},
+		];
+		const unread = new Map<string, number>([
+			['feed-parent', 1],
+			['feed-child', 4],
+		]);
+		const service = new CategoryService(
+			{ findAllByUser: vi.fn().mockResolvedValue(cats) } as never,
+			{ findAllByUser: vi.fn().mockResolvedValue(feeds) } as never,
+			{ unreadCountByFeed: vi.fn().mockResolvedValue(unread) } as never,
+		);
+
+		const result = await service.getTree('user-1');
+
+		expect(result.categories).toHaveLength(1);
+		expect(result.categories[0]).toMatchObject({
+			id: 'cat-tech',
+			feedCount: 2,
+			unreadCount: 5,
+			children: [
+				{
+					id: 'cat-web',
+					feedCount: 1,
+					unreadCount: 4,
+					children: [{ id: 'cat-react', feedCount: 1, unreadCount: 4 }],
+				},
+			],
+		});
+		expect(result.categories[0]?.feeds).toHaveLength(1);
+		expect(result.totalUnread).toBe(5);
+	});
 });
 
 describe('CategoryService - create', () => {

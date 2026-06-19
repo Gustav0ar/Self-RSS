@@ -21,6 +21,7 @@ bun run lint
 bun run typecheck
 bun run test:unit
 bun run build
+bun audit --audit-level high
 ```
 
 Run integration and E2E tests when changing API, auth, sync, database, or web flows:
@@ -28,6 +29,18 @@ Run integration and E2E tests when changing API, auth, sync, database, or web fl
 ```bash
 bun run test:integration
 bun run test:e2e
+```
+
+Regenerate and commit OpenAPI output after API contract changes:
+
+```bash
+bun run openapi:generate
+```
+
+For production-bound changes, run the full workspace suite:
+
+```bash
+bun run test:all
 ```
 
 Android is checked separately:

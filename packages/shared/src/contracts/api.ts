@@ -50,6 +50,7 @@ export interface RegisterResponse {
 export interface CategoryWithCounts extends Category {
 	feedCount: number;
 	unreadCount: number;
+	feeds?: FeedWithCounts[];
 	children?: CategoryWithCounts[];
 }
 

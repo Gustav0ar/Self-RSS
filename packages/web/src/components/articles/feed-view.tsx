@@ -94,6 +94,36 @@ export function FeedView({
 				}) ?? []
 		);
 	}, [data?.pages]);
+	const emptyState = useMemo(() => {
+		if (feedSyncError) {
+			return {
+				title: 'Unable to refresh articles',
+				description: feedSyncError,
+			};
+		}
+		if (unreadOnly) {
+			return {
+				title: 'No unread articles',
+				description: 'Turn off the unread filter to review older stories in this view.',
+			};
+		}
+		if (feedId) {
+			return {
+				title: 'No articles in this feed',
+				description: 'Refresh the feed or check that the source is publishing RSS items.',
+			};
+		}
+		if (categoryId) {
+			return {
+				title: 'No articles in this category',
+				description: 'Add feeds to this category or refresh existing sources.',
+			};
+		}
+		return {
+			title: 'No articles yet',
+			description: 'Add a feed or import OPML to start building your reading queue.',
+		};
+	}, [categoryId, feedId, feedSyncError, unreadOnly]);
 	const articles = useMemo(() => {
 		if (!unreadOnly || retainedReadArticles.size === 0) {
 			return fetchedArticles;
@@ -405,6 +435,8 @@ export function FeedView({
 						onLoadMore={handleLoadMore}
 						loadingMore={isFetchingNextPage}
 						density={density}
+						emptyTitle={emptyState.title}
+						emptyDescription={emptyState.description}
 					/>
 				</div>
 			</div>

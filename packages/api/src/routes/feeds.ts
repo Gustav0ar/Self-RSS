@@ -54,22 +54,6 @@ export function createFeedRoutes(
 		await enforceRateLimit(c, rateLimiter, 'feed-import', RATE_LIMITS.feedImport);
 		const userId = c.get('userId');
 
-		// Per-user daily import cap. Each successful import counts as one
-		// against the user's daily allowance; the counter is keyed by UTC
-		// date so it rolls over at midnight without any cron.
-		const dailyCount = await rateLimiter.incrementDailyCount(`opml-import:${userId}`);
-		if (dailyCount > OPML_IMPORT_DAILY_LIMIT) {
-			return c.json(
-				{
-					error: {
-						code: 'TOO_MANY_REQUESTS',
-						message: `OPML import daily limit reached (${OPML_IMPORT_DAILY_LIMIT})`,
-					},
-				},
-				429,
-			);
-		}
-
 		const formData = await c.req.formData().catch(() => null);
 		if (!formData) {
 			return c.json(
@@ -106,11 +90,36 @@ export function createFeedRoutes(
 			);
 		}
 
-		const result = await opmlImportService.import(
-			userId,
-			parsedInput.data.filename,
-			parsedInput.data.content,
-		);
+		// Per-user daily import cap. Reserve the slot only after cheap
+		// request validation, release it if import parsing or persistence
+		// fails, and keep it only for successful imports.
+		const dailyCountKey = `opml-import:${userId}`;
+		const dailyCount = await rateLimiter.incrementDailyCount(dailyCountKey);
+		if (dailyCount > OPML_IMPORT_DAILY_LIMIT) {
+			await rateLimiter.releaseDailyCount(dailyCountKey);
+			return c.json(
+				{
+					error: {
+						code: 'TOO_MANY_REQUESTS',
+						message: `OPML import daily limit reached (${OPML_IMPORT_DAILY_LIMIT})`,
+					},
+				},
+				429,
+			);
+		}
+
+		const result = await (async () => {
+			try {
+				return await opmlImportService.import(
+					userId,
+					parsedInput.data.filename,
+					parsedInput.data.content,
+				);
+			} catch (error) {
+				await rateLimiter.releaseDailyCount(dailyCountKey);
+				throw error;
+			}
+		})();
 
 		if (result.createdFeeds > 0) {
 			const logger = createLogger(c.get('requestId'));

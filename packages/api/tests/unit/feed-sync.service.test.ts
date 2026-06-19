@@ -8,6 +8,53 @@ describe('FeedSyncService', () => {
 		vi.useRealTimers();
 	});
 
+	it('skips article enrichment when another worker holds the article lock', async () => {
+		const redis = {
+			set: vi.fn(async () => null),
+			del: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		const resolveSpy = vi
+			.spyOn(
+				service as unknown as {
+					resolveEnrichedArticleHtml: () => Promise<string | null>;
+				},
+				'resolveEnrichedArticleHtml',
+			)
+			.mockResolvedValue('<p>Enriched</p>');
+
+		await (
+			service as unknown as {
+				enrichSingleArticle: (enrichment: {
+					articleId: string;
+					userId: string;
+					canonicalUrl: string;
+					contentHtml: string | null;
+					heroImageUrl: string | null;
+					fetchedAt: Date;
+				}) => Promise<void>;
+			}
+		).enrichSingleArticle({
+			articleId: 'article-1',
+			userId: 'user-1',
+			canonicalUrl: 'https://example.com/post-1',
+			contentHtml: null,
+			heroImageUrl: null,
+			fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
+		});
+
+		expect(redis.set).toHaveBeenCalledWith('articles:enriching:article-1', '1', 'EX', 60, 'NX');
+		expect(resolveSpy).not.toHaveBeenCalled();
+		expect(redis.del).not.toHaveBeenCalled();
+	});
+
 	it('stores feed content immediately and triggers lazy enrichment for new articles', async () => {
 		const feedRepo = {
 			findById: vi.fn(async () => ({

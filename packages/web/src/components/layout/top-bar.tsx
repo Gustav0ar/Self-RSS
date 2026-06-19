@@ -9,9 +9,10 @@ import { useTheme } from '@/providers/theme';
 interface TopBarProps {
 	onSelectArticle?: (id: string) => void;
 	onOpenSidebar?: () => void;
+	categoryId?: string;
 }
 
-export function TopBar({ onSelectArticle, onOpenSidebar }: TopBarProps) {
+export function TopBar({ onSelectArticle, onOpenSidebar, categoryId }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
 	const { isAuthenticated, logout, username } = useAuth();
@@ -54,7 +55,7 @@ export function TopBar({ onSelectArticle, onOpenSidebar }: TopBarProps) {
 				{isAuthenticated ? (
 					<div className="order-3 min-w-0 flex-[1_0_100%] items-center gap-3 sm:order-none sm:max-w-2xl sm:flex-1 md:flex">
 						<div className="min-w-0 flex-1">
-							<SearchBar onSelectArticle={onSelectArticle ?? (() => {})} />
+							<SearchBar onSelectArticle={onSelectArticle ?? (() => {})} categoryId={categoryId} />
 						</div>
 					</div>
 				) : null}

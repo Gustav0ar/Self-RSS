@@ -55,6 +55,7 @@ export const CacheKeys = {
 	// ownership check (article must belong to the caller) is implicit
 	// in the key namespace.
 	articleDetail: (userId: string, articleId: string) => `articles:detail:${userId}:${articleId}`,
+	articleEnrichmentLock: (articleId: string) => `articles:enriching:${articleId}`,
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
 } as const;

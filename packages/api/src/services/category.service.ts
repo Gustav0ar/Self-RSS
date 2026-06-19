@@ -3,6 +3,19 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 
+type CategoryRow = Awaited<ReturnType<CategoryRepository['findAllByUser']>>[number];
+type FeedRow = Awaited<ReturnType<FeedRepository['findAllByUser']>>[number];
+type SerializedFeed = ReturnType<typeof serializeFeed>;
+
+interface CategoryTreeNode extends Omit<CategoryRow, 'createdAt' | 'updatedAt'> {
+	createdAt: string;
+	updatedAt: string;
+	feedCount: number;
+	unreadCount: number;
+	feeds: SerializedFeed[];
+	children: CategoryTreeNode[];
+}
+
 function slugify(text: string): string {
 	return text
 		.toLowerCase()
@@ -31,24 +44,6 @@ export class CategoryService {
 			allFeeds.map((f) => f.id),
 		);
 
-		// Skip the per-feed unread-count query when the user has no feeds
-		// at all. The repository call still works on an empty list, but
-		// it incurs the round-trip and the caller has nothing to map the
-		// result over.
-		if (allFeeds.length === 0) {
-			return {
-				categories: cats.map((cat) => ({
-					...cat,
-					createdAt: cat.createdAt.toISOString(),
-					updatedAt: cat.updatedAt.toISOString(),
-					feedCount: 0,
-					unreadCount: 0,
-					feeds: [],
-				})),
-				totalUnread: 0,
-			};
-		}
-
 		const feedsByCategory = new Map<string, typeof allFeeds>();
 		for (const feed of allFeeds) {
 			const list = feedsByCategory.get(feed.categoryId) ?? [];
@@ -59,28 +54,7 @@ export class CategoryService {
 		const totalUnread = Array.from(unreadCountByFeedId.values()).reduce((a, b) => a + b, 0);
 
 		return {
-			categories: cats.map((cat) => {
-				const catFeeds = feedsByCategory.get(cat.id) ?? [];
-				const unreadCount = catFeeds.reduce(
-					(acc, f) => acc + (unreadCountByFeedId.get(f.id) ?? 0),
-					0,
-				);
-
-				return {
-					...cat,
-					createdAt: cat.createdAt.toISOString(),
-					updatedAt: cat.updatedAt.toISOString(),
-					feedCount: catFeeds.length,
-					unreadCount,
-					feeds: catFeeds.map((f) => ({
-						...f,
-						unreadCount: unreadCountByFeedId.get(f.id) ?? 0,
-						createdAt: f.createdAt.toISOString(),
-						updatedAt: f.updatedAt.toISOString(),
-						lastSyncedAt: f.lastSyncedAt?.toISOString() ?? null,
-					})),
-				};
-			}),
+			categories: buildCategoryTree(cats, feedsByCategory, unreadCountByFeedId),
 			totalUnread,
 		};
 	}
@@ -155,4 +129,59 @@ export class CategoryService {
 
 		return this.categoryRepo.delete(categoryId, userId);
 	}
+}
+
+function serializeFeed(feed: FeedRow, unreadCountByFeedId: Map<string, number>) {
+	return {
+		...feed,
+		unreadCount: unreadCountByFeedId.get(feed.id) ?? 0,
+		createdAt: feed.createdAt.toISOString(),
+		updatedAt: feed.updatedAt.toISOString(),
+		lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
+	};
+}
+
+function buildCategoryTree(
+	categories: CategoryRow[],
+	feedsByCategory: Map<string, FeedRow[]>,
+	unreadCountByFeedId: Map<string, number>,
+): CategoryTreeNode[] {
+	const childrenByParent = new Map<string | null, CategoryRow[]>();
+	for (const category of categories) {
+		const parentId = category.parentCategoryId ?? null;
+		const siblings = childrenByParent.get(parentId) ?? [];
+		siblings.push(category);
+		childrenByParent.set(parentId, siblings);
+	}
+
+	const buildNode = (category: CategoryRow, ancestors: Set<string>): CategoryTreeNode => {
+		const directFeeds = (feedsByCategory.get(category.id) ?? []).map((feed) =>
+			serializeFeed(feed, unreadCountByFeedId),
+		);
+		const nextAncestors = new Set(ancestors);
+		nextAncestors.add(category.id);
+		const children: CategoryTreeNode[] = (childrenByParent.get(category.id) ?? [])
+			.filter((child) => !nextAncestors.has(child.id))
+			.map((child) => buildNode(child, nextAncestors));
+
+		const directUnreadCount = directFeeds.reduce((count, feed) => count + feed.unreadCount, 0);
+		const descendantFeedCount = children.reduce((count, child) => count + child.feedCount, 0);
+		const descendantUnreadCount = children.reduce((count, child) => count + child.unreadCount, 0);
+
+		return {
+			...category,
+			createdAt: category.createdAt.toISOString(),
+			updatedAt: category.updatedAt.toISOString(),
+			feedCount: directFeeds.length + descendantFeedCount,
+			unreadCount: directUnreadCount + descendantUnreadCount,
+			feeds: directFeeds,
+			children,
+		};
+	};
+
+	const knownCategoryIds = new Set(categories.map((category) => category.id));
+	const roots = categories.filter(
+		(category) => !category.parentCategoryId || !knownCategoryIds.has(category.parentCategoryId),
+	);
+	return roots.map((category) => buildNode(category, new Set()));
 }

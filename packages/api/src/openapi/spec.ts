@@ -20,6 +20,16 @@ function apiDataRef(ref: string) {
 	};
 }
 
+function apiDataArrayRef(ref: string) {
+	return {
+		type: 'object',
+		required: ['data'],
+		properties: {
+			data: { type: 'array', items: { $ref: ref } },
+		},
+	};
+}
+
 function listResponse(ref: string) {
 	return {
 		type: 'object',
@@ -110,6 +120,107 @@ export const openApiSpec = {
 				required: ['registrationEnabled'],
 				properties: {
 					registrationEnabled: { type: 'boolean' },
+				},
+			},
+			Category: {
+				type: 'object',
+				required: [
+					'id',
+					'userId',
+					'parentCategoryId',
+					'name',
+					'slug',
+					'sortOrder',
+					'createdAt',
+					'updatedAt',
+				],
+				properties: {
+					id: { type: 'string', format: 'uuid' },
+					userId: { type: 'string', format: 'uuid' },
+					parentCategoryId: { type: ['string', 'null'], format: 'uuid' },
+					name: { type: 'string' },
+					slug: { type: 'string' },
+					sortOrder: { type: 'integer' },
+					createdAt: { type: 'string', format: 'date-time' },
+					updatedAt: { type: 'string', format: 'date-time' },
+				},
+			},
+			Feed: {
+				type: 'object',
+				required: [
+					'id',
+					'userId',
+					'categoryId',
+					'title',
+					'siteUrl',
+					'feedUrl',
+					'faviconUrl',
+					'description',
+					'pollingIntervalMinutes',
+					'lastSyncedAt',
+					'syncStatus',
+					'createdAt',
+					'updatedAt',
+				],
+				properties: {
+					id: { type: 'string', format: 'uuid' },
+					userId: { type: 'string', format: 'uuid' },
+					categoryId: { type: 'string', format: 'uuid' },
+					title: { type: 'string' },
+					siteUrl: { type: ['string', 'null'] },
+					feedUrl: { type: 'string', format: 'uri' },
+					faviconUrl: { type: ['string', 'null'] },
+					description: { type: ['string', 'null'] },
+					pollingIntervalMinutes: { type: 'integer' },
+					lastSyncedAt: { type: ['string', 'null'], format: 'date-time' },
+					nextSyncAt: { type: 'string', format: 'date-time' },
+					syncStatus: { type: 'string', enum: ['idle', 'syncing', 'error'] },
+					createdAt: { type: 'string', format: 'date-time' },
+					updatedAt: { type: 'string', format: 'date-time' },
+				},
+			},
+			FeedWithCounts: {
+				allOf: [
+					{ $ref: '#/components/schemas/Feed' },
+					{
+						type: 'object',
+						required: ['unreadCount'],
+						properties: {
+							unreadCount: { type: 'integer' },
+						},
+					},
+				],
+			},
+			CategoryWithCounts: {
+				allOf: [
+					{ $ref: '#/components/schemas/Category' },
+					{
+						type: 'object',
+						required: ['feedCount', 'unreadCount', 'feeds', 'children'],
+						properties: {
+							feedCount: { type: 'integer' },
+							unreadCount: { type: 'integer' },
+							feeds: {
+								type: 'array',
+								items: { $ref: '#/components/schemas/FeedWithCounts' },
+							},
+							children: {
+								type: 'array',
+								items: { $ref: '#/components/schemas/CategoryWithCounts' },
+							},
+						},
+					},
+				],
+			},
+			CategoryTreeResult: {
+				type: 'object',
+				required: ['categories', 'totalUnread'],
+				properties: {
+					categories: {
+						type: 'array',
+						items: { $ref: '#/components/schemas/CategoryWithCounts' },
+					},
+					totalUnread: { type: 'integer' },
 				},
 			},
 			ArticleListItem: {
@@ -318,13 +429,21 @@ export const openApiSpec = {
 			get: {
 				tags: ['Categories'],
 				security: bearerSecurity,
-				responses: { '200': json({ type: 'object' }) },
+				responses: { '200': json(apiDataRef('#/components/schemas/CategoryTreeResult')) },
 			},
 			post: {
 				tags: ['Categories'],
 				security: bearerSecurity,
-				requestBody: json({ type: 'object' }),
-				responses: { '201': json({ type: 'object' }) },
+				requestBody: json({
+					type: 'object',
+					required: ['name'],
+					properties: {
+						name: { type: 'string', minLength: 1, maxLength: 100 },
+						parentCategoryId: { type: ['string', 'null'], format: 'uuid' },
+						sortOrder: { type: 'integer', minimum: 0 },
+					},
+				}),
+				responses: { '201': json(apiDataRef('#/components/schemas/Category')) },
 			},
 		},
 		'/categories/{categoryId}': {
@@ -334,8 +453,15 @@ export const openApiSpec = {
 				parameters: [
 					{ in: 'path', name: 'categoryId', required: true, schema: { type: 'string' } },
 				],
-				requestBody: json({ type: 'object' }),
-				responses: { '200': json({ type: 'object' }) },
+				requestBody: json({
+					type: 'object',
+					properties: {
+						name: { type: 'string', minLength: 1, maxLength: 100 },
+						parentCategoryId: { type: ['string', 'null'], format: 'uuid' },
+						sortOrder: { type: 'integer', minimum: 0 },
+					},
+				}),
+				responses: { '200': json(apiDataRef('#/components/schemas/Category')) },
 			},
 			delete: {
 				tags: ['Categories'],
@@ -350,13 +476,21 @@ export const openApiSpec = {
 			get: {
 				tags: ['Feeds'],
 				security: bearerSecurity,
-				responses: { '200': json({ type: 'object' }) },
+				responses: { '200': json(apiDataArrayRef('#/components/schemas/FeedWithCounts')) },
 			},
 			post: {
 				tags: ['Feeds'],
 				security: bearerSecurity,
-				requestBody: json({ type: 'object' }),
-				responses: { '201': json({ type: 'object' }) },
+				requestBody: json({
+					type: 'object',
+					required: ['categoryId', 'feedUrl'],
+					properties: {
+						categoryId: { type: 'string', format: 'uuid' },
+						feedUrl: { type: 'string', format: 'uri', maxLength: 2048 },
+						title: { type: 'string', minLength: 1, maxLength: 255 },
+					},
+				}),
+				responses: { '201': json(apiDataRef('#/components/schemas/Feed')) },
 			},
 		},
 		'/feeds/import/opml': {
@@ -388,8 +522,15 @@ export const openApiSpec = {
 				tags: ['Feeds'],
 				security: bearerSecurity,
 				parameters: [{ in: 'path', name: 'feedId', required: true, schema: { type: 'string' } }],
-				requestBody: json({ type: 'object' }),
-				responses: { '200': json({ type: 'object' }) },
+				requestBody: json({
+					type: 'object',
+					properties: {
+						categoryId: { type: 'string', format: 'uuid' },
+						title: { type: 'string', minLength: 1, maxLength: 255 },
+						pollingIntervalMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
+					},
+				}),
+				responses: { '200': json(apiDataRef('#/components/schemas/Feed')) },
 			},
 			delete: {
 				tags: ['Feeds'],

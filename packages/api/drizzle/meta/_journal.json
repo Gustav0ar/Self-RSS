@@ -43,6 +43,13 @@
       "when": 1781899217429,
       "tag": "0005_amusing_black_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781906400000,
+      "tag": "0006_article_list_sort_index",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { feeds } from '../db/schema.js';
+import { categories, feeds } from '../db/schema.js';
 
 export class FeedRepository {
 	constructor(private db: Database) {}
@@ -13,8 +13,27 @@ export class FeedRepository {
 	}
 
 	async findByCategory(userId: string, categoryId: string) {
+		const categoryRows = this.db.all<{ id: string }>(sql`
+			WITH RECURSIVE category_scope(id) AS (
+				SELECT ${categories.id}
+				FROM ${categories}
+				WHERE ${categories.id} = ${categoryId}
+					AND ${categories.userId} = ${userId}
+				UNION ALL
+				SELECT child.id
+				FROM categories AS child
+				INNER JOIN category_scope AS parent ON child.parent_category_id = parent.id
+				WHERE child.user_id = ${userId}
+			)
+			SELECT id FROM category_scope
+		`);
+		const categoryIds = categoryRows.map((row) => row.id);
+		if (categoryIds.length === 0) {
+			return [];
+		}
+
 		return this.db.query.feeds.findMany({
-			where: and(eq(feeds.userId, userId), eq(feeds.categoryId, categoryId)),
+			where: and(eq(feeds.userId, userId), inArray(feeds.categoryId, categoryIds)),
 			orderBy: [feeds.title],
 		});
 	}
