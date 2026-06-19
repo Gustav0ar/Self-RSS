@@ -403,6 +403,27 @@ describe('API integration', () => {
 			expect(createFeed.response.status).toBe(201);
 			expect(createFeed.body.data.title).toBe('Example Feed');
 
+			const parentScopedFeeds = await authedRequest(
+				`/api/v1/feeds?categoryId=${parentCategory.body.data.id}`,
+				token1,
+			);
+			expect(parentScopedFeeds.response.status).toBe(200);
+			expect(parentScopedFeeds.body.data.map((feed: { id: string }) => feed.id)).toContain(
+				createFeed.body.data.id,
+			);
+
+			const categoryTree = await authedRequest('/api/v1/categories', token1);
+			expect(categoryTree.body.data.categories[0]).toMatchObject({
+				id: parentCategory.body.data.id,
+				feedCount: 1,
+				children: [
+					expect.objectContaining({
+						id: childCategory.body.data.id,
+						feedCount: 1,
+					}),
+				],
+			});
+
 			const duplicateFeed = await authedRequest('/api/v1/feeds', token1, {
 				method: 'POST',
 				body: JSON.stringify({
@@ -477,9 +498,18 @@ describe('API integration', () => {
 			expect(imported.body.data.skippedDuplicates).toBe(1);
 
 			const categories = await authedRequest('/api/v1/categories', token);
-			expect(
-				categories.body.data.categories.map((category: { name: string }) => category.name),
-			).toEqual(expect.arrayContaining(['Engineering', 'Frontend']));
+			const categoryNames = categories.body.data.categories.flatMap(function collect(category: {
+				name: string;
+				children?: unknown[];
+			}): string[] {
+				return [
+					category.name,
+					...(category.children ?? []).flatMap((child) =>
+						collect(child as { name: string; children?: unknown[] }),
+					),
+				];
+			});
+			expect(categoryNames).toEqual(expect.arrayContaining(['Engineering', 'Frontend']));
 
 			const feeds = await authedRequest('/api/v1/feeds', token);
 			expect(feeds.body.data.map((feed: { title: string }) => feed.title)).toEqual(

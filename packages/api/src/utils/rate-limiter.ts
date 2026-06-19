@@ -43,6 +43,15 @@ export class RateLimiter {
 		}
 		return current;
 	}
+
+	async releaseDailyCount(baseKey: string): Promise<void> {
+		const today = new Date().toISOString().slice(0, 10);
+		const redisKey = CacheKeys.rateLimit(`${baseKey}:${today}`);
+		const current = await this.redis.decr(redisKey);
+		if (current <= 0) {
+			await this.redis.del(redisKey);
+		}
+	}
 }
 
 export const RATE_LIMITS = {
@@ -61,6 +70,9 @@ export const RATE_LIMITS = {
 	},
 	get feedSync() {
 		return { windowMs: 60_000, maxRequests: 60 };
+	},
+	get articleEnrich() {
+		return { windowMs: 60_000, maxRequests: 120 };
 	},
 	get search() {
 		return { windowMs: 60_000, maxRequests: getEnv().RATE_LIMIT_SEARCH_MAX };

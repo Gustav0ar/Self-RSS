@@ -553,53 +553,65 @@ export class FeedSyncService {
 	}
 
 	private async enrichSingleArticle(enrichment: PendingArticleEnrichment) {
-		const enrichedHtml = await this.resolveEnrichedArticleHtml(
-			enrichment.canonicalUrl,
-			enrichment.contentHtml,
-		);
-		if (!enrichedHtml) {
+		const lockKey = CacheKeys.articleEnrichmentLock(enrichment.articleId);
+		const lockAcquired = await this.redis.set(lockKey, '1', 'EX', 60, 'NX');
+		if (lockAcquired !== 'OK') {
 			return;
 		}
 
-		const sanitizedHtml = sanitizeHtml(enrichedHtml);
-		const textContent = stripHtml(enrichedHtml);
-		const excerpt = textContent ? extractExcerpt(textContent) : null;
-		const heroImage =
-			extractHeroImage(enrichedHtml) ?? extractHeroImage(sanitizedHtml) ?? enrichment.heroImageUrl;
-
-		if (
-			!this.shouldRefreshArticle(
+		try {
+			const enrichedHtml = await this.resolveEnrichedArticleHtml(
+				enrichment.canonicalUrl,
 				enrichment.contentHtml,
-				enrichment.heroImageUrl,
-				sanitizedHtml,
-				heroImage,
-			)
-		) {
-			return;
-		}
+			);
+			if (!enrichedHtml) {
+				return;
+			}
 
-		const article = await this.articleRepo.findById(enrichment.articleId);
-		if (!article) {
-			return;
-		}
+			const sanitizedHtml = sanitizeHtml(enrichedHtml);
+			const textContent = stripHtml(enrichedHtml);
+			const excerpt = textContent ? extractExcerpt(textContent) : null;
+			const heroImage =
+				extractHeroImage(enrichedHtml) ??
+				extractHeroImage(sanitizedHtml) ??
+				enrichment.heroImageUrl;
 
-		await this.articleRepo.updateContent(enrichment.articleId, {
-			contentHtml: sanitizedHtml || null,
-			contentText: textContent || null,
-			excerpt,
-			heroImageUrl: heroImage,
-			hash: createArticleContentHash({
-				canonicalUrl: article.canonicalUrl,
-				title: article.title,
-				author: article.author,
-				excerpt,
+			if (
+				!this.shouldRefreshArticle(
+					enrichment.contentHtml,
+					enrichment.heroImageUrl,
+					sanitizedHtml,
+					heroImage,
+				)
+			) {
+				return;
+			}
+
+			const article = await this.articleRepo.findById(enrichment.articleId);
+			if (!article) {
+				return;
+			}
+
+			await this.articleRepo.updateContent(enrichment.articleId, {
 				contentHtml: sanitizedHtml || null,
 				contentText: textContent || null,
+				excerpt,
 				heroImageUrl: heroImage,
-			}),
-		});
-		await this.replaceArticleMedia(enrichment.articleId, sanitizedHtml || null);
-		await this.invalidateArticleDetailCaches(enrichment.userId, [enrichment.articleId]);
+				hash: createArticleContentHash({
+					canonicalUrl: article.canonicalUrl,
+					title: article.title,
+					author: article.author,
+					excerpt,
+					contentHtml: sanitizedHtml || null,
+					contentText: textContent || null,
+					heroImageUrl: heroImage,
+				}),
+			});
+			await this.replaceArticleMedia(enrichment.articleId, sanitizedHtml || null);
+			await this.invalidateArticleDetailCaches(enrichment.userId, [enrichment.articleId]);
+		} finally {
+			await this.redis.del(lockKey);
+		}
 	}
 
 	private shouldAttemptArticleEnrichment(

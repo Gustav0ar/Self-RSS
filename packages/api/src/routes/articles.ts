@@ -9,7 +9,7 @@ import type { ArticleService } from '../services/article.service.js';
 import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.js';
 import { parseBody, parseQuery, parseUuidParam } from '../utils/validation.js';
 
-export function createArticleRoutes(articleService: ArticleService) {
+export function createArticleRoutes(articleService: ArticleService, rateLimiter: RateLimiter) {
 	const routes = new Hono();
 
 	routes.get('/', async (c) => {
@@ -36,6 +36,7 @@ export function createArticleRoutes(articleService: ArticleService) {
 	});
 
 	routes.post('/:articleId/enrich', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'article-enrich', RATE_LIMITS.articleEnrich);
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const result = await articleService.enrichArticle(userId, articleId);

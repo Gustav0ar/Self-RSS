@@ -312,23 +312,32 @@ function updateCategoryUnreadCount(value: unknown, categoryId: string, delta: nu
 	}
 
 	let changed = false;
-	const categories = value.map((category) => {
-		if (
-			!category ||
-			typeof category !== 'object' ||
-			!('id' in category) ||
-			category.id !== categoryId
-		) {
+	const updateCategory = (category: unknown): unknown => {
+		if (!category || typeof category !== 'object' || !('id' in category)) {
+			return category;
+		}
+
+		const node = category as CategoryWithCounts;
+		let childChanged = false;
+		const children = Array.isArray(node.children)
+			? node.children.map((child) => {
+					const nextChild = updateCategory(child) as CategoryWithCounts;
+					if (nextChild !== child) childChanged = true;
+					return nextChild;
+				})
+			: node.children;
+		const isTarget = node.id === categoryId;
+
+		if (!isTarget && !childChanged) {
 			return category;
 		}
 
 		changed = true;
-		const unreadCount = Math.max(
-			0,
-			Number((category as CategoryWithCounts).unreadCount ?? 0) + delta,
-		);
-		return { ...category, unreadCount };
-	});
+		const unreadCount = Math.max(0, Number(node.unreadCount ?? 0) + delta);
+		return { ...node, children, unreadCount };
+	};
+
+	const categories = value.map((category) => updateCategory(category));
 
 	return changed ? categories : value;
 }
@@ -897,18 +906,7 @@ export function useMarkAllRead() {
 		},
 	});
 }
-
-export function useSearch(q: string, categoryId?: string) {
-	const normalizedQuery = q.trim();
-	const params = new URLSearchParams({ q: normalizedQuery });
-	if (categoryId) params.set('categoryId', categoryId);
-	return useQuery({
-		queryKey: ['search', normalizedQuery, categoryId],
-		queryFn: () => apiFetch<ApiListResponse<ArticleListItem>>(`/search?${params.toString()}`),
-		enabled: normalizedQuery.length >= 2,
-		staleTime: 5_000,
-	});
-}
+export { useSearch } from './search-queries';
 
 // --- Preferences ---
 

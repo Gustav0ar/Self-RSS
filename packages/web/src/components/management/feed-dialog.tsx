@@ -1,6 +1,7 @@
 import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
 import { useEffect, useState } from 'react';
 import { useCreateFeed, useUpdateFeed } from '@/hooks/queries';
+import { categoryPathLabel } from '@/lib/categories';
 import { ModalShell } from './modal-shell';
 
 interface FeedDialogProps {
@@ -117,7 +118,7 @@ export function FeedDialog({
 					>
 						{categories.map((category) => (
 							<option key={category.id} value={category.id}>
-								{category.name}
+								{categoryPathLabel(categories, category.id) || category.name}
 							</option>
 						))}
 					</select>

@@ -28,6 +28,8 @@ interface ArticleListProps {
 	onLoadMore?: () => void;
 	loadingMore?: boolean;
 	density?: DisplayDensityPreference;
+	emptyTitle?: string;
+	emptyDescription?: string;
 }
 
 const ROW_HEIGHT_PX = {
@@ -47,6 +49,8 @@ export function ArticleList({
 	onLoadMore,
 	loadingMore,
 	density = 'comfortable',
+	emptyTitle = 'No articles found',
+	emptyDescription,
 }: ArticleListProps) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const lastScrolledSelectedIdRef = useRef<string | null>(null);
@@ -170,7 +174,12 @@ export function ArticleList({
 	if (!loading && articles.length === 0) {
 		return (
 			<div className="flex h-full items-center justify-center px-6">
-				<div className="text-center text-sm text-muted-foreground">No articles found</div>
+				<div className="max-w-sm text-center">
+					<p className="text-sm font-medium text-foreground">{emptyTitle}</p>
+					{emptyDescription ? (
+						<p className="mt-1 text-sm leading-6 text-muted-foreground">{emptyDescription}</p>
+					) : null}
+				</div>
 			</div>
 		);
 	}

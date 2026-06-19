@@ -58,7 +58,8 @@ class MigrationGuardError extends Error {
 
 interface ProtectedTableSnapshot {
 	count: number;
-	keys: Set<string>;
+	keyColumns: readonly string[];
+	snapshotTable: string;
 }
 
 type ProtectedSnapshot = Map<string, ProtectedTableSnapshot>;
@@ -82,7 +83,7 @@ function tableExists(db: Database, table: string) {
 
 function protectedTableSnapshot(db: Database): ProtectedSnapshot {
 	const snapshot: ProtectedSnapshot = new Map();
-	for (const table of PROTECTED_TABLES) {
+	for (const [index, table] of PROTECTED_TABLES.entries()) {
 		if (!tableExists(db, table.name)) {
 			continue;
 		}
@@ -91,42 +92,95 @@ function protectedTableSnapshot(db: Database): ProtectedSnapshot {
 		);
 
 		const quotedKeyColumns = table.keyColumns.map(quoteIdentifier).join(', ');
-		const rows = db.all<Record<string, unknown>>(
+		const snapshotTable = `migration_guard_${index}_${table.name}`;
+		db.run(sql.raw(`DROP TABLE IF EXISTS temp.${quoteIdentifier(snapshotTable)}`));
+		db.run(
 			sql.raw(
-				`SELECT ${quotedKeyColumns} FROM ${quoteIdentifier(
-					table.name,
-				)} ORDER BY ${quotedKeyColumns}`,
-			),
-		);
-		const keys = new Set(
-			rows.map((row) =>
-				table.keyColumns
-					.map((column) => {
-						const value = row[column];
-						return value === null || value === undefined ? '' : String(value);
-					})
-					.join('\u001f'),
+				`CREATE TEMP TABLE ${quoteIdentifier(
+					snapshotTable,
+				)} AS SELECT ${quotedKeyColumns} FROM ${quoteIdentifier(table.name)}`,
 			),
 		);
 
-		snapshot.set(table.name, { count, keys });
+		snapshot.set(table.name, { count, keyColumns: table.keyColumns, snapshotTable });
 	}
 	return snapshot;
 }
 
-function assertNoProtectedDataLoss(before: ProtectedSnapshot, after: ProtectedSnapshot) {
+function protectedRowKeys(rows: Record<string, unknown>[], keyColumns: readonly string[]) {
+	return rows.map((row) =>
+		keyColumns
+			.map((column) => {
+				const value = row[column];
+				return value === null || value === undefined ? '' : String(value);
+			})
+			.join('\u001f'),
+	);
+}
+
+function protectedTableCount(db: Database, table: string) {
+	if (!tableExists(db, table)) {
+		return 0;
+	}
+	const [{ count } = { count: 0 }] = db.all<{ count: number }>(
+		sql.raw(`SELECT count(*) AS count FROM ${quoteIdentifier(table)}`),
+	);
+	return count;
+}
+
+function missingProtectedRows(
+	db: Database,
+	table: string,
+	snapshotTable: string,
+	keyColumns: readonly string[],
+) {
+	if (!tableExists(db, table)) {
+		const rows = db.all<Record<string, unknown>>(
+			sql.raw(`SELECT * FROM temp.${quoteIdentifier(snapshotTable)} LIMIT 20`),
+		);
+		return protectedRowKeys(rows, keyColumns);
+	}
+
+	const existsPredicate = keyColumns
+		.map((column) => `current.${quoteIdentifier(column)} IS snapshot.${quoteIdentifier(column)}`)
+		.join(' AND ');
+	const quotedKeyColumns = keyColumns
+		.map((column) => `snapshot.${quoteIdentifier(column)} AS ${quoteIdentifier(column)}`)
+		.join(', ');
+	const rows = db.all<Record<string, unknown>>(
+		sql.raw(
+			`SELECT ${quotedKeyColumns} FROM temp.${quoteIdentifier(snapshotTable)} AS snapshot
+			 WHERE NOT EXISTS (
+				 SELECT 1 FROM ${quoteIdentifier(table)} AS current WHERE ${existsPredicate}
+			 )
+			 LIMIT 20`,
+		),
+	);
+	return protectedRowKeys(rows, keyColumns);
+}
+
+function dropProtectedSnapshotTables(db: Database, snapshot: ProtectedSnapshot) {
+	for (const { snapshotTable } of snapshot.values()) {
+		db.run(sql.raw(`DROP TABLE IF EXISTS temp.${quoteIdentifier(snapshotTable)}`));
+	}
+}
+
+function assertNoProtectedDataLoss(db: Database, before: ProtectedSnapshot) {
 	const losses: { table: string; before: number; after: number }[] = [];
 	const missingRows: { table: string; keys: string[] }[] = [];
 
 	for (const [table, beforeTable] of before) {
-		const afterTable = after.get(table) ?? { count: 0, keys: new Set<string>() };
-		if (afterTable.count < beforeTable.count) {
-			losses.push({ table, before: beforeTable.count, after: afterTable.count });
+		const afterCount = protectedTableCount(db, table);
+		if (afterCount < beforeTable.count) {
+			losses.push({ table, before: beforeTable.count, after: afterCount });
 		}
 
-		const missing = Array.from(beforeTable.keys)
-			.filter((key) => !afterTable.keys.has(key))
-			.slice(0, 20);
+		const missing = missingProtectedRows(
+			db,
+			table,
+			beforeTable.snapshotTable,
+			beforeTable.keyColumns,
+		);
 		if (missing.length > 0) {
 			missingRows.push({ table, keys: missing });
 		}
@@ -240,7 +294,7 @@ export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
 			insertMigrationRecord(db, migrationsTable, migration);
 		}
 
-		assertNoProtectedDataLoss(beforeSnapshot, protectedTableSnapshot(db));
+		assertNoProtectedDataLoss(db, beforeSnapshot);
 		assertNoForeignKeyViolations(db);
 		db.run(sql.raw('COMMIT;'));
 	} catch (error) {
@@ -250,6 +304,7 @@ export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
 		}
 		throw error;
 	} finally {
+		dropProtectedSnapshotTables(db, beforeSnapshot);
 		db.run(sql.raw('PRAGMA foreign_keys = ON;'));
 	}
 }

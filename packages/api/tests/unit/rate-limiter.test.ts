@@ -95,6 +95,20 @@ describe('RateLimiter', () => {
 		expect(redis.expire).toHaveBeenCalledTimes(1);
 		expect(redis.expire).toHaveBeenCalledWith(`rl:opml-import:user-1:${today}`, 60 * 60 * 48);
 	});
+
+	it('releases a reserved daily counter slot', async () => {
+		const redis = {
+			decr: vi.fn().mockResolvedValue(0),
+			del: vi.fn().mockResolvedValue(1),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		await limiter.releaseDailyCount('opml-import:user-1');
+
+		const today = new Date().toISOString().slice(0, 10);
+		expect(redis.decr).toHaveBeenCalledWith(`rl:opml-import:user-1:${today}`);
+		expect(redis.del).toHaveBeenCalledWith(`rl:opml-import:user-1:${today}`);
+	});
 });
 
 describe('RATE_LIMITS', () => {
@@ -107,6 +121,7 @@ describe('RATE_LIMITS', () => {
 		expect(RATE_LIMITS.feedExport).toEqual({ windowMs: 60_000, maxRequests: 30 });
 		expect(RATE_LIMITS.feedImport).toEqual({ windowMs: 60_000, maxRequests: 20 });
 		expect(RATE_LIMITS.feedSync).toEqual({ windowMs: 60_000, maxRequests: 60 });
+		expect(RATE_LIMITS.articleEnrich).toEqual({ windowMs: 60_000, maxRequests: 120 });
 	});
 });
 

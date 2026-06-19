@@ -1,5 +1,5 @@
 import { Outlet, useRouter } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { KeyboardHelp } from '@/components/help/keyboard-help';
 import { usePreferences } from '@/hooks/queries';
@@ -61,7 +61,11 @@ export function RootLayout() {
 		<div className="app-shell h-full p-2 sm:p-3 lg:p-4">
 			<PreferenceRuntimeStyles />
 			<div className="flex h-full min-h-0 flex-col rounded-2xl">
-				<TopBar onSelectArticle={navigateToArticle} onOpenSidebar={() => setSidebarOpen(true)} />
+				<TopBar
+					onSelectArticle={navigateToArticle}
+					onOpenSidebar={() => setSidebarOpen(true)}
+					categoryId={selectedCategoryId}
+				/>
 				<div className="flex min-h-0 flex-1 gap-2 px-2 pb-2 pt-0 sm:gap-3 sm:px-3 sm:pb-3">
 					<Sidebar
 						selectedFeedId={selectedFeedId}
@@ -118,22 +122,60 @@ interface MobileSidebarDrawerProps {
 }
 
 function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
+	const drawerRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
+		const previouslyFocused =
+			document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const focusableSelector =
+			'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 		function handleKey(event: KeyboardEvent) {
 			if (event.key === 'Escape') {
 				onClose();
+				return;
+			}
+			if (event.key !== 'Tab') {
+				return;
+			}
+			const focusable = Array.from(
+				drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
+			).filter((element) => element.offsetParent !== null);
+			if (focusable.length === 0) {
+				event.preventDefault();
+				drawerRef.current?.focus();
+				return;
+			}
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last?.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first?.focus();
 			}
 		}
 		window.addEventListener('keydown', handleKey);
 		document.body.style.overflow = 'hidden';
+		window.setTimeout(() => {
+			const firstFocusable = drawerRef.current?.querySelector<HTMLElement>(focusableSelector);
+			(firstFocusable ?? drawerRef.current)?.focus();
+		}, 0);
 		return () => {
 			window.removeEventListener('keydown', handleKey);
 			document.body.style.overflow = '';
+			previouslyFocused?.focus();
 		};
 	}, [onClose]);
 
 	return (
-		<div className="sidebar-drawer lg:hidden" role="dialog" aria-modal="true" aria-label="Feeds">
+		<div
+			ref={drawerRef}
+			className="sidebar-drawer lg:hidden"
+			role="dialog"
+			aria-modal="true"
+			aria-label="Feeds"
+			tabIndex={-1}
+		>
 			<button
 				type="button"
 				aria-label="Close menu"
