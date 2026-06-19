@@ -56,25 +56,15 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		expect(result).toBeNull();
 	});
 
-	it('applies unread filter and sort from the cached snapshot', async () => {
-		const cached = {
-			articles: [
-				cachedArticle('a2', '2026-01-02T00:00:00.000Z', true),
-				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
-			],
-			cursor: null,
-			hasMore: false,
-			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
-		};
+	it('returns null for unread-only requests because the bounded cache can be incomplete', async () => {
 		const redis = {
-			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+			get: vi.fn(),
 		};
 		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20, unreadOnly: true });
-		expect(result?.articles).toHaveLength(1);
-		expect(result?.articles[0]?.id).toBe('a1');
-		expect(result?.meta.generation).toBe(1);
+		expect(result).toBeNull();
+		expect(redis.get).not.toHaveBeenCalled();
 	});
 
 	it('returns an opaque latest cursor from the last returned cached article', async () => {
@@ -100,27 +90,16 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		expect(result?.hasMore).toBe(true);
 	});
 
-	it('returns an opaque oldest cursor from the last returned cached article', async () => {
-		const cached = {
-			articles: [
-				cachedArticle('a3', '2026-01-03T00:00:00.000Z'),
-				cachedArticle('a2', '2026-01-02T00:00:00.000Z'),
-				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
-			],
-			cursor: null,
-			hasMore: true,
-			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
-		};
+	it('returns null for oldest requests because the bounded cache is latest-first only', async () => {
 		const redis = {
-			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+			get: vi.fn(),
 		};
 		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 2, sort: 'oldest' });
 
-		expect(result?.articles.map((article) => article.id)).toEqual(['a1', 'a2']);
-		expect(result?.cursor).toBe(`a2:${Date.parse('2026-01-02T00:00:00.000Z') / 1000}:a`);
-		expect(result?.hasMore).toBe(true);
+		expect(result).toBeNull();
+		expect(redis.get).not.toHaveBeenCalled();
 	});
 
 	it('returns null and deletes the key when the cached payload is corrupt', async () => {
@@ -133,6 +112,48 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
 		expect(redis.del).toHaveBeenCalled();
+	});
+});
+
+describe('ArticleCacheService - updateCachedReadState', () => {
+	it('patches matching cached articles without invalidating the generation', async () => {
+		const globalCached = {
+			articles: [
+				cachedArticle('a1', '2026-01-01T00:00:00.000Z'),
+				cachedArticle('a2', '2026-01-02T00:00:00.000Z'),
+			],
+			cursor: null,
+			hasMore: false,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const scopedCached = {
+			...globalCached,
+			articles: [cachedArticle('a1', '2026-01-01T00:00:00.000Z')],
+		};
+		const setex = vi.fn(async (_key: string, _ttl: number, _payload: string) => 'OK');
+		const redis = {
+			scan: vi.fn().mockResolvedValue(['0', ['articles:list:user-1:feed:f1']]),
+			get: vi
+				.fn()
+				.mockImplementation((key: string) =>
+					Promise.resolve(
+						key === 'articles:list:user-1'
+							? JSON.stringify(globalCached)
+							: JSON.stringify(scopedCached),
+					),
+				),
+			setex,
+			del: vi.fn(async () => 0),
+			incr: vi.fn(async () => 2),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		await service.updateCachedReadState('user-1', 'a1', true);
+
+		expect(redis.incr).not.toHaveBeenCalled();
+		expect(setex).toHaveBeenCalledTimes(2);
+		const payloads = setex.mock.calls.map((call) => JSON.parse(call[2]));
+		expect(payloads.every((payload) => payload.articles[0].isRead === true)).toBe(true);
 	});
 });
 

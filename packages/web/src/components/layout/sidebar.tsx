@@ -27,10 +27,9 @@ import {
 	useDeleteCategory,
 	useDeleteFeed,
 	useExportOpml,
-	useFeeds,
 	useUpdateCategory,
 } from '@/hooks/queries';
-import { categoryAncestorIds, flattenCategories } from '@/lib/categories';
+import { categoryAncestorIds, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 import { cn } from '@/lib/utils';
 
 interface SidebarProps {
@@ -86,9 +85,9 @@ export function Sidebar({
 	variant = 'pane',
 }: SidebarProps) {
 	const { data: categories } = useCategories();
-	const { data: feeds } = useFeeds();
 	const categoryTree = categories ?? [];
 	const flatCategories = useMemo(() => flattenCategories(categoryTree), [categoryTree]);
+	const feeds = useMemo(() => flattenCategoryFeeds(categoryTree), [categoryTree]);
 	const deleteCategory = useDeleteCategory();
 	const deleteFeed = useDeleteFeed();
 	const exportOpml = useExportOpml();
@@ -135,13 +134,13 @@ export function Sidebar({
 	}, [expandedCategories, uncategorizedExpanded]);
 
 	const _isAllSelected = !selectedFeedId && !selectedCategoryId;
-	const totalUnread = feeds?.reduce((sum, feed) => sum + (feed.unreadCount ?? 0), 0) ?? 0;
-	const uncategorizedFeeds = feeds?.filter((feed) => !feed.categoryId) ?? [];
+	const totalUnread = feeds.reduce((sum, feed) => sum + (feed.unreadCount ?? 0), 0);
+	const uncategorizedFeeds = feeds.filter((feed) => !feed.categoryId);
 	const hasCategories = flatCategories.length > 0;
 
 	const categoryFeedMap = useMemo(() => {
 		const map = new Map<string, FeedWithCounts[]>();
-		for (const feed of feeds ?? []) {
+		for (const feed of feeds) {
 			if (!feed.categoryId) {
 				continue;
 			}
@@ -152,7 +151,7 @@ export function Sidebar({
 		return map;
 	}, [feeds]);
 	const selectedFeedCategoryId = useMemo(
-		() => feeds?.find((feed) => feed.id === selectedFeedId)?.categoryId,
+		() => feeds.find((feed) => feed.id === selectedFeedId)?.categoryId,
 		[feeds, selectedFeedId],
 	);
 	const activeCategoryId = selectedCategoryId ?? selectedFeedCategoryId ?? undefined;

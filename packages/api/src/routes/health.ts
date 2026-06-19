@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
+import { CacheKeys, CacheTTL } from '../db/redis.js';
 
 export function createHealthRoutes(db?: Database, redis?: Redis) {
 	const health = new Hono();
@@ -22,10 +23,12 @@ export function createHealthRoutes(db?: Database, redis?: Redis) {
 
 		try {
 			await Promise.all([db.run(sql`select 1`), redis.ping()]);
+			const workerHeartbeat = await readWorkerHeartbeat(redis);
 			return c.json({
 				status: 'ok',
 				timestamp,
-				checks: { database: 'ok', redis: 'ok' },
+				checks: { database: 'ok', redis: 'ok', worker: workerHeartbeat.status },
+				worker: workerHeartbeat,
 			});
 		} catch (error) {
 			return c.json(
@@ -40,4 +43,24 @@ export function createHealthRoutes(db?: Database, redis?: Redis) {
 	});
 
 	return health;
+}
+
+async function readWorkerHeartbeat(redis: Redis) {
+	const rawHeartbeat = await redis.get(CacheKeys.workerHeartbeat('feed-worker'));
+	if (!rawHeartbeat) {
+		return { status: 'missing' as const };
+	}
+
+	try {
+		const parsed = JSON.parse(rawHeartbeat) as { timestamp?: unknown };
+		const timestamp = typeof parsed.timestamp === 'string' ? parsed.timestamp : null;
+		const ageMs = timestamp ? Date.now() - new Date(timestamp).getTime() : Number.POSITIVE_INFINITY;
+		const maxAgeMs = CacheTTL.workerHeartbeat * 1000;
+		if (!timestamp || !Number.isFinite(ageMs) || ageMs > maxAgeMs) {
+			return { status: 'stale' as const, timestamp, ageMs };
+		}
+		return { status: 'ok' as const, timestamp, ageMs };
+	} catch {
+		return { status: 'stale' as const };
+	}
 }

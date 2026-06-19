@@ -54,6 +54,7 @@ const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
 const MANUAL_SYNC_DEDUPE_TTL_SECONDS = 60 * 30;
 const MANUAL_SYNC_LOCK_TTL_SECONDS = 60 * 30;
+const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 
 export class FeedSyncService {
 	private parser: RSSParser;
@@ -82,6 +83,12 @@ export class FeedSyncService {
 		if (!feed) {
 			logger.warn('Feed not found for sync', { feedId, userId });
 			return null;
+		}
+
+		const releaseFeedLock = await this.tryAcquireFeedSyncLock(feedId);
+		if (!releaseFeedLock) {
+			logger.info('Skipping feed sync because another sync is already running', { feedId, userId });
+			return { newArticles: 0, total: 0, skipped: true as const };
 		}
 
 		const shouldEnrichArticles = options.enrichArticles ?? true;
@@ -379,6 +386,8 @@ export class FeedSyncService {
 			});
 			logger.error('Feed sync failed', { feedId, error: String(err) });
 			throw err;
+		} finally {
+			await releaseFeedLock();
 		}
 	}
 
@@ -397,7 +406,7 @@ export class FeedSyncService {
 			);
 		}
 		const syncableFeeds = feeds;
-		const skippedFeeds = 0;
+		let skippedFeeds = 0;
 
 		if (syncableFeeds.length === 0) {
 			return {
@@ -428,9 +437,13 @@ export class FeedSyncService {
 						enrichArticles: false,
 						warmArticleCache: false,
 					});
-					syncedFeeds += 1;
 					if (result) {
-						newArticles += result.newArticles;
+						if ('skipped' in result && result.skipped) {
+							skippedFeeds += 1;
+						} else {
+							syncedFeeds += 1;
+							newArticles += result.newArticles;
+						}
 					}
 				} catch {
 					failedFeeds += 1;
@@ -872,6 +885,43 @@ export class FeedSyncService {
 		await this.redis.del(
 			...articleIds.map((articleId) => CacheKeys.articleDetail(userId, articleId)),
 		);
+	}
+
+	private async tryAcquireFeedSyncLock(feedId: string): Promise<(() => Promise<void>) | null> {
+		const redisWithSet = this.redis as unknown as {
+			set?: (...args: unknown[]) => Promise<unknown>;
+			del?: (...args: unknown[]) => Promise<unknown>;
+		};
+
+		if (typeof redisWithSet.set !== 'function') {
+			logger.warn('Feed sync lock unavailable because Redis set is not configured', { feedId });
+			return async () => undefined;
+		}
+
+		const lockKey = CacheKeys.feedSyncLock(feedId);
+		const lockAcquired = await redisWithSet.set(
+			lockKey,
+			'1',
+			'EX',
+			FEED_SYNC_LOCK_TTL_SECONDS,
+			'NX',
+		);
+		if (lockAcquired !== 'OK') {
+			return null;
+		}
+
+		return async () => {
+			try {
+				if (typeof redisWithSet.del === 'function') {
+					await redisWithSet.del(lockKey);
+				}
+			} catch (err) {
+				logger.warn('Failed to release feed sync lock', {
+					feedId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		};
 	}
 
 	private parsePublishedAt(value: unknown): Date | null {

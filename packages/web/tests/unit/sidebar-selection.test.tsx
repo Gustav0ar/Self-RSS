@@ -15,22 +15,20 @@ const categories = [
 		updatedAt: new Date().toISOString(),
 		feedCount: 1,
 		unreadCount: 7,
-	},
-];
-
-const feeds = [
-	{
-		id: 'feed-1',
-		categoryId: 'category-1',
-		title: 'A very long feed title that should stay clipped correctly',
-		faviconUrl: null,
-		unreadCount: 7,
+		feeds: [
+			{
+				id: 'feed-1',
+				categoryId: 'category-1',
+				title: 'A very long feed title that should stay clipped correctly',
+				faviconUrl: null,
+				unreadCount: 7,
+			},
+		],
 	},
 ];
 
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
-	useFeeds: () => ({ data: feeds }),
 	useDeleteCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useDeleteFeed: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useExportOpml: () => ({ mutateAsync: vi.fn(), isPending: false }),

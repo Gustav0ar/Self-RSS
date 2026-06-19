@@ -99,7 +99,7 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(page.getByRole('heading', { name: 'Beta Update' })).toBeVisible();
 
 	await page.getByPlaceholder('Search articles...').fill('Gamma');
-	const gammaButton = page.getByRole('button', { name: /Gamma World/ });
+	const gammaButton = page.getByRole('option', { name: /Gamma World/ });
 	await expect(gammaButton).toBeVisible();
 	await gammaButton.click();
 	// The search-bar click navigates to /articles/:id. Wait for that

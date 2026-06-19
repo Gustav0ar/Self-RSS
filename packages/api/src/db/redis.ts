@@ -40,6 +40,7 @@ export const CacheKeys = {
 	feedSyncAllQueue: () => 'feed:sync-all:queue',
 	feedSyncAllQueued: (userId: string) => `feed:sync-all:queued:${userId}`,
 	feedSyncAllLock: (userId: string) => `feed:sync-all:lock:${userId}`,
+	feedSyncLock: (feedId: string) => `feed:sync:lock:${feedId}`,
 	// Pre-computed article cache (populated during background sync)
 	articleListCache: (userId: string) => `articles:list:${userId}`,
 	articleListCacheMeta: (userId: string) => `articles:meta:${userId}`,
@@ -58,6 +59,7 @@ export const CacheKeys = {
 	articleEnrichmentLock: (articleId: string) => `articles:enriching:${articleId}`,
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
+	workerHeartbeat: (name: string) => `worker:heartbeat:${name}`,
 } as const;
 
 // Cache TTL in seconds
@@ -68,4 +70,5 @@ export const CacheTTL = {
 	// SQLite query. Invalidation happens on mark-read (see
 	// ArticleService.invalidateArticleDetailCache).
 	articleDetail: 300,
+	workerHeartbeat: 45,
 } as const;

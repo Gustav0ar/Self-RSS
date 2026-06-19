@@ -187,7 +187,7 @@ export class ArticleService {
 			await Promise.all([
 				this.invalidateUnreadCache(userId, [article.feedId]),
 				this.invalidateArticleDetailCache(userId, articleId),
-				this.articleCache?.invalidateCache(userId),
+				this.articleCache?.updateCachedReadState(userId, articleId, read),
 				this.realtimeService?.publishReadStateEvent(userId, {
 					type: 'article.read_state_changed',
 					eventId: crypto.randomUUID(),

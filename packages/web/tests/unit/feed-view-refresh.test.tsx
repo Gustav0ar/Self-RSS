@@ -18,8 +18,43 @@ let hideReadPreference = false;
 let defaultSortPreference = 'latest';
 let keyboardShortcutsEnabled = true;
 let autoMarkReadMode = 'on_navigate';
+const categories = [
+	{
+		id: 'category-1',
+		userId: 'user-1',
+		parentCategoryId: null,
+		name: 'Review Feeds',
+		slug: 'review-feeds',
+		sortOrder: 0,
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+		feedCount: 1,
+		unreadCount: 6,
+		feeds: [
+			{
+				id: 'feed-42',
+				userId: 'user-1',
+				categoryId: 'category-1',
+				title: 'Feed 42',
+				siteUrl: null,
+				feedUrl: 'https://example.com/feed.xml',
+				faviconUrl: null,
+				description: null,
+				pollingIntervalMinutes: 60,
+				lastSyncedAt: null,
+				nextSyncAt: new Date().toISOString(),
+				syncStatus: 'idle',
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				unreadCount: 6,
+			},
+		],
+		children: [],
+	},
+];
 
 vi.mock('../../src/hooks/queries', () => ({
+	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: (params: unknown) => useInfiniteArticlesMock(params),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
 	useMarkRead: () => ({ mutate: markReadMutate }),

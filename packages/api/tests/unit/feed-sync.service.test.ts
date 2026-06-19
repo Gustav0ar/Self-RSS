@@ -141,6 +141,40 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ newArticles: 1, total: 1 });
 	});
 
+	it('skips a feed sync when the per-feed lock is already held', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Locked Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+		};
+		const redis = {
+			set: vi.fn(async () => null),
+			del: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			syncRunRepo as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		const result = await service.syncFeed('feed-1', 'user-1');
+
+		expect(redis.set).toHaveBeenCalledWith('feed:sync:lock:feed-1', '1', 'EX', 1200, 'NX');
+		expect(syncRunRepo.create).not.toHaveBeenCalled();
+		expect(feedRepo.update).not.toHaveBeenCalled();
+		expect(result).toEqual({ newArticles: 0, total: 0, skipped: true });
+	});
+
 	it('schedules lazy enrichment for existing text-only articles', async () => {
 		const feedRepo = {
 			findById: vi.fn(async () => ({
