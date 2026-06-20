@@ -124,12 +124,12 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 		[activeIndex, onSelectArticle, renderedResults, showDropdown],
 	);
 
-	// Reset the highlight when the debounced query changes so the user
-	// always starts at the top of a fresh result set.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional — runs on every debounced-query change to clear stale highlight state.
+	// Reset the highlight when the result set changes so keyboard selection
+	// always starts from the top of the current query and scope.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional — clears stale highlight state when the query or category scope changes.
 	useEffect(() => {
 		setActiveIndex(-1);
-	}, [debouncedQuery]);
+	}, [debouncedQuery, activeCategoryId]);
 
 	return (
 		<div className="relative" ref={containerRef}>

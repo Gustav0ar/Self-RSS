@@ -104,6 +104,79 @@ describe('SearchBar', () => {
 		expect(useSearchMock).toHaveBeenLastCalledWith('Alpha', 'category-1');
 	});
 
+	it('clears the highlighted result when switching search scope', () => {
+		useSearchMock.mockImplementation((_query: string, categoryId?: string) => ({
+			data: {
+				pages: [
+					{
+						data: categoryId
+							? [
+									{
+										id: 'category-a',
+										title: 'Current Alpha',
+										feedTitle: 'Scoped Feed',
+										excerpt: null,
+										heroImageUrl: null,
+									},
+									{
+										id: 'category-b',
+										title: 'Current Beta',
+										feedTitle: 'Scoped Feed',
+										excerpt: null,
+										heroImageUrl: null,
+									},
+								]
+							: [
+									{
+										id: 'all-a',
+										title: 'All Alpha',
+										feedTitle: 'All Feed',
+										excerpt: null,
+										heroImageUrl: null,
+									},
+									{
+										id: 'all-b',
+										title: 'All Beta',
+										feedTitle: 'All Feed',
+										excerpt: null,
+										heroImageUrl: null,
+									},
+								],
+						cursor: null,
+						hasMore: false,
+					},
+				],
+			},
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+		}));
+
+		render(<SearchBar onSelectArticle={() => {}} categoryId="category-1" />);
+		const input = screen.getByRole('combobox', { name: 'Search articles' });
+		fireEvent.change(input, { target: { value: 'Al' } });
+		act(() => {
+			vi.advanceTimersByTime(300);
+		});
+
+		fireEvent.keyDown(input, { key: 'ArrowDown' });
+		fireEvent.keyDown(input, { key: 'ArrowDown' });
+		expect(screen.getByRole('option', { name: /All Beta/ }).getAttribute('aria-selected')).toBe(
+			'true',
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Current' }));
+
+		expect(
+			screen.getByRole('option', { name: /Current Alpha/ }).getAttribute('aria-selected'),
+		).toBe('false');
+		expect(screen.getByRole('option', { name: /Current Beta/ }).getAttribute('aria-selected')).toBe(
+			'false',
+		);
+		expect(input.getAttribute('aria-activedescendant')).toBeNull();
+	});
+
 	it('wires combobox controls, active descendant, options, and scope pressed state', () => {
 		useSearchMock.mockReturnValue({
 			data: {
