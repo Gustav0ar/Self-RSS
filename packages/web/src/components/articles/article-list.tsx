@@ -291,7 +291,14 @@ function ArticleRowImpl({
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2 text-xs text-muted-foreground">
 					{article.feedFaviconUrl ? (
-						<img src={article.feedFaviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+						<img
+							src={article.feedFaviconUrl}
+							alt=""
+							className="h-4 w-4 rounded-sm"
+							loading="lazy"
+							decoding="async"
+							referrerPolicy="no-referrer"
+						/>
 					) : null}
 					<span className="truncate">{article.feedTitle}</span>
 					{timeAgo ? (

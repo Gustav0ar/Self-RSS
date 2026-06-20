@@ -55,6 +55,14 @@ const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
 const MANUAL_SYNC_DEDUPE_TTL_SECONDS = 60 * 30;
 const MANUAL_SYNC_LOCK_TTL_SECONDS = 60 * 30;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
+const QUEUE_SYNC_ALL_FEEDS_SCRIPT = `
+if redis.call("EXISTS", KEYS[1]) == 1 then
+	return 0
+end
+redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+redis.call("RPUSH", KEYS[2], ARGV[3])
+return 1
+`;
 
 export class FeedSyncService {
 	private parser: RSSParser;
@@ -139,6 +147,7 @@ export class FeedSyncService {
 				heroImageUrl: string | null;
 				hash: string;
 			}> = [];
+			const itemProcessingFailures: Array<{ index: number; error: string }> = [];
 
 			const processItem = async (item: (typeof items)[0], index: number) => {
 				const guid = this.resolveItemGuid(item, index);
@@ -259,7 +268,24 @@ export class FeedSyncService {
 
 			for (let i = 0; i < items.length; i += FEED_SYNC_ITEM_CONCURRENCY) {
 				const batch = items.slice(i, i + FEED_SYNC_ITEM_CONCURRENCY);
-				await Promise.allSettled(batch.map((item, index) => processItem(item, i + index)));
+				const batchResults = await Promise.allSettled(
+					batch.map((item, index) => processItem(item, i + index)),
+				);
+				batchResults.forEach((result, index) => {
+					if (result.status === 'rejected') {
+						itemProcessingFailures.push({
+							index: i + index,
+							error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+						});
+					}
+				});
+			}
+			if (itemProcessingFailures.length > 0) {
+				logger.warn('Feed sync skipped malformed article items', {
+					feedId,
+					failedItems: itemProcessingFailures.length,
+					sample: itemProcessingFailures.slice(0, 3),
+				});
 			}
 
 			// Build the per-article media maps up front so the repository can
@@ -350,6 +376,10 @@ export class FeedSyncService {
 				status: 'success',
 				httpStatus: 200,
 				itemCount: insertedArticles.length,
+				errorMessage:
+					itemProcessingFailures.length > 0
+						? `Skipped ${itemProcessingFailures.length} malformed article item(s)`
+						: undefined,
 			});
 
 			await this.invalidateUnreadCache(userId, feedId);
@@ -359,12 +389,23 @@ export class FeedSyncService {
 			await this.metricsRepo.incrementSyncCount(userId);
 
 			if (pendingEnrichments.length > 0) {
-				void this.enrichArticlesInBackground(pendingEnrichments);
+				void this.enrichArticlesInBackground(pendingEnrichments).catch((error) => {
+					logger.warn('Background article enrichment failed after feed sync', {
+						feedId,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
 			}
 
 			// Populate article cache after sync completes
 			if (shouldWarmArticleCache && this.articleCache && insertedArticles.length > 0) {
-				void this.articleCache.populateCache(userId);
+				void this.articleCache.populateCache(userId).catch((error) => {
+					logger.warn('Background article cache population failed after feed sync', {
+						userId,
+						feedId,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
 			}
 
 			logger.info('Feed synced', {
@@ -471,19 +512,21 @@ export class FeedSyncService {
 
 	async queueSyncAllFeeds(userId: string) {
 		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
-		const didQueue = await this.redis.set(
+		const queueKey = CacheKeys.feedSyncAllQueue();
+		const didQueue = await this.redis.eval(
+			QUEUE_SYNC_ALL_FEEDS_SCRIPT,
+			2,
 			queuedKey,
+			queueKey,
 			'1',
-			'EX',
-			MANUAL_SYNC_DEDUPE_TTL_SECONDS,
-			'NX',
+			String(MANUAL_SYNC_DEDUPE_TTL_SECONDS),
+			userId,
 		);
 
-		if (didQueue !== 'OK') {
+		if (Number(didQueue) !== 1) {
 			return { accepted: true, alreadyQueued: true };
 		}
 
-		await this.redis.rpush(CacheKeys.feedSyncAllQueue(), userId);
 		logger.info('Queued bulk feed sync', { userId });
 		return { accepted: true, alreadyQueued: false };
 	}

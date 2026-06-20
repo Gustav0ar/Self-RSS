@@ -141,6 +141,79 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ newArticles: 1, total: 1 });
 	});
 
+	it('records malformed item failures without failing the whole feed sync', async () => {
+		const badTitle: Record<string, unknown> = {};
+		Object.defineProperty(badTitle, 'value', {
+			enumerable: true,
+			get() {
+				throw new Error('bad title payload');
+			},
+		});
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+				pollingIntervalMinutes: 60,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const articleRepo = {
+			findExistingGuids: vi.fn(async () => []),
+			findByFeedAndGuids: vi.fn(async () => []),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+		const metricsRepo = {
+			incrementSyncCount: vi.fn(async () => undefined),
+		};
+		const redis = {
+			set: vi.fn(async () => 'OK'),
+			del: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			articleRepo as never,
+			syncRunRepo as never,
+			metricsRepo as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		vi.spyOn(
+			service as unknown as { fetchAndParse: () => Promise<unknown> },
+			'fetchAndParse',
+		).mockResolvedValue({
+			title: 'Feed',
+			items: [
+				{ guid: 'good-1', title: 'Good post', description: 'Readable text' },
+				{ guid: 'bad-1', title: badTitle, description: 'Unreadable text' },
+			],
+		} as never);
+
+		const result = await service.syncFeed('feed-1', 'user-1');
+
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
+			expect.objectContaining({
+				articlesToInsert: [expect.objectContaining({ guid: 'good-1' })],
+			}),
+		);
+		expect(syncRunRepo.complete).toHaveBeenCalledWith(
+			'run-1',
+			expect.objectContaining({
+				status: 'success',
+				errorMessage: 'Skipped 1 malformed article item(s)',
+			}),
+		);
+		expect(result).toEqual({ newArticles: 1, total: 2 });
+	});
+
 	it('derives enriched text and excerpt from sanitized content', async () => {
 		const redis = {
 			set: vi.fn(async () => 'OK'),
@@ -596,8 +669,7 @@ describe('FeedSyncService', () => {
 
 	it('queues bulk refresh once per user', async () => {
 		const redis = {
-			set: vi.fn(async () => 'OK'),
-			rpush: vi.fn(async () => 1),
+			eval: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -610,15 +682,21 @@ describe('FeedSyncService', () => {
 
 		const result = await service.queueSyncAllFeeds('user-1');
 
-		expect(redis.set).toHaveBeenCalledWith('feed:sync-all:queued:user-1', '1', 'EX', 1800, 'NX');
-		expect(redis.rpush).toHaveBeenCalledWith('feed:sync-all:queue', 'user-1');
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('RPUSH'),
+			2,
+			'feed:sync-all:queued:user-1',
+			'feed:sync-all:queue',
+			'1',
+			'1800',
+			'user-1',
+		);
 		expect(result).toEqual({ accepted: true, alreadyQueued: false });
 	});
 
 	it('deduplicates already queued bulk refreshes', async () => {
 		const redis = {
-			set: vi.fn(async () => null),
-			rpush: vi.fn(async () => 1),
+			eval: vi.fn(async () => 0),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -631,7 +709,15 @@ describe('FeedSyncService', () => {
 
 		const result = await service.queueSyncAllFeeds('user-1');
 
-		expect(redis.rpush).not.toHaveBeenCalled();
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('EXISTS'),
+			2,
+			'feed:sync-all:queued:user-1',
+			'feed:sync-all:queue',
+			'1',
+			'1800',
+			'user-1',
+		);
 		expect(result).toEqual({ accepted: true, alreadyQueued: true });
 	});
 

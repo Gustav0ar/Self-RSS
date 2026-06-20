@@ -22,6 +22,9 @@ data class SearchUiState(
     val hasMore: Boolean = false,
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
+    val selectedCategoryId: String? = null,
+    val currentCategoryOnly: Boolean = false,
+    val resultLimitReached: Boolean = false,
     val errorMessage: String? = null,
 )
 
@@ -38,37 +41,97 @@ class SearchViewModel @Inject constructor(
     val state: StateFlow<SearchUiState> = _state.asStateFlow()
 
     private var debounceJob: Job? = null
+    private var requestGeneration = 0L
 
     fun setQuery(query: String) {
         _state.update { it.copy(query = query) }
         if (query.length < MIN_QUERY_LENGTH) {
             debounceJob?.cancel()
-            _state.update { it.copy(results = emptyList(), cursor = null, hasMore = false) }
+            requestGeneration += 1
+            _state.update {
+                it.copy(
+                    results = emptyList(),
+                    cursor = null,
+                    hasMore = false,
+                    loading = false,
+                    loadingMore = false,
+                    resultLimitReached = false,
+                )
+            }
         }
     }
 
     fun search(debounceMs: Long = 300L) {
-        val query = _state.value.query.trim()
+        val snapshot = _state.value
+        val query = snapshot.query.trim()
         if (query.length < MIN_QUERY_LENGTH) {
             debounceJob?.cancel()
             return
         }
+        val categoryId = activeCategoryId(snapshot)
+        val generation = ++requestGeneration
         debounceJob?.cancel()
+        _state.update {
+            it.copy(
+                cursor = null,
+                hasMore = false,
+                loading = true,
+                loadingMore = false,
+                errorMessage = null,
+                resultLimitReached = false,
+            )
+        }
         debounceJob = viewModelScope.launch {
             delay(debounceMs)
             // Re-read latest query after debounce in case the user kept typing.
-            val current = _state.value.query.trim()
-            if (current != query) return@launch
-            runSearch(current, cursor = null)
+            val current = _state.value
+            if (
+                current.query.trim() != query ||
+                activeCategoryId(current) != categoryId ||
+                generation != requestGeneration
+            ) {
+                return@launch
+            }
+            runSearch(query, categoryId, cursor = null, generation = generation)
         }
     }
 
     fun loadMore() {
         val snapshot = _state.value
         if (!snapshot.hasMore || snapshot.loadingMore || snapshot.cursor == null) return
+        val generation = requestGeneration
+        val categoryId = activeCategoryId(snapshot)
         viewModelScope.launch {
             _state.update { it.copy(loadingMore = true) }
-            runSearch(snapshot.query.trim(), snapshot.cursor)
+            runSearch(snapshot.query.trim(), categoryId, snapshot.cursor, generation)
+        }
+    }
+
+    fun setSelectedCategoryId(categoryId: String?) {
+        val before = _state.value
+        val beforeActiveCategory = activeCategoryId(before)
+        _state.update {
+            it.copy(
+                selectedCategoryId = categoryId,
+                currentCategoryOnly = if (categoryId == null) false else it.currentCategoryOnly,
+            )
+        }
+        val after = _state.value
+        if (
+            beforeActiveCategory != activeCategoryId(after) &&
+            after.query.trim().length >= MIN_QUERY_LENGTH
+        ) {
+            search(debounceMs = 0L)
+        }
+    }
+
+    fun setCurrentCategoryOnly(enabled: Boolean) {
+        val snapshot = _state.value
+        if (enabled && snapshot.selectedCategoryId == null) return
+        if (snapshot.currentCategoryOnly == enabled) return
+        _state.update { it.copy(currentCategoryOnly = enabled) }
+        if (snapshot.query.trim().length >= MIN_QUERY_LENGTH) {
+            search(debounceMs = 0L)
         }
     }
 
@@ -103,31 +166,47 @@ class SearchViewModel @Inject constructor(
         _state.update { it.copy(errorMessage = null) }
     }
 
-    private suspend fun runSearch(query: String, cursor: String?) {
-        when (val result = repository.search(query, cursor = cursor)) {
+    private suspend fun runSearch(
+        query: String,
+        categoryId: String?,
+        cursor: String?,
+        generation: Long,
+    ) {
+        when (val result = repository.search(query, categoryId = categoryId, cursor = cursor)) {
             is AppResult.Success -> {
+                if (!isCurrentRequest(query, categoryId, generation)) return
                 if (cursor == null) {
+                    val page = result.data.data
+                    val capped = page.take(MAX_RESULTS)
+                    val reachedLimit = capped.size >= MAX_RESULTS && (result.data.hasMore || page.size > MAX_RESULTS)
                     _state.update {
                         it.copy(
-                            results = result.data.data,
+                            results = capped,
                             cursor = result.data.cursor,
-                            hasMore = result.data.hasMore,
+                            hasMore = result.data.hasMore && !reachedLimit,
+                            resultLimitReached = reachedLimit,
                             loading = false,
                             loadingMore = false,
                         )
                     }
                 } else {
                     _state.update {
+                        val uncapped = it.results + result.data.data
+                        val combined = uncapped.take(MAX_RESULTS)
+                        val reachedLimit = combined.size >= MAX_RESULTS &&
+                            (result.data.hasMore || uncapped.size > MAX_RESULTS)
                         it.copy(
-                            results = it.results + result.data.data,
+                            results = combined,
                             cursor = result.data.cursor,
-                            hasMore = result.data.hasMore,
+                            hasMore = result.data.hasMore && !reachedLimit,
+                            resultLimitReached = reachedLimit,
                             loadingMore = false,
                         )
                     }
                 }
             }
             is AppResult.Error -> {
+                if (!isCurrentRequest(query, categoryId, generation)) return
                 _state.update {
                     it.copy(loading = false, loadingMore = false, errorMessage = result.message)
                 }
@@ -135,7 +214,18 @@ class SearchViewModel @Inject constructor(
         }
     }
 
+    private fun activeCategoryId(state: SearchUiState): String? =
+        if (state.currentCategoryOnly) state.selectedCategoryId else null
+
+    private fun isCurrentRequest(query: String, categoryId: String?, generation: Long): Boolean {
+        val current = _state.value
+        return generation == requestGeneration &&
+            current.query.trim() == query &&
+            activeCategoryId(current) == categoryId
+    }
+
     companion object {
         const val MIN_QUERY_LENGTH = 2
+        const val MAX_RESULTS = 80
     }
 }

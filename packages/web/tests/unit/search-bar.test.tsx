@@ -188,5 +188,6 @@ describe('SearchBar', () => {
 		const image = document.querySelector<HTMLImageElement>('img[src="https://example.com/0.jpg"]');
 		expect(image?.getAttribute('loading')).toBe('lazy');
 		expect(image?.getAttribute('decoding')).toBe('async');
+		expect(image?.getAttribute('referrerpolicy')).toBe('no-referrer');
 	});
 });

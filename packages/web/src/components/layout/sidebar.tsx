@@ -759,7 +759,14 @@ function SidebarBody({
 												>
 													<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
 														{feed.faviconUrl ? (
-															<img src={feed.faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+															<img
+																src={feed.faviconUrl}
+																alt=""
+																className="h-4 w-4 rounded-sm"
+																loading="lazy"
+																decoding="async"
+																referrerPolicy="no-referrer"
+															/>
 														) : (
 															<RssIcon className="h-4 w-4 text-muted-foreground" />
 														)}
@@ -798,6 +805,13 @@ function SidebarBody({
 												selectedCategoryId={selectedCategoryId}
 												expandedCategories={expandedCategories}
 												categoryFeedMap={categoryFeedMap}
+												onReorderCategory={onReorderCategory}
+												draggingCategoryId={draggingCategoryId}
+												dragOverCategoryId={dragOverCategoryId}
+												onCategoryDragStart={onCategoryDragStart}
+												onCategoryDragEnd={onCategoryDragEnd}
+												onCategoryDragOver={onCategoryDragOver}
+												onCategoryDragLeave={onCategoryDragLeave}
 												onSelectFeed={onSelectFeed}
 												onSelectCategory={onSelectCategory}
 												onToggleCategory={onToggleCategory}
@@ -854,7 +868,14 @@ function SidebarBody({
 											>
 												<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
 													{feed.faviconUrl ? (
-														<img src={feed.faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+														<img
+															src={feed.faviconUrl}
+															alt=""
+															className="h-4 w-4 rounded-sm"
+															loading="lazy"
+															decoding="async"
+															referrerPolicy="no-referrer"
+														/>
 													) : (
 														<RssIcon className="h-4 w-4 text-muted-foreground" />
 													)}
@@ -904,6 +925,13 @@ function NestedCategoryRow({
 	onSelectFeed,
 	onSelectCategory,
 	onToggleCategory,
+	onReorderCategory,
+	draggingCategoryId,
+	dragOverCategoryId,
+	onCategoryDragStart,
+	onCategoryDragEnd,
+	onCategoryDragOver,
+	onCategoryDragLeave,
 	onEditCategory,
 	onDeleteCategory,
 	onEditFeed,
@@ -917,6 +945,13 @@ function NestedCategoryRow({
 	onSelectFeed: (feedId: string) => void;
 	onSelectCategory: (categoryId: string) => void;
 	onToggleCategory: (id: string) => void;
+	onReorderCategory: (sourceId: string, targetId: string | null) => void;
+	draggingCategoryId: string | null;
+	dragOverCategoryId: string | null;
+	onCategoryDragStart: (id: string) => void;
+	onCategoryDragEnd: () => void;
+	onCategoryDragOver: (id: string) => void;
+	onCategoryDragLeave: (id: string) => void;
 	onEditCategory: (category: CategoryWithCounts) => void;
 	onDeleteCategory: (category: CategoryWithCounts) => void;
 	onEditFeed: (feed: FeedWithCounts) => void;
@@ -927,9 +962,36 @@ function NestedCategoryRow({
 	const childCategories = category.children ?? [];
 	const categoryUnread = category.unreadCount ?? 0;
 	const hasNestedRows = categoryFeeds.length > 0 || childCategories.length > 0;
+	const isDragging = draggingCategoryId === category.id;
+	const isDropTarget = dragOverCategoryId === category.id && draggingCategoryId !== category.id;
 
 	return (
-		<div className="space-y-0.5">
+		// biome-ignore lint/a11y/noStaticElementInteractions: HTML5 drag-and-drop has no semantic primitive; the inner grip is a button.
+		<div
+			className={cn(
+				'space-y-0.5 rounded-xl transition-shadow',
+				isDragging && 'opacity-50',
+				isDropTarget && 'ring-2 ring-primary/60 ring-offset-2 ring-offset-sidebar',
+			)}
+			onDragOver={(event) => {
+				if (draggingCategoryId == null || draggingCategoryId === category.id) return;
+				event.preventDefault();
+				event.dataTransfer.dropEffect = 'move';
+				onCategoryDragOver(category.id);
+			}}
+			onDragLeave={(event) => {
+				if (event.currentTarget === event.target) {
+					onCategoryDragLeave(category.id);
+				}
+			}}
+			onDrop={(event) => {
+				event.preventDefault();
+				if (draggingCategoryId && draggingCategoryId !== category.id) {
+					onReorderCategory(draggingCategoryId, category.id);
+				}
+				onCategoryDragEnd();
+			}}
+		>
 			<div className="group/category relative">
 				<div
 					className={cn(
@@ -938,6 +1000,21 @@ function NestedCategoryRow({
 					)}
 				>
 					<span className="h-7 w-3 shrink-0 border-l border-border/60" aria-hidden="true" />
+					<button
+						type="button"
+						aria-label={`Drag to reorder ${category.name}`}
+						title="Drag to reorder"
+						draggable
+						onDragStart={(event) => {
+							event.dataTransfer.effectAllowed = 'move';
+							event.dataTransfer.setData('text/plain', category.id);
+							onCategoryDragStart(category.id);
+						}}
+						onDragEnd={onCategoryDragEnd}
+						className="-ml-1 inline-flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-opacity hover:bg-background/80 hover:text-muted-foreground group-hover/category:opacity-100 group-focus-within/category:opacity-100"
+					>
+						<GripVertical className="h-3.5 w-3.5" />
+					</button>
 					<button
 						type="button"
 						onClick={(event) => {
@@ -1015,6 +1092,13 @@ function NestedCategoryRow({
 							selectedCategoryId={selectedCategoryId}
 							expandedCategories={expandedCategories}
 							categoryFeedMap={categoryFeedMap}
+							onReorderCategory={onReorderCategory}
+							draggingCategoryId={draggingCategoryId}
+							dragOverCategoryId={dragOverCategoryId}
+							onCategoryDragStart={onCategoryDragStart}
+							onCategoryDragEnd={onCategoryDragEnd}
+							onCategoryDragOver={onCategoryDragOver}
+							onCategoryDragLeave={onCategoryDragLeave}
 							onSelectFeed={onSelectFeed}
 							onSelectCategory={onSelectCategory}
 							onToggleCategory={onToggleCategory}
@@ -1056,7 +1140,14 @@ function FeedTreeRow({
 			>
 				<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
 					{feed.faviconUrl ? (
-						<img src={feed.faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+						<img
+							src={feed.faviconUrl}
+							alt=""
+							className="h-4 w-4 rounded-sm"
+							loading="lazy"
+							decoding="async"
+							referrerPolicy="no-referrer"
+						/>
 					) : (
 						<RssIcon className="h-4 w-4 text-muted-foreground" />
 					)}

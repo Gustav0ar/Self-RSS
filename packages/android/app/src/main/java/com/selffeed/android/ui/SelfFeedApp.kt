@@ -123,6 +123,7 @@ data class SelfFeedAppActions(
     val onSearchQueryChanged: (String) -> Unit,
     val onSearchRequested: () -> Unit,
     val onLoadMoreSearch: () -> Unit,
+    val onSearchCurrentCategoryOnlyChanged: (Boolean) -> Unit,
     val onThemeChanged: (ThemePreference) -> Unit,
     val onSortChanged: (ArticleSortPreference) -> Unit,
     val onDensityChanged: (DensityPreference) -> Unit,
@@ -246,14 +247,22 @@ fun SelfFeedApp(
         state.search.results,
         selectedArticle?.id,
         state.search.hasMore,
+        state.search.loading,
         state.search.loadingMore,
+        state.search.selectedCategoryId,
+        state.search.currentCategoryOnly,
+        state.search.resultLimitReached,
     ) {
         SearchTabState(
             query = state.search.query,
             results = state.search.results,
             selectedArticleId = selectedArticle?.id,
             hasMoreResults = state.search.hasMore,
+            loadingResults = state.search.loading,
             loadingMoreResults = state.search.loadingMore,
+            currentCategoryAvailable = state.search.selectedCategoryId != null,
+            currentCategoryOnly = state.search.currentCategoryOnly,
+            resultLimitReached = state.search.resultLimitReached,
         )
     }
     val settingsTabState = remember(state.settings.preferences, state.settings.stats) {
@@ -284,6 +293,7 @@ fun SelfFeedApp(
             onSearchRequested = actions.onSearchRequested,
             onOpenArticle = actions.onOpenArticle,
             onLoadMore = actions.onLoadMoreSearch,
+            onCurrentCategoryOnlyChanged = actions.onSearchCurrentCategoryOnlyChanged,
         )
     }
     val settingsActions = remember(actions) {

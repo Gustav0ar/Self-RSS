@@ -24,7 +24,7 @@ describe('ArticleList', () => {
 						id: 'article-1',
 						feedId: 'feed-1',
 						feedTitle: '9to5Google',
-						feedFaviconUrl: null,
+						feedFaviconUrl: 'https://example.com/favicon.ico',
 						title: 'Gemini Live can now access your past chats Memory, Connected Apps info',
 						author: 'Abner Li',
 						excerpt: 'Following the big Neural Expressive redesign and new voices last month.',
@@ -48,6 +48,10 @@ describe('ArticleList', () => {
 		expect(rowText).not.toContain('Abner Li');
 		expect(rowText).not.toContain('Following the big Neural Expressive redesign');
 		expect(container.querySelector('img[src="https://example.com/poster.jpg"]')).toBeNull();
+		const favicon = container.querySelector<HTMLImageElement>(
+			'img[src="https://example.com/favicon.ico"]',
+		);
+		expect(favicon?.getAttribute('referrerpolicy')).toBe('no-referrer');
 		expect(row.classList.contains('overflow-hidden')).toBe(true);
 		expect(row.style.height).toBe('82px');
 	});
