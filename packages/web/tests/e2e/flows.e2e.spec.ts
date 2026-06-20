@@ -43,7 +43,9 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await page.getByLabel('Email').fill(email);
 	await page.getByLabel('Password').fill(password);
 	await page.getByRole('button', { name: 'Sign In' }).click();
+	// Wait for both the article list to load AND the authenticated UI to render
 	await expect(page.getByText('All Feeds')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
 async function ensureRegistrationUnlocked(request: APIRequestContext) {
@@ -51,14 +53,6 @@ async function ensureRegistrationUnlocked(request: APIRequestContext) {
 }
 
 test.describe.configure({ mode: 'serial' });
-
-test.beforeEach(async ({ request }) => {
-	await ensureRegistrationUnlocked(request);
-});
-
-test.afterEach(async ({ request }) => {
-	await setRegistrationLocked(request, false);
-});
 
 test('reader can toggle a read article back to unread', async ({ page }) => {
 	await loginThroughUi(page, 'reader@example.com', 'password123');

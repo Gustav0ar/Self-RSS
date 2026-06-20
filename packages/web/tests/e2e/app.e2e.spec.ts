@@ -53,18 +53,12 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await page.getByLabel('Email').fill(email);
 	await page.getByLabel('Password').fill(password);
 	await page.getByRole('button', { name: 'Sign In' }).click();
+	// Wait for both the article list to load AND the authenticated UI to render
 	await expect(page.getByText('All Feeds')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
 test.describe.configure({ mode: 'serial' });
-
-test.beforeEach(async ({ request }) => {
-	await setRegistrationLocked(request, false);
-});
-
-test.afterEach(async ({ request }) => {
-	await setRegistrationLocked(request, false);
-});
 
 test('user can register and sign out', async ({ page }) => {
 	const email = `fresh-${Date.now()}@example.com`;
