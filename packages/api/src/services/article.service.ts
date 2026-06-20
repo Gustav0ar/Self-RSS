@@ -9,6 +9,7 @@ import { encodeArticleCursor } from '../utils/article-cursor.js';
 import { createLogger } from '../utils/logger.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
+import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
 const logger = createLogger();
@@ -28,6 +29,8 @@ type ArticleDetailResponse = Omit<
 	isEnriched: boolean;
 };
 
+type CacheMetrics = Pick<MetricsService, 'recordCacheHit' | 'recordCacheMiss'>;
+
 export class ArticleService {
 	constructor(
 		private articleRepo: ArticleRepository,
@@ -38,6 +41,7 @@ export class ArticleService {
 		private realtimeService?: RealtimeService,
 		private articleCache?: ArticleCacheService,
 		private categoryRepo?: CategoryRepository,
+		private cacheMetrics?: CacheMetrics,
 	) {}
 
 	async getArticles(
@@ -139,11 +143,16 @@ export class ArticleService {
 		const cached = await this.redis.get(cacheKey);
 		if (cached) {
 			try {
-				return JSON.parse(cached) as ArticleDetailResponse;
+				const parsed = JSON.parse(cached) as ArticleDetailResponse;
+				this.cacheMetrics?.recordCacheHit('article_detail');
+				return parsed;
 			} catch {
 				// Corrupt cache entry — fall through to the DB.
 				await this.redis.del(cacheKey);
+				this.cacheMetrics?.recordCacheMiss('article_detail');
 			}
+		} else {
+			this.cacheMetrics?.recordCacheMiss('article_detail');
 		}
 
 		const article = await this.articleRepo.findDetailForUser(userId, articleId);
