@@ -5,6 +5,7 @@ import { type MigrationMeta, readMigrationFiles } from 'drizzle-orm/migrator';
 import type { Database } from './client.js';
 
 const DEFAULT_MIGRATIONS_TABLE = '__drizzle_migrations';
+const MIGRATION_GUARD_TABLE = '__self_feed_migration_guard';
 const PROTECTED_TABLES = [
 	{ name: 'users', keyColumns: ['id'] },
 	{ name: 'user_preferences', keyColumns: ['user_id'] },
@@ -29,6 +30,12 @@ interface DbMigrationRow {
 	id: number;
 	hash: string;
 	created_at: number | string;
+}
+
+interface MigrationGuardRow {
+	created_at: number | string;
+	local_hash: string;
+	ledger_hash: string;
 }
 
 interface DatabaseListRow {
@@ -238,6 +245,17 @@ function createMigrationTable(db: Database, migrationsTable: string) {
 	`);
 }
 
+function createMigrationGuardTable(db: Database) {
+	db.run(sql`
+		CREATE TABLE IF NOT EXISTS ${sql.identifier(MIGRATION_GUARD_TABLE)} (
+			created_at numeric PRIMARY KEY,
+			local_hash text NOT NULL,
+			ledger_hash text NOT NULL,
+			baselined_at numeric NOT NULL
+		)
+	`);
+}
+
 function latestAppliedMigration(db: Database, migrationsTable: string): DbMigrationRow | undefined {
 	const rows = db.all<DbMigrationRow>(
 		sql`SELECT id, hash, created_at FROM ${sql.identifier(
@@ -255,20 +273,71 @@ function appliedMigrations(db: Database, migrationsTable: string): DbMigrationRo
 	);
 }
 
-function assertAppliedMigrationHashes(migrations: MigrationMeta[], applied: DbMigrationRow[]) {
+function migrationGuardRows(db: Database): MigrationGuardRow[] {
+	return db.all<MigrationGuardRow>(
+		sql`SELECT created_at, local_hash, ledger_hash FROM ${sql.identifier(
+			MIGRATION_GUARD_TABLE,
+		)} ORDER BY created_at ASC`,
+	);
+}
+
+function insertMigrationGuardRecord(
+	db: Database,
+	createdAt: number,
+	localHash: string,
+	ledgerHash: string,
+) {
+	db.run(
+		sql`INSERT INTO ${sql.identifier(
+			MIGRATION_GUARD_TABLE,
+		)} ("created_at", "local_hash", "ledger_hash", "baselined_at")
+		VALUES(${createdAt}, ${localHash}, ${ledgerHash}, ${Date.now()})`,
+	);
+}
+
+function migrationCreatedAt(row: { id?: number; created_at: number | string }) {
+	const createdAt = Number(row.created_at);
+	if (!Number.isFinite(createdAt)) {
+		throw new MigrationGuardError({
+			message: row.id
+				? `Applied migration ${row.id} has an invalid created_at value: ${row.created_at}`
+				: `Migration guard has an invalid created_at value: ${row.created_at}`,
+			backupPath: null,
+		});
+	}
+	return createdAt;
+}
+
+function assertOrBaselineAppliedMigrationHashes(
+	db: Database,
+	migrations: MigrationMeta[],
+	applied: DbMigrationRow[],
+) {
 	const migrationsByCreatedAt = new Map(
 		migrations.map((migration) => [migration.folderMillis, migration]),
 	);
+	const guardRows = migrationGuardRows(db);
+	const guardByCreatedAt = new Map(guardRows.map((row) => [migrationCreatedAt(row), row]));
+	const appliedByCreatedAt = new Map(applied.map((row) => [migrationCreatedAt(row), row]));
 
-	for (const row of applied) {
-		const createdAt = Number(row.created_at);
-		if (!Number.isFinite(createdAt)) {
+	for (const guard of guardRows) {
+		const createdAt = migrationCreatedAt(guard);
+		if (!appliedByCreatedAt.has(createdAt)) {
 			throw new MigrationGuardError({
-				message: `Applied migration ${row.id} has an invalid created_at value: ${row.created_at}`,
+				message: `Migration guard tracks ${createdAt}, but the Drizzle ledger does not`,
 				backupPath: null,
 			});
 		}
+		if (!migrationsByCreatedAt.has(createdAt)) {
+			throw new MigrationGuardError({
+				message: `Migration guard tracks ${createdAt}, but local migrations do not`,
+				backupPath: null,
+			});
+		}
+	}
 
+	for (const row of applied) {
+		const createdAt = migrationCreatedAt(row);
 		const expected = migrationsByCreatedAt.get(createdAt);
 		if (!expected) {
 			throw new MigrationGuardError({
@@ -277,9 +346,28 @@ function assertAppliedMigrationHashes(migrations: MigrationMeta[], applied: DbMi
 			});
 		}
 
-		if (row.hash !== expected.hash) {
+		const guard = guardByCreatedAt.get(createdAt);
+		if (!guard) {
+			if (guardRows.length === 0) {
+				insertMigrationGuardRecord(db, createdAt, expected.hash, row.hash);
+				continue;
+			}
 			throw new MigrationGuardError({
-				message: `Applied migration hash mismatch for ${createdAt}`,
+				message: `Applied migration ${createdAt} is not tracked by the migration guard`,
+				backupPath: null,
+			});
+		}
+
+		if (row.hash !== guard.ledger_hash) {
+			throw new MigrationGuardError({
+				message: `Applied migration ledger hash changed for ${createdAt}`,
+				backupPath: null,
+			});
+		}
+
+		if (expected.hash !== guard.local_hash) {
+			throw new MigrationGuardError({
+				message: `Local migration hash changed for ${createdAt}`,
 				backupPath: null,
 			});
 		}
@@ -308,6 +396,7 @@ function insertMigrationRecord(db: Database, migrationsTable: string, migration:
 			migration.hash
 		}, ${migration.folderMillis})`,
 	);
+	insertMigrationGuardRecord(db, migration.folderMillis, migration.hash, migration.hash);
 }
 
 export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
@@ -315,8 +404,9 @@ export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
 	const migrations = readMigrationFiles({ migrationsFolder: options.migrationsFolder });
 
 	createMigrationTable(db, migrationsTable);
+	createMigrationGuardTable(db);
 	const applied = appliedMigrations(db, migrationsTable);
-	assertAppliedMigrationHashes(migrations, applied);
+	assertOrBaselineAppliedMigrationHashes(db, migrations, applied);
 	const latest = latestAppliedMigration(db, migrationsTable);
 	const pending = pendingMigrations(migrations, latest);
 	if (pending.length === 0) {

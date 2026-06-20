@@ -1,5 +1,13 @@
 import { Database as BunDatabase } from 'bun:sqlite';
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	copyFileSync,
+	cpSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -185,6 +193,12 @@ function createDangerousMigrationFolder(baseDir: string, migratedThrough: number
 	return folder;
 }
 
+function copyMigrationFolder(baseDir: string) {
+	const folder = join(baseDir, 'copied-drizzle');
+	cpSync(migrationsFolder, folder, { recursive: true });
+	return folder;
+}
+
 describe('SQLite migrations', () => {
 	it('preserves feeds and articles when applying the category self-reference migration', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-migration-'));
@@ -254,7 +268,46 @@ describe('SQLite migrations', () => {
 		}
 	});
 
-	it('rejects an applied migration whose recorded hash differs from local migrations', async () => {
+	it('baselines legacy ledger hash mismatches and rejects later ledger changes', async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-migration-'));
+		tempDirs.push(tempDir);
+		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
+		sqlite.exec('PRAGMA foreign_keys = ON;');
+
+		try {
+			const migratedThrough = seedDatabaseBeforeCategoryRebuild(sqlite);
+			sqlite
+				.query('UPDATE "__drizzle_migrations" SET "hash" = ? WHERE "id" = ?')
+				.run('legacy-migration-hash', 4);
+			const db = drizzle(sqlite, { schema });
+
+			expect(() => applyMigrations(db, { migrationsFolder })).not.toThrow();
+			expect(
+				sqlite
+					.query(
+						`SELECT local_hash, ledger_hash
+						 FROM "__self_feed_migration_guard"
+						 WHERE created_at = ?`,
+					)
+					.get(migratedThrough),
+			).toMatchObject({
+				ledger_hash: 'legacy-migration-hash',
+			});
+
+			sqlite
+				.query('UPDATE "__drizzle_migrations" SET "hash" = ? WHERE "id" = ?')
+				.run('tampered-migration-hash', 4);
+
+			expect(() => applyMigrations(db, { migrationsFolder })).toThrow(/ledger hash changed/);
+			expect(countRows(sqlite, 'categories')).toBe(1);
+			expect(countRows(sqlite, 'feeds')).toBe(1);
+			expect(countRows(sqlite, 'articles')).toBe(1);
+		} finally {
+			sqlite.close();
+		}
+	});
+
+	it('rejects local migration file changes after the guard baseline exists', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-migration-'));
 		tempDirs.push(tempDir);
 		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
@@ -262,15 +315,20 @@ describe('SQLite migrations', () => {
 
 		try {
 			seedDatabaseBeforeCategoryRebuild(sqlite);
-			sqlite
-				.query('UPDATE "__drizzle_migrations" SET "hash" = ? WHERE "id" = ?')
-				.run('tampered-migration-hash', 4);
 			const db = drizzle(sqlite, { schema });
 
-			expect(() => applyMigrations(db, { migrationsFolder })).toThrow(/hash mismatch/);
-			expect(countRows(sqlite, 'categories')).toBe(1);
-			expect(countRows(sqlite, 'feeds')).toBe(1);
-			expect(countRows(sqlite, 'articles')).toBe(1);
+			applyMigrations(db, { migrationsFolder });
+
+			const copiedMigrations = copyMigrationFolder(tempDir);
+			const migrationPath = join(copiedMigrations, '0004_user_accent_color.sql');
+			writeFileSync(
+				migrationPath,
+				`${readFileSync(migrationPath, 'utf8')}\n-- accidental edit after production baseline\n`,
+			);
+
+			expect(() => applyMigrations(db, { migrationsFolder: copiedMigrations })).toThrow(
+				/local migration hash changed/i,
+			);
 		} finally {
 			sqlite.close();
 		}
