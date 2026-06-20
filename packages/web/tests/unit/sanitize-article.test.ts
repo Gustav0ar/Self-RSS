@@ -73,19 +73,36 @@ describe('sanitizeArticleHtml', () => {
 		expect(result).toContain('<p>after</p>');
 	});
 
-	it('sandboxes iframes that are not approved embeds', () => {
-		const result = sanitizeArticleHtml('<iframe src="https://attacker.example/x"></iframe>');
-		expect(result.toLowerCase()).toContain('sandbox=');
+	it('removes iframes that are not approved embeds', () => {
+		const result = sanitizeArticleHtml(
+			'<p>before</p><p><iframe src="https://attacker.example/x"></iframe></p><p>after</p>',
+		);
+		expect(result.toLowerCase()).not.toContain('<iframe');
+		expect(result).not.toContain('attacker.example');
+		expect(result).toContain('<p>before</p>');
+		expect(result).toContain('<p>after</p>');
 	});
 
-	it('does not treat lookalike media domains as approved embeds', () => {
+	it('removes lookalike media domains instead of treating them as approved embeds', () => {
 		const result = sanitizeArticleHtml(
 			'<iframe src="https://notyoutube.com/watch?v=abc123"></iframe><iframe src="https://evilplayer.vimeo.com/video/123"></iframe>',
 		);
 
-		expect(result).toContain('notyoutube.com');
-		expect(result).toContain('evilplayer.vimeo.com');
-		expect(result.toLowerCase().match(/sandbox=/g)).toHaveLength(2);
+		expect(result.toLowerCase()).not.toContain('<iframe');
+		expect(result).not.toContain('notyoutube.com');
+		expect(result).not.toContain('evilplayer.vimeo.com');
+	});
+
+	it('keeps approved provider iframes that are not server-stamped', () => {
+		const result = sanitizeArticleHtml(
+			'<iframe src="https://youtu.be/abc123?feature=oembed"></iframe>',
+		);
+
+		expect(result).toContain('<iframe');
+		expect(result).toContain('src="https://www.youtube.com/embed/abc123"');
+		expect(result).toContain('loading="lazy"');
+		expect(result).toContain('referrerpolicy="strict-origin-when-cross-origin"');
+		expect(result).toContain('sandbox="allow-scripts allow-same-origin allow-presentation"');
 	});
 
 	it('adds rel and target to external anchor links', () => {
