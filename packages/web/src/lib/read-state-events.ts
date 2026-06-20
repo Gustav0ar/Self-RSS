@@ -1,4 +1,4 @@
-import type { ReadStateSyncEvent } from '@self-feed/shared';
+import { type ReadStateSyncEvent, readStateSyncEventSchema } from '@self-feed/shared';
 import { getAccessToken, getClientId, refreshAccessToken } from './api';
 
 const API_BASE = '/api/v1';
@@ -59,35 +59,6 @@ export function createSseParser(onMessage: SseMessageHandler) {
 			dispatch();
 		},
 	};
-}
-
-function isReadStateSyncEvent(value: unknown): value is ReadStateSyncEvent {
-	if (!value || typeof value !== 'object' || !('type' in value)) {
-		return false;
-	}
-
-	if (value.type === 'article.read_state_changed') {
-		return (
-			'articleId' in value &&
-			typeof value.articleId === 'string' &&
-			'feedId' in value &&
-			typeof value.feedId === 'string' &&
-			'isRead' in value &&
-			typeof value.isRead === 'boolean'
-		);
-	}
-
-	if (value.type === 'articles.marked_read') {
-		return (
-			'feedIds' in value &&
-			Array.isArray(value.feedIds) &&
-			value.feedIds.every((feedId) => typeof feedId === 'string') &&
-			'markedCount' in value &&
-			typeof value.markedCount === 'number'
-		);
-	}
-
-	return false;
 }
 
 async function fetchReadStateStream(signal: AbortSignal) {
@@ -151,8 +122,9 @@ export async function streamReadStateEvents({
 			return;
 		}
 
-		if (isReadStateSyncEvent(parsed)) {
-			onEvent(parsed);
+		const result = readStateSyncEventSchema.safeParse(parsed);
+		if (result.success) {
+			onEvent(result.data);
 		}
 	});
 

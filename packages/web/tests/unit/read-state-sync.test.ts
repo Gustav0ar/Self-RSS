@@ -107,6 +107,16 @@ describe('read-state sync', () => {
 				controller.enqueue(encoder.encode('event: read-state\ndata: {"type":"unknown.event"}\n\n'));
 				controller.enqueue(
 					encoder.encode(
+						'event: read-state\ndata: {"type":"article.read_state_changed","articleId":"article-1","feedId":"feed-1","isRead":true}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'event: read-state\ndata: {"type":"articles.marked_read","eventId":"event-invalid","feedIds":["feed-1"],"scope":{},"markedCount":-1,"clientId":null,"updatedAt":"2026-06-01T00:00:00.000Z"}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
 						[
 							'event: read-state',
 							'data: {"type":"article.read_state_changed","eventId":"event-1","articleId":"article-1","feedId":"feed-1","isRead":true,"source":"manual","clientId":"other-client","updatedAt":"2026-06-01T00:00:00.000Z"}',
