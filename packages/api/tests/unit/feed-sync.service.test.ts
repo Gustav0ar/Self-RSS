@@ -1313,35 +1313,59 @@ describe('FeedSyncService', () => {
 	});
 
 	it('reconstructs naointendo posts HTML content correctly from JSON API', async () => {
-		const service = new FeedSyncService(
-			{} as never,
-			{} as never,
-			{} as never,
-			{} as never,
-			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
-		);
-
 		const originalFetch = globalThis.fetch;
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: true,
-			status: 200,
-			headers: new Headers({ 'content-type': 'application/json' }),
-			text: async () =>
-				JSON.stringify({
-					post: {
-						title: 'Test Post',
-						description: '<p>Paragraph text</p>',
-						media: {
-							type: 'twitter',
-							content: '123456789',
+		const mockFetch = vi.fn().mockImplementation((url: string) => {
+			// Return different responses for HTML page fetch vs API fetch
+			if (url.includes('/api/posts/')) {
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					headers: new Headers({ 'content-type': 'application/json' }),
+					text: async () =>
+						JSON.stringify({
+							post: {
+								title: 'Test Post',
+								description: '<p>Paragraph text</p>',
+								media: {
+									type: 'twitter',
+									content: '123456789',
+								},
+							},
+						}),
+					json: async () => ({
+						post: {
+							title: 'Test Post',
+							description: '<p>Paragraph text</p>',
+							media: {
+								type: 'twitter',
+								content: '123456789',
+							},
 						},
-					},
-				}),
+					}),
+				});
+			}
+			// Default response for HTML page fetch
+			return Promise.resolve({
+				ok: true,
+				status: 200,
+				headers: new Headers({ 'content-type': 'text/html' }),
+				text: async () =>
+					'<html><body><article><div class="entry-content"><p>Dummy content</p></div></article></body></html>',
+			});
 		});
 		globalThis.fetch = mockFetch as unknown as typeof fetch;
 
 		try {
+			// Create service AFTER setting up the mock
+			const service = new FeedSyncService(
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+			);
+
 			const content = await (
 				service as unknown as {
 					fetchArticlePageContent(canonicalUrl: string): Promise<string | null>;

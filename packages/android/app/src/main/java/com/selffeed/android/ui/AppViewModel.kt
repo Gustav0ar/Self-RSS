@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.repository.AppStatusRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -27,9 +29,17 @@ data class AppChromeState(
 @HiltViewModel
 class AppViewModel @Inject constructor(
     private val repository: AppStatusRepository,
+    sessionStore: SessionStore,
 ) : ViewModel() {
     private val _chrome = MutableStateFlow(AppChromeState())
     val chrome: StateFlow<AppChromeState> = _chrome.asStateFlow()
+
+    init {
+        // Preload session data early to avoid runBlocking on main thread
+        viewModelScope.launch {
+            sessionStore.preload()
+        }
+    }
 
     /** Online state mirrored from the [com.selffeed.android.network.NetworkMonitor]. */
     val isOnline: StateFlow<Boolean> = repository.observeOnline()

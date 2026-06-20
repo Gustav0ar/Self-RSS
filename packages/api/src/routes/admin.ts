@@ -6,16 +6,19 @@ import type {
 } from '../repositories/settings.repository.js';
 import type { AuthService } from '../services/auth.service.js';
 import { createLogger } from '../utils/logger.js';
+import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/rate-limiter.js';
 import { parseBody } from '../utils/validation.js';
 
 export function createAdminRoutes(
 	authService: AuthService,
 	settingsRepo: AppSettingsRepository,
 	auditLogRepo: AuditLogRepository,
+	rateLimiter: RateLimiter,
 ) {
 	const admin = new Hono();
 
 	admin.get('/settings', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'admin', RATE_LIMITS.admin);
 		const settings = await settingsRepo.get();
 		return c.json({
 			data: { registrationLocked: settings.registrationLocked },
@@ -23,6 +26,7 @@ export function createAdminRoutes(
 	});
 
 	admin.patch('/settings', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'admin', RATE_LIMITS.admin);
 		const body = await parseBody(c, updateAppSettingsSchema);
 		const settings = await settingsRepo.update(body);
 		await auditLogRepo.create({
@@ -42,6 +46,7 @@ export function createAdminRoutes(
 	});
 
 	admin.post('/users', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'admin', RATE_LIMITS.admin);
 		const body = await parseBody(c, adminCreateUserSchema);
 		const role = body.role ?? 'user';
 		const user = await authService.adminCreateUser(body.email, body.password, role);

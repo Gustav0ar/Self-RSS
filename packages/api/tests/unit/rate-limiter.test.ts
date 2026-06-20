@@ -80,6 +80,67 @@ describe('RateLimiter', () => {
 		expect(result).toEqual({ allowed: false, remaining: 0 });
 	});
 
+	it('fails open when Redis incr throws during check', async () => {
+		const redis = {
+			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+			pexpire: vi.fn().mockResolvedValue(1),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
+
+		expect(result).toEqual({ allowed: true, remaining: Infinity });
+		expect(redis.pexpire).not.toHaveBeenCalled();
+	});
+
+	it('fails open when Redis pexpire throws during check', async () => {
+		const redis = {
+			incr: vi.fn().mockResolvedValue(1),
+			pexpire: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
+
+		// First request succeeded (incr returned 1), but pexpire failed
+		// The operation still allowed the request since the core incr worked
+		expect(result).toEqual({ allowed: true, remaining: Infinity });
+	});
+
+	it('fails closed when Redis incr throws during incrementDailyCount', async () => {
+		const redis = {
+			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		await expect(limiter.incrementDailyCount('opml-import:user-1')).rejects.toThrow(
+			'Rate limit service unavailable',
+		);
+	});
+
+	it('fails closed when Redis expire throws during incrementDailyCount', async () => {
+		const redis = {
+			incr: vi.fn().mockResolvedValue(1),
+			expire: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		await expect(limiter.incrementDailyCount('opml-import:user-1')).rejects.toThrow(
+			'Rate limit service unavailable',
+		);
+	});
+
+	it('fails closed when Redis decr throws during releaseDailyCount', async () => {
+		const redis = {
+			decr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		await expect(limiter.releaseDailyCount('opml-import:user-1')).rejects.toThrow(
+			'Rate limit service unavailable',
+		);
+	});
+
 	it('increments a daily counter with a 48h TTL only on the first hit of the day', async () => {
 		const redis = {
 			incr: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2),

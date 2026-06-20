@@ -10,6 +10,21 @@ import { createLogger } from './utils/logger.js';
 import { sseRegistry } from './utils/sse-registry.js';
 import { createTokenUtils } from './utils/tokens.js';
 
+process.on('unhandledRejection', (reason, _promise) => {
+	console.error('Unhandled promise rejection:', {
+		reason: reason instanceof Error ? reason.message : String(reason),
+		stack: reason instanceof Error ? reason.stack : undefined,
+	});
+});
+
+process.on('uncaughtException', (error) => {
+	console.error('Uncaught exception:', {
+		message: error.message,
+		stack: error.stack,
+	});
+	process.exit(1);
+});
+
 const logger = createLogger();
 const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../drizzle');
 

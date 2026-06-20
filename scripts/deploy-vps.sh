@@ -46,6 +46,59 @@ fail_with_diagnostics() {
 	exit 1
 }
 
+rollback_deploy() {
+	echo "=========================================="
+	echo "ROLLBACK: Initiating rollback to previous image"
+	echo "=========================================="
+
+	PREV_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
+	echo "[ROLLBACK] Pulling previous image: ${PREV_IMAGE}"
+	if ! docker pull "${PREV_IMAGE}" 2>&1 | tee /dev/stderr; then
+		echo "[ROLLBACK] ERROR: Failed to pull previous image"
+		fail_with_diagnostics
+	fi
+
+	echo "[ROLLBACK] Tagging image for deployment"
+	docker tag "${PREV_IMAGE}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}" || true
+
+	echo "[ROLLBACK] Restarting containers with previous image"
+	"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || {
+		echo "[ROLLBACK] ERROR: Failed to restart containers"
+		fail_with_diagnostics
+	}
+
+	echo "[ROLLBACK] Verifying container health after rollback"
+	if wait_for_container_health selffeed-redis Redis; then
+		if wait_for_container_health selffeed-api API; then
+			if wait_for_container_health selffeed-web Web; then
+				if wait_for_container_health selffeed-worker Worker; then
+					echo "=========================================="
+					echo "ROLLBACK: Completed successfully - services healthy"
+					echo "=========================================="
+					echo "[ROLLBACK] New deployment failed; previous version restored and healthy."
+					exit 2  # Exit code 2 indicates rollback was performed
+				fi
+			fi
+		fi
+	fi
+
+	echo "[ROLLBACK] ERROR: Health checks failed after rollback"
+	fail_with_diagnostics
+}
+
+save_current_image() {
+	echo "Saving current API image as :previous for potential rollback"
+	current_api_image="$("${CONTAINER_CLI}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "${IMAGE_OWNER}/self-feed-api" | grep -v ":previous" | grep -v ":${IMAGE_TAG}" | head -n 1 || true)"
+	if [ -n "${current_api_image}" ]; then
+		echo "[PRE-DEPLOY] Found current image: ${current_api_image}"
+		docker tag "${current_api_image}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
+		echo "[PRE-DEPLOY] Tagged as :previous for rollback capability"
+	else
+		echo "[PRE-DEPLOY] No existing self-feed-api image found; creating placeholder"
+		docker tag "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous" 2>/dev/null || true
+	fi
+}
+
 wait_for_container_health() {
 	container="$1"
 	label="$2"
@@ -171,13 +224,16 @@ export REGISTRY
 
 backup_existing_database
 
+# Save current image before deploying for rollback capability
+save_current_image
+
 # Pull images, restart services, prune.
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull || fail_with_diagnostics
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || fail_with_diagnostics
 
-wait_for_container_health selffeed-redis Redis || fail_with_diagnostics
-wait_for_container_health selffeed-api API || fail_with_diagnostics
-wait_for_container_health selffeed-web Web || fail_with_diagnostics
-wait_for_container_health selffeed-worker Worker || fail_with_diagnostics
+wait_for_container_health selffeed-redis Redis || { echo "[DEPLOY] Redis health check failed"; rollback_deploy; }
+wait_for_container_health selffeed-api API || { echo "[DEPLOY] API health check failed"; rollback_deploy; }
+wait_for_container_health selffeed-web Web || { echo "[DEPLOY] Web health check failed"; rollback_deploy; }
+wait_for_container_health selffeed-worker Worker || { echo "[DEPLOY] Worker health check failed"; rollback_deploy; }
 
 "${CONTAINER_CLI}" image prune -f

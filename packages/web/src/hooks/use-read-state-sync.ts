@@ -2,13 +2,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyReadStateSyncEvent } from '@/hooks/queries';
 import { getClientId } from '@/lib/api';
+import { REFRESH_INTERVALS } from '@/lib/constants';
 import { streamReadStateEvents } from '@/lib/read-state-events';
 
-const MIN_RECONNECT_DELAY_MS = 1_000;
-const MAX_RECONNECT_DELAY_MS = 30_000;
-
 export function getReadStateReconnectDelay(attempt: number) {
-	return Math.min(MAX_RECONNECT_DELAY_MS, MIN_RECONNECT_DELAY_MS * 2 ** attempt);
+	return Math.min(
+		REFRESH_INTERVALS.RECONNECT_MAX_MS,
+		REFRESH_INTERVALS.RECONNECT_MIN_MS * 2 ** attempt,
+	);
 }
 
 export function useReadStateSync(enabled: boolean) {
