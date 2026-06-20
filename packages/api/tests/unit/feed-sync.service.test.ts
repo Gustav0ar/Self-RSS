@@ -313,7 +313,7 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ newArticles: 0, total: 0, skipped: true });
 	});
 
-	it('schedules lazy enrichment for existing text-only articles', async () => {
+	it('schedules lazy enrichment for existing text-only articles with inert feed images', async () => {
 		const feedRepo = {
 			findById: vi.fn(async () => ({
 				id: 'feed-1',
@@ -370,7 +370,8 @@ describe('FeedSyncService', () => {
 					guid: 'guid-1',
 					link: 'https://example.com/post-1',
 					title: 'Post 1',
-					description: 'Only text in the RSS feed',
+					description:
+						'<p>Only text in the RSS feed</p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" />',
 				},
 			],
 		} as never);
