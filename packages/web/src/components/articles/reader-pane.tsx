@@ -401,7 +401,28 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 										/>
 									);
 								}
-								if (m.type === 'video' || m.type === 'embed') {
+								if (m.type === 'video') {
+									return (
+										<div
+											key={m.url}
+											className="overflow-hidden rounded-xl border border-border/70 bg-muted"
+											style={{
+												aspectRatio: m.width && m.height ? `${m.width} / ${m.height}` : '16 / 9',
+											}}
+										>
+											{/* biome-ignore lint/a11y/useMediaCaption: RSS media records do not include caption track metadata. */}
+											<video
+												src={m.url}
+												title={`Media ${i + 1}`}
+												className="h-full w-full bg-black"
+												controls
+												preload="metadata"
+												playsInline
+											/>
+										</div>
+									);
+								}
+								if (m.type === 'embed') {
 									const isX = (m.provider as string) === 'x';
 									return (
 										<div

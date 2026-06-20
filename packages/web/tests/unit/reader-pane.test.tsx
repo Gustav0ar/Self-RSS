@@ -86,6 +86,36 @@ describe('ReaderPane', () => {
 		);
 	});
 
+	it('renders direct video media with a video player instead of an iframe', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			contentHtml: '<p>Body</p>',
+			media: [
+				{
+					id: 'media-video',
+					articleId: 'article-1',
+					type: 'video',
+					provider: 'unknown',
+					url: 'https://cdn.example.com/video.mp4',
+					embedUrl: null,
+					width: null,
+					height: null,
+					position: 0,
+				},
+			],
+		};
+
+		render(<ReaderPane articleId="article-1" />);
+
+		const mediaPanel = document.querySelector('.surface-card.motion-enter.mt-6.space-y-4');
+		const video = mediaPanel?.querySelector('video');
+		expect(video).toBeTruthy();
+		expect(video?.getAttribute('src')).toBe('https://cdn.example.com/video.mp4');
+		expect(video?.hasAttribute('controls')).toBe(true);
+		expect(video?.getAttribute('preload')).toBe('metadata');
+		expect(mediaPanel?.querySelectorAll('iframe')).toHaveLength(0);
+	});
+
 	it('does not mark articles read on open when auto-mark is on navigate', () => {
 		render(<ReaderPane articleId="article-1" />);
 
