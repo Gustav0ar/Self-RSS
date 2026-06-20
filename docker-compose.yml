@@ -97,6 +97,18 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const res = await fetch('http://api:3000/ready'); if (!res.ok) process.exit(1);",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
 
   web:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-web:${IMAGE_TAG:-latest}

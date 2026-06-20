@@ -78,6 +78,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 
 	const resultIds = useMemo(() => results?.pages.flatMap((page) => page.data) ?? [], [results]);
 	const renderedResults = useMemo(() => resultIds.slice(0, MAX_RENDERED_RESULTS), [resultIds]);
+	const reachedRenderLimit = resultIds.length >= MAX_RENDERED_RESULTS;
 	const showDropdown = isOpen && debouncedQuery.trim().length >= 2;
 	const activeArticle =
 		activeIndex >= 0 && activeIndex < renderedResults.length
@@ -266,7 +267,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 							})
 						)}
 					</div>
-					{hasNextPage ? (
+					{hasNextPage && !reachedRenderLimit ? (
 						<button
 							type="button"
 							onClick={() => fetchNextPage()}
@@ -275,6 +276,11 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 						>
 							{isFetchingNextPage ? 'Loading more...' : 'Load more results'}
 						</button>
+					) : null}
+					{hasNextPage && reachedRenderLimit ? (
+						<div className="mt-1 rounded-2xl px-4 py-3 text-center text-xs text-muted-foreground">
+							Showing the first {MAX_RENDERED_RESULTS} results. Refine the search to narrow them.
+						</div>
 					) : null}
 					<div className="mt-1 flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
 						<span className="inline-flex items-center gap-1">

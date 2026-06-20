@@ -123,6 +123,7 @@ export const categories = sqliteTable(
 	(t) => [
 		uniqueIndex('categories_user_slug_idx').on(t.userId, t.slug),
 		index('categories_user_id_idx').on(t.userId),
+		index('categories_user_parent_idx').on(t.userId, t.parentCategoryId),
 	],
 );
 

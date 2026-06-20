@@ -582,7 +582,7 @@ export class FeedSyncService {
 			}
 
 			const sanitizedHtml = sanitizeHtml(enrichedHtml);
-			const textContent = stripHtml(enrichedHtml);
+			const textContent = stripHtml(sanitizedHtml);
 			const excerpt = textContent ? extractExcerpt(textContent) : null;
 			const heroImage =
 				extractHeroImage(enrichedHtml) ??

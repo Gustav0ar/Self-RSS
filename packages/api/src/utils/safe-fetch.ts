@@ -1,5 +1,9 @@
 import { lookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { AppError } from '../middleware/errors.js';
 
 interface RemoteFetchSecurityOptions {
@@ -18,6 +22,13 @@ interface FetchWithValidatedRedirectsDeps {
 	lookupFn?: LookupFn;
 	fetchImpl?: FetchImpl;
 }
+
+interface ValidatedRemoteUrl {
+	url: string;
+	addresses: LookupAddressRecord[];
+}
+
+type PinnedRequestBody = string | Uint8Array | ReadableStream;
 
 function isRedirectStatus(status: number) {
 	return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -95,12 +106,12 @@ function isPrivateIpAddress(ip: string) {
 	return false;
 }
 
-export async function assertSafeRemoteUrl(
+async function validateRemoteUrl(
 	rawUrl: string,
 	options: RemoteFetchSecurityOptions,
 	lookupFn: LookupFn = (hostname, options) =>
 		lookup(hostname, options) as Promise<LookupAddressRecord[]>,
-) {
+): Promise<ValidatedRemoteUrl> {
 	let url: URL;
 	try {
 		url = new URL(rawUrl);
@@ -121,6 +132,12 @@ export async function assertSafeRemoteUrl(
 		throw AppError.badRequest('Remote URL must include a hostname');
 	}
 
+	const ipVersion = isIP(hostname);
+	const addresses: LookupAddressRecord[] =
+		ipVersion === 4 || ipVersion === 6
+			? [{ address: hostname, family: ipVersion }]
+			: await lookupFn(hostname, { all: true, verbatim: true });
+
 	if (!options.allowPrivateHosts) {
 		if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
 			throw AppError.badRequest('Feed URL must not target a local or private network host');
@@ -130,13 +147,110 @@ export async function assertSafeRemoteUrl(
 			throw AppError.badRequest('Feed URL must not target a local or private network host');
 		}
 
-		const addresses = await lookupFn(hostname, { all: true, verbatim: true });
 		if (addresses.some((entry: LookupAddressRecord) => isPrivateIpAddress(entry.address))) {
 			throw AppError.badRequest('Feed URL must not target a local or private network host');
 		}
 	}
 
-	return url.toString();
+	if (addresses.length === 0) {
+		throw AppError.badRequest('Remote URL hostname did not resolve');
+	}
+
+	return { url: url.toString(), addresses };
+}
+
+export async function assertSafeRemoteUrl(
+	rawUrl: string,
+	options: RemoteFetchSecurityOptions,
+	lookupFn: LookupFn = (hostname, options) =>
+		lookup(hostname, options) as Promise<LookupAddressRecord[]>,
+) {
+	return (await validateRemoteUrl(rawUrl, options, lookupFn)).url;
+}
+
+function headersFromIncoming(headers: Record<string, string | string[] | undefined>) {
+	const responseHeaders = new Headers();
+	for (const [name, value] of Object.entries(headers)) {
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				responseHeaders.append(name, item);
+			}
+		} else if (value !== undefined) {
+			responseHeaders.set(name, value);
+		}
+	}
+	return responseHeaders;
+}
+
+function bodyFromRequestInit(init: RequestInit): PinnedRequestBody | undefined {
+	const body = init.body;
+	if (!body) return undefined;
+	if (typeof body === 'string' || body instanceof ReadableStream) {
+		return body;
+	}
+	if (body instanceof URLSearchParams) {
+		return body.toString();
+	}
+	if (body instanceof ArrayBuffer) {
+		return new Uint8Array(body);
+	}
+	if (ArrayBuffer.isView(body)) {
+		return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+	}
+	throw AppError.badRequest('Unsupported remote fetch request body');
+}
+
+async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: RequestInit) {
+	const url = new URL(validated.url);
+	const address = validated.addresses[0];
+	if (!address) {
+		throw AppError.badRequest('Remote URL hostname did not resolve');
+	}
+
+	const requestImpl = url.protocol === 'https:' ? httpsRequest : httpRequest;
+	const headers = Object.fromEntries(new Headers(init.headers).entries());
+	if (!headers.host) {
+		headers.host = url.host;
+	}
+	const method = init.method ?? 'GET';
+	const body = bodyFromRequestInit(init);
+
+	return new Promise<Response>((resolve, reject) => {
+		const req = requestImpl(
+			{
+				protocol: url.protocol,
+				hostname: address.address,
+				port: url.port || undefined,
+				path: `${url.pathname}${url.search}`,
+				method,
+				headers,
+				servername: url.protocol === 'https:' ? url.hostname : undefined,
+				signal: init.signal ?? undefined,
+			},
+			(res) => {
+				const responseHeaders = headersFromIncoming(res.headers);
+				const responseBody = Readable.toWeb(res) as unknown as ReadableStream;
+				resolve(
+					new Response(responseBody, {
+						status: res.statusCode ?? 200,
+						statusText: res.statusMessage,
+						headers: responseHeaders,
+					}),
+				);
+			},
+		);
+
+		req.on('error', reject);
+		if (body instanceof ReadableStream) {
+			Readable.fromWeb(body as unknown as NodeReadableStream).pipe(req);
+			return;
+		}
+		if (body !== undefined) {
+			req.end(body);
+			return;
+		}
+		req.end();
+	});
 }
 
 export async function fetchWithValidatedRedirects(
@@ -148,7 +262,7 @@ export async function fetchWithValidatedRedirects(
 	const lookupFn = deps.lookupFn ?? lookup;
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const maxRedirects = options.maxRedirects ?? 3;
-	let currentUrl = await assertSafeRemoteUrl(input, options, lookupFn);
+	let current = await validateRemoteUrl(input, options, lookupFn);
 
 	// Per-redirect timeout. The caller's `init.signal` only cancels the
 	// initial request; subsequent redirects inherit no signal and a
@@ -174,11 +288,15 @@ export async function fetchWithValidatedRedirects(
 
 		let response: Response;
 		try {
-			response = await fetchImpl(currentUrl, {
+			const requestInit = {
 				...init,
 				redirect: 'manual',
 				signal: perRedirectController.signal,
-			});
+			} satisfies RequestInit;
+			response =
+				deps.fetchImpl || options.allowPrivateHosts
+					? await fetchImpl(current.url, requestInit)
+					: await fetchWithPinnedLookup(current, requestInit);
 		} finally {
 			clearTimeout(perRedirectTimer);
 			if (callerSignal) {
@@ -199,11 +317,7 @@ export async function fetchWithValidatedRedirects(
 			throw AppError.badRequest('Feed URL returned a redirect without a location');
 		}
 
-		currentUrl = await assertSafeRemoteUrl(
-			new URL(location, currentUrl).toString(),
-			options,
-			lookupFn,
-		);
+		current = await validateRemoteUrl(new URL(location, current.url).toString(), options, lookupFn);
 	}
 
 	throw AppError.badRequest('Feed URL exceeded the maximum number of redirects');

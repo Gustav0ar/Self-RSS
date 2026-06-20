@@ -40,6 +40,34 @@ function isArticleListCacheKey(userId: string, key: string): boolean {
 	return key === CacheKeys.articleListCache(userId) || key.startsWith(`articles:list:${userId}:`);
 }
 
+function cacheableArticleRows(result: Awaited<ReturnType<ArticleRepository['findByFeeds']>>): {
+	articles: CachedArticle[];
+	cursor: string | null;
+	hasMore: boolean;
+	rows: typeof result;
+} {
+	const hasMore = result.length > CACHED_ARTICLE_LIMIT;
+	const rows = result.slice(0, CACHED_ARTICLE_LIMIT);
+	return {
+		rows,
+		articles: rows.map((a) => ({
+			id: a.id,
+			feedId: a.feedId,
+			feedTitle: a.feedTitle,
+			feedFaviconUrl: a.feedFaviconUrl,
+			title: a.title,
+			author: a.author,
+			excerpt: a.excerpt,
+			heroImageUrl: a.heroImageUrl,
+			publishedAt: a.publishedAt?.toISOString() ?? null,
+			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
+			isRead: a.isRead,
+		})),
+		cursor: hasMore ? encodeArticleCursor(rows[rows.length - 1] ?? null, 'latest') : null,
+		hasMore,
+	};
+}
+
 export interface CachedArticleList {
 	articles: CachedArticle[];
 	cursor: string | null;
@@ -236,7 +264,7 @@ export class ArticleCacheService {
 				unreadOnly: false,
 			});
 
-			const hasMore = result.length >= CACHED_ARTICLE_LIMIT;
+			const cacheable = cacheableArticleRows(result);
 
 			// Check for new articles since last sync
 			const metaStr = await this.redis.get(metaKey);
@@ -245,7 +273,7 @@ export class ArticleCacheService {
 				try {
 					const prevMeta: ArticleListCacheMeta = JSON.parse(metaStr);
 					const prevTime = new Date(prevMeta.syncedAt).getTime();
-					newArticlesCount = result.filter(
+					newArticlesCount = cacheable.rows.filter(
 						(a) => new Date(a.fetchedAt).getTime() > prevTime,
 					).length;
 				} catch {
@@ -254,21 +282,9 @@ export class ArticleCacheService {
 			}
 
 			const cached: CachedArticleList = {
-				articles: result.map((a) => ({
-					id: a.id,
-					feedId: a.feedId,
-					feedTitle: a.feedTitle,
-					feedFaviconUrl: a.feedFaviconUrl,
-					title: a.title,
-					author: a.author,
-					excerpt: a.excerpt,
-					heroImageUrl: a.heroImageUrl,
-					publishedAt: a.publishedAt?.toISOString() ?? null,
-					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-					isRead: a.isRead,
-				})),
-				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
-				hasMore,
+				articles: cacheable.articles,
+				cursor: cacheable.cursor,
+				hasMore: cacheable.hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
 					newArticlesCount,
@@ -320,24 +336,12 @@ export class ArticleCacheService {
 				unreadOnly: false,
 			});
 
-			const hasMore = result.length >= CACHED_ARTICLE_LIMIT;
+			const cacheable = cacheableArticleRows(result);
 
 			const cached: CachedArticleList = {
-				articles: result.map((a) => ({
-					id: a.id,
-					feedId: a.feedId,
-					feedTitle: a.feedTitle,
-					feedFaviconUrl: a.feedFaviconUrl,
-					title: a.title,
-					author: a.author,
-					excerpt: a.excerpt,
-					heroImageUrl: a.heroImageUrl,
-					publishedAt: a.publishedAt?.toISOString() ?? null,
-					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-					isRead: a.isRead,
-				})),
-				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
-				hasMore,
+				articles: cacheable.articles,
+				cursor: cacheable.cursor,
+				hasMore: cacheable.hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
 					newArticlesCount: 0,
@@ -404,24 +408,12 @@ export class ArticleCacheService {
 				unreadOnly: false,
 			});
 
-			const hasMore = result.length >= CACHED_ARTICLE_LIMIT;
+			const cacheable = cacheableArticleRows(result);
 
 			const cached: CachedArticleList = {
-				articles: result.map((a) => ({
-					id: a.id,
-					feedId: a.feedId,
-					feedTitle: a.feedTitle,
-					feedFaviconUrl: a.feedFaviconUrl,
-					title: a.title,
-					author: a.author,
-					excerpt: a.excerpt,
-					heroImageUrl: a.heroImageUrl,
-					publishedAt: a.publishedAt?.toISOString() ?? null,
-					displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-					isRead: a.isRead,
-				})),
-				cursor: hasMore ? encodeArticleCursor(result[result.length - 1] ?? null, 'latest') : null,
-				hasMore,
+				articles: cacheable.articles,
+				cursor: cacheable.cursor,
+				hasMore: cacheable.hasMore,
 				meta: {
 					syncedAt: new Date().toISOString(),
 					newArticlesCount: 0,

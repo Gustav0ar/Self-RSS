@@ -1,3 +1,6 @@
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import type { AppError } from '../../src/middleware/errors.js';
 import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../../src/utils/safe-fetch.js';
@@ -97,6 +100,36 @@ describe('fetchWithValidatedRedirects', () => {
 		);
 
 		expect(response.status).toBe(200);
+	});
+
+	it('validates DNS before delegating to an injected fetch implementation', async () => {
+		const server = createServer((_req, res) => {
+			res.writeHead(200, { 'content-type': 'application/xml' });
+			res.end('<rss />');
+		});
+		server.listen(0, '127.0.0.1');
+		await once(server, 'listening');
+		const port = (server.address() as AddressInfo).port;
+
+		try {
+			const response = await fetchWithValidatedRedirects(
+				`http://feeds.example.test:${port}/feed.xml`,
+				{},
+				{ allowPrivateHosts: false, maxRedirects: 0 },
+				{
+					lookupFn: async () => [{ address: '203.0.113.10', family: 4 as const }],
+					fetchImpl: async (input) => {
+						expect(input).toBe(`http://feeds.example.test:${port}/feed.xml`);
+						return fetch(`http://127.0.0.1:${port}/feed.xml`);
+					},
+				},
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe('<rss />');
+		} finally {
+			server.close();
+		}
 	});
 
 	it('rejects redirects into private networks', async () => {

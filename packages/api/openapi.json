@@ -1704,7 +1704,38 @@
 					"content": {
 						"application/json": {
 							"schema": {
-								"type": "object"
+								"oneOf": [
+									{
+										"type": "object",
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"additionalProperties": false,
+										"required": [
+											"feedId"
+										],
+										"properties": {
+											"feedId": {
+												"type": "string",
+												"format": "uuid"
+											}
+										}
+									},
+									{
+										"type": "object",
+										"additionalProperties": false,
+										"required": [
+											"categoryId"
+										],
+										"properties": {
+											"categoryId": {
+												"type": "string",
+												"format": "uuid"
+											}
+										}
+									}
+								]
 							}
 						}
 					}

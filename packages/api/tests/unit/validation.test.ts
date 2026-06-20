@@ -82,6 +82,14 @@ describe('markAllReadSchema', () => {
 		expect(result.feedId).toBe('550e8400-e29b-41d4-a716-446655440000');
 	});
 
+	it('rejects ambiguous feed and category scopes', () => {
+		const result = markAllReadSchema.safeParse({
+			feedId: '550e8400-e29b-41d4-a716-446655440000',
+			categoryId: '550e8400-e29b-41d4-a716-446655440001',
+		});
+		expect(result.success).toBe(false);
+	});
+
 	it('rejects invalid UUID', () => {
 		const result = markAllReadSchema.safeParse({ feedId: 'bad' });
 		expect(result.success).toBe(false);
