@@ -2,6 +2,108 @@ import { describe, expect, it, vi } from 'vitest';
 import { ArticleService } from '../../src/services/article.service.js';
 
 describe('ArticleService', () => {
+	it('lists articles through a user-scoped repository query without materializing feed ids', async () => {
+		const articleRepo = {
+			findByScope: vi.fn(async () => [
+				{
+					id: 'article-1',
+					feedId: 'feed-1',
+					feedTitle: 'Feed',
+					feedFaviconUrl: null,
+					title: 'Post 1',
+					author: null,
+					excerpt: 'Excerpt',
+					heroImageUrl: null,
+					publishedAt: new Date('2026-06-01T00:00:00.000Z'),
+					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
+					isRead: false,
+				},
+			]),
+		};
+		const feedRepo = {
+			findById: vi.fn(async () => ({ id: 'feed-1' })),
+			findAllByUser: vi.fn(),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			feedRepo as never,
+			{} as never,
+			{} as never,
+		);
+
+		const result = await service.getArticles('user-1', { feedId: 'feed-1', limit: 20 });
+
+		expect(feedRepo.findById).toHaveBeenCalledWith('feed-1', 'user-1');
+		expect(feedRepo.findAllByUser).not.toHaveBeenCalled();
+		expect(articleRepo.findByScope).toHaveBeenCalledWith(
+			{ userId: 'user-1', feedId: 'feed-1', categoryId: undefined },
+			{ limit: 20, cursor: undefined, sort: undefined, unreadOnly: undefined },
+		);
+		expect(result).toEqual({
+			data: [
+				expect.objectContaining({
+					id: 'article-1',
+					displayedAt: '2026-06-01T00:00:00.000Z',
+					publishedAt: '2026-06-01T00:00:00.000Z',
+				}),
+			],
+			cursor: null,
+			hasMore: false,
+		});
+	});
+
+	it('searches through a scoped repository query and records search metrics', async () => {
+		const articleRepo = {
+			searchByScope: vi.fn(async () => [
+				{
+					id: 'article-1',
+					feedId: 'feed-1',
+					feedTitle: 'Feed',
+					feedFaviconUrl: null,
+					title: 'Post 1',
+					author: null,
+					excerpt: 'Excerpt',
+					heroImageUrl: null,
+					publishedAt: null,
+					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
+					isRead: false,
+				},
+			]),
+		};
+		const feedRepo = {
+			findAllByUser: vi.fn(),
+			findByCategory: vi.fn(),
+		};
+		const metricsRepo = {
+			incrementSearchCount: vi.fn(async () => undefined),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			feedRepo as never,
+			metricsRepo as never,
+			{} as never,
+		);
+
+		const result = await service.search('user-1', 'reader', 'cat-1', 20);
+
+		expect(feedRepo.findAllByUser).not.toHaveBeenCalled();
+		expect(feedRepo.findByCategory).not.toHaveBeenCalled();
+		expect(articleRepo.searchByScope).toHaveBeenCalledWith(
+			{ userId: 'user-1', categoryId: 'cat-1' },
+			'reader',
+			20,
+			undefined,
+		);
+		expect(metricsRepo.incrementSearchCount).toHaveBeenCalledWith('user-1');
+		expect(result.data[0]).toEqual(
+			expect.objectContaining({
+				id: 'article-1',
+				displayedAt: '2026-06-01T00:01:00.000Z',
+				publishedAt: null,
+			}),
+		);
+	});
+
 	it('loads article detail with the user-scoped detail query', async () => {
 		const articleRepo = {
 			findDetailForUser: vi.fn(async () => ({

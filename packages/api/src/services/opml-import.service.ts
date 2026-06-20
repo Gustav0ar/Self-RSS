@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom';
 import { AppError } from '../middleware/errors.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
+import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
 
 interface ParsedOpmlFeed {
 	feedUrl: string;
@@ -26,33 +27,15 @@ function titleFromUrl(feedUrl: string): string {
 	}
 }
 
-function normalizeFeedUrlForImport(rawUrl: string): string {
-	let url: URL;
-	try {
-		url = new URL(rawUrl.trim());
-	} catch {
-		throw AppError.badRequest('Invalid remote URL');
-	}
-
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		throw AppError.badRequest('Only HTTP and HTTPS feed URLs are allowed');
-	}
-
-	if (url.username || url.password) {
-		throw AppError.badRequest('Feed URLs must not include credentials');
-	}
-
-	if (!url.hostname) {
-		throw AppError.badRequest('Remote URL must include a hostname');
-	}
-
-	return url.toString();
+interface OpmlImportConfig {
+	allowPrivateHosts: boolean;
 }
 
 export class OpmlImportService {
 	constructor(
 		private categoryRepo: CategoryRepository,
 		private feedRepo: FeedRepository,
+		private config: OpmlImportConfig = { allowPrivateHosts: false },
 	) {}
 
 	async import(userId: string, filename: string, content: string): Promise<OpmlImportSummary> {
@@ -69,6 +52,41 @@ export class OpmlImportService {
 			warnings: [],
 		};
 
+		const normalizedEntries: ParsedOpmlFeed[] = [];
+		const normalizedUrlCache = new Map<string, string>();
+		for (const entry of feeds) {
+			if (!entry.feedUrl) {
+				summary.invalidEntries += 1;
+				summary.warnings.push({
+					code: 'INVALID_ENTRY',
+					message: 'Feed outline is missing xmlUrl',
+					categoryPath: entry.categoryPath,
+				});
+				continue;
+			}
+
+			let normalizedFeedUrl = normalizedUrlCache.get(entry.feedUrl);
+			try {
+				if (!normalizedFeedUrl) {
+					normalizedFeedUrl = await assertSafeRemoteUrl(entry.feedUrl.trim(), {
+						allowPrivateHosts: this.config.allowPrivateHosts,
+					});
+					normalizedUrlCache.set(entry.feedUrl, normalizedFeedUrl);
+				}
+			} catch (error) {
+				summary.invalidEntries += 1;
+				summary.warnings.push({
+					code: 'INVALID_FEED_URL',
+					message: error instanceof Error ? error.message : 'Invalid feed URL',
+					feedUrl: entry.feedUrl,
+					categoryPath: entry.categoryPath,
+				});
+				continue;
+			}
+
+			normalizedEntries.push({ ...entry, feedUrl: normalizedFeedUrl });
+		}
+
 		// Pre-fetch the user's existing feed URLs and category tree in one
 		// round-trip each. Without this, a 500-entry OPML would issue 1500+
 		// individual `findByUrl` / `findByName` calls (1 per category, 1 per
@@ -77,7 +95,10 @@ export class OpmlImportService {
 		// repository batch them in a single transaction.
 		const existingFeedUrls = new Set(
 			(
-				await this.feedRepo.findByUrls(userId, feeds.map((entry) => entry.feedUrl).filter(Boolean))
+				await this.feedRepo.findByUrls(
+					userId,
+					normalizedEntries.map((entry) => entry.feedUrl),
+				)
 			).map((feed) => feed.feedUrl),
 		);
 		const existingCategories = await this.categoryRepo.findAllByUser(userId);
@@ -92,37 +113,13 @@ export class OpmlImportService {
 		}[] = [];
 		const feedsToCreate: typeof import('../db/schema.js').feeds.$inferInsert[] = [];
 
-		for (const entry of feeds) {
-			if (!entry.feedUrl) {
-				summary.invalidEntries += 1;
-				summary.warnings.push({
-					code: 'INVALID_ENTRY',
-					message: 'Feed outline is missing xmlUrl',
-					categoryPath: entry.categoryPath,
-				});
-				continue;
-			}
-
-			let normalizedFeedUrl: string;
-			try {
-				normalizedFeedUrl = normalizeFeedUrlForImport(entry.feedUrl);
-			} catch (error) {
-				summary.invalidEntries += 1;
-				summary.warnings.push({
-					code: 'INVALID_FEED_URL',
-					message: error instanceof Error ? error.message : 'Invalid feed URL',
-					feedUrl: entry.feedUrl,
-					categoryPath: entry.categoryPath,
-				});
-				continue;
-			}
-
-			if (existingFeedUrls.has(normalizedFeedUrl)) {
+		for (const entry of normalizedEntries) {
+			if (existingFeedUrls.has(entry.feedUrl)) {
 				summary.skippedDuplicates += 1;
 				summary.warnings.push({
 					code: 'DUPLICATE_FEED',
 					message: 'Feed already subscribed and was skipped',
-					feedUrl: normalizedFeedUrl,
+					feedUrl: entry.feedUrl,
 					categoryPath: entry.categoryPath,
 				});
 				continue;
@@ -133,7 +130,7 @@ export class OpmlImportService {
 			// queued and the second would either be rejected by the
 			// unique constraint or — with onConflictDoNothing — silently
 			// dropped without bumping `skippedDuplicates`.
-			existingFeedUrls.add(normalizedFeedUrl);
+			existingFeedUrls.add(entry.feedUrl);
 
 			// Resolve category chain. We do not insert anything yet: we collect
 			// the desired categories and feeds and let the repository batch
@@ -182,7 +179,7 @@ export class OpmlImportService {
 				summary.warnings.push({
 					code: 'UNCATEGORIZED_ENTRY',
 					message: 'Feed entry is missing a category path',
-					feedUrl: normalizedFeedUrl,
+					feedUrl: entry.feedUrl,
 				});
 				continue;
 			}
@@ -191,8 +188,8 @@ export class OpmlImportService {
 				userId,
 				// Patched after the category insert below.
 				categoryId: parentCategoryId as string,
-				feedUrl: normalizedFeedUrl,
-				title: entry.title?.trim() || titleFromUrl(normalizedFeedUrl),
+				feedUrl: entry.feedUrl,
+				title: entry.title?.trim() || titleFromUrl(entry.feedUrl),
 				siteUrl: null,
 				faviconUrl: null,
 				description: null,

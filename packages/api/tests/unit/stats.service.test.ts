@@ -4,8 +4,8 @@ import { StatsService } from '../../src/services/stats.service.js';
 describe('StatsService', () => {
 	it('returns counts, run history, and 30 days of daily metrics', async () => {
 		const articleRepo = {
-			countByFeeds: vi.fn(async () => 10),
-			countReadByFeeds: vi.fn(async () => 4),
+			countByScope: vi.fn(async () => 10),
+			countReadByScope: vi.fn(async () => 4),
 		};
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [{ id: 'feed-1' }, { id: 'feed-2' }]),
@@ -44,12 +44,14 @@ describe('StatsService', () => {
 		});
 		expect(syncRunRepo.findRecentByUser).toHaveBeenCalledWith('user-1', 10);
 		expect(metricsRepo.getDailyMetrics).toHaveBeenCalledWith('user-1', 30);
+		expect(articleRepo.countByScope).toHaveBeenCalledWith({ userId: 'user-1' });
+		expect(articleRepo.countReadByScope).toHaveBeenCalledWith({ userId: 'user-1' });
 	});
 
 	it('clamps the unread count to zero when read exceeds total', async () => {
 		const articleRepo = {
-			countByFeeds: vi.fn(async () => 3),
-			countReadByFeeds: vi.fn(async () => 5),
+			countByScope: vi.fn(async () => 3),
+			countReadByScope: vi.fn(async () => 5),
 		};
 		const service = new StatsService(
 			articleRepo as never,

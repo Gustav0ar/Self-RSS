@@ -227,6 +227,9 @@ fun ArticleReaderDialog(
                             webView.loadUrl(embedUrl)
                         }
                     },
+                    onRelease = { webView ->
+                        webView.releaseReaderResources()
+                    },
                 )
             },
         )
@@ -294,6 +297,9 @@ private fun SecureHtmlContent(
                     documentBaseUrl,
                 )
             }
+        },
+        onRelease = { webView ->
+            webView.releaseReaderResources()
         },
     )
 }

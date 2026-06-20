@@ -12,7 +12,7 @@ import type {
 } from '@self-feed/shared';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
 
 export function invalidateReaderQueries(qc: QueryClient) {
@@ -718,15 +718,26 @@ export function useSyncFeed() {
 
 export function useSyncAllFeeds() {
 	const qc = useQueryClient();
+	const delayedRefreshTimers = useRef<ReturnType<typeof globalThis.setTimeout>[]>([]);
+	const clearDelayedRefreshTimers = useCallback(() => {
+		for (const timer of delayedRefreshTimers.current) {
+			globalThis.clearTimeout(timer);
+		}
+		delayedRefreshTimers.current = [];
+	}, []);
+	useEffect(() => clearDelayedRefreshTimers, [clearDelayedRefreshTimers]);
+
 	return useMutation({
 		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
 		onSuccess: () => {
+			clearDelayedRefreshTimers();
 			qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
 			// Immediate optimistic refresh of articles for fast UI update
 			qc.invalidateQueries({ queryKey: ['articles'] });
 			// Additional refreshes at staggered intervals for background sync
 			for (const delayMs of [2_000, 5_000, 15_000]) {
-				globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
+				const timer = globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
+				delayedRefreshTimers.current.push(timer);
 			}
 		},
 	});

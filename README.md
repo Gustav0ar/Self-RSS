@@ -131,7 +131,7 @@ SelfFeed/
 │       │   ├── providers/    # Auth, theme providers
 │       │   └── routes/       # TanStack Router pages
 │       └── tests/
-│   └── android/      # Jetpack Compose Android client (API 36)
+│   └── android/      # Jetpack Compose Android client (compile API 37, target API 35)
 ├── compose.yaml      # Podman/Docker Compose stack
 ├── Dockerfile.api    # API container image
 ├── Dockerfile.web    # Web container image (nginx)
@@ -142,7 +142,7 @@ SelfFeed/
 
 An Android app using Jetpack Compose is available in `packages/android`.
 
-- Target: **Android 16 / API 36**
+- Build SDK: **compile API 37**, **target API 35**
 - Auth: JWT access token + refresh-cookie flow
 - Core coverage: auth, feeds/categories, articles, search, preferences, stats, admin registration lock
 
@@ -187,7 +187,8 @@ All API endpoints are prefixed with `/api/v1`.
 | GET    | /preferences                  | ✓        | Get user preferences         |
 | PATCH  | /preferences                  | ✓        | Update preferences           |
 | GET    | /stats                        | ✓        | Dashboard statistics         |
-| POST   | /admin/registration-lock      | Admin    | Toggle registration          |
+| GET    | /admin/settings               | Admin    | Get admin app settings       |
+| PATCH  | /admin/settings               | Admin    | Update admin app settings    |
 | POST   | /admin/users                  | Admin    | Create user (when locked)    |
 
 ## Android / Mobile Integration
@@ -197,7 +198,7 @@ The API is designed for multi-client consumption:
 - **Stateless JWT auth** — no server-side sessions; tokens work from any client
 - **JSON REST** — standard HTTP methods with consistent response envelopes
 - **Generated OpenAPI document** — `packages/api/openapi.json`
-- **Pagination** — cursor-based via `offset`/`limit` query parameters
+- **Pagination** — cursor-based via `cursor`/`limit` query parameters
 - **Consistent error format** — `{ success: false, error: { code, message } }`
 
 Refresh the OpenAPI artifact with:

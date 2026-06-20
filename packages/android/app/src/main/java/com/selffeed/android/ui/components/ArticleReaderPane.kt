@@ -609,7 +609,7 @@ private fun SecureHtmlContent(
     )
 }
 
-private fun WebView.releaseReaderResources() {
+internal fun WebView.releaseReaderResources() {
     runCatching {
         stopLoading()
         loadUrl("about:blank")

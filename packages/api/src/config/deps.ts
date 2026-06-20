@@ -101,7 +101,9 @@ export function createDeps(
 		resolvedSyncConfig,
 		articleCache,
 	);
-	const opmlImport = new OpmlImportService(repos.category, repos.feed);
+	const opmlImport = new OpmlImportService(repos.category, repos.feed, {
+		allowPrivateHosts: resolvedSyncConfig.allowPrivateHosts,
+	});
 
 	const services: AppDeps['services'] = {
 		auth: new AuthService(repos.user, repos.settings, tokenUtils, redis),

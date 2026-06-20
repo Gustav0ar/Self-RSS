@@ -14,11 +14,10 @@ export class StatsService {
 
 	async getStats(userId: string) {
 		const feeds = await this.feedRepo.findAllByUser(userId);
-		const feedIds = feeds.map((f) => f.id);
 		const categories = await this.categoryRepo.findAllByUser(userId);
 		const [totalArticles, totalRead] = await Promise.all([
-			this.articleRepo.countByFeeds(feedIds),
-			this.articleRepo.countReadByFeeds(userId, feedIds),
+			this.articleRepo.countByScope({ userId }),
+			this.articleRepo.countReadByScope({ userId }),
 		]);
 		const totalUnread = Math.max(0, totalArticles - totalRead);
 

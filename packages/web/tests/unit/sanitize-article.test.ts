@@ -50,6 +50,16 @@ describe('sanitizeArticleHtml', () => {
 		expect(result.toLowerCase()).toContain('sandbox=');
 	});
 
+	it('does not treat lookalike media domains as approved embeds', () => {
+		const result = sanitizeArticleHtml(
+			'<iframe src="https://notyoutube.com/watch?v=abc123"></iframe><iframe src="https://evilplayer.vimeo.com/video/123"></iframe>',
+		);
+
+		expect(result).toContain('notyoutube.com');
+		expect(result).toContain('evilplayer.vimeo.com');
+		expect(result.toLowerCase().match(/sandbox=/g)).toHaveLength(2);
+	});
+
 	it('adds rel and target to external anchor links', () => {
 		const result = sanitizeArticleHtml('<a href="https://example.com/post">read</a>');
 		expect(result).toContain('target="_blank"');

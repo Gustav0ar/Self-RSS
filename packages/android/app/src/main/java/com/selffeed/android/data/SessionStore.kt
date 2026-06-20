@@ -1,6 +1,9 @@
+@file:Suppress("DEPRECATION")
+
 package com.selffeed.android.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -10,6 +13,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -51,7 +55,10 @@ import javax.crypto.spec.GCMParameterSpec
  * EncryptedSharedPreferences version, so all callers continue to
  * work without modification.
  */
-class SessionStore(context: Context) {
+class SessionStore internal constructor(
+    context: Context,
+    private val legacyPreferencesFactory: LegacyPreferencesFactory? = null,
+) {
     private val appContext = context.applicationContext
     private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
     @Volatile private var accessTokenLoaded = false
@@ -129,9 +136,13 @@ class SessionStore(context: Context) {
     fun clear() {
         runBlocking {
             val clientId = getClientId()
+            val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
             dataStore.edit { prefs ->
                 prefs.clear()
                 prefs[KEY_CLIENT_ID] = clientId
+                if (legacyMigrationMarker != null) {
+                    prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
+                }
             }
             accessTokenCache = null
             accessTokenLoaded = true
@@ -233,26 +244,40 @@ class SessionStore(context: Context) {
     }
 
     private fun migrateLegacyIfPresent() {
-        val legacyFile = java.io.File(
-            appContext.filesDir.parentFile,
-            "共享_prefs/rss_secure_session.xml",
-        )
+        val legacyFile = legacySessionPreferencesFile(appContext)
         if (!legacyFile.exists()) return
         Log.d(TAG, "Migrating legacy session from ${legacyFile.absolutePath}")
-        val legacy = appContext.getSharedPreferences("rss_secure_session", Context.MODE_PRIVATE)
+        val existing = runBlocking { dataStore.data.first() }
+        if (existing[KEY_LEGACY_SESSION_MIGRATED] == "true") {
+            return
+        }
+
+        if (existing[KEY_ACCESS_TOKEN] != null || existing[KEY_REFRESH_COOKIE] != null) {
+            runBlocking {
+                dataStore.edit { prefs ->
+                    prefs[KEY_LEGACY_SESSION_MIGRATED] = "true"
+                }
+            }
+            return
+        }
+
+        val legacy = legacyPreferencesFactory?.invoke(appContext)
+            ?: openLegacyEncryptedPreferences(appContext, masterKey)
         val accessToken = legacy.getString("access_token", null)
         val refreshCookie = legacy.getString("refresh_cookie", null)
         val clientId = legacy.getString("client_id", null)
         runBlocking {
             dataStore.edit { prefs ->
-                if (accessToken != null) prefs[KEY_ACCESS_TOKEN] = accessToken // already encrypted by legacy
-                if (refreshCookie != null) prefs[KEY_REFRESH_COOKIE] = refreshCookie
+                if (accessToken != null) prefs[KEY_ACCESS_TOKEN] = encrypt(accessToken)
+                if (refreshCookie != null) prefs[KEY_REFRESH_COOKIE] = encrypt(refreshCookie)
                 if (clientId != null) prefs[KEY_CLIENT_ID] = clientId
+                prefs[KEY_LEGACY_SESSION_MIGRATED] = "true"
             }
             accessTokenLoaded = false
             refreshCookieLoaded = false
             clientIdCache = clientId
         }
+        legacy.edit().clear().apply()
     }
 
     companion object {
@@ -266,8 +291,24 @@ class SessionStore(context: Context) {
         private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         private val KEY_REFRESH_COOKIE = stringPreferencesKey("refresh_cookie")
         private val KEY_CLIENT_ID = stringPreferencesKey("client_id")
+        private val KEY_LEGACY_SESSION_MIGRATED = stringPreferencesKey("legacy_session_migrated")
     }
 }
+
+private typealias LegacyPreferencesFactory = (Context) -> SharedPreferences
+
+@Suppress("DEPRECATION")
+private fun openLegacyEncryptedPreferences(context: Context, masterKey: MasterKey): SharedPreferences =
+    EncryptedSharedPreferences.create(
+        context,
+        "rss_secure_session",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+
+internal fun legacySessionPreferencesFile(context: Context): java.io.File =
+    java.io.File(context.applicationContext.filesDir.parentFile, "shared_prefs/rss_secure_session.xml")
 
 /**
  * Top-level DataStore delegate for the session. The `preferencesDataStore`

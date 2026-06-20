@@ -1,11 +1,12 @@
 package com.selffeed.android.data
 
+import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,5 +97,39 @@ class SessionStoreTest {
         store.clear()
         val after = store.getClientId()
         assertEquals(first, after)
+    }
+
+    @Test
+    fun `legacy session file uses Android shared prefs directory`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val path = legacySessionPreferencesFile(context).path
+
+        assertTrue(path.endsWith("shared_prefs/rss_secure_session.xml"))
+        assertFalse(path.contains("共享_prefs"))
+    }
+
+    @Test
+    fun `legacy session migration re-encrypts plaintext values supplied by legacy reader when available`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val keyStoreOk = runCatching { store.setAccessToken("probe") }.isSuccess
+        if (!keyStoreOk) return
+        store.clear()
+
+        val legacy = context.getSharedPreferences("rss_secure_session", Context.MODE_PRIVATE)
+        legacy.edit()
+            .clear()
+            .putString("access_token", "legacy-access")
+            .putString("refresh_cookie", "legacy-refresh")
+            .putString("client_id", "123e4567-e89b-12d3-a456-426614174000")
+            .commit()
+
+        val migrated = SessionStore(context) { legacy }
+
+        assertEquals("legacy-access", migrated.getAccessToken())
+        assertEquals("legacy-refresh", migrated.getRefreshCookie())
+        assertEquals("123e4567-e89b-12d3-a456-426614174000", migrated.getClientId())
+        assertFalse(legacy.contains("access_token"))
+        assertFalse(legacy.contains("refresh_cookie"))
+        assertFalse(legacy.contains("client_id"))
     }
 }

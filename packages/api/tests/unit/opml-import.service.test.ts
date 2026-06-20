@@ -135,7 +135,9 @@ describe('OpmlImportService', () => {
 			),
 		};
 
-		const service = new OpmlImportService(categoryRepo as never, feedRepo as never);
+		const service = new OpmlImportService(categoryRepo as never, feedRepo as never, {
+			allowPrivateHosts: true,
+		});
 
 		const summary = await service.import(
 			'user-1',
@@ -217,6 +219,53 @@ describe('OpmlImportService', () => {
 				categoryPath: ['Engineering'],
 			},
 		]);
+		expect(categoryRepo.createManyInTransaction).not.toHaveBeenCalled();
+		expect(feedRepo.createMany).not.toHaveBeenCalled();
+	});
+
+	it('rejects private or local feed URLs during import before creating data', async () => {
+		const categoryRepo = {
+			findAllByUser: vi.fn(async () => []),
+			findByName: vi.fn(),
+			create: vi.fn(),
+			createManyInTransaction: vi.fn(),
+		};
+		const feedRepo = {
+			findByUrl: vi.fn(),
+			findByUrls: vi.fn(async () => []),
+			create: vi.fn(),
+			createMany: vi.fn(),
+		};
+		const service = new OpmlImportService(categoryRepo as never, feedRepo as never, {
+			allowPrivateHosts: false,
+		});
+
+		const summary = await service.import(
+			'user-1',
+			'feeds.opml',
+			`<?xml version="1.0" encoding="UTF-8"?>
+			<opml version="2.0">
+				<body>
+					<outline text="Internal">
+						<outline text="Localhost" xmlUrl="http://localhost/feed.xml" />
+						<outline text="Loopback" xmlUrl="http://127.0.0.1/feed.xml" />
+					</outline>
+				</body>
+			</opml>`,
+		);
+
+		expect(summary.createdCategories).toBe(0);
+		expect(summary.createdFeeds).toBe(0);
+		expect(summary.invalidEntries).toBe(2);
+		expect(summary.warnings.map((warning) => warning.code)).toEqual([
+			'INVALID_FEED_URL',
+			'INVALID_FEED_URL',
+		]);
+		expect(summary.warnings.map((warning) => warning.message)).toEqual([
+			'Feed URL must not target a local or private network host',
+			'Feed URL must not target a local or private network host',
+		]);
+		expect(feedRepo.findByUrls).toHaveBeenCalledWith('user-1', []);
 		expect(categoryRepo.createManyInTransaction).not.toHaveBeenCalled();
 		expect(feedRepo.createMany).not.toHaveBeenCalled();
 	});
