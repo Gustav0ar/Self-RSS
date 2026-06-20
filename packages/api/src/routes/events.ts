@@ -19,6 +19,7 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 		const encoder = new TextEncoder();
 		let cleanup: (() => void) | null = null;
 		let heartbeat: ReturnType<typeof setInterval> | null = null;
+		let abortHandler: (() => void) | null = null;
 		let closed = false;
 
 		// Register this SSE connection for graceful shutdown tracking
@@ -28,6 +29,19 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 			startedAt: Date.now(),
 			userId,
 		});
+		const cleanupConnection = () => {
+			if (heartbeat) {
+				clearInterval(heartbeat);
+				heartbeat = null;
+			}
+			cleanup?.();
+			cleanup = null;
+			if (abortHandler) {
+				c.req.raw.signal.removeEventListener('abort', abortHandler);
+				abortHandler = null;
+			}
+			unregister();
+		};
 
 		const stream = new ReadableStream({
 			async start(controller) {
@@ -41,14 +55,7 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 						return;
 					}
 					closed = true;
-					if (heartbeat) {
-						clearInterval(heartbeat);
-						heartbeat = null;
-					}
-					cleanup?.();
-					cleanup = null;
-					// Unregister from the connection registry
-					unregister();
+					cleanupConnection();
 					try {
 						controller.close();
 					} catch {
@@ -56,13 +63,28 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 					}
 				};
 
-				c.req.raw.signal.addEventListener('abort', close, { once: true });
-				cleanup = await realtimeService.subscribeToReadStateEvents(
-					userId,
-					(event: ReadStateSyncEvent) => {
-						enqueue(encodeSse('read-state', event));
-					},
-				);
+				abortHandler = close;
+				c.req.raw.signal.addEventListener('abort', abortHandler, { once: true });
+				try {
+					const unsubscribe = await realtimeService.subscribeToReadStateEvents(
+						userId,
+						(event: ReadStateSyncEvent) => {
+							enqueue(encodeSse('read-state', event));
+						},
+					);
+					if (closed) {
+						unsubscribe();
+						return;
+					}
+					cleanup = unsubscribe;
+				} catch (error) {
+					if (!closed) {
+						closed = true;
+						cleanupConnection();
+						controller.error(error);
+					}
+					return;
+				}
 				enqueue(
 					encodeSse('read-state.connected', {
 						connected: true,
@@ -74,15 +96,11 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 				}, HEARTBEAT_INTERVAL_MS);
 			},
 			cancel() {
-				closed = true;
-				if (heartbeat) {
-					clearInterval(heartbeat);
-					heartbeat = null;
+				if (closed) {
+					return;
 				}
-				cleanup?.();
-				cleanup = null;
-				// Unregister from the connection registry
-				unregister();
+				closed = true;
+				cleanupConnection();
 			},
 		});
 
