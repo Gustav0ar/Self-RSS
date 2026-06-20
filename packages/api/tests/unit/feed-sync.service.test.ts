@@ -549,7 +549,7 @@ describe('FeedSyncService', () => {
 			'fetchAndParse',
 		).mockRejectedValue(response);
 
-		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toBe(response);
+		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toThrow('HTTP 404: Not Found');
 
 		expect(syncRunRepo.complete).toHaveBeenCalledWith(
 			'run-1',
