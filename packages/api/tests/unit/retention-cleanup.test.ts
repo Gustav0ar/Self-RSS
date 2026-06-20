@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ArticleRepository } from '../../src/repositories/article.repository.js';
 import { startRetentionCleanup } from '../../src/jobs/scheduler.js';
+import type { ArticleRepository } from '../../src/repositories/article.repository.js';
 
 // Mock logger
 vi.mock('../../src/utils/logger.js', () => ({
@@ -143,12 +143,10 @@ describe('startRetentionCleanup', () => {
 				resolveDelete = resolve;
 			});
 
-			(mockArticleRepo.deleteOlderThan as ReturnType<typeof vi.fn>).mockImplementation(
-				async () => {
-					await deletePromise;
-					return 1;
-				},
-			);
+			(mockArticleRepo.deleteOlderThan as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+				await deletePromise;
+				return 1;
+			});
 
 			const stop = startRetentionCleanup(mockArticleRepo as ArticleRepository, {
 				retentionDays: 90,

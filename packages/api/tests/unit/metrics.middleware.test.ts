@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { Hono } from 'hono';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { httpMetricsMiddleware } from '../../src/middleware/metrics.js';
-import { resetMetricsService, getMetricsService } from '../../src/services/metrics.service.js';
+import { getMetricsService, resetMetricsService } from '../../src/services/metrics.service.js';
 
 describe('HTTP Metrics Middleware', () => {
 	let app: Hono;

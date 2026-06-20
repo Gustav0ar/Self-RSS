@@ -1,6 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { ReadStateSyncEvent } from '@self-feed/shared';
 import { Hono } from 'hono';
-import { randomUUID } from 'node:crypto';
 import type { RealtimeService } from '../services/realtime.service.js';
 import { sseRegistry } from '../utils/sse-registry.js';
 

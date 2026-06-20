@@ -1,6 +1,5 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { resetMetricsService, getMetricsService } from '../../src/services/metrics.service.js';
-import { register } from 'prom-client';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { getMetricsService, resetMetricsService } from '../../src/services/metrics.service.js';
 
 describe('MetricsService', () => {
 	let metricsService: ReturnType<typeof getMetricsService>;

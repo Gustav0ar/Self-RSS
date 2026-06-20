@@ -1,10 +1,9 @@
+import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import type { Database } from '../db/client.js';
 import type Redis from 'ioredis';
-import { sql, eq, inArray } from 'drizzle-orm';
-import { feeds, articles } from '../db/schema.js';
+import type { Database } from '../db/client.js';
+import { feeds } from '../db/schema.js';
 import { getMetricsService } from '../services/metrics.service.js';
-import { CacheKeys } from '../db/redis.js';
 
 export interface MetricsRouteOptions {
 	db?: Database;
@@ -52,17 +51,24 @@ async function updateDynamicMetrics(options: MetricsRouteOptions) {
 	if (db) {
 		try {
 			const [runningResult, pendingResult, failedResult] = await Promise.all([
-				db.select({ count: sql<number>`count(*)` }).from(feeds).where(eq(feeds.syncStatus, 'syncing')),
-				db.select({ count: sql<number>`count(*)` }).from(feeds).where(
-					sql`${feeds.syncStatus} = 'idle' AND ${feeds.nextSyncAt} <= unixepoch()`
-				),
-				db.select({ count: sql<number>`count(*)` }).from(feeds).where(eq(feeds.syncStatus, 'error')),
+				db
+					.select({ count: sql<number>`count(*)` })
+					.from(feeds)
+					.where(eq(feeds.syncStatus, 'syncing')),
+				db
+					.select({ count: sql<number>`count(*)` })
+					.from(feeds)
+					.where(sql`${feeds.syncStatus} = 'idle' AND ${feeds.nextSyncAt} <= unixepoch()`),
+				db
+					.select({ count: sql<number>`count(*)` })
+					.from(feeds)
+					.where(eq(feeds.syncStatus, 'error')),
 			]);
 
 			getMetricsService().updateFeedSyncStatus(
 				runningResult[0]?.count ?? 0,
 				pendingResult[0]?.count ?? 0,
-				failedResult[0]?.count ?? 0
+				failedResult[0]?.count ?? 0,
 			);
 		} catch (err) {
 			console.error('Failed to update feed sync metrics:', err);

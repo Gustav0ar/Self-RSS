@@ -1,8 +1,8 @@
 import { Outlet, useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
-import { KeyboardHelp } from '@/components/help/keyboard-help';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { KeyboardHelp } from '@/components/help/keyboard-help';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import {

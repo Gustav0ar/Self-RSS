@@ -4,8 +4,8 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
-import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import { fetchWithRetry } from '../utils/retry.js';
+import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 
 interface FeedMetadata {
 	title: string;

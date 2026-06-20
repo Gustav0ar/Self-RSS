@@ -8,8 +8,8 @@ import type { MetricsRepository, SyncRunRepository } from '../repositories/setti
 import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
-import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import { fetchWithRetry } from '../utils/retry.js';
+import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import {
 	extractArticleContentFromPage,
 	extractExcerpt,

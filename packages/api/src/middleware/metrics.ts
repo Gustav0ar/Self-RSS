@@ -1,5 +1,4 @@
-import type { MiddlewareHandler } from 'hono';
-import type { Next } from 'hono';
+import type { Context, Next } from 'hono';
 import { getMetricsService } from '../services/metrics.service.js';
 
 const knownPaths = [
@@ -52,7 +51,7 @@ function normalizePath(path: string): string {
  * Should be applied early in the middleware chain.
  */
 export function httpMetricsMiddleware() {
-	return async function httpMetrics(c: any, next: Next) {
+	return async function httpMetrics(c: Context, next: Next) {
 		const metrics = getMetricsService();
 		const start = process.hrtime.bigint();
 

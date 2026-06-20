@@ -31,9 +31,9 @@ function decodeCursor(
 		if (direction !== expectedDirection) return null;
 		const OFFSET = 1000000000;
 		const SCALE = 10000;
-		const rankInt = Number.parseInt(rankIntRaw, 10);
-		if (!Number.isFinite(rankInt)) return null;
-		const ftsRank = (rankInt - OFFSET) / SCALE;
+		const rawRank = Number(rankIntRaw);
+		if (!Number.isFinite(rawRank)) return null;
+		const ftsRank = rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
 		const seconds = Number.parseInt(secondsRaw, 10);
 		if (!Number.isFinite(seconds) || seconds < 0) return null;
 		return { id, seconds, direction, ftsRank };
@@ -117,7 +117,18 @@ describe('decodeCursor - valid cursors', () => {
 		});
 	});
 
-	it('decodes valid search cursor with ftsRank', () => {
+	it('decodes valid search cursor with exact ftsRank', () => {
+		const cursor = `-0.00000123456789:1704067200:${validUuid}:d`;
+		const result = decodeCursor(cursor, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 1704067200,
+			direction: 'd',
+			ftsRank: -0.00000123456789,
+		});
+	});
+
+	it('decodes legacy integer search cursor with ftsRank', () => {
 		const cursor = `1000001234:1704067200:${validUuid}:d`;
 		const result = decodeCursor(cursor, 'latest');
 		expect(result).toEqual({
@@ -177,7 +188,9 @@ describe('decodeCursor - malformed/invalid cursors', () => {
 		// Missing segment
 		expect(decodeCursor('550e8400-e29b-41d4-a716:1704067200:d', 'latest')).toBeNull();
 		// Extra segment
-		expect(decodeCursor('550e8400-e29b-41d4-a716-446655440000-extra:1704067200:d', 'latest')).toBeNull();
+		expect(
+			decodeCursor('550e8400-e29b-41d4-a716-446655440000-extra:1704067200:d', 'latest'),
+		).toBeNull();
 	});
 
 	it('returns null for cursor with invalid direction', () => {
@@ -208,6 +221,8 @@ describe('decodeCursor - malformed/invalid cursors', () => {
 
 	it('returns null for cursor with binary data pattern', () => {
 		// Null byte injection
-		expect(decodeCursor('550e8400-e29b-41d4\x00-a716-446655440000:1704067200:d', 'latest')).toBeNull();
+		expect(
+			decodeCursor('550e8400-e29b-41d4\x00-a716-446655440000:1704067200:d', 'latest'),
+		).toBeNull();
 	});
 });

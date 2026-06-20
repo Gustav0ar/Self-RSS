@@ -98,7 +98,7 @@ describe('token utilities', () => {
 
 		it('rejects tampered tokens', async () => {
 			const token = await tokenUtils.signAccessToken('user-1', 'admin');
-			const tamperedToken = token.slice(0, -5) + 'xxxxx';
+			const tamperedToken = `${token.slice(0, -5)}xxxxx`;
 			await expect(tokenUtils.verifyAccessToken(tamperedToken)).rejects.toThrow();
 		});
 
@@ -153,59 +153,39 @@ describe('token utilities', () => {
 
 	describe('expiry parsing', () => {
 		it('parses seconds correctly', () => {
-			const utils = createTokenUtils(
-				TEST_SECRET,
-				TEST_REFRESH_SECRET,
-				'30s',
-				'60s',
-			);
+			const utils = createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '30s', '60s');
 			expect(utils.accessExpiresIn).toBe(30);
 			expect(utils.refreshExpiresIn).toBe(60);
 		});
 
 		it('parses minutes correctly', () => {
-			const utils = createTokenUtils(
-				TEST_SECRET,
-				TEST_REFRESH_SECRET,
-				'5m',
-				'15m',
-			);
+			const utils = createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '5m', '15m');
 			expect(utils.accessExpiresIn).toBe(300);
 			expect(utils.refreshExpiresIn).toBe(900);
 		});
 
 		it('parses hours correctly', () => {
-			const utils = createTokenUtils(
-				TEST_SECRET,
-				TEST_REFRESH_SECRET,
-				'1h',
-				'24h',
-			);
+			const utils = createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '1h', '24h');
 			expect(utils.accessExpiresIn).toBe(3600);
 			expect(utils.refreshExpiresIn).toBe(86400);
 		});
 
 		it('parses days correctly', () => {
-			const utils = createTokenUtils(
-				TEST_SECRET,
-				TEST_REFRESH_SECRET,
-				'7d',
-				'30d',
-			);
+			const utils = createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '7d', '30d');
 			expect(utils.accessExpiresIn).toBe(604800);
 			expect(utils.refreshExpiresIn).toBe(2592000);
 		});
 
 		it('throws on invalid expiry format', () => {
-			expect(() =>
-				createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, 'invalid', '7d'),
-			).toThrow('Invalid expiry format: invalid');
+			expect(() => createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, 'invalid', '7d')).toThrow(
+				'Invalid expiry format: invalid',
+			);
 		});
 
 		it('throws on missing unit', () => {
-			expect(() =>
-				createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '100', '7d'),
-			).toThrow('Invalid expiry format: 100');
+			expect(() => createTokenUtils(TEST_SECRET, TEST_REFRESH_SECRET, '100', '7d')).toThrow(
+				'Invalid expiry format: 100',
+			);
 		});
 	});
 

@@ -12,7 +12,6 @@ import com.squareup.moshi.ToJson
 import okhttp3.Authenticator
 import okhttp3.Cache
 import okhttp3.CertificatePinner
-import okhttp3.CertificatePinningException
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -24,6 +23,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.io.File
+import javax.net.ssl.SSLPeerUnverifiedException
 import java.util.concurrent.TimeUnit
 
 class PersistedRefreshCookieJar(
@@ -193,7 +193,7 @@ object NetworkModule {
             .addInterceptor { chain ->
                 try {
                     chain.proceed(chain.request())
-                } catch (e: CertificatePinningException) {
+                } catch (e: SSLPeerUnverifiedException) {
                     logCertificatePinningFailure(e)
                     throw e
                 }
@@ -274,12 +274,15 @@ object NetworkModule {
         return CertificatePinner.Builder()
             .apply {
                 // Primary domain pinning
-                add(PRODUCTION_API_HOSTNAME, primaryPins.split("|").filter { it.isNotBlank() })
+                add(
+                    PRODUCTION_API_HOSTNAME,
+                    *primaryPins.split("|").filter { it.isNotBlank() }.toTypedArray(),
+                )
 
                 // Backup pins for certificate rotation
                 if (backupPins.isNotBlank()) {
                     val backupList = backupPins.split("|").filter { it.isNotBlank() }
-                    add(PRODUCTION_API_HOSTNAME, backupList)
+                    add(PRODUCTION_API_HOSTNAME, *backupList.toTypedArray())
                 }
             }
             .build()
@@ -294,7 +297,7 @@ object NetworkModule {
     private const val PRODUCTION_API_HOSTNAME = "api.selffeed.com"
     private const val TAG = "NetworkModule"
 
-    private fun logCertificatePinningFailure(e: CertificatePinningException) {
+    private fun logCertificatePinningFailure(e: SSLPeerUnverifiedException) {
         // Log security-critical event with details for forensic analysis.
         // Do NOT log sensitive data like certificate contents - only the hostname.
         Log.e(TAG, "Certificate pinning failure: ${e.message}", e)

@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { createMetricsRoutes } from '../../src/routes/metrics.js';
-import { resetMetricsService, getMetricsService } from '../../src/services/metrics.service.js';
 import { Hono } from 'hono';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createMetricsRoutes } from '../../src/routes/metrics.js';
+import { getMetricsService, resetMetricsService } from '../../src/services/metrics.service.js';
 
 describe('Metrics routes', () => {
 	// Create a shared app instance for all tests

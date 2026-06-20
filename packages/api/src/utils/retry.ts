@@ -118,7 +118,7 @@ export async function withRetry<T>(
 			}
 
 			// Calculate delay: baseDelayMs * 2^(attempt-2) = 1s, 2s, 4s, ...
-			const delayMs = Math.min(baseDelayMs * Math.pow(2, attempt - 2), maxDelayMs);
+			const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 2), maxDelayMs);
 
 			logger.info('Retrying after error', {
 				...context,
@@ -148,19 +148,23 @@ export async function fetchWithRetry(
 	options: RetryOptions = {},
 	context?: Record<string, unknown>,
 ): Promise<Response> {
-	return withRetry(async () => {
-		const response = await fetchFn();
+	return withRetry(
+		async () => {
+			const response = await fetchFn();
 
-		// Check for retryable HTTP status codes
-		if (response.status >= 500) {
-			throw response;
-		}
+			// Check for retryable HTTP status codes
+			if (response.status >= 500) {
+				throw response;
+			}
 
-		// Don't retry on client errors
-		if (response.status >= 400 && response.status < 500) {
-			throw response;
-		}
+			// Don't retry on client errors
+			if (response.status >= 400 && response.status < 500) {
+				throw response;
+			}
 
-		return response;
-	}, options, context);
+			return response;
+		},
+		options,
+		context,
+	);
 }

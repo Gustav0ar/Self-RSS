@@ -336,7 +336,14 @@ export class ArticleService {
 		const items = results.slice(0, limit);
 
 		const data = items.map((a) => ({
-			...a,
+			id: a.id,
+			feedId: a.feedId,
+			title: a.title,
+			author: a.author,
+			excerpt: a.excerpt,
+			heroImageUrl: a.heroImageUrl,
+			feedTitle: a.feedTitle,
+			feedFaviconUrl: a.feedFaviconUrl,
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: a.isRead,

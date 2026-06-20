@@ -46,12 +46,12 @@ val releaseApiBaseUrl = configuredReleaseApiBaseUrl?.let {
 //     openssl dgst -sha256 -binary | openssl enc -base64
 //
 // For intermediate CA certificates, also pin those if your server doesn't send the full chain.
-val releaseCertificatePins = listOf(
+val releaseCertificatePins = listOf<String>(
     // TODO: Replace with your actual production certificate SHA-256 pin(s)
     // Example: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 )
 
-val releaseBackupCertificatePins = listOf(
+val releaseBackupCertificatePins = listOf<String>(
     // TODO: Replace with your actual backup certificate SHA-256 pin(s) for rotation
     // Example: "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
 )
@@ -170,7 +170,6 @@ tasks.withType<JacocoReport>().configureEach {
     reports {
         xml.required.set(true)
         html.required.set(true)
-        lcov.required.set(true)
     }
 }
 

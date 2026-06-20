@@ -29,8 +29,12 @@ describe('OpmlImportService', () => {
 	it('creates categories with the same slug name under different parents', async () => {
 		// This tests that the slug uniqueness is now (userId, parentId, slug),
 		// not just (userId, slug)
-		const createdCategories: Array<{ id: string; name: string; slug: string; parentCategoryId: string | null }> =
-			[];
+		const createdCategories: Array<{
+			id: string;
+			name: string;
+			slug: string;
+			parentCategoryId: string | null;
+		}> = [];
 		const createdFeeds: Array<{
 			userId: string;
 			categoryId: string;
@@ -40,53 +44,60 @@ describe('OpmlImportService', () => {
 
 		const categoryRepo = {
 			findAllByUser: vi.fn(async () => []),
-			createManyInTransaction: vi.fn(async (rows: Array<{ name: string; slug: string; parentCategoryId: string | null }>) => {
-				const inserted: Array<{
-					id: string;
-					name: string;
-					slug: string;
-					parentCategoryId: string | null;
-				}> = [];
-				// Simulate how the real implementation resolves __pending__ placeholders
-				for (const r of rows) {
-					let resolvedParent: string | null = r.parentCategoryId;
-					if (typeof resolvedParent === 'string' && resolvedParent.startsWith('__pending__:')) {
-						const idx = Number.parseInt(resolvedParent.slice('__pending__:'.length), 10);
-						resolvedParent = Number.isInteger(idx) && idx >= 0 && idx < inserted.length
-							? inserted[idx]?.id ?? null
-							: null;
+			createManyInTransaction: vi.fn(
+				async (rows: Array<{ name: string; slug: string; parentCategoryId: string | null }>) => {
+					const inserted: Array<{
+						id: string;
+						name: string;
+						slug: string;
+						parentCategoryId: string | null;
+					}> = [];
+					// Simulate how the real implementation resolves __pending__ placeholders
+					for (const r of rows) {
+						let resolvedParent: string | null = r.parentCategoryId;
+						if (typeof resolvedParent === 'string' && resolvedParent.startsWith('__pending__:')) {
+							const idx = Number.parseInt(resolvedParent.slice('__pending__:'.length), 10);
+							resolvedParent =
+								Number.isInteger(idx) && idx >= 0 && idx < inserted.length
+									? (inserted[idx]?.id ?? null)
+									: null;
+						}
+						const category = {
+							id: `category-${createdCategories.length + 1}`,
+							name: r.name,
+							slug: r.slug,
+							parentCategoryId: resolvedParent,
+						};
+						createdCategories.push(category);
+						inserted.push(category);
 					}
-					const category = {
-						id: `category-${createdCategories.length + 1}`,
-						name: r.name,
-						slug: r.slug,
-						parentCategoryId: resolvedParent,
-					};
-					createdCategories.push(category);
-					inserted.push(category);
-				}
-				return inserted;
-			}),
+					return inserted;
+				},
+			),
 		};
 
 		const feedRepo = {
 			findByUrls: vi.fn(async () => []),
-			createMany: vi.fn(async (rows: Array<{
-				userId: string;
-				categoryId: string;
-				feedUrl: string;
-				title: string;
-			}>) => {
-				for (const row of rows) {
-					createdFeeds.push({
-						userId: row.userId,
-						categoryId: row.categoryId,
-						feedUrl: row.feedUrl,
-						title: row.title,
-					});
-				}
-				return rows.map((_, i) => ({ id: `feed-${i + 1}` }));
-			}),
+			createMany: vi.fn(
+				async (
+					rows: Array<{
+						userId: string;
+						categoryId: string;
+						feedUrl: string;
+						title: string;
+					}>,
+				) => {
+					for (const row of rows) {
+						createdFeeds.push({
+							userId: row.userId,
+							categoryId: row.categoryId,
+							feedUrl: row.feedUrl,
+							title: row.title,
+						});
+					}
+					return rows.map((_, i) => ({ id: `feed-${i + 1}` }));
+				},
+			),
 		};
 
 		const service = new OpmlImportService(categoryRepo as never, feedRepo as never, {
