@@ -2,10 +2,8 @@ import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
 import { type InfiniteData, type QueryClient, QueryClientContext } from '@tanstack/react-query';
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
+import { REFRESH_INTERVALS } from '@/lib/constants';
 import { type ArticleQueryParams, buildArticleSearchParams } from './queries';
-
-const REFRESH_INTERVAL_MS = 5 * 60_000;
-const MIN_FRESH_MS = 30_000;
 
 function buildInfiniteKey(params: ArticleQueryParams) {
 	const limit = params.limit ?? 30;
@@ -90,7 +88,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 		if (!qc) return;
 		if (document.visibilityState !== 'visible') return;
 		if (inFlightRef.current) return;
-		if (Date.now() - lastFetchedAtRef.current < MIN_FRESH_MS) return;
+		if (Date.now() - lastFetchedAtRef.current < REFRESH_INTERVALS.ARTICLE_STALE_MS) return;
 
 		const cached = qc.getQueryData<ArticleList>(queryKey);
 		if (!cached?.pages[0]) return;
@@ -123,7 +121,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 
 		window.addEventListener('focus', onFocus);
 		document.addEventListener('visibilitychange', onVisibility);
-		const interval = window.setInterval(refresh, REFRESH_INTERVAL_MS);
+		const interval = window.setInterval(refresh, REFRESH_INTERVALS.SILENT_REFRESH_MS);
 
 		return () => {
 			window.removeEventListener('focus', onFocus);

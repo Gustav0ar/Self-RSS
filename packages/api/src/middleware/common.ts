@@ -57,6 +57,7 @@ export async function requestLogger(c: Context, next: Next): Promise<void> {
 
 export async function securityHeaders(c: Context, next: Next): Promise<void> {
 	await next();
+	c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 	c.header('X-Content-Type-Options', 'nosniff');
 	c.header('X-Frame-Options', 'DENY');
 	c.header('X-XSS-Protection', '0');

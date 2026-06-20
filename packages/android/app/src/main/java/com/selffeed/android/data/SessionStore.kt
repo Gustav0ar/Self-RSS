@@ -61,11 +61,12 @@ class SessionStore internal constructor(
 ) {
     private val appContext = context.applicationContext
     private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
-    @Volatile private var accessTokenLoaded = false
-    @Volatile private var accessTokenCache: String? = null
-    @Volatile private var refreshCookieLoaded = false
-    @Volatile private var refreshCookieCache: String? = null
-    @Volatile private var clientIdCache: String? = null
+
+    // Cached session values loaded by preload()
+    @Volatile private var cachedAccessToken: String? = null
+    @Volatile private var cachedRefreshCookie: String? = null
+    @Volatile private var cachedClientId: String? = null
+    @Volatile private var preloaded = false
 
     private val masterKey: MasterKey by lazy {
         MasterKey.Builder(appContext)
@@ -79,50 +80,46 @@ class SessionStore internal constructor(
             .onFailure { Log.w(TAG, "Legacy session migration failed", it) }
     }
 
-    fun getAccessToken(): String? {
-        if (accessTokenLoaded) return accessTokenCache
-        return runBlocking {
-            decrypt(dataStore.data.first()[KEY_ACCESS_TOKEN]).also {
-                accessTokenCache = it
-                accessTokenLoaded = true
-            }
-        }
+    /**
+     * Loads all session data from DataStore into memory caches.
+     * Call this early at app startup (e.g., from AppViewModel init or Application).
+     * All getter methods return cached values after this is called.
+     */
+    suspend fun preload() {
+        if (preloaded) return
+        val prefs = dataStore.data.first()
+        cachedAccessToken = decrypt(prefs[KEY_ACCESS_TOKEN])
+        cachedRefreshCookie = decrypt(prefs[KEY_REFRESH_COOKIE])
+        cachedClientId = prefs[KEY_CLIENT_ID]
+        preloaded = true
     }
 
+    fun getAccessToken(): String? = cachedAccessToken
+
     fun setAccessToken(token: String?) {
+        cachedAccessToken = token
         runBlocking {
             val encrypted = token?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_ACCESS_TOKEN) else prefs[KEY_ACCESS_TOKEN] = encrypted
             }
         }
-        accessTokenCache = token
-        accessTokenLoaded = true
     }
 
-    fun getRefreshCookie(): String? {
-        if (refreshCookieLoaded) return refreshCookieCache
-        return runBlocking {
-            decrypt(dataStore.data.first()[KEY_REFRESH_COOKIE]).also {
-                refreshCookieCache = it
-                refreshCookieLoaded = true
-            }
-        }
-    }
+    fun getRefreshCookie(): String? = cachedRefreshCookie
 
     fun setRefreshCookie(rawCookie: String?) {
+        cachedRefreshCookie = rawCookie
         runBlocking {
             val encrypted = rawCookie?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_REFRESH_COOKIE) else prefs[KEY_REFRESH_COOKIE] = encrypted
             }
         }
-        refreshCookieCache = rawCookie
-        refreshCookieLoaded = true
     }
 
     fun getClientId(): String {
-        clientIdCache?.let { return it }
+        cachedClientId?.let { return it }
         return runBlocking {
             dataStore.edit { prefs ->
                 val existing = prefs[KEY_CLIENT_ID]
@@ -130,12 +127,12 @@ class SessionStore internal constructor(
                     prefs[KEY_CLIENT_ID] = UUID.randomUUID().toString()
                 }
             }[KEY_CLIENT_ID] ?: UUID.randomUUID().toString()
-        }.also { clientIdCache = it }
+        }.also { cachedClientId = it }
     }
 
     fun clear() {
         runBlocking {
-            val clientId = getClientId()
+            val clientId = cachedClientId ?: getClientId()
             val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
             dataStore.edit { prefs ->
                 prefs.clear()
@@ -144,11 +141,10 @@ class SessionStore internal constructor(
                     prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
                 }
             }
-            accessTokenCache = null
-            accessTokenLoaded = true
-            refreshCookieCache = null
-            refreshCookieLoaded = true
-            clientIdCache = clientId
+            cachedAccessToken = null
+            cachedRefreshCookie = null
+            cachedClientId = clientId
+            preloaded = true
         }
     }
 
@@ -273,9 +269,9 @@ class SessionStore internal constructor(
                 if (clientId != null) prefs[KEY_CLIENT_ID] = clientId
                 prefs[KEY_LEGACY_SESSION_MIGRATED] = "true"
             }
-            accessTokenLoaded = false
-            refreshCookieLoaded = false
-            clientIdCache = clientId
+            cachedAccessToken = accessToken
+            cachedRefreshCookie = refreshCookie
+            cachedClientId = clientId
         }
         legacy.edit().clear().apply()
     }

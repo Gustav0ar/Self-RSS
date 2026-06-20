@@ -708,19 +708,21 @@ export class ArticleRepository {
 				await tx.insert(articleMedia).values(allNewMedia);
 			}
 
-			// Batch update all articles with new content (1 query instead of N)
-			for (const update of params.articlesToUpdate) {
-				await tx
-					.update(articles)
-					.set({
-						contentHtml: update.contentHtml,
-						contentText: update.contentText,
-						excerpt: update.excerpt,
-						heroImageUrl: update.heroImageUrl,
-						hash: update.hash,
-					})
-					.where(eq(articles.id, update.id));
-			}
+			// Update all articles with new content in parallel
+			await Promise.all(
+				params.articlesToUpdate.map((update) =>
+					tx
+						.update(articles)
+						.set({
+							contentHtml: update.contentHtml,
+							contentText: update.contentText,
+							excerpt: update.excerpt,
+							heroImageUrl: update.heroImageUrl,
+							hash: update.hash,
+						})
+						.where(eq(articles.id, update.id)),
+				),
+			);
 
 			// Collect all replacement media and delete old media in batch
 			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];

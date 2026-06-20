@@ -123,7 +123,12 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 		v1.use('/admin/*', authMiddleware, requireAdmin);
 		v1.route(
 			'/admin',
-			createAdminRoutes(deps.services.auth, deps.repos.settings, deps.repos.auditLog),
+			createAdminRoutes(
+				deps.services.auth,
+				deps.repos.settings,
+				deps.repos.auditLog,
+				deps.rateLimiter,
+			),
 		);
 
 		// Metrics endpoint (requires authentication and admin role)

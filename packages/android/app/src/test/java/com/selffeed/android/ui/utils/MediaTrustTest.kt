@@ -38,6 +38,20 @@ class MediaTrustTest {
     }
 
     @Test
+    fun `preview returns false when embedUrl is null`() {
+        assertFalse(canPreviewMedia("youtube", null))
+        assertFalse(canPreviewMedia("vimeo", null))
+        assertFalse(canPreviewMedia("unknown", null))
+    }
+
+    @Test
+    fun `preview returns false when embedUrl is blank`() {
+        assertFalse(canPreviewMedia("youtube", ""))
+        assertFalse(canPreviewMedia("youtube", "   "))
+        assertFalse(canPreviewMedia("vimeo", "\t"))
+    }
+
+    @Test
     fun `youtube thumbnail extraction rejects lookalike hosts`() {
         assertEquals(
             "https://img.youtube.com/vi/abc_123-XYZ/0.jpg",

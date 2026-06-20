@@ -105,4 +105,10 @@ export const RATE_LIMITS = {
 	get feedsMutate() {
 		return { windowMs: 60_000, maxRequests: 30 };
 	},
+	get admin() {
+		return { windowMs: 60_000, maxRequests: 10 };
+	},
 } as const;
+
+// Re-export enforceRateLimit for convenience (originally in rate-limit.ts)
+export { enforceRateLimit } from './rate-limit.js';

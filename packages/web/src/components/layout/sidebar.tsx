@@ -753,59 +753,14 @@ function SidebarBody({
 								{isExpanded ? (
 									<div className="mt-0.5 space-y-0.5 pl-5">
 										{categoryFeeds.map((feed) => (
-											<div key={feed.id} className="group/feed relative">
-												<button
-													type="button"
-													onClick={() => onSelectFeed(feed.id)}
-													aria-label={
-														(feed.unreadCount ?? 0) > 0
-															? `${feed.title} ${feed.unreadCount}`
-															: feed.title
-													}
-													className={cn(
-														'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 pr-20 text-left text-sm hover:bg-accent/70',
-														selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
-													)}
-												>
-													<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
-														{feed.faviconUrl ? (
-															<img
-																src={feed.faviconUrl}
-																alt=""
-																className="h-4 w-4 rounded-sm"
-																loading="lazy"
-																decoding="async"
-																referrerPolicy="no-referrer"
-															/>
-														) : (
-															<RssIcon className="h-4 w-4 text-muted-foreground" />
-														)}
-													</div>
-													<div className="min-w-0 flex-1 overflow-hidden">
-														<SidebarOverflowText text={feed.title} />
-													</div>
-													{(feed.unreadCount ?? 0) > 0 ? (
-														<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
-															{feed.unreadCount}
-														</span>
-													) : null}
-												</button>
-												<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 touch-only">
-													<SidebarIconButton
-														label={`Edit ${feed.title}`}
-														onClick={() => onEditFeed(feed)}
-													>
-														<Pencil className="h-3.5 w-3.5" />
-													</SidebarIconButton>
-													<SidebarIconButton
-														label={`Delete ${feed.title}`}
-														onClick={() => onDeleteFeed(feed)}
-														className="hover:text-red-500"
-													>
-														<Trash2 className="h-3.5 w-3.5" />
-													</SidebarIconButton>
-												</div>
-											</div>
+											<FeedTreeRow
+												key={feed.id}
+												feed={feed}
+												selectedFeedId={selectedFeedId}
+												onSelectFeed={onSelectFeed}
+												onEditFeed={onEditFeed}
+												onDeleteFeed={onDeleteFeed}
+											/>
 										))}
 										{childCategories.map((childCategory) => (
 											<NestedCategoryRow
@@ -862,59 +817,14 @@ function SidebarBody({
 							{uncategorizedExpanded ? (
 								<div className="space-y-1">
 									{uncategorizedFeeds.map((feed) => (
-										<div key={feed.id} className="group/feed relative">
-											<button
-												type="button"
-												onClick={() => onSelectFeed(feed.id)}
-												aria-label={
-													(feed.unreadCount ?? 0) > 0
-														? `${feed.title} ${feed.unreadCount}`
-														: feed.title
-												}
-												className={cn(
-													'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 pr-20 text-left text-sm hover:bg-accent/70',
-													selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
-												)}
-											>
-												<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
-													{feed.faviconUrl ? (
-														<img
-															src={feed.faviconUrl}
-															alt=""
-															className="h-4 w-4 rounded-sm"
-															loading="lazy"
-															decoding="async"
-															referrerPolicy="no-referrer"
-														/>
-													) : (
-														<RssIcon className="h-4 w-4 text-muted-foreground" />
-													)}
-												</div>
-												<div className="min-w-0 flex-1 overflow-hidden">
-													<SidebarOverflowText text={feed.title} />
-												</div>
-												{(feed.unreadCount ?? 0) > 0 ? (
-													<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
-														{feed.unreadCount}
-													</span>
-												) : null}
-											</button>
-											<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 touch-only">
-												<SidebarIconButton
-													label={`Edit ${feed.title}`}
-													onClick={() => onEditFeed(feed)}
-												>
-													<Pencil className="h-3.5 w-3.5" />
-												</SidebarIconButton>
-												<SidebarIconButton
-													label={`Delete ${feed.title}`}
-													onClick={() => onDeleteFeed(feed)}
-													className="hover:text-red-500"
-												>
-													<Trash2 className="h-3.5 w-3.5" />
-												</SidebarIconButton>
-											</div>
-										</div>
+										<FeedTreeRow
+											key={feed.id}
+											feed={feed}
+											selectedFeedId={selectedFeedId}
+											onSelectFeed={onSelectFeed}
+											onEditFeed={onEditFeed}
+											onDeleteFeed={onDeleteFeed}
+										/>
 									))}
 								</div>
 							) : null}

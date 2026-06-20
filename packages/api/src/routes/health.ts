@@ -25,30 +25,60 @@ export function createHealthRoutes(db?: Database, redis?: Redis, options: Health
 			});
 		}
 
-		try {
-			await Promise.all([db.run(sql`select 1`), redis.ping()]);
-			const workerHeartbeat = await readWorkerHeartbeat(redis);
-			const workerReady = workerHeartbeat.status === 'ok';
-			const status = options.requireWorkerHeartbeat && !workerReady ? 'error' : 'ok';
-			return c.json(
-				{
-					status,
-					timestamp,
-					checks: { database: 'ok', redis: 'ok', worker: workerHeartbeat.status },
-					worker: workerHeartbeat,
-				},
-				status === 'ok' ? 200 : 503,
-			);
-		} catch (error) {
-			return c.json(
-				{
-					status: 'error',
-					timestamp,
-					error: error instanceof Error ? error.message : String(error),
-				},
-				503,
-			);
+		type HealthResult = {
+			database: 'ok' | 'timeout' | 'error';
+			redis: 'ok' | 'timeout' | 'error';
+			worker: { status: string; timestamp?: string | null; ageMs?: number };
+		};
+
+		const timeoutPromise = new Promise<'timeout'>((resolve) =>
+			setTimeout(() => resolve('timeout'), 5000),
+		);
+
+		const dbCheck = Promise.race([
+			Promise.resolve(db.all(sql`select 1`))
+				.then(() => 'ok' as const)
+				.catch(() => 'error' as const),
+			timeoutPromise,
+		]);
+		const redisCheck = Promise.race([
+			redis
+				.ping()
+				.then(() => 'ok' as const)
+				.catch(() => 'error' as const),
+			timeoutPromise,
+		]);
+
+		const [dbResult, redisResult] = await Promise.all([dbCheck, redisCheck]);
+		const results = { database: dbResult, redis: redisResult };
+		const workerHeartbeat = await readWorkerHeartbeat(redis);
+
+		const dbOk = results.database === 'ok';
+		const redisOk = results.redis === 'ok';
+		const workerReady = workerHeartbeat.status === 'ok';
+
+		let status: 'ok' | 'degraded' | 'error' = 'ok';
+		if (options.requireWorkerHeartbeat && !workerReady) {
+			status = 'error';
+		} else if (!dbOk || !redisOk) {
+			status = 'error';
 		}
+
+		const checks: HealthResult = {
+			database: results.database,
+			redis: results.redis,
+			worker: workerHeartbeat,
+		};
+
+		return c.json(
+			{
+				status,
+				timestamp,
+				checks,
+				...(status !== 'ok' && { worker: workerHeartbeat }),
+			},
+			status === 'ok' ? 200 : 503,
+		);
 	});
 
 	return health;

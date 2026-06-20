@@ -266,32 +266,34 @@ private fun ArticleDetailView(
                                     .clickable { openExternalUrl(context, media.url) },
                                 contentScale = ContentScale.Fit,
                             )
-                        } else if (canPreviewMedia(media.provider, media.embedUrl)) {
-                            EmbedPlayer(
-                                embedUrl = media.embedUrl!!,
-                                backgroundColor = backgroundColor,
-                                documentBaseUrl = documentBaseUrl,
-                                onShowFullscreenMedia = showFullscreenMedia,
-                                onHideFullscreenMedia = hideFullscreenMedia,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                            )
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val label = when {
-                                    media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
-                                    media.type == "embed" -> "Embedded Content"
-                                    media.type == "video" -> "Video"
-                                    else -> "Media Link"
-                                }
-                                androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
-                                    Text(label)
+                        media.embedUrl?.let { url ->
+                            if (canPreviewMedia(media.provider, url)) {
+                                EmbedPlayer(
+                                    embedUrl = url,
+                                    backgroundColor = backgroundColor,
+                                    documentBaseUrl = documentBaseUrl,
+                                    onShowFullscreenMedia = showFullscreenMedia,
+                                    onHideFullscreenMedia = hideFullscreenMedia,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                )
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val label = when {
+                                        media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
+                                        media.type == "embed" -> "Embedded Content"
+                                        media.type == "video" -> "Video"
+                                        else -> "Media Link"
+                                    }
+                                    androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
+                                        Text(label)
+                                    }
                                 }
                             }
                         }

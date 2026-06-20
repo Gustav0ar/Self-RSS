@@ -15,6 +15,15 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef } from 'react';
 import { apiDownload, apiFetch } from '../lib/api';
+import { ARTICLE_LIMITS, REFRESH_INTERVALS } from '../lib/constants';
+
+function isFeedWithCounts(obj: unknown): obj is FeedWithCounts {
+	return typeof obj === 'object' && obj !== null && 'id' in obj && 'unreadCount' in obj;
+}
+
+function isCategoryWithCounts(obj: unknown): obj is CategoryWithCounts {
+	return typeof obj === 'object' && obj !== null && 'id' in obj && 'unreadCount' in obj;
+}
 
 export function invalidateReaderQueries(qc: QueryClient) {
 	qc.invalidateQueries({ queryKey: ['articles'] });
@@ -59,8 +68,6 @@ export function buildArticleSearchParams(params: ArticleQueryParams, cursor?: st
 }
 
 const articleQueryKey = (articleId: string) => ['article', articleId] as const;
-const ARTICLE_WARM_LIMIT = 5;
-const ARTICLE_DETAIL_WARM_STALE_MS = 60_000;
 
 function fetchArticle(articleId: string) {
 	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`).then((r) => r.data);
@@ -247,12 +254,12 @@ function updateFeedUnreadCount(value: unknown, feedId: string, delta: number): u
 
 	let changed = false;
 	const feeds = value.map((feed) => {
-		if (!feed || typeof feed !== 'object' || !('id' in feed) || feed.id !== feedId) {
+		if (!isFeedWithCounts(feed) || feed.id !== feedId) {
 			return feed;
 		}
 
 		changed = true;
-		const unreadCount = Math.max(0, Number((feed as FeedWithCounts).unreadCount ?? 0) + delta);
+		const unreadCount = Math.max(0, Number(feed.unreadCount ?? 0) + delta);
 		return { ...feed, unreadCount };
 	});
 
@@ -288,11 +295,11 @@ function updateCategoryTreeFeedUnreadCount(
 
 	let changed = false;
 	const updateCategory = (category: unknown): unknown => {
-		if (!category || typeof category !== 'object') {
+		if (!isCategoryWithCounts(category)) {
 			return category;
 		}
 
-		const node = category as CategoryWithCounts;
+		const node = category;
 		let feedsChanged = false;
 		const feeds = Array.isArray(node.feeds)
 			? node.feeds.map((feed) => {
@@ -309,7 +316,7 @@ function updateCategoryTreeFeedUnreadCount(
 		let childChanged = false;
 		const children = Array.isArray(node.children)
 			? node.children.map((child) => {
-					const nextChild = updateCategory(child) as CategoryWithCounts;
+					const nextChild = updateCategory(child);
 					if (nextChild !== child) childChanged = true;
 					return nextChild;
 				})
@@ -347,10 +354,10 @@ function findCachedFeed(qc: QueryClient, feedId: string): { categoryId: string }
 		}
 
 		for (const category of categories) {
-			if (!category || typeof category !== 'object' || !('id' in category)) {
+			if (!isCategoryWithCounts(category)) {
 				continue;
 			}
-			const node = category as CategoryWithCounts;
+			const node = category;
 			const feed = node.feeds?.find((item) => item.id === feedId);
 			if (feed) {
 				return { categoryId: feed.categoryId };
@@ -380,15 +387,15 @@ function updateCategoryUnreadCount(value: unknown, categoryId: string, delta: nu
 
 	let changed = false;
 	const updateCategory = (category: unknown): unknown => {
-		if (!category || typeof category !== 'object' || !('id' in category)) {
+		if (!isCategoryWithCounts(category)) {
 			return category;
 		}
 
-		const node = category as CategoryWithCounts;
+		const node = category;
 		let childChanged = false;
 		const children = Array.isArray(node.children)
 			? node.children.map((child) => {
-					const nextChild = updateCategory(child) as CategoryWithCounts;
+					const nextChild = updateCategory(child);
 					if (nextChild !== child) childChanged = true;
 					return nextChild;
 				})
@@ -500,11 +507,11 @@ function cachedUnreadCountForFeed(qc: QueryClient, feedId: string) {
 		}
 
 		for (const category of categories) {
-			if (!category || typeof category !== 'object') {
+			if (!isCategoryWithCounts(category)) {
 				continue;
 			}
 
-			const node = category as CategoryWithCounts;
+			const node = category;
 			const feed = node.feeds?.find((item) => item.id === feedId);
 			if (feed) {
 				return Math.max(0, Number(feed.unreadCount ?? 0));
@@ -798,7 +805,8 @@ export function useSyncAllFeedsStatus() {
 			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status').then(
 				(response) => response.data,
 			),
-		refetchInterval: (query) => (query.state.data?.active ? 2_000 : false),
+		refetchInterval: (query) =>
+			query.state.data?.active ? REFRESH_INTERVALS.SYNC_STATUS_POLL_MS : false,
 		staleTime: 1_000,
 	});
 }
@@ -821,8 +829,8 @@ export function useArticles(params: ArticleQueryParams = {}) {
 		queryFn: () => apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`),
 		// Optimistic UI: show cached data immediately, refresh in background
 		placeholderData: (prev) => prev,
-		staleTime: 30_000, // Consider data fresh for 30s to avoid unnecessary refetches
-		gcTime: 5 * 60_000, // Keep in cache for 5 minutes
+		staleTime: REFRESH_INTERVALS.ARTICLE_STALE_MS, // Consider data fresh for 30s to avoid unnecessary refetches
+		gcTime: REFRESH_INTERVALS.CACHE_GC_MS, // Keep in cache for 5 minutes
 	});
 }
 
@@ -891,7 +899,7 @@ export function useWarmNextArticles() {
 		(articleIds: readonly string[]) => {
 			const idsToWarm = Array.from(new Set(articleIds.filter(Boolean))).slice(
 				0,
-				ARTICLE_WARM_LIMIT,
+				ARTICLE_LIMITS.WARM_LIMIT,
 			);
 
 			for (const articleId of idsToWarm) {
@@ -906,7 +914,7 @@ export function useWarmNextArticles() {
 						await qc.fetchQuery({
 							queryKey,
 							queryFn: () => fetchArticle(articleId),
-							staleTime: ARTICLE_DETAIL_WARM_STALE_MS,
+							staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
 						});
 					} catch {
 						// Background warming should never surface as reader UI noise.

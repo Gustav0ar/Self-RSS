@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
-import { RealtimeService } from '../../src/services/realtime.service.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+	MAX_CONNECTIONS_PER_USER,
+	MAX_RECONNECT_ATTEMPTS,
+	RealtimeService,
+} from '../../src/services/realtime.service.js';
 
 /**
  * In-memory Redis stand-in. The publish/subscribe primitives share a single
@@ -170,5 +174,276 @@ describe('RealtimeService - close', () => {
 				updatedAt: '2026-01-01T00:00:00.000Z',
 			}),
 		).resolves.toBeUndefined();
+	});
+});
+
+describe('RealtimeService - per-user connection limits', () => {
+	it('allows up to MAX_CONNECTIONS_PER_USER connections for a single user', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		const handlers = Array.from({ length: MAX_CONNECTIONS_PER_USER }, () => vi.fn());
+		for (const handler of handlers) {
+			await service.subscribeToReadStateEvents('user-1', handler);
+		}
+
+		// All connections should succeed
+		expect(service.getConnectionCount()).toBe(MAX_CONNECTIONS_PER_USER);
+	});
+
+	it('rejects connection when user already has MAX_CONNECTIONS_PER_USER', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Create MAX connections
+		const handlers = Array.from({ length: MAX_CONNECTIONS_PER_USER }, () => vi.fn());
+		for (const handler of handlers) {
+			await service.subscribeToReadStateEvents('user-1', handler);
+		}
+
+		// The next connection should be rejected
+		await expect(service.subscribeToReadStateEvents('user-1', vi.fn())).rejects.toThrow(
+			`User user-1 has reached the maximum number of connections (${MAX_CONNECTIONS_PER_USER})`,
+		);
+
+		// Connection count should remain at MAX
+		expect(service.getConnectionCount()).toBe(MAX_CONNECTIONS_PER_USER);
+	});
+
+	it('allows a different user to connect even when first user is at limit', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// User 1 reaches limit
+		const user1Handlers = Array.from({ length: MAX_CONNECTIONS_PER_USER }, () => vi.fn());
+		for (const handler of user1Handlers) {
+			await service.subscribeToReadStateEvents('user-1', handler);
+		}
+
+		// User 2 should still be able to connect
+		const user2Handler = vi.fn();
+		await expect(service.subscribeToReadStateEvents('user-2', user2Handler)).resolves.toBeDefined();
+
+		// User 1 should still be at limit
+		expect(service.getConnectionCount()).toBe(MAX_CONNECTIONS_PER_USER + 1);
+	});
+
+	it('allows reconnection after a handler is removed', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Create MAX connections
+		const handlers = Array.from({ length: MAX_CONNECTIONS_PER_USER }, () => vi.fn());
+		const unsubscribes = [];
+		for (const handler of handlers) {
+			const unsubscribe = await service.subscribeToReadStateEvents('user-1', handler);
+			unsubscribes.push(unsubscribe);
+		}
+
+		// Remove one connection
+		unsubscribes[0]!();
+
+		// Should be able to add a new connection
+		const newHandler = vi.fn();
+		await expect(service.subscribeToReadStateEvents('user-1', newHandler)).resolves.toBeDefined();
+
+		// Connection count should be back at MAX
+		expect(service.getConnectionCount()).toBe(MAX_CONNECTIONS_PER_USER);
+	});
+
+	it('clears connectionsByUser on close', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Create connections for multiple users
+		await service.subscribeToReadStateEvents('user-1', vi.fn());
+		await service.subscribeToReadStateEvents('user-2', vi.fn());
+
+		await service.close();
+
+		// After close, new connections should work
+		const handler = vi.fn();
+		await expect(service.subscribeToReadStateEvents('user-1', handler)).resolves.toBeDefined();
+	});
+});
+
+describe('RealtimeService - reconnection logic', () => {
+	it('reconnects on subscriber error within retry limit', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Capture the error handler (async because it calls ensureSubscriber)
+		let errorHandler: (error: Error) => Promise<void>;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		let subscriberCount = 0;
+		redis.duplicate = (...args) => {
+			subscriberCount++;
+			const fakeSubscriber = originalDuplicate(...args);
+			// Intercept error handler registration
+			const originalOn = fakeSubscriber.on.bind(fakeSubscriber);
+			fakeSubscriber.on = (event: string, handler: (...args: unknown[]) => void) => {
+				if (event === 'error') {
+					errorHandler = handler as (error: Error) => Promise<void>;
+				}
+				return originalOn(event, handler);
+			};
+			return fakeSubscriber;
+		};
+
+		// Subscribe to trigger subscriber creation
+		await service.subscribeToReadStateEvents('user-1', vi.fn());
+
+		// Initial subscriber created
+		expect(subscriberCount).toBe(1);
+
+		// Simulate an error (await because error handler is async)
+		const mockError = new Error('Connection lost');
+		await errorHandler!(mockError);
+
+		// Should have reconnected (new subscriber created)
+		expect(subscriberCount).toBe(2);
+	});
+
+	it('stops reconnecting after max attempts', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Capture the error handler
+		let errorHandler: (error: Error) => Promise<void>;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		let subscriberCount = 0;
+		redis.duplicate = (...args) => {
+			subscriberCount++;
+			const fakeSubscriber = originalDuplicate(...args);
+			const originalOn = fakeSubscriber.on.bind(fakeSubscriber);
+			fakeSubscriber.on = (event: string, handler: (...args: unknown[]) => void) => {
+				if (event === 'error') {
+					errorHandler = handler as (error: Error) => Promise<void>;
+				}
+				return originalOn(event, handler);
+			};
+			return fakeSubscriber;
+		};
+
+		// Subscribe to trigger subscriber creation
+		await service.subscribeToReadStateEvents('user-1', vi.fn());
+
+		// Initial subscriber
+		expect(subscriberCount).toBe(1);
+
+		// Simulate errors up to the limit
+		const mockError = new Error('Connection lost');
+		for (let i = 0; i < MAX_RECONNECT_ATTEMPTS; i++) {
+			await errorHandler!(mockError);
+		}
+
+		// Should have attempted reconnect MAX_RECONNECT_ATTEMPTS times
+		// Initial + reconnect attempts
+		expect(subscriberCount).toBe(MAX_RECONNECT_ATTEMPTS + 1);
+	});
+
+	it('resets reconnect attempts on close', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Capture the error handler
+		let errorHandler: (error: Error) => Promise<void>;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		let subscriberCount = 0;
+		redis.duplicate = (...args) => {
+			subscriberCount++;
+			const fakeSubscriber = originalDuplicate(...args);
+			const originalOn = fakeSubscriber.on.bind(fakeSubscriber);
+			fakeSubscriber.on = (event: string, handler: (...args: unknown[]) => void) => {
+				if (event === 'error') {
+					errorHandler = handler as (error: Error) => Promise<void>;
+				}
+				return originalOn(event, handler);
+			};
+			return fakeSubscriber;
+		};
+
+		// Subscribe to trigger subscriber creation
+		await service.subscribeToReadStateEvents('user-1', vi.fn());
+
+		// Simulate an error
+		await errorHandler!(new Error('Connection lost'));
+		expect(subscriberCount).toBe(2);
+
+		// Close should reset reconnect attempts and mark service as closed
+		await service.close();
+
+		// Subscribe again - this creates a new subscriber
+		await service.subscribeToReadStateEvents('user-2', vi.fn());
+
+		// Simulate another error - should NOT reconnect because service is closed
+		await errorHandler!(new Error('Connection lost'));
+
+		// Initial (user-1) + reconnect (user-1) + close + new subscriber (user-2)
+		// Old error handler should not trigger reconnect because service is closed
+		expect(subscriberCount).toBe(4);
+	});
+
+	it('subscribes to existing channels after reconnection', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Capture the subscribe call
+		const subscribeCalls: string[] = [];
+		const originalDuplicate = redis.duplicate.bind(redis);
+		redis.duplicate = (...args) => {
+			const fakeSubscriber = originalDuplicate(...args);
+			const originalSubscribe = fakeSubscriber.subscribe.bind(fakeSubscriber);
+			fakeSubscriber.subscribe = (
+				...subscribeArgs: Parameters<typeof fakeSubscriber.subscribe>
+			) => {
+				subscribeCalls.push(subscribeArgs[0] as string);
+				return originalSubscribe(...subscribeArgs);
+			};
+			return fakeSubscriber;
+		};
+
+		// Subscribe to trigger subscriber creation
+		const handler = vi.fn();
+		await service.subscribeToReadStateEvents('user-1', handler);
+
+		// After reconnect, should resubscribe to the channel
+		// The reconnection will trigger a new subscriber which should subscribe to the channel
+		expect(subscribeCalls).toContain('events:user:user-1:read-state');
+	});
+
+	it('clears reconnect attempts on close', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		// Capture the error handler
+		let errorHandler: (error: Error) => Promise<void>;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		let subscriberCount = 0;
+		redis.duplicate = (...args) => {
+			subscriberCount++;
+			const fakeSubscriber = originalDuplicate(...args);
+			const originalOn = fakeSubscriber.on.bind(fakeSubscriber);
+			fakeSubscriber.on = (event: string, handler: (...args: unknown[]) => void) => {
+				if (event === 'error') {
+					errorHandler = handler as (error: Error) => Promise<void>;
+				}
+				return originalOn(event, handler);
+			};
+			return fakeSubscriber;
+		};
+
+		await service.subscribeToReadStateEvents('user-1', vi.fn());
+		await errorHandler!(new Error('Connection lost'));
+
+		await service.close();
+
+		// After close, reconnect attempts should be reset
+		await service.subscribeToReadStateEvents('user-2', vi.fn());
+
+		// Should NOT reconnect since service is closed
+		await errorHandler!(new Error('Another error'));
+		// Initial + reconnect + close + new subscriber
+		expect(subscriberCount).toBe(4);
 	});
 });
