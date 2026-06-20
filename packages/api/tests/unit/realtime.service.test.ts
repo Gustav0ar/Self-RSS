@@ -54,6 +54,12 @@ class FakeRedis extends EventEmitter {
 	}
 
 	async quit() {
+		for (const [channel, subscribers] of this.bus.subscribers) {
+			subscribers.delete(this);
+			if (subscribers.size === 0) {
+				this.bus.subscribers.delete(channel);
+			}
+		}
 		return 'OK';
 	}
 
@@ -268,6 +274,54 @@ describe('RealtimeService - per-user connection limits', () => {
 });
 
 describe('RealtimeService - reconnection logic', () => {
+	it('waits for an in-flight subscriber connection before subscribing concurrent callers', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+
+		let resolveConnect: (() => void) | undefined;
+		let subscribeCalls = 0;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		redis.duplicate = (...args) => {
+			const fakeSubscriber = originalDuplicate(...args);
+			fakeSubscriber.connect = async () => {
+				await new Promise<void>((resolve) => {
+					resolveConnect = resolve;
+				});
+				return undefined;
+			};
+
+			const originalSubscribe = fakeSubscriber.subscribe.bind(fakeSubscriber);
+			fakeSubscriber.subscribe = async (...subscribeArgs) => {
+				subscribeCalls++;
+				return originalSubscribe(...subscribeArgs);
+			};
+			return fakeSubscriber;
+		};
+
+		const firstSubscription = service.subscribeToReadStateEvents('user-1', vi.fn());
+		await Promise.resolve();
+		expect(resolveConnect).toBeDefined();
+
+		let secondSubscriptionResolved = false;
+		const secondSubscription = service
+			.subscribeToReadStateEvents('user-2', vi.fn())
+			.then((unsubscribe) => {
+				secondSubscriptionResolved = true;
+				return unsubscribe;
+			});
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(secondSubscriptionResolved).toBe(false);
+		expect(subscribeCalls).toBe(0);
+
+		resolveConnect!();
+
+		await Promise.all([firstSubscription, secondSubscription]);
+		expect(secondSubscriptionResolved).toBe(true);
+		expect(subscribeCalls).toBe(2);
+	});
+
 	it('reconnects on subscriber error within retry limit', async () => {
 		const redis = new FakeRedis();
 		const service = new RealtimeService(redis as never);
@@ -388,28 +442,41 @@ describe('RealtimeService - reconnection logic', () => {
 		const redis = new FakeRedis();
 		const service = new RealtimeService(redis as never);
 
-		// Capture the subscribe call
-		const subscribeCalls: string[] = [];
+		let errorHandler: (error: Error) => Promise<void>;
 		const originalDuplicate = redis.duplicate.bind(redis);
 		redis.duplicate = (...args) => {
 			const fakeSubscriber = originalDuplicate(...args);
-			const originalSubscribe = fakeSubscriber.subscribe.bind(fakeSubscriber);
-			fakeSubscriber.subscribe = (
-				...subscribeArgs: Parameters<typeof fakeSubscriber.subscribe>
-			) => {
-				subscribeCalls.push(subscribeArgs[0] as string);
-				return originalSubscribe(...subscribeArgs);
+			const originalOn = fakeSubscriber.on.bind(fakeSubscriber);
+			fakeSubscriber.on = (event: string, handler: (...args: unknown[]) => void) => {
+				if (event === 'error') {
+					errorHandler = handler as (error: Error) => Promise<void>;
+				}
+				return originalOn(event, handler);
 			};
 			return fakeSubscriber;
 		};
 
-		// Subscribe to trigger subscriber creation
-		const handler = vi.fn();
+		const received: unknown[] = [];
+		const handler = vi.fn((event) => received.push(event));
 		await service.subscribeToReadStateEvents('user-1', handler);
 
-		// After reconnect, should resubscribe to the channel
-		// The reconnection will trigger a new subscriber which should subscribe to the channel
-		expect(subscribeCalls).toContain('events:user:user-1:read-state');
+		await errorHandler!(new Error('Connection lost'));
+		await service.publishReadStateEvent('user-1', {
+			type: 'article.read_state_changed',
+			eventId: 'evt-reconnected',
+			articleId: 'article-1',
+			feedId: 'feed-1',
+			isRead: true,
+			source: 'manual',
+			clientId: null,
+			updatedAt: '2026-01-01T00:00:00.000Z',
+		});
+
+		expect(received).toHaveLength(1);
+		expect(received[0]).toMatchObject({
+			type: 'article.read_state_changed',
+			eventId: 'evt-reconnected',
+		});
 	});
 
 	it('clears reconnect attempts on close', async () => {

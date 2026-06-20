@@ -94,6 +94,7 @@ export class RealtimeService {
 
 	private async ensureSubscriber() {
 		if (this.subscriber) {
+			await this.connecting;
 			return;
 		}
 
@@ -126,6 +127,9 @@ export class RealtimeService {
 
 		this.connecting ??= subscriber
 			.connect()
+			.then(async () => {
+				await this.resubscribeActiveChannels(subscriber);
+			})
 			.catch((error: Error) => {
 				this.subscriber = null;
 				throw error;
@@ -134,6 +138,14 @@ export class RealtimeService {
 				this.connecting = null;
 			});
 		await this.connecting;
+	}
+
+	private async resubscribeActiveChannels(subscriber: Redis) {
+		for (const [channel, handlers] of this.handlersByChannel) {
+			if (handlers.size > 0) {
+				await subscriber.subscribe(channel);
+			}
+		}
 	}
 
 	private handleMessage(channel: string, message: string) {
