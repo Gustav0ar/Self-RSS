@@ -33,6 +33,10 @@ export class AppError extends Error {
 		return new AppError('TOO_MANY_REQUESTS', message, 429);
 	}
 
+	static badGateway(message = 'Bad gateway', details?: unknown): AppError {
+		return new AppError('BAD_GATEWAY', message, 502, details);
+	}
+
 	static internal(message = 'Internal server error'): AppError {
 		return new AppError('INTERNAL_ERROR', message, 500);
 	}

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type Redis from 'ioredis';
 import RSSParser from 'rss-parser';
 import { CacheKeys } from '../db/redis.js';
+import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
@@ -73,7 +74,18 @@ interface SyncErrorDetails {
 	url?: string;
 }
 
+class FeedSyncFetchError extends Error {
+	constructor(readonly details: SyncErrorDetails) {
+		super(details.error);
+		this.name = 'FeedSyncFetchError';
+	}
+}
+
 function getSyncErrorDetails(error: unknown): SyncErrorDetails {
+	if (error instanceof FeedSyncFetchError) {
+		return error.details;
+	}
+
 	if (error instanceof Error) {
 		return { error: error.message, stack: error.stack };
 	}
@@ -160,7 +172,9 @@ export class FeedSyncService {
 		try {
 			const articleCount = (await this.articleRepo.countByFeeds?.([feedId])) ?? 0;
 			const ignoreCache = articleCount === 0;
-			const parsed = await this.fetchAndParse(feed.feedUrl, ignoreCache);
+			const parsed = await this.fetchAndParse(feed.feedUrl, ignoreCache).catch((error) => {
+				throw new FeedSyncFetchError(getSyncErrorDetails(error));
+			});
 			const parsedTitle = this.normalizeText(parsed.title)?.trim() ?? null;
 			const parsedLink = this.normalizeText(parsed.link);
 			const parsedDescription = this.normalizeText(parsed.description);
@@ -479,6 +493,9 @@ export class FeedSyncService {
 				errorMessage: errorDetails.error,
 			});
 			logger.error('Feed sync failed', { feedId, ...errorDetails });
+			if (err instanceof FeedSyncFetchError) {
+				throw AppError.badGateway('Could not fetch or parse the feed URL', errorDetails.error);
+			}
 			throw normalizeSyncThrowable(err, errorDetails);
 		} finally {
 			await releaseFeedLock();
