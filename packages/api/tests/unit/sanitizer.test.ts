@@ -102,6 +102,31 @@ describe('extractHeroImage', () => {
 		expect(extractHeroImage(html)).toBe('https://example.com/hero.jpg');
 	});
 
+	it('extracts lazy image candidates before falling back to later images', () => {
+		const html =
+			'<p>Text</p><img data-lazy-src="https://cdn.example.com/lazy.jpg" /><img src="https://example.com/fallback.jpg" />';
+
+		expect(extractHeroImage(html)).toBe('https://cdn.example.com/lazy.jpg');
+	});
+
+	it('uses the first safe srcset candidate when src is missing', () => {
+		const html =
+			'<img srcset="https://cdn.example.com/small.jpg 480w, https://cdn.example.com/large.jpg 960w" />';
+
+		expect(extractHeroImage(html)).toBe('https://cdn.example.com/small.jpg');
+	});
+
+	it('skips video loader placeholders and unsafe image URLs', () => {
+		const html = `
+			<img src="https://example.com/wp-content/plugins/load-video-on-click/assets/img/ajax-loader.gif" />
+			<img src="javascript:alert(1)" />
+			<img src="data:image/svg+xml;base64,PHN2Zy8+" />
+			<img src="https://example.com/real.jpg" />
+		`;
+
+		expect(extractHeroImage(html)).toBe('https://example.com/real.jpg');
+	});
+
 	it('returns null when no image', () => {
 		expect(extractHeroImage('<p>No images</p>')).toBeNull();
 	});

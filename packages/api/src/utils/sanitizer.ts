@@ -39,6 +39,9 @@ const TEXT_BOUNDARY_TAG_REGEX =
 const HTML_TAG_REGEX = /<\/?[a-zA-Z][^>]*>/g;
 const WHITESPACE_REGEX = /\s+/g;
 const HTML_ENTITY_REGEX = /&(#\d+|#x[\da-f]+|[a-z][a-z0-9]+);/gi;
+const IMG_TAG_REGEX = /<img\b[^>]*>/gi;
+const HERO_IMAGE_ATTRS = ['src', 'data-src', 'data-lazy-src', 'data-original', 'data-original-src'];
+const HERO_IMAGE_SRCSET_ATTRS = ['srcset', 'data-srcset', 'data-lazy-srcset'];
 const NAMED_HTML_ENTITIES: Record<string, string> = {
 	amp: '&',
 	apos: "'",
@@ -312,9 +315,61 @@ export function extractExcerpt(text: string, maxLength = 300): string {
 	return `${lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated}...`;
 }
 
+function getTagAttribute(tag: string, attribute: string): string | null {
+	const match = tag.match(
+		new RegExp(`\\b${attribute}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>]+))`, 'i'),
+	);
+	const value = match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+	return value ? decodeHtmlEntities(value).trim() : null;
+}
+
+function normalizeHeroImageCandidate(value: string | null): string | null {
+	if (!value) return null;
+	const candidate = value.trim();
+	if (!candidate || candidate.includes(VIDEO_LOADER_PLACEHOLDER_PATH)) {
+		return null;
+	}
+	if (/^data:/i.test(candidate)) {
+		return null;
+	}
+	try {
+		const parsed = new URL(candidate, 'https://placeholder.invalid');
+		if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+			return candidate.startsWith('//') ? parsed.toString() : candidate;
+		}
+	} catch {
+		// Fall through to relative URL handling below.
+	}
+	if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+		return null;
+	}
+	return candidate;
+}
+
+function firstHeroImageFromSrcset(srcset: string | null): string | null {
+	if (!srcset) return null;
+	for (const entry of srcset.split(',')) {
+		const candidate = entry.trim().split(/\s+/)[0] ?? null;
+		const normalized = normalizeHeroImageCandidate(candidate);
+		if (normalized) return normalized;
+	}
+	return null;
+}
+
 export function extractHeroImage(html: unknown): string | null {
-	const match = normalizeHtmlInput(html).match(/<img[^>]+src=["']([^"']+)["']/i);
-	return match?.[1] ?? null;
+	const normalizedHtml = normalizeHtmlInput(html);
+	for (const match of normalizedHtml.matchAll(IMG_TAG_REGEX)) {
+		const tag = match[0]!;
+		for (const attribute of HERO_IMAGE_ATTRS) {
+			const candidate = normalizeHeroImageCandidate(getTagAttribute(tag, attribute));
+			if (candidate) return candidate;
+		}
+		for (const attribute of HERO_IMAGE_SRCSET_ATTRS) {
+			const candidate = firstHeroImageFromSrcset(getTagAttribute(tag, attribute));
+			if (candidate) return candidate;
+		}
+	}
+	return null;
 }
 
 function promoteLazyAttribute(element: Element, attribute: 'src' | 'srcset' | 'poster') {
