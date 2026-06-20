@@ -190,6 +190,39 @@ describe('extractMediaFromHtml', () => {
 
 		expect(extractMediaFromHtml(html)).toHaveLength(0);
 	});
+
+	it('skips unsafe extracted image and video URLs', () => {
+		const html = `
+			<img src="data:image/svg+xml;base64,PHN2Zy8+" />
+			<img src="javascript:alert(1)" />
+			<img src="/wp-content/plugins/load-video-on-click/assets/img/ajax-loader.gif" />
+			<video src="javascript:alert(1)" width="1280" height="720"></video>
+			<video src="https://cdn.example.com/video.mp4" width="1280" height="720"></video>
+		`;
+
+		const media = extractMediaFromHtml(html);
+
+		expect(media).toHaveLength(1);
+		expect(media[0]).toMatchObject({
+			type: 'video',
+			url: 'https://cdn.example.com/video.mp4',
+			width: 1280,
+			height: 720,
+		});
+	});
+
+	it('normalizes protocol-relative extracted media URLs', () => {
+		const html = '<video src="//videos.files.wordpress.com/path/video.mp4"></video>';
+		const media = extractMediaFromHtml(html);
+
+		expect(media).toHaveLength(1);
+		expect(media[0]).toMatchObject({
+			type: 'video',
+			provider: 'videopress',
+			url: 'https://videos.files.wordpress.com/path/video.mp4',
+			embedUrl: 'https://videos.files.wordpress.com/path/video.mp4',
+		});
+	});
 });
 
 describe('hasRichMedia', () => {

@@ -323,7 +323,7 @@ function getTagAttribute(tag: string, attribute: string): string | null {
 	return value ? decodeHtmlEntities(value).trim() : null;
 }
 
-function normalizeHeroImageCandidate(value: string | null): string | null {
+function normalizeMediaUrlCandidate(value: string | null): string | null {
 	if (!value) return null;
 	const candidate = value.trim();
 	if (!candidate || candidate.includes(VIDEO_LOADER_PLACEHOLDER_PATH)) {
@@ -344,6 +344,10 @@ function normalizeHeroImageCandidate(value: string | null): string | null {
 		return null;
 	}
 	return candidate;
+}
+
+function normalizeHeroImageCandidate(value: string | null): string | null {
+	return normalizeMediaUrlCandidate(value);
 }
 
 function firstHeroImageFromSrcset(srcset: string | null): string | null {
@@ -718,17 +722,17 @@ export function extractMediaFromHtml(html: unknown) {
 	let position = 0;
 
 	// Extract images
-	const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-	for (const imgMatch of normalizedHtml.matchAll(imgRegex)) {
-		const widthMatch = imgMatch[0]!.match(/width=["']?(\d+)/);
-		const heightMatch = imgMatch[0]!.match(/height=["']?(\d+)/);
+	for (const imgMatch of normalizedHtml.matchAll(IMG_TAG_REGEX)) {
+		const tag = imgMatch[0]!;
+		const src = normalizeMediaUrlCandidate(getTagAttribute(tag, 'src'));
+		if (!src) continue;
 		media.push({
 			type: 'image',
 			provider: 'unknown',
-			url: imgMatch[1]!,
+			url: src,
 			embedUrl: null,
-			width: widthMatch ? Number.parseInt(widthMatch[1]!, 10) : null,
-			height: heightMatch ? Number.parseInt(heightMatch[1]!, 10) : null,
+			width: parseDimension(getTagAttribute(tag, 'width')),
+			height: parseDimension(getTagAttribute(tag, 'height')),
 			position: position++,
 		});
 	}
@@ -755,15 +759,17 @@ export function extractMediaFromHtml(html: unknown) {
 
 	const videoRegex = /<(video|source)[^>]+src=["']([^"']+)["'][^>]*>/gi;
 	for (const videoMatch of normalizedHtml.matchAll(videoRegex)) {
-		const src = videoMatch[2]!;
+		const tag = videoMatch[0]!;
+		const src = normalizeMediaUrlCandidate(getTagAttribute(tag, 'src'));
+		if (!src) continue;
 		const embedded = toEmbedUrl(src);
 		media.push({
 			type: videoMatch[1] === 'video' ? 'video' : embedded ? 'embed' : 'video',
 			provider: embedded?.provider ?? getProviderFromUrl(src),
 			url: src,
 			embedUrl: embedded?.embedUrl ?? null,
-			width: null,
-			height: null,
+			width: parseDimension(getTagAttribute(tag, 'width')),
+			height: parseDimension(getTagAttribute(tag, 'height')),
 			position: position++,
 		});
 	}
