@@ -518,6 +518,48 @@ describe('FeedSyncService', () => {
 		);
 	});
 
+	it('stores useful HTTP details when feed fetching throws a response', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Failing Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+				pollingIntervalMinutes: 15,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{
+				countByFeeds: vi.fn(async () => 1),
+			} as never,
+			syncRunRepo as never,
+			{} as never,
+			{ del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		const response = new Response(null, { status: 404, statusText: 'Not Found' });
+		vi.spyOn(
+			service as unknown as { fetchAndParse: () => Promise<unknown> },
+			'fetchAndParse',
+		).mockRejectedValue(response);
+
+		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toBe(response);
+
+		expect(syncRunRepo.complete).toHaveBeenCalledWith(
+			'run-1',
+			expect.objectContaining({
+				status: 'failed',
+				errorMessage: 'HTTP 404: Not Found',
+			}),
+		);
+	});
+
 	it('syncs every non-active feed for a user with summary counts', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [
@@ -1386,6 +1428,33 @@ describe('FeedSyncService', () => {
 
 			const errorLog = errorLogs.find((l) => l.msg === 'Feed sync failed during bulk sync');
 			expect(errorLog!.extra.error).toBe('String error thrown');
+		});
+
+		it('logs HTTP details for response values thrown during bulk sync', async () => {
+			const feedRepo = {
+				findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
+			};
+
+			const service = new FeedSyncService(
+				feedRepo as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			);
+
+			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
+			syncFeedSpy.mockRejectedValue(
+				new Response(null, { status: 503, statusText: 'Service Unavailable' }),
+			);
+
+			await service.syncAllFeeds('user-1');
+
+			const errorLog = errorLogs.find((l) => l.msg === 'Feed sync failed during bulk sync');
+			expect(errorLog!.extra.error).toBe('HTTP 503: Service Unavailable');
+			expect(errorLog!.extra.status).toBe(503);
+			expect(errorLog!.extra.statusText).toBe('Service Unavailable');
 		});
 
 		it('continues syncing remaining feeds after one fails', async () => {

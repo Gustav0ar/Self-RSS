@@ -65,6 +65,50 @@ redis.call("RPUSH", KEYS[2], ARGV[3])
 return 1
 `;
 
+interface SyncErrorDetails {
+	error: string;
+	stack?: string;
+	status?: number;
+	statusText?: string;
+	url?: string;
+}
+
+function getSyncErrorDetails(error: unknown): SyncErrorDetails {
+	if (error instanceof Error) {
+		return { error: error.message, stack: error.stack };
+	}
+
+	if (typeof Response !== 'undefined' && error instanceof Response) {
+		const statusText = error.statusText || 'Unknown status';
+		return {
+			error: `HTTP ${error.status}: ${statusText}`,
+			status: error.status,
+			statusText,
+			...(error.url ? { url: error.url } : {}),
+		};
+	}
+
+	if (error && typeof error === 'object') {
+		const responseLike = error as { status?: unknown; statusText?: unknown; url?: unknown };
+		if (typeof responseLike.status === 'number') {
+			const statusText =
+				typeof responseLike.statusText === 'string' && responseLike.statusText
+					? responseLike.statusText
+					: 'Unknown status';
+			return {
+				error: `HTTP ${responseLike.status}: ${statusText}`,
+				status: responseLike.status,
+				statusText,
+				...(typeof responseLike.url === 'string' && responseLike.url
+					? { url: responseLike.url }
+					: {}),
+			};
+		}
+	}
+
+	return { error: String(error) };
+}
+
 export class FeedSyncService {
 	private parser: RSSParser;
 
@@ -417,6 +461,7 @@ export class FeedSyncService {
 
 			return { newArticles: insertedArticles.length, total: items.length };
 		} catch (err) {
+			const errorDetails = getSyncErrorDetails(err);
 			await this.feedRepo.update(feedId, userId, {
 				nextSyncAt: this.nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
 				syncStatus: 'error',
@@ -424,9 +469,9 @@ export class FeedSyncService {
 			await this.syncRunRepo.complete(run.id, {
 				status: 'failed',
 				itemCount: 0,
-				errorMessage: err instanceof Error ? err.message : String(err),
+				errorMessage: errorDetails.error,
 			});
-			logger.error('Feed sync failed', { feedId, error: String(err) });
+			logger.error('Feed sync failed', { feedId, ...errorDetails });
 			throw err;
 		} finally {
 			await releaseFeedLock();
@@ -489,13 +534,12 @@ export class FeedSyncService {
 					}
 				} catch (err) {
 					failedFeeds += 1;
-					const error = err instanceof Error ? err : new Error(String(err));
+					const errorDetails = getSyncErrorDetails(err);
 					logger.error('Feed sync failed during bulk sync', {
 						operation: 'bulkFeedSync',
 						feedId: feed.id,
 						userId,
-						error: error.message,
-						stack: error.stack,
+						...errorDetails,
 					});
 				}
 			}
