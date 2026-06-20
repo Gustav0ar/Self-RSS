@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { clearEnvCache } from '../../src/config/index.js';
+
+const testDir = dirname(fileURLToPath(import.meta.url));
 
 function buildApp() {
 	clearEnvCache();
@@ -45,9 +50,22 @@ describe('Security headers', () => {
 		expect(csp).toBeTruthy();
 		expect(csp).toContain("default-src 'self'");
 		expect(csp).toContain("script-src 'self'");
+		expect(csp).toContain("media-src 'self' https:");
 		expect(csp).toContain('frame-src https://www.youtube.com');
 		expect(csp).toContain('https://player.vimeo.com');
 		expect(csp).toContain('https://streamable.com');
+	});
+
+	it('keeps nginx CSP aligned for remote RSS media playback', () => {
+		const nginx = readFileSync(resolve(testDir, '../../../..', 'nginx.conf'), 'utf8');
+		const cspHeaders = nginx.match(/add_header Content-Security-Policy "[^"]+"/g) ?? [];
+
+		expect(cspHeaders).toHaveLength(2);
+		for (const header of cspHeaders) {
+			expect(header).toContain("media-src 'self' https:");
+			expect(header).toContain('frame-src https://www.youtube.com');
+			expect(header).toContain('https://platform.twitter.com');
+		}
 	});
 
 	it('includes X-Request-Id header', async () => {
