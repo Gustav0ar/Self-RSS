@@ -130,6 +130,7 @@ export function createDeps(
 			feedSync,
 			realtime,
 			articleCache,
+			repos.category,
 		),
 	};
 

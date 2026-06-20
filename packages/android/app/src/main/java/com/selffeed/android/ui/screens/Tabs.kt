@@ -115,7 +115,11 @@ data class SearchTabState(
     val results: List<ArticleListItem>,
     val selectedArticleId: String?,
     val hasMoreResults: Boolean,
+    val loadingResults: Boolean,
     val loadingMoreResults: Boolean,
+    val currentCategoryAvailable: Boolean,
+    val currentCategoryOnly: Boolean,
+    val resultLimitReached: Boolean,
 )
 
 data class SettingsTabState(
@@ -142,7 +146,50 @@ data class SearchTabActions(
     val onSearchRequested: () -> Unit,
     val onOpenArticle: (String) -> Unit,
     val onLoadMore: () -> Unit,
+    val onCurrentCategoryOnlyChanged: (Boolean) -> Unit,
 )
+
+internal sealed interface FeedDrawerRow {
+    val depth: Int
+    val key: String
+    val contentType: String
+}
+
+internal data class CategoryDrawerRow(
+    val category: CategoryWithCounts,
+    override val depth: Int,
+) : FeedDrawerRow {
+    override val key = "cat-${category.id}"
+    override val contentType = "category"
+}
+
+internal data class FeedDrawerFeedRow(
+    val feed: FeedWithCounts,
+    override val depth: Int,
+) : FeedDrawerRow {
+    override val key = "feed-${feed.id}"
+    override val contentType = "feed"
+}
+
+internal fun buildFeedDrawerRows(
+    categories: List<CategoryWithCounts>,
+    feedsByCategory: Map<String, List<FeedWithCounts>>,
+    isExpanded: (String) -> Boolean,
+): List<FeedDrawerRow> = buildList {
+    fun addCategory(category: CategoryWithCounts, depth: Int) {
+        add(CategoryDrawerRow(category, depth))
+        if (!isExpanded(category.id)) return
+
+        feedsByCategory[category.id].orEmpty().forEach { feed ->
+            add(FeedDrawerFeedRow(feed, depth + 1))
+        }
+        category.children.orEmpty().forEach { child ->
+            addCategory(child, depth + 1)
+        }
+    }
+
+    categories.forEach { category -> addCategory(category, depth = 0) }
+}
 
 data class SettingsTabActions(
     val onThemeChanged: (ThemePreference) -> Unit,
@@ -162,11 +209,13 @@ fun FeedsTab(
     val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(state.categories) {
-        state.categories.forEach { category ->
+        fun seed(category: CategoryWithCounts) {
             if (!expandedCategories.containsKey(category.id)) {
                 expandedCategories[category.id] = true
             }
+            category.children.orEmpty().forEach(::seed)
         }
+        state.categories.forEach(::seed)
     }
     val feedsByCategory = remember(state.feeds) {
         state.feeds.groupBy { it.categoryId }
@@ -213,40 +262,21 @@ fun FeedsTab(
             }
         }
 
-        // Build a single ordered list that interleaves each category with
-        // its feeds when expanded. The previous implementation rendered
-        // all expanded feeds as a single flat block at the bottom of the
-        // list, which broke the visual hierarchy — feeds should sit
-        // directly under the category they belong to.
-        val rows = buildList<Any> {
-            state.categories.forEach { category ->
-                add(category)
-                if (expandedCategories[category.id] ?: true) {
-                    feedsByCategory[category.id].orEmpty().forEach { add(it) }
-                }
-            }
-        }
+        val rows = buildFeedDrawerRows(
+            categories = state.categories,
+            feedsByCategory = feedsByCategory,
+            isExpanded = { categoryId -> expandedCategories[categoryId] ?: true },
+        )
         items(
             items = rows,
-            key = { row ->
-                when (row) {
-                    is com.selffeed.android.network.CategoryWithCounts -> "cat-${row.id}"
-                    is com.selffeed.android.network.FeedWithCounts -> "feed-${row.id}"
-                    else -> row.hashCode().toString()
-                }
-            },
-            contentType = { row ->
-                when (row) {
-                    is com.selffeed.android.network.CategoryWithCounts -> "category"
-                    is com.selffeed.android.network.FeedWithCounts -> "feed"
-                    else -> "unknown"
-                }
-            },
+            key = { row -> row.key },
+            contentType = { row -> row.contentType },
         ) { row ->
             when (row) {
-                is com.selffeed.android.network.CategoryWithCounts -> {
-                    val isExpanded = expandedCategories[row.id] ?: true
-                    FeedSurfaceCard {
+                is CategoryDrawerRow -> {
+                    val category = row.category
+                    val isExpanded = expandedCategories[category.id] ?: true
+                    FeedSurfaceCard(modifier = Modifier.padding(start = (row.depth * 14).dp)) {
                         DrawerItem(
                             icon = {
                                 Icon(
@@ -256,26 +286,27 @@ fun FeedsTab(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             },
-                            label = row.name,
-                            subtitle = "${row.feedCount} feeds",
-                            count = row.unreadCount,
-                            selected = state.selectedCategoryId == row.id,
+                            label = category.name,
+                            subtitle = "${category.feedCount} feeds",
+                            count = category.unreadCount,
+                            selected = state.selectedCategoryId == category.id,
                             onClick = {
-                                actions.onCategorySelected(row.id)
+                                actions.onCategorySelected(category.id)
                                 onSelect()
                             },
                             onExpand = {
-                                expandedCategories[row.id] = !isExpanded
+                                expandedCategories[category.id] = !isExpanded
                             }
                         )
                     }
                 }
-                is com.selffeed.android.network.FeedWithCounts -> {
+                is FeedDrawerFeedRow -> {
                     FeedRow(
-                        feed = row,
-                        selected = state.selectedFeedId == row.id,
+                        feed = row.feed,
+                        selected = state.selectedFeedId == row.feed.id,
+                        modifier = Modifier.padding(start = (row.depth * 14).dp),
                         onSelect = {
-                            actions.onFeedSelected(row.id)
+                            actions.onFeedSelected(row.feed.id)
                             onSelect()
                         },
                     )
@@ -286,8 +317,12 @@ fun FeedsTab(
 }
 
 @Composable
-private fun FeedSurfaceCard(content: @Composable ColumnScope.() -> Unit) {
+private fun FeedSurfaceCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Card(
+        modifier = modifier,
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
@@ -359,10 +394,11 @@ private fun DrawerItem(
 private fun FeedRow(
     feed: FeedWithCounts,
     selected: Boolean,
+    modifier: Modifier = Modifier,
     onSelect: () -> Unit,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
@@ -940,6 +976,21 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
                 )
+                if (state.currentCategoryAvailable) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !state.currentCategoryOnly,
+                            onClick = { actions.onCurrentCategoryOnlyChanged(false) },
+                            label = { Text("All") },
+                        )
+                        FilterChip(
+                            selected = state.currentCategoryOnly,
+                            onClick = { actions.onCurrentCategoryOnlyChanged(true) },
+                            label = { Text("Current") },
+                        )
+                    }
+                }
             }
         }
 
@@ -954,6 +1005,19 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
             }
         }
 
+        if (state.loadingResults && state.results.isEmpty()) {
+            item(key = "search-loading") {
+                Box(
+                    modifier = Modifier
+                        .fillParentMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                }
+            }
+        }
+
         items(
             items = state.results,
             key = { it.id },
@@ -964,6 +1028,17 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                 selected = state.selectedArticleId == article.id,
                 onClick = { actions.onOpenArticle(article.id) },
             )
+        }
+
+        if (state.resultLimitReached) {
+            item(key = "search-result-limit") {
+                Text(
+                    text = "Showing first ${state.results.size} results. Refine the search to narrow them.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
         }
 
         if (state.hasMoreResults) {

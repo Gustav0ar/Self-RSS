@@ -43,6 +43,11 @@ export class FeedService {
 	}
 
 	async getByCategory(userId: string, categoryId: string) {
+		const category = await this.categoryRepo.findById(categoryId, userId);
+		if (!category) {
+			throw AppError.notFound('Category not found');
+		}
+
 		const feeds = await this.feedRepo.findByCategory(userId, categoryId);
 		return this.serializeFeedsWithCounts(userId, feeds);
 	}

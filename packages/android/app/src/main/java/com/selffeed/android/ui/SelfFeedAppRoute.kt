@@ -62,6 +62,10 @@ fun SelfFeedAppRoute(
             }
         }
 
+        LaunchedEffect(articlesState.selectedCategoryId) {
+            searchViewModel.setSelectedCategoryId(articlesState.selectedCategoryId)
+        }
+
         LaunchedEffect(feedsState.syncRevision) {
             if (feedsState.syncRevision > 0L) {
                 feedsViewModel.loadCategories()
@@ -174,6 +178,7 @@ fun SelfFeedAppRoute(
                 onSearchQueryChanged = searchViewModel::setQuery,
                 onSearchRequested = searchViewModel::search,
                 onLoadMoreSearch = searchViewModel::loadMore,
+                onSearchCurrentCategoryOnlyChanged = searchViewModel::setCurrentCategoryOnly,
                 onThemeChanged = { settingsViewModel.updateTheme(it.apiValue) },
                 onSortChanged = {
                     settingsViewModel.updateDefaultSort(it.apiValue)

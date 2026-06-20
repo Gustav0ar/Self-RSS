@@ -95,6 +95,31 @@ describe('ArticleService', () => {
 		expect(result.data).toHaveLength(1);
 	});
 
+	it('returns 404 for category-scoped article lists when the category is missing', async () => {
+		const articleRepo = {
+			findByScope: vi.fn(),
+		};
+		const categoryRepo = {
+			findById: vi.fn(async () => null),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			undefined,
+			undefined,
+			undefined,
+			categoryRepo as never,
+		);
+
+		await expect(
+			service.getArticles('user-1', { categoryId: 'category-1', limit: 20 }),
+		).rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 });
+		expect(categoryRepo.findById).toHaveBeenCalledWith('category-1', 'user-1');
+		expect(articleRepo.findByScope).not.toHaveBeenCalled();
+	});
+
 	it('searches through a scoped repository query and records search metrics', async () => {
 		const articleRepo = {
 			searchByScope: vi.fn(async () => [
@@ -145,6 +170,35 @@ describe('ArticleService', () => {
 				publishedAt: null,
 			}),
 		);
+	});
+
+	it('returns 404 for category-scoped search when the category is missing', async () => {
+		const articleRepo = {
+			searchByScope: vi.fn(),
+		};
+		const metricsRepo = {
+			incrementSearchCount: vi.fn(),
+		};
+		const categoryRepo = {
+			findById: vi.fn(async () => null),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			metricsRepo as never,
+			{} as never,
+			undefined,
+			undefined,
+			undefined,
+			categoryRepo as never,
+		);
+
+		await expect(service.search('user-1', 'reader', 'missing-category')).rejects.toMatchObject({
+			code: 'NOT_FOUND',
+			statusCode: 404,
+		});
+		expect(articleRepo.searchByScope).not.toHaveBeenCalled();
+		expect(metricsRepo.incrementSearchCount).not.toHaveBeenCalled();
 	});
 
 	it('loads article detail with the user-scoped detail query', async () => {
@@ -465,5 +519,33 @@ describe('ArticleService', () => {
 		expect(realtime.publishReadStateEvent).not.toHaveBeenCalled();
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
 		expect(result).toEqual({ markedCount: 0, feedIds: ['feed-1'] });
+	});
+
+	it('returns 404 for markAllRead when the category is missing', async () => {
+		const articleRepo = {
+			markAllRead: vi.fn(),
+		};
+		const feedRepo = {
+			findByCategory: vi.fn(),
+		};
+		const categoryRepo = {
+			findById: vi.fn(async () => null),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			undefined,
+			undefined,
+			undefined,
+			categoryRepo as never,
+		);
+
+		await expect(
+			service.markAllRead('user-1', { categoryId: 'missing-category' }, 'client-1'),
+		).rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 });
+		expect(feedRepo.findByCategory).not.toHaveBeenCalled();
+		expect(articleRepo.markAllRead).not.toHaveBeenCalled();
 	});
 });

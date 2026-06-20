@@ -2,11 +2,19 @@ import Redis, { type RedisOptions } from 'ioredis';
 
 let redisInstance: Redis | null = null;
 
+export function normalizeRedisUrl(url: string) {
+	const parsed = new URL(url);
+	if (parsed.hostname === 'localhost') {
+		parsed.hostname = '127.0.0.1';
+	}
+	return parsed.toString();
+}
+
 export function getRedis(redisUrl?: string): Redis {
 	if (redisInstance) return redisInstance;
 	const url = redisUrl ?? process.env.REDIS_URL;
 	if (!url) throw new Error('REDIS_URL is required');
-	const parsedUrl = url.replace('localhost', '127.0.0.1');
+	const parsedUrl = normalizeRedisUrl(url);
 
 	const options: RedisOptions = {
 		maxRetriesPerRequest: 3,

@@ -302,7 +302,14 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 					<header className="motion-enter max-w-[82ch]">
 						<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 							{article.feedFaviconUrl ? (
-								<img src={article.feedFaviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+								<img
+									src={article.feedFaviconUrl}
+									alt=""
+									className="h-4 w-4 rounded-sm"
+									loading="lazy"
+									decoding="async"
+									referrerPolicy="no-referrer"
+								/>
 							) : null}
 							<span>{article.feedTitle}</span>
 							{publishedAt ? (
@@ -389,6 +396,8 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 											alt=""
 											className="max-w-full rounded-xl"
 											loading="lazy"
+											decoding="async"
+											referrerPolicy="no-referrer"
 										/>
 									);
 								}
@@ -437,6 +446,9 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 								src={article.heroImageUrl}
 								alt=""
 								className="aspect-video w-full rounded-xl object-cover"
+								loading="lazy"
+								decoding="async"
+								referrerPolicy="no-referrer"
 							/>
 						) : null}
 

@@ -34,7 +34,7 @@ const rawEnvSchema = z
 		FEED_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
 		FEED_MAX_CONTENT_LENGTH: z.coerce.number().int().min(1024).default(5242880),
 		FEED_ALLOW_PRIVATE_HOSTS: booleanCoercible.default(false),
-		ALLOW_REGISTRATION: booleanCoercible.default(true),
+		ALLOW_REGISTRATION: booleanCoercible.optional(),
 		RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(30),
 		RATE_LIMIT_FEED_CREATE_MAX: z.coerce.number().int().min(1).default(100),
 		RATE_LIMIT_SEARCH_MAX: z.coerce.number().int().min(1).default(100),
@@ -102,6 +102,7 @@ const rawEnvSchema = z
 
 const envSchema = rawEnvSchema.transform((env) => ({
 	...env,
+	ALLOW_REGISTRATION: env.ALLOW_REGISTRATION ?? env.NODE_ENV !== 'production',
 	REQUIRE_WORKER_HEARTBEAT: env.REQUIRE_WORKER_HEARTBEAT ?? env.NODE_ENV === 'production',
 }));
 

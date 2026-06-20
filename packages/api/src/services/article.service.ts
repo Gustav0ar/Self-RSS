@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
+import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
 import { encodeArticleCursor } from '../utils/article-cursor.js';
@@ -36,6 +37,7 @@ export class ArticleService {
 		private feedSyncService?: FeedSyncService,
 		private realtimeService?: RealtimeService,
 		private articleCache?: ArticleCacheService,
+		private categoryRepo?: CategoryRepository,
 	) {}
 
 	async getArticles(
@@ -59,7 +61,16 @@ export class ArticleService {
 			});
 		});
 
-		// Try cache first (only for initial load without cursor)
+		if (options.feedId) {
+			const feed = await this.feedRepo.findById(options.feedId, userId);
+			if (!feed) throw AppError.notFound('Feed not found');
+		}
+		if (options.categoryId) {
+			await this.assertCategoryExists(userId, options.categoryId);
+		}
+
+		// Try cache first (only for initial load without cursor) after scope
+		// validation, so stale/deleted category ids cannot look like empty lists.
 		if (!options.cursor && this.articleCache) {
 			const cached = await this.articleCache.getCachedArticleList(userId, {
 				feedId: options.feedId,
@@ -75,11 +86,6 @@ export class ArticleService {
 					hasMore: cached.hasMore,
 				};
 			}
-		}
-
-		if (options.feedId) {
-			const feed = await this.feedRepo.findById(options.feedId, userId);
-			if (!feed) throw AppError.notFound('Feed not found');
 		}
 
 		const result = await this.articleRepo.findByScope(
@@ -243,6 +249,7 @@ export class ArticleService {
 			if (!feed) throw AppError.notFound('Feed not found');
 			feedIds = [feed.id];
 		} else if (options.categoryId) {
+			await this.assertCategoryExists(userId, options.categoryId);
 			const feeds = await this.feedRepo.findByCategory(userId, options.categoryId);
 			feedIds = feeds.map((f) => f.id);
 		} else {
@@ -314,6 +321,10 @@ export class ArticleService {
 	}
 
 	async search(userId: string, query: string, categoryId?: string, limit = 20, cursor?: string) {
+		if (categoryId) {
+			await this.assertCategoryExists(userId, categoryId);
+		}
+
 		const results = await this.articleRepo.searchByScope(
 			{ userId, categoryId },
 			query,
@@ -336,6 +347,16 @@ export class ArticleService {
 			cursor: hasMore ? encodeArticleCursor(items[items.length - 1] ?? null, 'latest') : null,
 			hasMore,
 		};
+	}
+
+	private async assertCategoryExists(userId: string, categoryId: string) {
+		if (!this.categoryRepo) {
+			return;
+		}
+		const category = await this.categoryRepo.findById(categoryId, userId);
+		if (!category) {
+			throw AppError.notFound('Category not found');
+		}
 	}
 
 	private async invalidateUnreadCache(userId: string, feedIds: string[] = []) {

@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../../src/components/layout/sidebar';
 
+const reorderCategoriesMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 const categories = [
 	{
 		id: 'category-1',
@@ -24,6 +26,34 @@ const categories = [
 				unreadCount: 7,
 			},
 		],
+		children: [
+			{
+				id: 'category-child-a',
+				userId: 'user-1',
+				parentCategoryId: 'category-1',
+				name: 'Android',
+				slug: 'android',
+				sortOrder: 0,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				feedCount: 0,
+				unreadCount: 0,
+				feeds: [],
+			},
+			{
+				id: 'category-child-b',
+				userId: 'user-1',
+				parentCategoryId: 'category-1',
+				name: 'Linux',
+				slug: 'linux',
+				sortOrder: 1,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				feedCount: 0,
+				unreadCount: 0,
+				feeds: [],
+			},
+		],
 	},
 ];
 
@@ -32,7 +62,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	useDeleteCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useDeleteFeed: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useExportOpml: () => ({ mutateAsync: vi.fn(), isPending: false }),
-	useReorderCategories: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useReorderCategories: () => ({ mutateAsync: reorderCategoriesMock, isPending: false }),
 	useUpdateCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
@@ -79,6 +109,7 @@ describe('Sidebar selection', () => {
 			// sidebar's load is wrapped in try/catch already, so this is
 			// safe to skip.
 		}
+		reorderCategoriesMock.mockClear();
 	});
 
 	it('expands the parent category when the selected feed is active on load', async () => {
@@ -112,5 +143,27 @@ describe('Sidebar selection', () => {
 
 		fireEvent.click(screen.getByRole('button', { name: 'Blogs 7' }));
 		expect(onSelectCategory).toHaveBeenCalledWith('category-1');
+	});
+
+	it('reorders nested categories within the same parent', async () => {
+		renderSidebar({ selectedFeedId: 'feed-1' });
+		const dataTransfer = {
+			effectAllowed: '',
+			dropEffect: '',
+			setData: vi.fn(),
+		};
+
+		fireEvent.dragStart(screen.getByRole('button', { name: 'Drag to reorder Android' }), {
+			dataTransfer,
+		});
+		fireEvent.dragOver(screen.getByRole('button', { name: 'Linux' }), { dataTransfer });
+		fireEvent.drop(screen.getByRole('button', { name: 'Linux' }), { dataTransfer });
+
+		expect(reorderCategoriesMock).toHaveBeenCalledWith({
+			updates: [
+				{ id: 'category-child-b', sortOrder: 0 },
+				{ id: 'category-child-a', sortOrder: 1 },
+			],
+		});
 	});
 });

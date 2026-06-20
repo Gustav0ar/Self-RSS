@@ -21,8 +21,14 @@ afterEach(() => {
 });
 
 describe('getEnv', () => {
-	it('defaults ALLOW_REGISTRATION to true and allows overrides', () => {
-		applyEnv({});
+	it('defaults ALLOW_REGISTRATION open outside production and closed in production', () => {
+		applyEnv({ NODE_ENV: 'development' });
+		expect(getEnv().ALLOW_REGISTRATION).toBe(true);
+
+		applyEnv({ NODE_ENV: 'production' });
+		expect(getEnv().ALLOW_REGISTRATION).toBe(false);
+
+		applyEnv({ NODE_ENV: 'production', ALLOW_REGISTRATION: 'true' });
 		expect(getEnv().ALLOW_REGISTRATION).toBe(true);
 	});
 

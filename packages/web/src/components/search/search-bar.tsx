@@ -259,6 +259,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 												alt=""
 												loading="lazy"
 												decoding="async"
+												referrerPolicy="no-referrer"
 												className="hidden h-24 w-36 rounded-2xl object-cover md:block"
 											/>
 										) : null}

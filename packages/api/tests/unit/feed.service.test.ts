@@ -74,6 +74,27 @@ describe('FeedService - getAll', () => {
 	});
 });
 
+describe('FeedService - getByCategory', () => {
+	it('returns 404 when the category does not exist', async () => {
+		const feedRepo = {
+			findByCategory: vi.fn(),
+		};
+		const categoryRepo = {
+			findById: vi.fn(async () => null),
+		};
+		const service = new FeedService(feedRepo as never, categoryRepo as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
+
+		await expect(service.getByCategory('user-1', 'missing-category')).rejects.toMatchObject({
+			code: 'NOT_FOUND',
+			statusCode: 404,
+		});
+		expect(feedRepo.findByCategory).not.toHaveBeenCalled();
+	});
+});
+
 describe('FeedService - create', () => {
 	it('returns 404 when the target category does not exist', async () => {
 		const categoryRepo = { findById: vi.fn().mockResolvedValue(null) };
