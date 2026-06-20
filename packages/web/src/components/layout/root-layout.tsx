@@ -129,10 +129,12 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 	useEffect(() => {
 		const previouslyFocused =
 			document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const previousOverflow = document.body.style.overflow;
 		const focusableSelector =
 			'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 		function handleKey(event: KeyboardEvent) {
 			if (event.key === 'Escape') {
+				event.preventDefault();
 				onClose();
 				return;
 			}
@@ -159,13 +161,14 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 		}
 		window.addEventListener('keydown', handleKey);
 		document.body.style.overflow = 'hidden';
-		window.setTimeout(() => {
+		const focusTimer = window.setTimeout(() => {
 			const firstFocusable = drawerRef.current?.querySelector<HTMLElement>(focusableSelector);
 			(firstFocusable ?? drawerRef.current)?.focus();
 		}, 0);
 		return () => {
 			window.removeEventListener('keydown', handleKey);
-			document.body.style.overflow = '';
+			window.clearTimeout(focusTimer);
+			document.body.style.overflow = previousOverflow;
 			previouslyFocused?.focus();
 		};
 	}, [onClose]);
