@@ -109,6 +109,13 @@ function getSyncErrorDetails(error: unknown): SyncErrorDetails {
 	return { error: String(error) };
 }
 
+function normalizeSyncThrowable(error: unknown, details: SyncErrorDetails): Error {
+	if (error instanceof Error) {
+		return error;
+	}
+	return new Error(details.error);
+}
+
 export class FeedSyncService {
 	private parser: RSSParser;
 
@@ -472,7 +479,7 @@ export class FeedSyncService {
 				errorMessage: errorDetails.error,
 			});
 			logger.error('Feed sync failed', { feedId, ...errorDetails });
-			throw err;
+			throw normalizeSyncThrowable(err, errorDetails);
 		} finally {
 			await releaseFeedLock();
 		}
