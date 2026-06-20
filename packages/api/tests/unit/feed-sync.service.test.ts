@@ -498,7 +498,12 @@ describe('FeedSyncService', () => {
 			'fetchAndParse',
 		).mockRejectedValue(new Error('network failed'));
 
-		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toThrow('network failed');
+		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toMatchObject({
+			code: 'BAD_GATEWAY',
+			details: 'network failed',
+			message: 'Could not fetch or parse the feed URL',
+			statusCode: 502,
+		});
 
 		expect(feedRepo.update).toHaveBeenNthCalledWith(1, 'feed-1', 'user-1', {
 			syncStatus: 'syncing',
@@ -549,7 +554,12 @@ describe('FeedSyncService', () => {
 			'fetchAndParse',
 		).mockRejectedValue(response);
 
-		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toThrow('HTTP 404: Not Found');
+		await expect(service.syncFeed('feed-1', 'user-1')).rejects.toMatchObject({
+			code: 'BAD_GATEWAY',
+			details: 'HTTP 404: Not Found',
+			message: 'Could not fetch or parse the feed URL',
+			statusCode: 502,
+		});
 
 		expect(syncRunRepo.complete).toHaveBeenCalledWith(
 			'run-1',

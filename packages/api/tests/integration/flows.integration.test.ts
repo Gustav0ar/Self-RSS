@@ -257,6 +257,51 @@ describe('API integration - additional flows', () => {
 		}
 	});
 
+	it('returns a clean upstream error when manual feed sync cannot parse the remote feed', async () => {
+		const registered = await registerUser('manual-sync-failure@example.com');
+		const token = registered.body.data.tokens.accessToken;
+
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Manual Sync Failure' }),
+		});
+
+		const feedServer = await startMutableFeedServer(`<?xml version="1.0" encoding="UTF-8"?>
+			<rss version="2.0"><channel>
+				<title>Manual Sync Failure Feed</title><link>https://example.com</link>
+				<item>
+					<title>Story</title>
+					<link>https://example.com/story</link>
+					<guid>manual-sync-failure-story</guid>
+					<description><![CDATA[<p>Story body.</p>]]></description>
+				</item>
+			</channel></rss>`);
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+
+			feedServer.setXml('not xml');
+			const failedSync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+
+			expect(failedSync.response.status).toBe(502);
+			expect(failedSync.body.error).toMatchObject({
+				code: 'BAD_GATEWAY',
+				message: 'Could not fetch or parse the feed URL',
+			});
+			expect(failedSync.body.error.details).toEqual(expect.any(String));
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
 	it('returns 404 for an article that does not exist or belongs to another user', async () => {
 		const userA = await registerUser('article-404-a@example.com');
 		const userB = await registerUser('article-404-b@example.com');
