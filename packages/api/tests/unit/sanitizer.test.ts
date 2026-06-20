@@ -233,6 +233,12 @@ describe('hasRichMedia', () => {
 				'<div class="rll-youtube-player" data-src="https://www.youtube.com/embed/abc"></div>',
 			),
 		).toBe(true);
+		expect(
+			hasRichMedia(
+				'<div class="rll-vimeo-player" data-src="https://player.vimeo.com/video/123"></div>',
+			),
+		).toBe(true);
+		expect(hasRichMedia('<audio src="https://cdn.example.com/story.mp3"></audio>')).toBe(true);
 		expect(hasRichMedia('<p>Only text</p>')).toBe(false);
 	});
 
@@ -242,6 +248,18 @@ describe('hasRichMedia', () => {
 				'<p><img src="/wp-content/plugins/load-video-on-click/assets/img/ajax-loader.gif" /></p>',
 			),
 		).toBe(false);
+	});
+
+	it('does not treat inert or unsafe media tags as rich media', () => {
+		expect(hasRichMedia('<p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" /></p>')).toBe(
+			false,
+		);
+		expect(hasRichMedia('<p><img src="javascript:alert(1)" /></p>')).toBe(false);
+		expect(hasRichMedia('<p><img alt="lazy image without source" /></p>')).toBe(false);
+		expect(hasRichMedia('<video src="javascript:alert(1)"></video>')).toBe(false);
+		expect(hasRichMedia('<audio src="javascript:alert(1)"></audio>')).toBe(false);
+		expect(hasRichMedia('<div class="rll-youtube-player"></div>')).toBe(false);
+		expect(hasRichMedia('<div data-video-url="javascript:alert(1)"></div>')).toBe(false);
 	});
 });
 

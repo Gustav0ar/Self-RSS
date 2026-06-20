@@ -26,8 +26,12 @@ const KNOWN_EMBED_HOSTS = new Set([
 	'x.com',
 ]);
 
-const MEDIA_CONTENT_REGEX = /<(?:img|video|audio|picture|source|iframe)\b/i;
 const MEDIA_EXTRACTION_CANDIDATE_REGEX = /<(?:img|iframe|video|source|a)\b/i;
+const AUDIO_TAG_REGEX = /<audio\b[^>]*>/gi;
+const LAZY_EMBED_TAG_REGEX =
+	/<[^>]+(?:rll-youtube-player|rll-vimeo-player|rll-video-player|data-(?:video-url|embed-url)\s*=)[^>]*>/gi;
+const LAZY_EMBED_CLASS_REGEX = /\b(?:rll-youtube-player|rll-vimeo-player|rll-video-player)\b/i;
+const LAZY_EMBED_SOURCE_ATTRS = ['data-src', 'data-video-url', 'data-embed-url'];
 const VIDEO_LOADER_PLACEHOLDER_PATH = 'load-video-on-click/assets/img/ajax-loader.gif';
 const VIDEO_LOADER_PLACEHOLDER_TAG_REGEX = new RegExp(
 	`<img[^>]+${VIDEO_LOADER_PLACEHOLDER_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*>`,
@@ -269,7 +273,15 @@ export function hasRichMedia(html: unknown): boolean {
 	const normalizedHtml = normalizeHtmlInput(html);
 	if (!normalizedHtml.trim()) return false;
 	const cleanedHtml = normalizedHtml.replace(VIDEO_LOADER_PLACEHOLDER_TAG_REGEX, '');
-	return MEDIA_CONTENT_REGEX.test(cleanedHtml) || cleanedHtml.includes('rll-youtube-player');
+	if (extractMediaFromHtml(cleanedHtml).length > 0) {
+		return true;
+	}
+	for (const match of cleanedHtml.matchAll(AUDIO_TAG_REGEX)) {
+		if (normalizeMediaUrlCandidate(getTagAttribute(match[0]!, 'src'))) {
+			return true;
+		}
+	}
+	return hasLazyEmbedPlaceholder(cleanedHtml);
 }
 
 export function stripHtml(html: unknown): string {
@@ -358,6 +370,28 @@ function firstHeroImageFromSrcset(srcset: string | null): string | null {
 		if (normalized) return normalized;
 	}
 	return null;
+}
+
+function hasLazyEmbedPlaceholder(html: string): boolean {
+	for (const match of html.matchAll(LAZY_EMBED_TAG_REGEX)) {
+		const tag = match[0]!;
+		const hasLazyClass =
+			LAZY_EMBED_CLASS_REGEX.test(getTagAttribute(tag, 'class') ?? '') ||
+			LAZY_EMBED_CLASS_REGEX.test(tag);
+		const hasExplicitEmbedAttribute = Boolean(
+			getTagAttribute(tag, 'data-video-url') || getTagAttribute(tag, 'data-embed-url'),
+		);
+		if (!hasLazyClass && !hasExplicitEmbedAttribute) {
+			continue;
+		}
+		for (const attribute of LAZY_EMBED_SOURCE_ATTRS) {
+			const source = getTagAttribute(tag, attribute);
+			if (source && toEmbedUrl(source)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 export function extractHeroImage(html: unknown): string | null {
