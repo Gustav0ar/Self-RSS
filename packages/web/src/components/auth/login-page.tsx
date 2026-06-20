@@ -1,9 +1,11 @@
 import { ArrowRight, Rss, ShieldCheck, Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { AuthErrorFallback } from '@/components/error-fallbacks';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/providers/auth';
 
-export function LoginPage() {
+function LoginPageContent() {
 	const { login, register } = useAuth();
 	const [mode, setMode] = useState<'login' | 'register'>('login');
 	const [email, setEmail] = useState('');
@@ -14,28 +16,30 @@ export function LoginPage() {
 	const canRegister = registrationEnabled === true;
 
 	useEffect(() => {
-		let cancelled = false;
+		const controller = new AbortController();
+
 		async function checkRegistrationStatus() {
 			try {
 				const res = await apiFetch<{ data: { registrationEnabled: boolean } }>(
 					'/auth/registration-status',
+					{ signal: controller.signal },
 				);
-				if (!cancelled) {
-					setRegistrationEnabled(res.data.registrationEnabled);
-					if (!res.data.registrationEnabled) {
-						setMode('login');
-					}
-				}
-			} catch {
-				if (!cancelled) {
-					setRegistrationEnabled(false);
+				setRegistrationEnabled(res.data.registrationEnabled);
+				if (!res.data.registrationEnabled) {
 					setMode('login');
 				}
+			} catch (err) {
+				if (err instanceof Error && err.name === 'AbortError') {
+					return;
+				}
+				setRegistrationEnabled(false);
+				setMode('login');
 			}
 		}
+
 		void checkRegistrationStatus();
 		return () => {
-			cancelled = true;
+			controller.abort();
 		};
 	}, []);
 
@@ -201,5 +205,13 @@ export function LoginPage() {
 				</section>
 			</div>
 		</div>
+	);
+}
+
+export function LoginPage() {
+	return (
+		<ErrorBoundary fallback={AuthErrorFallback}>
+			<LoginPageContent />
+		</ErrorBoundary>
 	);
 }

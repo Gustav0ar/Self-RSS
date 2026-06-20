@@ -1,5 +1,7 @@
+import { Database as BunDatabase } from 'bun:sqlite';
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
+import { getRawDb } from '../db/client.js';
 import { articleMedia, articleReads, articles, categories, feeds } from '../db/schema.js';
 
 export interface ArticleScope {
@@ -23,29 +25,60 @@ function toFtsQuery(query: string): string | null {
 	return terms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' ');
 }
 
+// UUID v4 validation regex pattern
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidUuid(value: string): boolean {
+	return UUID_REGEX.test(value);
+}
+
 /**
  * Decode the opaque pagination cursor emitted by `encodeCursor` in the
- * service. The format is `<articleId>:<unixSeconds>:<direction>`. If the
- * input doesn't match the new shape (e.g. a legacy id-only cursor still
- * in flight from before this change), the decoder returns null and the
- * caller falls back to no cursor — the request simply returns the first
- * page, which is the safe behavior for a malformed cursor.
+ * service. The format for search results is `<ftsRank>:<unixSeconds>:<id>:<direction>`.
+ * For non-search results it is `<id>:<unixSeconds>:<direction>`.
+ * If the input doesn't match the expected shape, the decoder returns null
+ * and the caller falls back to no cursor — the request simply returns the
+ * first page, which is the safe behavior for a malformed cursor.
  */
 function decodeCursor(
 	cursor: string | undefined,
 	sort: string | undefined,
-): { id: string; seconds: number; direction: 'a' | 'd' } | null {
+): { id: string; seconds: number; direction: 'a' | 'd'; ftsRank?: number } | null {
 	if (!cursor) return null;
 	const parts = cursor.split(':');
-	if (parts.length !== 3) return null;
+	if (parts.length < 3) return null;
+
+	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
+
+	// Search cursor format: <ftsRankInt>:<unixSeconds>:<id>:<direction>
+	// ftsRankInt is the integer encoding of bm25: OFFSET + round(bm25 * SCALE)
+	// where OFFSET = 1000000000 and SCALE = 10000
+	// Non-search cursor format: <id>:<unixSeconds>:<direction>
+	if (parts.length === 4) {
+		// Search cursor
+		const [rankIntRaw, secondsRaw, id, direction] = parts;
+		if (!rankIntRaw || !secondsRaw || !id || !direction) return null;
+		// Validate that id is a valid UUID to prevent SQL injection
+		if (!isValidUuid(id)) return null;
+		if (direction !== 'a' && direction !== 'd') return null;
+		if (direction !== expectedDirection) return null;
+		// Decode the integer-encoded bm25 back to the original value
+		const OFFSET = 1000000000;
+		const SCALE = 10000;
+		const rankInt = Number.parseInt(rankIntRaw, 10);
+		if (!Number.isFinite(rankInt)) return null;
+		const ftsRank = (rankInt - OFFSET) / SCALE;
+		const seconds = Number.parseInt(secondsRaw, 10);
+		if (!Number.isFinite(seconds) || seconds < 0) return null;
+		return { id, seconds, direction, ftsRank };
+	}
+
+	// Non-search cursor (legacy/regular cursor)
 	const [id, secondsRaw, direction] = parts;
 	if (!id || !secondsRaw || !direction) return null;
+	// Validate that id is a valid UUID to prevent SQL injection
+	if (!isValidUuid(id)) return null;
 	if (direction !== 'a' && direction !== 'd') return null;
-	// Verify the encoded direction matches the requested sort. If the
-	// client paginated with `latest` and then switched to `oldest`,
-	// we don't have a way to translate the cursor; fall back to first
-	// page.
-	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
 	if (direction !== expectedDirection) return null;
 	const seconds = Number.parseInt(secondsRaw, 10);
 	if (!Number.isFinite(seconds) || seconds < 0) return null;
@@ -81,7 +114,7 @@ function scopeConditions(scope: ArticleScope): SQL[] {
 }
 
 export class ArticleRepository {
-	constructor(private db: Database) {}
+	constructor(private db: Database, private rawDb?: BunDatabase) {}
 
 	async findByFeeds(
 		userId: string,
@@ -423,7 +456,28 @@ export class ArticleRepository {
 		return new Map(result.map(({ feedId, count }) => [feedId, count]));
 	}
 
-	async search(_userId: string, query: string, feedIds: string[], limit: number, cursor?: string) {
+	async search(
+		_userId: string,
+		query: string,
+		feedIds: string[],
+		limit: number,
+		cursor?: string,
+	): Promise<
+		Array<{
+			id: string;
+			feedId: string;
+			title: string | null;
+			author: string | null;
+			excerpt: string | null;
+			heroImageUrl: string | null;
+			publishedAt: Date | null;
+			fetchedAt: Date;
+			feedTitle: string;
+			feedFaviconUrl: string | null;
+			isRead: boolean;
+			ftsRank: number;
+		}>
+	> {
 		if (feedIds.length === 0) return [];
 
 		const ftsQuery = toFtsQuery(query);
@@ -431,95 +485,155 @@ export class ArticleRepository {
 			return [];
 		}
 
-		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
 		const decodedCursor = decodeCursor(cursor, 'latest');
-		const cursorSeconds = decodedCursor?.seconds;
 
-		const conditions: SQL[] = [
-			inArray(articles.feedId, feedIds),
-			sql`${articles.id} IN (SELECT article_id FROM articles_fts WHERE articles_fts MATCH ${ftsQuery})`,
-		];
+		// Use parameterized query to prevent SQL injection
+		// All user input (feedIds, _userId, cursor values) are passed as bound parameters
+		const params: (string | number)[] = [ftsQuery, _userId, ...feedIds];
 
-		if (cursorSeconds != null && decodedCursor) {
-			conditions.push(
-				sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${decodedCursor.id}))`,
-			);
+		// Cursor pagination: results are ordered by fts_rank ASC, sortTimestamp DESC, id DESC
+		// bm25() returns negative values where lower = more relevant
+		// For pagination, we want articles that come AFTER the cursor:
+		// - Either fts_rank > cursorRank (less relevant after more relevant)
+		// - Or fts_rank = cursorRank AND (sortTimestamp < cursorTimestamp OR (sortTimestamp = cursorTimestamp AND id < cursorId))
+		let cursorCondition = '';
+		if (decodedCursor?.ftsRank != null) {
+			const cursorRank = decodedCursor.ftsRank;
+			const cursorSeconds = decodedCursor.seconds;
+			const cursorId = decodedCursor.id;
+			cursorCondition = ` AND (fts.fts_rank > ? OR (fts.fts_rank = ? AND (coalesce(a.published_at, a.fetched_at) < ? OR (coalesce(a.published_at, a.fetched_at) = ? AND a.id < ?))))`;
+			params.push(cursorRank, cursorRank, cursorSeconds, cursorSeconds, cursorId);
 		}
 
-		return this.db
-			.select({
-				id: articles.id,
-				feedId: articles.feedId,
-				title: articles.title,
-				author: articles.author,
-				excerpt: articles.excerpt,
-				heroImageUrl: articles.heroImageUrl,
-				publishedAt: articles.publishedAt,
-				fetchedAt: articles.fetchedAt,
-				feedTitle: feeds.title,
-				feedFaviconUrl: feeds.faviconUrl,
-				// Fold the read-state lookup into the search query so the
-				// caller doesn't need a second round-trip. The LEFT JOIN
-				// hits the same `article_reads_pk` index that the
-				// `getReadArticleIds` lookup would have used, so this is
-				// at most as expensive as the two queries combined.
-				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
-			})
-			.from(articles)
-			.innerJoin(feeds, eq(articles.feedId, feeds.id))
-			.leftJoin(
-				articleReads,
-				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, _userId)),
-			)
-			.where(and(...conditions))
-			.orderBy(sql`${sortTimestamp} DESC, ${articles.id} DESC`)
-			.limit(limit + 1);
+		// Use parameterized IN clause for feed IDs
+		const feedIdPlaceholders = feedIds.map(() => '?').join(', ');
+
+		const sqlQuery = `WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE a.feed_id IN (${feedIdPlaceholders})` + cursorCondition + ` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
+
+		// Add limit parameter
+		params.push(limit + 1);
+
+		// Use raw SQLite client for FTS queries with bm25
+		const rawDb = this.rawDb ?? getRawDb();
+		if (!rawDb) {
+			return [];
+		}
+
+		const rows = rawDb.query(sqlQuery).all(...params) as Array<{
+			id: string;
+			feedId: string;
+			title: string | null;
+			author: string | null;
+			excerpt: string | null;
+			heroImageUrl: string | null;
+			publishedAt: Date | null;
+			fetchedAt: Date;
+			feedTitle: string;
+			feedFaviconUrl: string | null;
+			isRead: number | boolean;
+			ftsRank: number;
+		}>;
+
+		// Convert SQLite boolean (0/1) to JS boolean
+		return rows.map((row) => ({
+			...row,
+			isRead: Boolean(row.isRead),
+		}));
 	}
 
-	async searchByScope(scope: ArticleScope, query: string, limit: number, cursor?: string) {
+	async searchByScope(
+		scope: ArticleScope,
+		query: string,
+		limit: number,
+		cursor?: string,
+	): Promise<
+		Array<{
+			id: string;
+			feedId: string;
+			title: string | null;
+			author: string | null;
+			excerpt: string | null;
+			heroImageUrl: string | null;
+			publishedAt: Date | null;
+			fetchedAt: Date;
+			feedTitle: string;
+			feedFaviconUrl: string | null;
+			isRead: boolean;
+			ftsRank: number;
+		}>
+	> {
 		const ftsQuery = toFtsQuery(query);
 		if (!ftsQuery) {
 			return [];
 		}
 
-		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
 		const decodedCursor = decodeCursor(cursor, 'latest');
-		const cursorSeconds = decodedCursor?.seconds;
 
-		const conditions: SQL[] = [
-			...scopeConditions(scope),
-			sql`${articles.id} IN (SELECT article_id FROM articles_fts WHERE articles_fts MATCH ${ftsQuery})`,
-		];
+		// Use parameterized query to prevent SQL injection
+		// All user input (scope.userId, scope.feedId, scope.categoryId, cursor values) are passed as bound parameters
+		// Parameter order must match SQL placeholders:
+		// 1. ftsQuery (MATCH), 2. ar.user_id (JOIN), 3. f.user_id (WHERE), then feedId/categoryId, then cursor, then limit
+		const params: (string | number)[] = [ftsQuery, scope.userId]; // ftsQuery and ar.user_id first
 
-		if (cursorSeconds != null && decodedCursor) {
-			conditions.push(
-				sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${decodedCursor.id}))`,
-			);
+		// Build scope filter - f.user_id placeholder comes FIRST in WHERE (before categoryId)
+		let scopeFilter = 'f.user_id = ?';
+		params.push(scope.userId); // for f.user_id in WHERE (comes before categoryId in SQL)
+
+		if (scope.feedId) {
+			scopeFilter += ' AND f.id = ?';
+			params.push(scope.feedId);
+		}
+		if (scope.categoryId) {
+			// Include the category and all its descendants
+			scopeFilter += ' AND f.category_id IN (WITH RECURSIVE category_scope(id) AS (SELECT ? UNION ALL SELECT child.parent_category_id FROM categories child INNER JOIN category_scope parent ON child.id = parent.id WHERE child.id != ?) SELECT id FROM category_scope)';
+			params.push(scope.categoryId, scope.categoryId);
 		}
 
-		return this.db
-			.select({
-				id: articles.id,
-				feedId: articles.feedId,
-				title: articles.title,
-				author: articles.author,
-				excerpt: articles.excerpt,
-				heroImageUrl: articles.heroImageUrl,
-				publishedAt: articles.publishedAt,
-				fetchedAt: articles.fetchedAt,
-				feedTitle: feeds.title,
-				feedFaviconUrl: feeds.faviconUrl,
-				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
-			})
-			.from(articles)
-			.innerJoin(feeds, eq(articles.feedId, feeds.id))
-			.leftJoin(
-				articleReads,
-				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, scope.userId)),
-			)
-			.where(and(...conditions))
-			.orderBy(sql`${sortTimestamp} DESC, ${articles.id} DESC`)
-			.limit(limit + 1);
+		// Cursor pagination: results are ordered by fts_rank ASC, sortTimestamp DESC, id DESC
+		// bm25() returns negative values where lower = more relevant
+		// For pagination, we want articles that come AFTER the cursor:
+		// - Either fts_rank > cursorRank (less relevant after more relevant)
+		// - Or fts_rank = cursorRank AND (sortTimestamp < cursorTimestamp OR (sortTimestamp = cursorTimestamp AND id < cursorId))
+		let cursorCondition = '';
+		if (decodedCursor?.ftsRank != null) {
+			const cursorRank = decodedCursor.ftsRank;
+			const cursorSeconds = decodedCursor.seconds;
+			const cursorId = decodedCursor.id;
+			cursorCondition = ` AND (fts.fts_rank > ? OR (fts.fts_rank = ? AND (coalesce(a.published_at, a.fetched_at) < ? OR (coalesce(a.published_at, a.fetched_at) = ? AND a.id < ?))))`;
+			params.push(cursorRank, cursorRank, cursorSeconds, cursorSeconds, cursorId);
+		}
+
+		const sqlQuery = `WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE ` + scopeFilter + cursorCondition + ` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
+
+		// Add limit
+		params.push(limit + 1);
+
+		// Use raw SQLite client for FTS queries with bm25
+		const rawDb = this.rawDb ?? getRawDb();
+		if (!rawDb) {
+			return [];
+		}
+
+		const rows = rawDb.query(sqlQuery).all(...params) as Array<{
+			id: string;
+			feedId: string;
+			title: string | null;
+			author: string | null;
+			excerpt: string | null;
+			heroImageUrl: string | null;
+			publishedAt: Date | null;
+			fetchedAt: Date;
+			feedTitle: string;
+			feedFaviconUrl: string | null;
+			isRead: number | boolean;
+			ftsRank: number;
+		}>;
+
+		// Convert SQLite boolean (0/1) to JS boolean
+		return rows.map((row) => ({
+			...row,
+			isRead: Boolean(row.isRead),
+		}));
 	}
 
 	async insertMedia(data: (typeof articleMedia.$inferInsert)[]) {
@@ -575,15 +689,19 @@ export class ArticleRepository {
 							.returning()
 					: [];
 
+			// Batch insert all media for newly inserted articles (1 query instead of N)
+			const allNewMedia: (typeof articleMedia.$inferInsert)[] = [];
 			for (const article of inserted) {
 				const media = params.mediaByGuid.get(article.guid);
 				if (media && media.length > 0) {
-					await tx
-						.insert(articleMedia)
-						.values(media.map((row) => ({ ...row, articleId: article.id })));
+					allNewMedia.push(...media.map((row) => ({ ...row, articleId: article.id })));
 				}
 			}
+			if (allNewMedia.length > 0) {
+				await tx.insert(articleMedia).values(allNewMedia);
+			}
 
+			// Batch update all articles with new content (1 query instead of N)
 			for (const update of params.articlesToUpdate) {
 				await tx
 					.update(articles)
@@ -595,20 +713,56 @@ export class ArticleRepository {
 						hash: update.hash,
 					})
 					.where(eq(articles.id, update.id));
+			}
 
+			// Collect all replacement media and delete old media in batch
+			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];
+			for (const update of params.articlesToUpdate) {
 				const replacement = params.updatedMediaByArticleId.get(update.id);
-				await tx.delete(articleMedia).where(eq(articleMedia.articleId, update.id));
 				if (replacement && replacement.length > 0) {
-					await tx.insert(articleMedia).values(replacement);
+					allReplacementMedia.push(...replacement);
 				}
+			}
+
+			// Delete old media for all updated articles (1 query instead of N)
+			const articleIdsToUpdate = params.articlesToUpdate.map((u) => u.id);
+			if (articleIdsToUpdate.length > 0) {
+				await tx.delete(articleMedia).where(inArray(articleMedia.articleId, articleIdsToUpdate));
+			}
+
+			// Batch insert all replacement media (1 query instead of N)
+			if (allReplacementMedia.length > 0) {
+				await tx.insert(articleMedia).values(allReplacementMedia);
 			}
 
 			return inserted;
 		});
 	}
 
-	async deleteOlderThan(days: number) {
+	/**
+	 * Delete articles older than the specified number of days that have not been read.
+	 * When dryRun is true, returns the count of articles that would be deleted without
+	 * actually deleting them. This is useful for safely previewing cleanup impact.
+	 */
+	async deleteOlderThan(days: number, dryRun = false) {
 		const cutoff = sql`unixepoch('now', '-' || ${days} || ' days')`;
+
+		// First, count what would be deleted (always runs to provide logging info)
+		const candidates = await this.db
+			.select({ id: articles.id })
+			.from(articles)
+			.where(
+				and(
+					lt(articles.fetchedAt, cutoff),
+					sql`${articles.id} NOT IN (SELECT article_id FROM article_reads)`,
+				),
+			);
+
+		if (dryRun) {
+			return candidates.length;
+		}
+
+		// Only perform actual deletion if not in dry-run mode
 		const result = await this.db
 			.delete(articles)
 			.where(
@@ -619,5 +773,24 @@ export class ArticleRepository {
 			)
 			.returning({ id: articles.id });
 		return result.length;
+	}
+
+	/**
+	 * Count articles that would be deleted by retention cleanup.
+	 * Returns the number of unread articles older than the cutoff date.
+	 * This is always a read-only operation.
+	 */
+	async countOlderThan(days: number) {
+		const cutoff = sql`unixepoch('now', '-' || ${days} || ' days')`;
+		const result = await this.db
+			.select({ count: sql<number>`count(*)` })
+			.from(articles)
+			.where(
+				and(
+					lt(articles.fetchedAt, cutoff),
+					sql`${articles.id} NOT IN (SELECT article_id FROM article_reads)`,
+				),
+			);
+		return result[0]?.count ?? 0;
 	}
 }

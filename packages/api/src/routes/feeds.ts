@@ -24,6 +24,7 @@ export function createFeedRoutes(
 	const routes = new Hono();
 
 	routes.get('/', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-read', RATE_LIMITS.feedsRead);
 		const userId = c.get('userId');
 		const categoryId = new URL(c.req.url).searchParams.get('categoryId');
 		const feeds = categoryId
@@ -149,12 +150,14 @@ export function createFeedRoutes(
 	});
 
 	routes.get('/sync/status', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-read', RATE_LIMITS.feedsRead);
 		const userId = c.get('userId');
 		const status = await syncService.getSyncAllFeedsStatus(userId);
 		return c.json({ data: status });
 	});
 
 	routes.patch('/:feedId', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-mutate', RATE_LIMITS.feedsMutate);
 		const userId = c.get('userId');
 		const feedId = parseUuidParam(c, 'feedId');
 		const body = await parseBody(c, updateFeedSchema);
@@ -163,6 +166,7 @@ export function createFeedRoutes(
 	});
 
 	routes.delete('/:feedId', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-mutate', RATE_LIMITS.feedsMutate);
 		const userId = c.get('userId');
 		const feedId = parseUuidParam(c, 'feedId');
 		await feedService.delete(userId, feedId);

@@ -5,6 +5,7 @@ plugins {
     // KSP for Moshi adapter codegen. See the matching version in
     // packages/android/build.gradle.kts.
     id("com.google.devtools.ksp")
+    id("jacoco")
 }
 
 fun quotedBuildConfigValue(value: String): String =
@@ -34,6 +35,27 @@ val releaseApiBaseUrl = configuredReleaseApiBaseUrl?.let {
     if (it.endsWith("/")) it else "$it/"
 }
 
+// Certificate pinning SHA-256 hashes for the production API domain.
+// Each pin is the Base64-encoded SHA-256 hash of the certificate's SubjectPublicKeyInfo (SPKI).
+// The primary pin should match the current production certificate.
+// The backup pin is for rotation: deploy the new certificate with its pin as backup,
+// then after rollout make the new pin primary. Keep at least one backup pin at all times.
+//
+// To obtain pins for your certificate:
+//   openssl s_client -connect your-domain.com:443 </dev/null | openssl x509 -pubkey -noout | \
+//     openssl dgst -sha256 -binary | openssl enc -base64
+//
+// For intermediate CA certificates, also pin those if your server doesn't send the full chain.
+val releaseCertificatePins = listOf(
+    // TODO: Replace with your actual production certificate SHA-256 pin(s)
+    // Example: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+)
+
+val releaseBackupCertificatePins = listOf(
+    // TODO: Replace with your actual backup certificate SHA-256 pin(s) for rotation
+    // Example: "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+)
+
 android {
     namespace = "com.selffeed.android"
     compileSdk = 37
@@ -51,9 +73,10 @@ android {
         }
 
         // Debug builds target the host machine's local API from the Android
-        // emulator. Release overrides this below and requires an explicit
-        // HTTPS endpoint.
+        // emulator. Certificate pinning is disabled in debug builds.
         buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3000/api/v1/\"")
+        buildConfigField("String", "CERTIFICATE_PINS", "\"\"")
+        buildConfigField("String", "BACKUP_CERTIFICATE_PINS", "\"\"")
     }
 
     buildTypes {
@@ -68,6 +91,16 @@ android {
                 "String",
                 "API_BASE_URL",
                 quotedBuildConfigValue(releaseApiBaseUrl ?: "https://example.invalid/api/v1/"),
+            )
+            buildConfigField(
+                "String",
+                "CERTIFICATE_PINS",
+                quotedBuildConfigValue(releaseCertificatePins.joinToString("|")),
+            )
+            buildConfigField(
+                "String",
+                "BACKUP_CERTIFICATE_PINS",
+                quotedBuildConfigValue(releaseBackupCertificatePins.joinToString("|")),
             )
         }
         debug {
@@ -103,6 +136,41 @@ android {
 
     lint {
         disable += "MutableCollectionMutableState"
+    }
+}
+
+jacoco {
+    toolVersion = "0.8.12"
+}
+
+tasks.withType<JacocoReport>().configureEach {
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.map {
+            fileTree(it) {
+                exclude(
+                    "**/R.class",
+                    "**/R$*.class",
+                    "**/BuildConfig.*",
+                    "**/Manifest*.*",
+                    "**/*Test*.*",
+                    "**/Hilt_*.*",
+                    "**/hilt_*.*",
+                    "**/*_HiltModules*.*",
+                    "**/*_MembersInjector*.*",
+                    "**/*_Factory*.*",
+                    "**/*_Provide*Factory*.*",
+                    "**/dagger/**",
+                    "**/kotlinx/**",
+                    "**/com/google/**",
+                )
+            }
+        }))
+    }
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        lcov.required.set(true)
     }
 }
 

@@ -1,6 +1,7 @@
 import type { ReadStateSyncEvent } from '@self-feed/shared';
 import type Redis from 'ioredis';
 import { createLogger } from '../utils/logger.js';
+import { getMetricsService } from './metrics.service.js';
 
 type ReadStateEventHandler = (event: ReadStateSyncEvent) => void;
 
@@ -65,6 +66,10 @@ export class RealtimeService {
 		}
 
 		handlers.add(handler);
+
+		// Track SSE connection count
+		getMetricsService().incrementSseConnections();
+
 		if (firstSubscriberForChannel) {
 			await this.subscriber?.subscribe(channel);
 		}
@@ -145,6 +150,10 @@ export class RealtimeService {
 		}
 
 		handlers.delete(handler);
+
+		// Track SSE connection count
+		getMetricsService().decrementSseConnections();
+
 		if (handlers.size > 0) {
 			return;
 		}
@@ -157,5 +166,16 @@ export class RealtimeService {
 			this.subscriber = null;
 			await subscriber.quit().catch(() => undefined);
 		}
+	}
+
+	/**
+	 * Get the current active SSE connection count.
+	 */
+	getConnectionCount(): number {
+		let total = 0;
+		for (const handlers of this.handlersByChannel.values()) {
+			total += handlers.size;
+		}
+		return total;
 	}
 }

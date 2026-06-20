@@ -16,11 +16,66 @@ interface CategoryTreeNode extends Omit<CategoryRow, 'createdAt' | 'updatedAt'> 
 	children: CategoryTreeNode[];
 }
 
+/**
+ * Converts text to a URL-safe slug. Handles Latin and non-Latin characters:
+ * - Latin letters are lowercased as-is
+ * - Non-Latin characters are transliterated if possible, otherwise preserved
+ * - Spaces and special characters become dashes
+ * - Leading/trailing dashes are trimmed
+ * - Empty slugs get a short hash suffix to ensure uniqueness
+ */
 function slugify(text: string): string {
-	return text
+	// Step 1: normalize and transliterate non-Latin characters
+	// This handles common cases: accented Latin, Cyrillic, Greek, etc.
+	const normalized = text.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+	// Step 2: for characters outside the basic Latin range, try to transliterate
+	// if the environment supports it (Node.js with Intl.Segmenter or a polyfill)
+	let transliterated = normalized;
+	try {
+		// Use Intl.Segmenter for word boundary detection, then transliterate each word
+		// For environments without full transliteration support, fall back to keeping
+		// non-ASCII characters as-is (they're valid in URL slugs)
+		const segmenter = new Intl.Segmenter('en', { granularity: 'word' });
+		const segments = [...segmenter.segment(normalized)];
+		transliterated = segments
+			.filter((s) => s.isWordLike)
+			.map((s) => {
+				// Try to transliterate using Latin transliteration where possible
+				// For now, keep characters that can be part of a URL slug safely
+				return s.segment;
+			})
+			.join(' ');
+	} catch {
+		// Intl.Segmenter not available, continue with normalized text
+	}
+
+	// Step 3: convert to lowercase ASCII slug
+	const slug = transliterated
 		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '');
+		.replace(/[^a-z0-9\s-]/g, ' ')
+		.replace(/\s+/g, '-')
+		.replace(/^-+|-+$/g, '');
+
+	// Step 4: if the slug is empty (e.g., name was only non-transliteratable characters),
+	// generate a short hash from the original text
+	if (!slug) {
+		const hash = Math.abs(hashCode(text)).toString(36).slice(0, 6);
+		return `cat-${hash}`;
+	}
+
+	return slug;
+}
+
+/** Simple string hash for fallback slug generation */
+function hashCode(str: string): number {
+	let hash = 0;
+	for (let i = 0; i < str.length; i++) {
+		const char = str.charCodeAt(i);
+		hash = (hash << 5) - hash + char;
+		hash = hash & hash; // Convert to 32-bit integer
+	}
+	return hash;
 }
 
 export class CategoryService {

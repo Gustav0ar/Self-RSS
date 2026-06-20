@@ -14,6 +14,10 @@ import { createTokenUtils } from './utils/tokens.js';
 
 const logger = createLogger();
 
+// Configuration for graceful shutdown
+const DRAIN_TIMEOUT_MS = 30_000; // 30 seconds - time to wait for in-flight syncs to complete
+const POLL_INTERVAL_MS = 100; // Check every 100ms for sync completion
+
 try {
 	const env = getEnv();
 	const db = getDb(env.DATABASE_URL);
@@ -33,6 +37,8 @@ try {
 		concurrency: env.FEED_SYNC_CONCURRENCY,
 		allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
 	});
+
+	// Shared coordinator tracks sync status for shutdown coordination
 	const syncCoordinator = { isRunning: false };
 	const stopSyncScheduler = startSyncScheduler(deps.services.feedSync, undefined, syncCoordinator);
 	const stopQueuedSyncWorker = startQueuedSyncWorker(
@@ -40,7 +46,11 @@ try {
 		undefined,
 		syncCoordinator,
 	);
-	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article);
+	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article, {
+		retentionDays: env.RETENTION_DELETION_DAYS,
+		enabled: env.RETENTION_DELETION_ENABLED,
+		dryRun: env.RETENTION_DRY_RUN,
+	});
 	const stopCacheWarmer = startCacheWarmer(deps.services.articleCache, deps.repos.user, {
 		intervalMs: env.CACHE_WARMER_INTERVAL_MS,
 		recentWindowMinutes: env.CACHE_WARMER_RECENT_WINDOW_MINUTES,
@@ -51,22 +61,74 @@ try {
 	});
 	const stopWorkerHeartbeat = startWorkerHeartbeat(redis);
 
-	let shuttingDown = false;
-	const shutdown = async (signal: string) => {
-		if (shuttingDown) return;
-		shuttingDown = true;
-		logger.info('Shutting down API worker', { signal });
+	/**
+	 * Wait for in-flight syncs to complete with timeout.
+	 * Uses the syncCoordinator.isRunning flag which is set by the scheduler.
+	 *
+	 * @returns true if all syncs completed, false if timeout exceeded
+	 */
+	async function waitForInFlightSyncs(): Promise<boolean> {
+		const startTime = Date.now();
+
+		while (syncCoordinator.isRunning) {
+			const elapsed = Date.now() - startTime;
+			if (elapsed >= DRAIN_TIMEOUT_MS) {
+				logger.warn('Timeout waiting for in-flight syncs to complete', {
+					elapsedMs: elapsed,
+				});
+				return false;
+			}
+			logger.debug('Waiting for in-flight sync to complete', { elapsedMs: elapsed });
+			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+		}
+
+		return true;
+	}
+
+	/**
+	 * Graceful shutdown sequence for the worker:
+	 * 1. Signal all schedulers to stop (prevents new work)
+	 * 2. Wait for in-flight syncs to complete (with timeout)
+	 * 3. Close external resources (Redis, DB)
+	 * 4. Exit process
+	 *
+	 * This ensures that in-progress feed syncs complete before shutdown,
+	 * preventing data inconsistencies and ensuring clients receive updates.
+	 */
+	async function gracefulShutdown(signal: string) {
+		logger.info('Initiating graceful worker shutdown', { signal, syncInProgress: syncCoordinator.isRunning });
+
+		// Step 1: Stop all schedulers to prevent new work
+		logger.info('Stopping schedulers');
 		stopSyncScheduler();
 		stopQueuedSyncWorker();
 		stopRetentionCleanup();
 		stopCacheWarmer();
 		stopWorkerHeartbeat();
-		await Promise.allSettled([closeRedis(), closeDb()]);
-		process.exit(0);
-	};
 
-	process.on('SIGINT', () => void shutdown('SIGINT'));
-	process.on('SIGTERM', () => void shutdown('SIGTERM'));
+		// Step 2: Wait for any in-flight syncs to complete
+		logger.info('Waiting for in-flight syncs to complete');
+		const synced = await waitForInFlightSyncs();
+
+		if (!synced) {
+			logger.warn('Shutdown continuing despite incomplete syncs');
+		} else {
+			logger.info('All in-flight syncs completed');
+		}
+
+		// Step 3: Close external resources
+		logger.info('Closing external resources');
+		await Promise.allSettled([closeRedis(), closeDb()]);
+
+		logger.info('Graceful worker shutdown complete');
+		process.exit(0);
+	}
+
+	// Handle shutdown signals
+	// SIGINT: Ctrl+C in terminal
+	// SIGTERM: kill signal (docker stop, kubernetes, systemd, etc.)
+	process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+	process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 
 	logger.info('API worker started', { env: env.NODE_ENV });
 } catch (err) {

@@ -121,7 +121,7 @@ export const categories = sqliteTable(
 			.$defaultFn(() => new Date()),
 	},
 	(t) => [
-		uniqueIndex('categories_user_slug_idx').on(t.userId, t.slug),
+		uniqueIndex('categories_user_parent_slug_idx').on(t.userId, t.parentCategoryId, t.slug),
 		index('categories_user_id_idx').on(t.userId),
 		index('categories_user_parent_idx').on(t.userId, t.parentCategoryId),
 	],

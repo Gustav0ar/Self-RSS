@@ -1,6 +1,8 @@
 import type { ReadStateSyncEvent } from '@self-feed/shared';
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import type { RealtimeService } from '../services/realtime.service.js';
+import { sseRegistry } from '../utils/sse-registry.js';
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
@@ -18,6 +20,14 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 		let cleanup: (() => void) | null = null;
 		let heartbeat: ReturnType<typeof setInterval> | null = null;
 		let closed = false;
+
+		// Register this SSE connection for graceful shutdown tracking
+		const connectionId = randomUUID();
+		const unregister = sseRegistry.register({
+			id: connectionId,
+			startedAt: Date.now(),
+			userId,
+		});
 
 		const stream = new ReadableStream({
 			async start(controller) {
@@ -37,6 +47,8 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 					}
 					cleanup?.();
 					cleanup = null;
+					// Unregister from the connection registry
+					unregister();
 					try {
 						controller.close();
 					} catch {
@@ -69,6 +81,8 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 				}
 				cleanup?.();
 				cleanup = null;
+				// Unregister from the connection registry
+				unregister();
 			},
 		});
 

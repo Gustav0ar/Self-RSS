@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sanitizeArticleHtml } from '../../src/lib/sanitize-article';
 
 describe('sanitizeArticleHtml', () => {
@@ -6,6 +6,34 @@ describe('sanitizeArticleHtml', () => {
 		expect(sanitizeArticleHtml(null)).toBe('');
 		expect(sanitizeArticleHtml(undefined)).toBe('');
 		expect(sanitizeArticleHtml('')).toBe('');
+	});
+
+	it('returns empty string (not raw content) when sanitizer throws', async () => {
+		// Mock the sanitizer module to throw when sanitize() is called.
+		// This verifies that raw (potentially unsafe) HTML is NEVER
+		// returned — the error handler must return safe content.
+
+		// Reset the cached purify instance so our mock is picked up.
+		vi.resetModules();
+
+		const sanitizeSpy = vi.fn(() => {
+			throw new Error('sanitizer unavailable');
+		});
+		vi.doMock('dompurify', () => ({
+			default: vi.fn(() => ({ sanitize: sanitizeSpy })),
+		}));
+
+		// Re-import to pick up the mocked module.
+		const mod = await import('../../src/lib/sanitize-article');
+		// Reset the internal cache so getPurify() calls our mock.
+		(mod as unknown as { cachedPurify: unknown }).cachedPurify = null;
+
+		const dirty = '<script>alert("xss")</script><p>safe content</p>';
+		const result = mod.sanitizeArticleHtml(dirty);
+
+		expect(result).toBe('');
+		expect(result).not.toContain('<script>');
+		expect(result).not.toContain('alert');
 	});
 
 	it('strips <script> tags', () => {

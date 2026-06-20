@@ -23,7 +23,10 @@ export class UserRepository {
 				role: data.role ?? 'user',
 			})
 			.returning();
-		return user!;
+		if (!user) {
+			throw new Error('Failed to create user');
+		}
+		return user;
 	}
 
 	async createWithPreferences(data: { email: string; passwordHash: string; role?: string }) {
@@ -36,8 +39,11 @@ export class UserRepository {
 					role: data.role ?? 'user',
 				})
 				.returning();
-			await tx.insert(userPreferences).values({ userId: user!.id });
-			return user!;
+			if (!user) {
+				throw new Error('Failed to create user');
+			}
+			await tx.insert(userPreferences).values({ userId: user.id });
+			return user;
 		});
 	}
 
@@ -63,15 +69,21 @@ export class UserRepository {
 					role: isBootstrapAdmin ? 'admin' : 'user',
 				})
 				.returning();
-			await tx.insert(userPreferences).values({ userId: user!.id });
+			if (!user) {
+				throw new Error('Failed to create user');
+			}
+			await tx.insert(userPreferences).values({ userId: user.id });
 
-			return { user: user!, isBootstrapAdmin };
+			return { user, isBootstrapAdmin };
 		});
 	}
 
 	async createPreferences(userId: string) {
 		const [prefs] = await this.db.insert(userPreferences).values({ userId }).returning();
-		return prefs!;
+		if (!prefs) {
+			throw new Error('Failed to create user preferences');
+		}
+		return prefs;
 	}
 
 	async getPreferences(userId: string) {

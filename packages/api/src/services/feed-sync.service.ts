@@ -9,6 +9,7 @@ import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
+import { fetchWithRetry } from '../utils/retry.js';
 import {
 	extractArticleContentFromPage,
 	extractExcerpt,
@@ -486,8 +487,16 @@ export class FeedSyncService {
 							newArticles += result.newArticles;
 						}
 					}
-				} catch {
+				} catch (err) {
 					failedFeeds += 1;
+					const error = err instanceof Error ? err : new Error(String(err));
+					logger.error('Feed sync failed during bulk sync', {
+						operation: 'bulkFeedSync',
+						feedId: feed.id,
+						userId,
+						error: error.message,
+						stack: error.stack,
+					});
 				}
 			}
 		};
@@ -723,13 +732,18 @@ export class FeedSyncService {
 				if (lastMod) headers['If-Modified-Since'] = lastMod;
 			}
 
-			const response = await fetchWithValidatedRedirects(
-				feedUrl,
-				{
-					signal: controller.signal,
-					headers,
-				},
-				{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+			const response = await fetchWithRetry(
+				() =>
+					fetchWithValidatedRedirects(
+						feedUrl,
+						{
+							signal: controller.signal,
+							headers,
+						},
+						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+					),
+				{ maxRetries: 3 },
+				{ operation: 'fetchAndParse', feedUrl },
 			);
 
 			if (response.status === 304) {

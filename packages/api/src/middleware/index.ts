@@ -5,4 +5,5 @@ export {
 	requestLogger,
 	securityHeaders,
 } from './common.js';
+export { httpMetricsMiddleware } from './metrics.js';
 export { AppError } from './errors.js';

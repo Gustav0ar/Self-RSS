@@ -96,6 +96,9 @@ ALLOW_REGISTRATION=true
 ADMIN_EMAIL=you@example.com
 ADMIN_PASSWORD=<strong-password>
 TRUSTED_PROXY_HOPS=1
+RETENTION_DELETION_ENABLED=false
+RETENTION_DELETION_DAYS=90
+RETENTION_DRY_RUN=true
 EOF'
 sudo chmod 600 /mnt/storage/containers/selfrss/.env
 
@@ -187,3 +190,49 @@ in the error.
   environment variables, environment name (when restricted), or
   approval history.
 - **You (and any collaborators you add)** see everything.
+
+## Retention Cleanup Configuration
+
+Articles that have not been read by any user are eligible for automatic
+cleanup to manage database size. This feature is **disabled by default**
+for safety.
+
+| Variable                   | Default | Description                                      |
+| -------------------------- | ------- | ------------------------------------------------ |
+| `RETENTION_DELETION_ENABLED` | `false` | Set to `true` to enable actual deletion         |
+| `RETENTION_DELETION_DAYS`    | `90`    | Delete unread articles older than this many days |
+| `RETENTION_DRY_RUN`          | `true`  | Log what would be deleted without deleting       |
+
+### Safety Features
+
+1. **Opt-in required**: Deletion is disabled by default. Even if
+   `RETENTION_DELETION_ENABLED` is not set, no articles are deleted.
+
+2. **Dry-run mode**: `RETENTION_DRY_RUN=true` (the default) logs how
+   many articles would be deleted without actually deleting them. Use
+   this to verify the cleanup behavior before enabling live deletion.
+
+3. **Read protection**: Only articles that have **never been read** by
+   any user are eligible for cleanup. An article that has been read
+   even once is protected regardless of age.
+
+### Enabling Retention Cleanup
+
+```bash
+# 1. First, enable dry-run mode to preview what would be deleted
+RETENTION_DELETION_ENABLED=false
+RETENTION_DRY_RUN=true
+# Check logs for "Retention cleanup: would delete N articles"
+
+# 2. Once satisfied with the preview, enable live deletion
+RETENTION_DELETION_ENABLED=true
+RETENTION_DRY_RUN=false
+```
+
+### Recommended Production Settings
+
+```bash
+RETENTION_DELETION_ENABLED=true
+RETENTION_DELETION_DAYS=90
+RETENTION_DRY_RUN=false
+```

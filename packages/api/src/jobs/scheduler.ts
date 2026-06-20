@@ -30,8 +30,12 @@ export function startSyncScheduler(
 				logger.info('Sync cycle complete', result);
 			}
 		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
 			logger.error('Sync scheduler error', {
-				error: err instanceof Error ? err.message : String(err),
+				operation: 'syncScheduler',
+				timestamp: new Date().toISOString(),
+				error: error.message,
+				stack: error.stack,
 			});
 		} finally {
 			coordinator.isRunning = false;
@@ -57,8 +61,12 @@ export function startQueuedSyncWorker(
 		try {
 			await syncService.processNextQueuedSyncAllFeeds();
 		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
 			logger.error('Queued feed sync worker error', {
-				error: err instanceof Error ? err.message : String(err),
+				operation: 'queuedSyncWorker',
+				timestamp: new Date().toISOString(),
+				error: error.message,
+				stack: error.stack,
 			});
 		} finally {
 			coordinator.isRunning = false;
@@ -73,12 +81,66 @@ export function startQueuedSyncWorker(
 	return () => clearInterval(interval);
 }
 
+export interface RetentionCleanupOptions {
+	retentionDays: number;
+	enabled: boolean;
+	dryRun: boolean;
+	intervalMs?: number;
+}
+
+/**
+ * Start the retention cleanup scheduler.
+ *
+ * SAFETY: Deletion is DISABLED by default. To enable it, you MUST set
+ * RETENTION_DELETION_ENABLED=true in your environment. This prevents accidental
+ * data loss during deployment or configuration errors.
+ *
+ * @param articleRepo - The article repository instance
+ * @param options - Configuration options (defaults from env if not provided)
+ * @returns Cleanup function to stop the scheduler
+ */
 export function startRetentionCleanup(
 	articleRepo: ArticleRepository,
-	retentionDays = 90,
-	intervalMs: number = 24 * 60 * 60 * 1000,
+	optionsOrIntervalMs?: RetentionCleanupOptions | number,
 ) {
-	logger.info('Retention cleanup scheduled', { retentionDays, intervalMs });
+	// Parse options (supports both object and legacy number for backward compatibility)
+	const options: RetentionCleanupOptions =
+		typeof optionsOrIntervalMs === 'number'
+			? {
+					retentionDays: optionsOrIntervalMs,
+					enabled: true, // Legacy behavior assumed intentional when called with number
+					dryRun: false,
+					intervalMs: 24 * 60 * 60 * 1000,
+				}
+			: {
+					retentionDays: optionsOrIntervalMs?.retentionDays ?? 90,
+					enabled: optionsOrIntervalMs?.enabled ?? false,
+					dryRun: optionsOrIntervalMs?.dryRun ?? false,
+					intervalMs: optionsOrIntervalMs?.intervalMs ?? 24 * 60 * 60 * 1000,
+				};
+
+	const mode = options.enabled
+		? options.dryRun
+			? 'DRY-RUN (no deletions will occur)'
+			: 'ENABLED (deletions will occur)'
+		: 'DISABLED (no deletions will occur)';
+
+	logger.info('Retention cleanup scheduled', {
+		retentionDays: options.retentionDays,
+		mode,
+		intervalMs: options.intervalMs,
+	});
+
+	// If deletion is disabled, log a warning to make the safe default obvious
+	if (!options.enabled) {
+		logger.warn(
+			'RETENTION CLEANUP IS DISABLED - No articles will be deleted. ' +
+				'To enable, set RETENTION_DELETION_ENABLED=true',
+		);
+	} else if (options.dryRun) {
+		logger.info('Retention cleanup running in DRY-RUN mode - no articles will be deleted');
+	}
+
 	let isRunning = false;
 
 	const interval = setInterval(async () => {
@@ -86,20 +148,38 @@ export function startRetentionCleanup(
 			logger.warn('Skipping retention cleanup because the previous run is still active');
 			return;
 		}
+
+		// Safety check: don't run if deletion is not enabled
+		if (!options.enabled) {
+			return;
+		}
+
 		isRunning = true;
 		try {
-			const deleted = await articleRepo.deleteOlderThan(retentionDays);
+			const deleted = await articleRepo.deleteOlderThan(options.retentionDays, options.dryRun);
 			if (deleted > 0) {
-				logger.info('Retention cleanup', { deleted, retentionDays });
+				const action = options.dryRun ? 'DRY-RUN complete' : 'Retention cleanup';
+				logger.info(action, { wouldDelete: deleted, retentionDays: options.retentionDays });
+			} else {
+				logger.debug('Retention cleanup: no articles to delete', {
+					retentionDays: options.retentionDays,
+					mode: options.dryRun ? 'DRY-RUN' : 'LIVE',
+				});
 			}
 		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
 			logger.error('Retention cleanup error', {
-				error: err instanceof Error ? err.message : String(err),
+				operation: 'retentionCleanup',
+				timestamp: new Date().toISOString(),
+				retentionDays: options.retentionDays,
+				dryRun: options.dryRun,
+				error: error.message,
+				stack: error.stack,
 			});
 		} finally {
 			isRunning = false;
 		}
-	}, intervalMs);
+	}, options.intervalMs);
 
 	return () => clearInterval(interval);
 }
@@ -174,8 +254,15 @@ export function startCacheWarmer(
 			await warmUsers(recentUserIds, 'recent');
 			await warmUsers(idleUsers, 'idle');
 		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
 			logger.error('Cache warmer error', {
-				error: err instanceof Error ? err.message : String(err),
+				operation: 'cacheWarmer',
+				timestamp: new Date().toISOString(),
+				recentWindowMinutes,
+				recentUsersLimit,
+				includeIdleUsers,
+				error: error.message,
+				stack: error.stack,
 			});
 		} finally {
 			isRunning = false;

@@ -45,6 +45,9 @@ const rawEnvSchema = z
 		CACHE_WARMER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
 		CACHE_WARMER_IDLE_USERS_ENABLED: booleanCoercible.default(false),
 		CACHE_WARMER_IDLE_USERS_LIMIT: z.coerce.number().int().min(1).max(1000).default(25),
+		RETENTION_DELETION_ENABLED: booleanCoercible.default(false),
+		RETENTION_DELETION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+		RETENTION_DRY_RUN: booleanCoercible.default(true),
 	})
 	.superRefine((env, ctx) => {
 		if (env.JWT_SECRET === env.JWT_REFRESH_SECRET) {

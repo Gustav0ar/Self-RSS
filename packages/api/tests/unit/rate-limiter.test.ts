@@ -123,6 +123,21 @@ describe('RATE_LIMITS', () => {
 		expect(RATE_LIMITS.feedSync).toEqual({ windowMs: 60_000, maxRequests: 60 });
 		expect(RATE_LIMITS.articleEnrich).toEqual({ windowMs: 60_000, maxRequests: 120 });
 	});
+
+	it('exposes read-heavy endpoint limits at 100/min', () => {
+		expect(RATE_LIMITS.articlesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.categoriesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.preferencesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.statsRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.feedsRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+	});
+
+	it('exposes mutation endpoint limits at 30/min', () => {
+		expect(RATE_LIMITS.articlesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
+		expect(RATE_LIMITS.categoriesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
+		expect(RATE_LIMITS.preferencesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
+		expect(RATE_LIMITS.feedsMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
+	});
 });
 
 describe('enforceRateLimit', () => {

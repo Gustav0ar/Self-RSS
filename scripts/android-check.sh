@@ -18,4 +18,8 @@ bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:lintDebug
 echo "[android-check] Assembling Android debug build..."
 bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleDebug
 
+echo "[android-check] Assembling Android release build..."
+SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ \
+  bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleRelease
+
 echo "[android-check] ✅ All Android checks passed."

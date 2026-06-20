@@ -132,4 +132,66 @@ describe('getEnv', () => {
 			/Admin email must not use the default example value in production/,
 		);
 	});
+
+	describe('retention cleanup configuration', () => {
+		it('defaults to disabled (RETENTION_DELETION_ENABLED=false)', () => {
+			applyEnv({});
+			expect(getEnv().RETENTION_DELETION_ENABLED).toBe(false);
+		});
+
+		it('defaults to 90 days retention', () => {
+			applyEnv({});
+			expect(getEnv().RETENTION_DELETION_DAYS).toBe(90);
+		});
+
+		it('defaults to dry-run mode enabled', () => {
+			applyEnv({});
+			expect(getEnv().RETENTION_DRY_RUN).toBe(true);
+		});
+
+		it('parses RETENTION_DELETION_ENABLED=true', () => {
+			applyEnv({ RETENTION_DELETION_ENABLED: 'true' });
+			expect(getEnv().RETENTION_DELETION_ENABLED).toBe(true);
+		});
+
+		it('parses RETENTION_DELETION_ENABLED=false', () => {
+			applyEnv({ RETENTION_DELETION_ENABLED: 'false' });
+			expect(getEnv().RETENTION_DELETION_ENABLED).toBe(false);
+		});
+
+		it('parses custom RETENTION_DELETION_DAYS', () => {
+			applyEnv({ RETENTION_DELETION_DAYS: '30' });
+			expect(getEnv().RETENTION_DELETION_DAYS).toBe(30);
+		});
+
+		it('rejects RETENTION_DELETION_DAYS less than 1', () => {
+			applyEnv({ RETENTION_DELETION_DAYS: '0' });
+			expect(() => getEnv()).toThrowError();
+		});
+
+		it('rejects RETENTION_DELETION_DAYS greater than 3650', () => {
+			applyEnv({ RETENTION_DELETION_DAYS: '5000' });
+			expect(() => getEnv()).toThrowError();
+		});
+
+		it('parses RETENTION_DRY_RUN=true', () => {
+			applyEnv({ RETENTION_DRY_RUN: 'true' });
+			expect(getEnv().RETENTION_DRY_RUN).toBe(true);
+		});
+
+		it('parses RETENTION_DRY_RUN=false', () => {
+			applyEnv({ RETENTION_DRY_RUN: 'false' });
+			expect(getEnv().RETENTION_DRY_RUN).toBe(false);
+		});
+
+		it('parses numeric 1 as true for RETENTION_DELETION_ENABLED', () => {
+			applyEnv({ RETENTION_DELETION_ENABLED: '1' });
+			expect(getEnv().RETENTION_DELETION_ENABLED).toBe(true);
+		});
+
+		it('parses numeric 0 as false for RETENTION_DELETION_ENABLED', () => {
+			applyEnv({ RETENTION_DELETION_ENABLED: '0' });
+			expect(getEnv().RETENTION_DELETION_ENABLED).toBe(false);
+		});
+	});
 });

@@ -14,6 +14,8 @@ import {
 	Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { SidebarErrorFallback } from '@/components/error-fallbacks';
 import { CategoryDialog } from '@/components/management/category-dialog';
 import { ConfirmDialog } from '@/components/management/confirm-dialog';
 import { FeedDialog } from '@/components/management/feed-dialog';
@@ -76,7 +78,7 @@ function saveExpandedToStorage(categories: Set<string>, uncategorized: boolean) 
 	}
 }
 
-export function Sidebar({
+function SidebarContent({
 	selectedFeedId,
 	selectedCategoryId,
 	onSelectAll,
@@ -471,6 +473,14 @@ export function Sidebar({
 				/>
 			) : null}
 		</>
+	);
+}
+
+export function Sidebar(props: SidebarProps) {
+	return (
+		<ErrorBoundary fallback={SidebarErrorFallback}>
+			<SidebarContent {...props} />
+		</ErrorBoundary>
 	);
 }
 

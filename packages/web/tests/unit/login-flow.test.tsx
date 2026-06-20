@@ -29,7 +29,7 @@ describe('LoginPage - login flow', () => {
 		render(<LoginPage />);
 
 		await waitFor(() => {
-			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status');
+			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status', expect.any(Object));
 		});
 
 		fireEvent.change(screen.getByLabelText('Email'), {

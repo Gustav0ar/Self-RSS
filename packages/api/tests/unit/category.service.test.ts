@@ -197,6 +197,29 @@ describe('CategoryService - create', () => {
 			sortOrder: 4,
 		});
 	});
+
+	it('allows the same slug name under different parent categories', async () => {
+		// This tests that the slugify function produces the same slug,
+		// but the uniqueness constraint is now (userId, parentId, slug)
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'parent-1' })),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'News', slug: 'news' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', {
+			name: 'News',
+			parentCategoryId: 'parent-1',
+		});
+
+		// The slug should be 'news' - the same as a hypothetical "Work/News" category
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				name: 'News',
+				slug: 'news',
+			}),
+		);
+	});
 });
 
 describe('CategoryService - update', () => {
@@ -366,5 +389,202 @@ describe('CategoryService - delete', () => {
 
 		await service.delete('user-1', 'cat-1');
 		expect(categoryRepo.delete).toHaveBeenCalledWith('cat-1', 'user-1');
+	});
+});
+
+describe('CategoryService - slugify', () => {
+	it('handles Latin names correctly', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Engineering', slug: 'engineering' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'Engineering' });
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ slug: 'engineering' }),
+		);
+	});
+
+	it('handles accented Latin characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Curriculum', slug: 'curriculum' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'Currículum' });
+
+		// NFD normalization + diacritic removal produces "Curriculum"
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ slug: 'curriculum' }),
+		);
+	});
+
+	it('generates non-empty slug for non-Latin names', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'Техника' }); // Russian: "Technology"
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for Chinese characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: '新闻' }); // Chinese: "News"
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for Japanese characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'テクノロジー' }); // Katakana: "Technology"
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for Korean characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: '새새' }); // Korean: "New news"
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for Arabic characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'أخبار' }); // Arabic: "News"
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for emoji-only names', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: '📰️' }); // RSS emoji
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				slug: expect.stringMatching(/^cat-[a-z0-9]+$/),
+			}),
+		);
+	});
+
+	it('generates non-empty slug for numbers-only names', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+				id: 'new',
+				name: data.name,
+				slug: data.slug,
+			})),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: '12345' });
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ slug: '12345' }),
+		);
+	});
+
+	it('trims leading and trailing dashes', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Test', slug: 'test' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: '  Test  ' });
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ slug: 'test' }),
+		);
+	});
+
+	it('handles names with special characters', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Tech Blog', slug: 'tech-blog' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'Tech Blog!' });
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ slug: 'tech-blog' }),
+		);
 	});
 });

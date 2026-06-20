@@ -29,6 +29,10 @@ export function getDb(databaseUrl?: string) {
 	return dbInstance;
 }
 
+export function getRawDb(): BunDatabase | null {
+	return sqliteClient;
+}
+
 export async function closeDb() {
 	if (sqliteClient) {
 		sqliteClient.close();

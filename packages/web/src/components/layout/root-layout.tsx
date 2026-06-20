@@ -2,6 +2,7 @@ import { Outlet, useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { KeyboardHelp } from '@/components/help/keyboard-help';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import {
@@ -84,7 +85,9 @@ export function RootLayout() {
 						}}
 					/>
 					<main className="surface-card surface-quiet motion-enter min-h-0 flex-1 overflow-hidden rounded-2xl">
-						<Outlet />
+						<ErrorBoundary>
+							<Outlet />
+						</ErrorBoundary>
 					</main>
 				</div>
 			</div>

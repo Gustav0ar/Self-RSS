@@ -28,7 +28,7 @@ describe('LoginPage registration availability', () => {
 		render(<LoginPage />);
 
 		await waitFor(() => {
-			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status');
+			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status', expect.any(Object));
 		});
 
 		expect(screen.queryByRole('button', { name: 'Register' })).toBeNull();
@@ -41,7 +41,7 @@ describe('LoginPage registration availability', () => {
 		render(<LoginPage />);
 
 		await waitFor(() => {
-			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status');
+			expect(apiFetchMock).toHaveBeenCalledWith('/auth/registration-status', expect.any(Object));
 		});
 
 		expect(screen.queryByRole('button', { name: 'Register' })).toBeNull();
