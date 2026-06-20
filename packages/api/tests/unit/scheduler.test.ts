@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	startCacheWarmer,
 	startQueuedSyncWorker,
@@ -81,7 +81,9 @@ describe('scheduler error handling', () => {
 	describe('startQueuedSyncWorker', () => {
 		it('logs errors when processNextQueuedSyncAllFeeds throws', async () => {
 			const syncService = {
-				processNextQueuedSyncAllFeeds: vi.fn().mockRejectedValue(new Error('Queue processing error')),
+				processNextQueuedSyncAllFeeds: vi
+					.fn()
+					.mockRejectedValue(new Error('Queue processing error')),
 			};
 
 			const stop = startQueuedSyncWorker(syncService as never, 100);

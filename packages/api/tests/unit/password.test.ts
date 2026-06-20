@@ -63,7 +63,10 @@ describe('password utilities', () => {
 
 		it('returns false for malformed hash format (scrypt format)', async () => {
 			// Test with a properly formatted but invalid scrypt hash
-			const isValid = await verifyPassword('password', 'scrypt$notavalidhash$0000000000000000000000000000000000000000000000000000000000000000');
+			const isValid = await verifyPassword(
+				'password',
+				'scrypt$notavalidhash$0000000000000000000000000000000000000000000000000000000000000000',
+			);
 			expect(isValid).toBe(false);
 		});
 
@@ -78,7 +81,7 @@ describe('password utilities', () => {
 		});
 
 		it('handles password with special characters', async () => {
-			const password = "p@$$w0rd!#%^&*()_+-=[]{}|;':\",./<>?";
+			const password = 'p@$$w0rd!#%^&*()_+-=[]{}|;\':",./<>?';
 			const hash = await hashPassword(password);
 			const isValid = await verifyPassword(password, hash);
 			expect(isValid).toBe(true);

@@ -3,7 +3,12 @@ import { AppError } from '../../src/middleware/errors.js';
 import { CategoryService } from '../../src/services/category.service.js';
 
 function buildCategory(
-	overrides: Partial<{ id: string; parentCategoryId: string | null; name: string }> = {},
+	overrides: Partial<{
+		id: string;
+		parentCategoryId: string | null;
+		name: string;
+		slug: string;
+	}> = {},
 ) {
 	return {
 		id: 'cat-1',
@@ -179,6 +184,7 @@ describe('CategoryService - create', () => {
 	it('creates the category with a slug and stores the parent reference', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'parent' })),
+			findAllByUser: vi.fn().mockResolvedValue([]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Engineering', slug: 'engineering' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -203,6 +209,9 @@ describe('CategoryService - create', () => {
 		// but the uniqueness constraint is now (userId, parentId, slug)
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'parent-1' })),
+			findAllByUser: vi
+				.fn()
+				.mockResolvedValue([buildCategory({ id: 'sibling-parent', slug: 'news' })]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'News', slug: 'news' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -217,6 +226,26 @@ describe('CategoryService - create', () => {
 			expect.objectContaining({
 				name: 'News',
 				slug: 'news',
+			}),
+		);
+	});
+
+	it('suffixes slug collisions within the same parent', async () => {
+		const categoryRepo = {
+			findById: vi.fn().mockResolvedValue(null),
+			findAllByUser: vi
+				.fn()
+				.mockResolvedValue([buildCategory({ id: 'existing', name: 'C', slug: 'c' })]),
+			create: vi.fn().mockResolvedValue({ id: 'new', name: 'C++', slug: 'c-2' }),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await service.create('user-1', { name: 'C++' });
+
+		expect(categoryRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				name: 'C++',
+				slug: 'c-2',
 			}),
 		);
 	});
@@ -265,6 +294,7 @@ describe('CategoryService - update', () => {
 	it('recomputes the slug when the name changes', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(buildCategory({ id: 'cat-1', name: 'Old' })),
+			findAllByUser: vi.fn().mockResolvedValue([buildCategory({ id: 'cat-1', name: 'Old' })]),
 			update: vi.fn().mockResolvedValue({ id: 'cat-1', name: 'New Name' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -396,6 +426,7 @@ describe('CategoryService - slugify', () => {
 	it('handles Latin names correctly', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
+			findAllByUser: vi.fn().mockResolvedValue([]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Engineering', slug: 'engineering' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -410,6 +441,7 @@ describe('CategoryService - slugify', () => {
 	it('handles accented Latin characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
+			findAllByUser: vi.fn().mockResolvedValue([]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Curriculum', slug: 'curriculum' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
@@ -425,7 +457,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for non-Latin names', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -445,7 +478,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for Chinese characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -465,7 +499,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for Japanese characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -485,7 +520,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for Korean characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -505,7 +541,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for Arabic characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -525,7 +562,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for emoji-only names', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -545,7 +583,8 @@ describe('CategoryService - slugify', () => {
 	it('generates non-empty slug for numbers-only names', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
-			create: vi.fn().mockImplementation((data: { slug: string }) => ({
+			findAllByUser: vi.fn().mockResolvedValue([]),
+			create: vi.fn().mockImplementation((data: { name: string; slug: string }) => ({
 				id: 'new',
 				name: data.name,
 				slug: data.slug,
@@ -555,28 +594,26 @@ describe('CategoryService - slugify', () => {
 
 		await service.create('user-1', { name: '12345' });
 
-		expect(categoryRepo.create).toHaveBeenCalledWith(
-			expect.objectContaining({ slug: '12345' }),
-		);
+		expect(categoryRepo.create).toHaveBeenCalledWith(expect.objectContaining({ slug: '12345' }));
 	});
 
 	it('trims leading and trailing dashes', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
+			findAllByUser: vi.fn().mockResolvedValue([]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Test', slug: 'test' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
 
 		await service.create('user-1', { name: '  Test  ' });
 
-		expect(categoryRepo.create).toHaveBeenCalledWith(
-			expect.objectContaining({ slug: 'test' }),
-		);
+		expect(categoryRepo.create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'test' }));
 	});
 
 	it('handles names with special characters', async () => {
 		const categoryRepo = {
 			findById: vi.fn().mockResolvedValue(null),
+			findAllByUser: vi.fn().mockResolvedValue([]),
 			create: vi.fn().mockResolvedValue({ id: 'new', name: 'Tech Blog', slug: 'tech-blog' }),
 		};
 		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);

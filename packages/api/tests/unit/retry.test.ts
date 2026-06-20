@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-	fetchWithRetry,
-	isRetryableError,
-	withRetry,
-} from '../../src/utils/retry.js';
+import { fetchWithRetry, isRetryableError, withRetry } from '../../src/utils/retry.js';
 
 describe('isRetryableError', () => {
 	it('returns true for network errors (TypeError)', () => {

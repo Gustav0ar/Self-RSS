@@ -1,9 +1,9 @@
-import type { Counter, Histogram, Gauge, Registry } from 'prom-client';
+import type { Counter, Gauge, Histogram, Registry } from 'prom-client';
 import {
-	collectDefaultMetrics,
 	Counter as CounterMetric,
-	Histogram as HistogramMetric,
+	collectDefaultMetrics,
 	Gauge as GaugeMetric,
+	Histogram as HistogramMetric,
 	register,
 } from 'prom-client';
 

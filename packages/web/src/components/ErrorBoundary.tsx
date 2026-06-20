@@ -1,4 +1,4 @@
-import { Component, ReactNode, isValidElement, type ErrorInfo } from 'react';
+import { Component, type ErrorInfo, isValidElement, type ReactNode } from 'react';
 
 interface ErrorBoundaryProps {
 	children: ReactNode;
@@ -53,9 +53,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 			}
 
 			// Default fallback UI
-			return (
-				<DefaultErrorFallback error={error} onReset={this.handleReset} />
-			);
+			return <DefaultErrorFallback error={error} onReset={this.handleReset} />;
 		}
 
 		return children;
@@ -98,6 +96,7 @@ function DefaultErrorFallback({
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
+					aria-hidden="true"
 					width="48"
 					height="48"
 					viewBox="0 0 24 24"
@@ -171,6 +170,7 @@ function DefaultErrorFallback({
 			)}
 
 			<button
+				type="button"
 				onClick={onReset}
 				style={{
 					padding: '0.5rem 1.5rem',

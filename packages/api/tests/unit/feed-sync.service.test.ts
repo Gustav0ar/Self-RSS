@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 
 describe('FeedSyncService', () => {
@@ -1417,7 +1417,9 @@ describe('FeedSyncService', () => {
 
 			expect(result.syncedFeeds).toBe(2);
 			expect(result.failedFeeds).toBe(1);
-			expect(errorLogs.filter((l) => l.msg === 'Feed sync failed during bulk sync')).toHaveLength(1);
+			expect(errorLogs.filter((l) => l.msg === 'Feed sync failed during bulk sync')).toHaveLength(
+				1,
+			);
 		});
 	});
 });

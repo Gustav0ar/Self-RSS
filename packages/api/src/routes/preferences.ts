@@ -4,7 +4,10 @@ import type { PreferencesService } from '../services/preferences.service.js';
 import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.js';
 import { parseBody } from '../utils/validation.js';
 
-export function createPreferencesRoutes(preferencesService: PreferencesService, rateLimiter: RateLimiter) {
+export function createPreferencesRoutes(
+	preferencesService: PreferencesService,
+	rateLimiter: RateLimiter,
+) {
 	const routes = new Hono();
 
 	routes.get('/', async (c) => {

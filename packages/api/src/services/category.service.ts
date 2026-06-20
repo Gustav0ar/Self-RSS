@@ -2,6 +2,7 @@ import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
+import { uniqueCategorySlug } from '../utils/category-slug.js';
 
 type CategoryRow = Awaited<ReturnType<CategoryRepository['findAllByUser']>>[number];
 type FeedRow = Awaited<ReturnType<FeedRepository['findAllByUser']>>[number];
@@ -14,68 +15,6 @@ interface CategoryTreeNode extends Omit<CategoryRow, 'createdAt' | 'updatedAt'> 
 	unreadCount: number;
 	feeds: SerializedFeed[];
 	children: CategoryTreeNode[];
-}
-
-/**
- * Converts text to a URL-safe slug. Handles Latin and non-Latin characters:
- * - Latin letters are lowercased as-is
- * - Non-Latin characters are transliterated if possible, otherwise preserved
- * - Spaces and special characters become dashes
- * - Leading/trailing dashes are trimmed
- * - Empty slugs get a short hash suffix to ensure uniqueness
- */
-function slugify(text: string): string {
-	// Step 1: normalize and transliterate non-Latin characters
-	// This handles common cases: accented Latin, Cyrillic, Greek, etc.
-	const normalized = text.normalize('NFD').replace(/[̀-ͯ]/g, '');
-
-	// Step 2: for characters outside the basic Latin range, try to transliterate
-	// if the environment supports it (Node.js with Intl.Segmenter or a polyfill)
-	let transliterated = normalized;
-	try {
-		// Use Intl.Segmenter for word boundary detection, then transliterate each word
-		// For environments without full transliteration support, fall back to keeping
-		// non-ASCII characters as-is (they're valid in URL slugs)
-		const segmenter = new Intl.Segmenter('en', { granularity: 'word' });
-		const segments = [...segmenter.segment(normalized)];
-		transliterated = segments
-			.filter((s) => s.isWordLike)
-			.map((s) => {
-				// Try to transliterate using Latin transliteration where possible
-				// For now, keep characters that can be part of a URL slug safely
-				return s.segment;
-			})
-			.join(' ');
-	} catch {
-		// Intl.Segmenter not available, continue with normalized text
-	}
-
-	// Step 3: convert to lowercase ASCII slug
-	const slug = transliterated
-		.toLowerCase()
-		.replace(/[^a-z0-9\s-]/g, ' ')
-		.replace(/\s+/g, '-')
-		.replace(/^-+|-+$/g, '');
-
-	// Step 4: if the slug is empty (e.g., name was only non-transliteratable characters),
-	// generate a short hash from the original text
-	if (!slug) {
-		const hash = Math.abs(hashCode(text)).toString(36).slice(0, 6);
-		return `cat-${hash}`;
-	}
-
-	return slug;
-}
-
-/** Simple string hash for fallback slug generation */
-function hashCode(str: string): number {
-	let hash = 0;
-	for (let i = 0; i < str.length; i++) {
-		const char = str.charCodeAt(i);
-		hash = (hash << 5) - hash + char;
-		hash = hash & hash; // Convert to 32-bit integer
-	}
-	return hash;
 }
 
 export class CategoryService {
@@ -118,16 +57,22 @@ export class CategoryService {
 		userId: string,
 		data: { name: string; parentCategoryId?: string | null; sortOrder?: number },
 	) {
-		const slug = slugify(data.name);
+		const name = data.name.trim();
+		if (!name) {
+			throw AppError.badRequest('Category name is required');
+		}
+		const parentCategoryId = data.parentCategoryId ?? null;
 		if (data.parentCategoryId) {
 			const parent = await this.categoryRepo.findById(data.parentCategoryId, userId);
 			if (!parent) throw AppError.notFound('Parent category not found');
 		}
+		const slug = await this.uniqueSlugForParent(userId, parentCategoryId, name);
+
 		return this.categoryRepo.create({
 			userId,
-			name: data.name,
+			name,
 			slug,
-			parentCategoryId: data.parentCategoryId ?? null,
+			parentCategoryId,
 			sortOrder: data.sortOrder ?? 0,
 		});
 	}
@@ -156,10 +101,24 @@ export class CategoryService {
 			}
 		}
 
+		const parentCategoryId =
+			data.parentCategoryId !== undefined ? data.parentCategoryId : cat.parentCategoryId;
+		const name = data.name !== undefined ? data.name.trim() : cat.name;
+		if (!name) {
+			throw AppError.badRequest('Category name is required');
+		}
+
 		const updates: Record<string, unknown> = {};
 		if (data.name !== undefined) {
-			updates.name = data.name;
-			updates.slug = slugify(data.name);
+			updates.name = name;
+		}
+		if (data.name !== undefined || data.parentCategoryId !== undefined) {
+			updates.slug = await this.uniqueSlugForParent(
+				userId,
+				parentCategoryId ?? null,
+				name,
+				categoryId,
+			);
 		}
 		if (data.parentCategoryId !== undefined) updates.parentCategoryId = data.parentCategoryId;
 		if (data.sortOrder !== undefined) updates.sortOrder = data.sortOrder;
@@ -205,6 +164,30 @@ export class CategoryService {
 		}
 
 		return this.categoryRepo.delete(categoryId, userId);
+	}
+
+	private async uniqueSlugForParent(
+		userId: string,
+		parentCategoryId: string | null,
+		name: string,
+		excludeCategoryId?: string,
+	) {
+		const categories = await this.categoryRepo.findAllByUser(userId);
+		const normalizedName = name.trim().toLocaleLowerCase();
+		const siblings = categories.filter(
+			(category) =>
+				(category.parentCategoryId ?? null) === parentCategoryId &&
+				category.id !== excludeCategoryId,
+		);
+
+		const duplicateName = siblings.find(
+			(category) => category.name.trim().toLocaleLowerCase() === normalizedName,
+		);
+		if (duplicateName) {
+			throw AppError.conflict('Category already exists in this parent');
+		}
+
+		return uniqueCategorySlug(name, new Set(siblings.map((category) => category.slug)));
 	}
 }
 

@@ -3,61 +3,13 @@ import { JSDOM } from 'jsdom';
 import { AppError } from '../middleware/errors.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
+import { uniqueCategorySlug } from '../utils/category-slug.js';
 import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
 
 interface ParsedOpmlFeed {
 	feedUrl: string;
 	title?: string;
 	categoryPath: string[];
-}
-
-/**
- * Converts text to a URL-safe slug. Handles Latin and non-Latin characters:
- * - Latin letters are lowercased as-is
- * - Non-Latin characters are transliterated if possible, otherwise preserved
- * - Spaces and special characters become dashes
- * - Leading/trailing dashes are trimmed
- * - Empty slugs get a short hash suffix to ensure uniqueness
- */
-function slugify(text: string): string {
-	// Step 1: normalize and transliterate non-Latin characters
-	const normalized = text.normalize('NFD').replace(/[̀-ͯ]/g, '');
-
-	// Step 2: try to transliterate using Intl.Segmenter for word boundaries
-	let transliterated = normalized;
-	try {
-		const segmenter = new Intl.Segmenter('en', { granularity: 'word' });
-		const segments = [...segmenter.segment(normalized)];
-		transliterated = segments.filter((s) => s.isWordLike).map((s) => s.segment).join(' ');
-	} catch {
-		// Intl.Segmenter not available, continue with normalized text
-	}
-
-	// Step 3: convert to lowercase ASCII slug
-	const slug = transliterated
-		.toLowerCase()
-		.replace(/[^a-z0-9\s-]/g, ' ')
-		.replace(/\s+/g, '-')
-		.replace(/^-+|-+$/g, '');
-
-	// Step 4: if the slug is empty, generate a short hash suffix
-	if (!slug) {
-		const hash = Math.abs(hashCode(text)).toString(36).slice(0, 6);
-		return `cat-${hash}`;
-	}
-
-	return slug;
-}
-
-/** Simple string hash for fallback slug generation */
-function hashCode(str: string): number {
-	let hash = 0;
-	for (let i = 0; i < str.length; i++) {
-		const char = str.charCodeAt(i);
-		hash = (hash << 5) - hash + char;
-		hash = hash & hash;
-	}
-	return hash;
 }
 
 function titleFromUrl(feedUrl: string): string {
@@ -145,8 +97,10 @@ export class OpmlImportService {
 		);
 		const existingCategories = await this.categoryRepo.findAllByUser(userId);
 		const categoryByPath = new Map<string, string>();
+		const usedSlugsByParent = new Map<string, Set<string>>();
 		for (const cat of existingCategories) {
 			categoryByPath.set(this.categoryPathKey(cat.parentCategoryId, cat.name), cat.id);
+			this.usedSlugsForParent(usedSlugsByParent, cat.parentCategoryId).add(cat.slug);
 		}
 
 		const categoriesToCreate: {
@@ -200,12 +154,16 @@ export class OpmlImportService {
 					parentCategoryId = resolvedId;
 					continue;
 				}
+				const usedSlugs = this.usedSlugsForParent(usedSlugsByParent, parentCategoryId);
+				const slug = uniqueCategorySlug(name, usedSlugs);
+				usedSlugs.add(slug);
+
 				categoriesToCreate.push({
 					key,
 					row: {
 						userId,
 						name,
-						slug: slugify(name),
+						slug,
 						parentCategoryId,
 						sortOrder: 0,
 					},
@@ -305,7 +263,17 @@ export class OpmlImportService {
 	}
 
 	private categoryPathKey(parentCategoryId: string | null, name: string): string {
-		return `${parentCategoryId ?? '__root__'}::${name}`;
+		return `${parentCategoryId ?? '__root__'}::${name.trim().toLocaleLowerCase()}`;
+	}
+
+	private usedSlugsForParent(
+		usedSlugsByParent: Map<string, Set<string>>,
+		parentCategoryId: string | null,
+	) {
+		const key = parentCategoryId ?? '__root__';
+		const usedSlugs = usedSlugsByParent.get(key) ?? new Set<string>();
+		usedSlugsByParent.set(key, usedSlugs);
+		return usedSlugs;
 	}
 
 	parse(content: string): ParsedOpmlFeed[] {

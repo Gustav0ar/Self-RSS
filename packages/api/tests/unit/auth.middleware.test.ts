@@ -30,7 +30,7 @@ describe('auth middleware', () => {
 						jti: 'unique-id',
 					}),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer valid.jwt.token');
 				const next = vi.fn() as unknown as Next;
 
@@ -50,7 +50,7 @@ describe('auth middleware', () => {
 						type: 'access',
 					}),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer token');
 				const next = vi.fn() as unknown as Next;
 
@@ -107,15 +107,13 @@ describe('auth middleware', () => {
 			});
 
 			it('rejects Bearer with empty token', async () => {
-				const middleware = createAuthMiddleware({} as never);
-				const c = makeContext('Bearer ');
 				const next = vi.fn() as unknown as Next;
 
 				// Empty Bearer token should fail at verification stage
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('Invalid token')),
 				};
-				const middlewareWithUtils = createAuthMiddleware(tokenUtils);
+				const middlewareWithUtils = createAuthMiddleware(tokenUtils as never);
 				const cWithUtils = makeContext('Bearer ');
 
 				await expect(middlewareWithUtils(cWithUtils, next)).rejects.toMatchObject({
@@ -129,7 +127,7 @@ describe('auth middleware', () => {
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('Invalid signature')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer not.a.valid.jwt');
 				const next = vi.fn() as unknown as Next;
 
@@ -141,11 +139,9 @@ describe('auth middleware', () => {
 
 			it('rejects tokens with invalid signatures', async () => {
 				const tokenUtils = {
-					verifyAccessToken: vi
-						.fn()
-						.mockRejectedValue(new Error('signature verification failed')),
+					verifyAccessToken: vi.fn().mockRejectedValue(new Error('signature verification failed')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer tampered.jwt.here');
 				const next = vi.fn() as unknown as Next;
 
@@ -158,7 +154,7 @@ describe('auth middleware', () => {
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('jwt signature mismatch')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer wrong.secret.token');
 				const next = vi.fn() as unknown as Next;
 
@@ -171,7 +167,7 @@ describe('auth middleware', () => {
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('invalid')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer invalid');
 				const next = vi.fn() as unknown as Next;
 
@@ -185,7 +181,7 @@ describe('auth middleware', () => {
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('Token expired')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer expired.jwt.token');
 				const next = vi.fn() as unknown as Next;
 
@@ -199,7 +195,7 @@ describe('auth middleware', () => {
 				const tokenUtils = {
 					verifyAccessToken: vi.fn().mockRejectedValue(new Error('jwt expired')),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer expired.jwt');
 				const next = vi.fn() as unknown as Next;
 
@@ -215,7 +211,7 @@ describe('auth middleware', () => {
 						.fn()
 						.mockResolvedValue({ sub: 'user-1', type: 'refresh', role: 'admin' }),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer refresh.token.here');
 				const next = vi.fn() as unknown as Next;
 
@@ -231,7 +227,7 @@ describe('auth middleware', () => {
 						.fn()
 						.mockResolvedValue({ sub: 'user-1', type: 'unknown', role: 'admin' }),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer unknown.type.token');
 				const next = vi.fn() as unknown as Next;
 
@@ -250,7 +246,7 @@ describe('auth middleware', () => {
 						.fn()
 						.mockResolvedValue({ sub: 'user-1', type: 'access', role: 'user' }),
 				};
-				const middleware = createAuthMiddleware(tokenUtils);
+				const middleware = createAuthMiddleware(tokenUtils as never);
 				const c = makeContext('Bearer access.token');
 				const next = vi.fn() as unknown as Next;
 

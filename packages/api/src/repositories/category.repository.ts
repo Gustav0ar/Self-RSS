@@ -118,7 +118,9 @@ export class CategoryRepository {
 		if (updates.length === 0) return 0;
 
 		// Build CASE expressions for bulk update (1 query instead of N)
-		const sortOrderCases = updates.map((u) => sql`WHEN ${categories.id} = ${u.id} THEN ${u.sortOrder}`);
+		const sortOrderCases = updates.map(
+			(u) => sql`WHEN ${categories.id} = ${u.id} THEN ${u.sortOrder}`,
+		);
 		const idConditions = updates.map((u) => sql`${u.id}`);
 
 		const result = await this.db
@@ -127,10 +129,12 @@ export class CategoryRepository {
 				sortOrder: sql`CASE ${sql.join(sortOrderCases, sql` `)} ELSE ${categories.sortOrder} END`,
 				updatedAt: new Date(),
 			})
-			.where(and(
-				eq(categories.userId, userId),
-				sql`${categories.id} IN (${sql.join(idConditions, sql`, `)})`,
-			))
+			.where(
+				and(
+					eq(categories.userId, userId),
+					sql`${categories.id} IN (${sql.join(idConditions, sql`, `)})`,
+				),
+			)
 			.returning({ id: categories.id });
 
 		return result.length;

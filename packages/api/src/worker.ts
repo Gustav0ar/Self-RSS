@@ -96,7 +96,10 @@ try {
 	 * preventing data inconsistencies and ensuring clients receive updates.
 	 */
 	async function gracefulShutdown(signal: string) {
-		logger.info('Initiating graceful worker shutdown', { signal, syncInProgress: syncCoordinator.isRunning });
+		logger.info('Initiating graceful worker shutdown', {
+			signal,
+			syncInProgress: syncCoordinator.isRunning,
+		});
 
 		// Step 1: Stop all schedulers to prevent new work
 		logger.info('Stopping schedulers');

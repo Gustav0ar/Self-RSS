@@ -6,8 +6,8 @@ import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
 import { applyMigrations } from './db/migrations.js';
 import { closeRedis, getRedis } from './db/redis.js';
-import { sseRegistry } from './utils/sse-registry.js';
 import { createLogger } from './utils/logger.js';
+import { sseRegistry } from './utils/sse-registry.js';
 import { createTokenUtils } from './utils/tokens.js';
 
 const logger = createLogger();
@@ -58,7 +58,10 @@ try {
 	 * 5. Exit process
 	 */
 	async function gracefulShutdown(signal: string) {
-		logger.info('Initiating graceful shutdown', { signal, activeSseConnections: sseRegistry.count });
+		logger.info('Initiating graceful shutdown', {
+			signal,
+			activeSseConnections: sseRegistry.count,
+		});
 
 		// Step 1: Stop accepting new connections immediately
 		// This prevents new SSE connections while we're draining

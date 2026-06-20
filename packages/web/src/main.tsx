@@ -1,9 +1,9 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppStateProvider, AuthProvider, QueryProvider, ThemeProvider, useAuth } from './providers';
 import { router } from './routes/router';
-import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles/globals.css';
 
 const rootEl = document.getElementById('root');

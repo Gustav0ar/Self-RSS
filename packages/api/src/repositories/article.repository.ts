@@ -1,4 +1,4 @@
-import { Database as BunDatabase } from 'bun:sqlite';
+import type { Database as BunDatabase } from 'bun:sqlite';
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { getRawDb } from '../db/client.js';
@@ -23,6 +23,67 @@ function toFtsQuery(query: string): string | null {
 	}
 
 	return terms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' ');
+}
+
+interface RawSearchRow {
+	id: string;
+	feedId: string;
+	title: string | null;
+	author: string | null;
+	excerpt: string | null;
+	heroImageUrl: string | null;
+	publishedAt: Date | number | string | null;
+	fetchedAt: Date | number | string;
+	feedTitle: string;
+	feedFaviconUrl: string | null;
+	isRead: number | boolean;
+	ftsRank: number;
+}
+
+interface SearchRow {
+	id: string;
+	feedId: string;
+	title: string | null;
+	author: string | null;
+	excerpt: string | null;
+	heroImageUrl: string | null;
+	publishedAt: Date | null;
+	fetchedAt: Date;
+	feedTitle: string;
+	feedFaviconUrl: string | null;
+	isRead: boolean;
+	ftsRank: number;
+}
+
+function sqliteTimestampToDate(value: Date | number | string | null): Date | null {
+	if (value == null) {
+		return null;
+	}
+	if (value instanceof Date) {
+		return value;
+	}
+
+	const numericValue = typeof value === 'number' ? value : Number(value);
+	if (Number.isFinite(numericValue)) {
+		return new Date(numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000);
+	}
+
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function mapSearchRow(row: RawSearchRow): SearchRow {
+	const fetchedAt = sqliteTimestampToDate(row.fetchedAt);
+	if (!fetchedAt) {
+		throw new Error(`Invalid fetched_at timestamp for article ${row.id}`);
+	}
+
+	return {
+		...row,
+		publishedAt: sqliteTimestampToDate(row.publishedAt),
+		fetchedAt,
+		isRead: Boolean(row.isRead),
+	};
 }
 
 // UUID v4 validation regex pattern
@@ -50,9 +111,9 @@ function decodeCursor(
 
 	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
 
-	// Search cursor format: <ftsRankInt>:<unixSeconds>:<id>:<direction>
-	// ftsRankInt is the integer encoding of bm25: OFFSET + round(bm25 * SCALE)
-	// where OFFSET = 1000000000 and SCALE = 10000
+	// Search cursor format: <ftsRank>:<unixSeconds>:<id>:<direction>.
+	// Older local builds emitted <ftsRankInt> with OFFSET + round(bm25 * SCALE);
+	// continue to accept that form so stale cursors safely degrade to the same page.
 	// Non-search cursor format: <id>:<unixSeconds>:<direction>
 	if (parts.length === 4) {
 		// Search cursor
@@ -62,12 +123,11 @@ function decodeCursor(
 		if (!isValidUuid(id)) return null;
 		if (direction !== 'a' && direction !== 'd') return null;
 		if (direction !== expectedDirection) return null;
-		// Decode the integer-encoded bm25 back to the original value
 		const OFFSET = 1000000000;
 		const SCALE = 10000;
-		const rankInt = Number.parseInt(rankIntRaw, 10);
-		if (!Number.isFinite(rankInt)) return null;
-		const ftsRank = (rankInt - OFFSET) / SCALE;
+		const rawRank = Number(rankIntRaw);
+		if (!Number.isFinite(rawRank)) return null;
+		const ftsRank = rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
 		const seconds = Number.parseInt(secondsRaw, 10);
 		if (!Number.isFinite(seconds) || seconds < 0) return null;
 		return { id, seconds, direction, ftsRank };
@@ -114,7 +174,10 @@ function scopeConditions(scope: ArticleScope): SQL[] {
 }
 
 export class ArticleRepository {
-	constructor(private db: Database, private rawDb?: BunDatabase) {}
+	constructor(
+		private db: Database,
+		private rawDb?: BunDatabase,
+	) {}
 
 	async findByFeeds(
 		userId: string,
@@ -462,22 +525,7 @@ export class ArticleRepository {
 		feedIds: string[],
 		limit: number,
 		cursor?: string,
-	): Promise<
-		Array<{
-			id: string;
-			feedId: string;
-			title: string | null;
-			author: string | null;
-			excerpt: string | null;
-			heroImageUrl: string | null;
-			publishedAt: Date | null;
-			fetchedAt: Date;
-			feedTitle: string;
-			feedFaviconUrl: string | null;
-			isRead: boolean;
-			ftsRank: number;
-		}>
-	> {
+	): Promise<SearchRow[]> {
 		if (feedIds.length === 0) return [];
 
 		const ftsQuery = toFtsQuery(query);
@@ -508,7 +556,10 @@ export class ArticleRepository {
 		// Use parameterized IN clause for feed IDs
 		const feedIdPlaceholders = feedIds.map(() => '?').join(', ');
 
-		const sqlQuery = `WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE a.feed_id IN (${feedIdPlaceholders})` + cursorCondition + ` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
+		const sqlQuery =
+			`WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE a.feed_id IN (${feedIdPlaceholders})` +
+			cursorCondition +
+			` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
 
 		// Add limit parameter
 		params.push(limit + 1);
@@ -519,26 +570,9 @@ export class ArticleRepository {
 			return [];
 		}
 
-		const rows = rawDb.query(sqlQuery).all(...params) as Array<{
-			id: string;
-			feedId: string;
-			title: string | null;
-			author: string | null;
-			excerpt: string | null;
-			heroImageUrl: string | null;
-			publishedAt: Date | null;
-			fetchedAt: Date;
-			feedTitle: string;
-			feedFaviconUrl: string | null;
-			isRead: number | boolean;
-			ftsRank: number;
-		}>;
+		const rows = rawDb.query(sqlQuery).all(...params) as RawSearchRow[];
 
-		// Convert SQLite boolean (0/1) to JS boolean
-		return rows.map((row) => ({
-			...row,
-			isRead: Boolean(row.isRead),
-		}));
+		return rows.map(mapSearchRow);
 	}
 
 	async searchByScope(
@@ -546,22 +580,7 @@ export class ArticleRepository {
 		query: string,
 		limit: number,
 		cursor?: string,
-	): Promise<
-		Array<{
-			id: string;
-			feedId: string;
-			title: string | null;
-			author: string | null;
-			excerpt: string | null;
-			heroImageUrl: string | null;
-			publishedAt: Date | null;
-			fetchedAt: Date;
-			feedTitle: string;
-			feedFaviconUrl: string | null;
-			isRead: boolean;
-			ftsRank: number;
-		}>
-	> {
+	): Promise<SearchRow[]> {
 		const ftsQuery = toFtsQuery(query);
 		if (!ftsQuery) {
 			return [];
@@ -585,8 +604,9 @@ export class ArticleRepository {
 		}
 		if (scope.categoryId) {
 			// Include the category and all its descendants
-			scopeFilter += ' AND f.category_id IN (WITH RECURSIVE category_scope(id) AS (SELECT ? UNION ALL SELECT child.parent_category_id FROM categories child INNER JOIN category_scope parent ON child.id = parent.id WHERE child.id != ?) SELECT id FROM category_scope)';
-			params.push(scope.categoryId, scope.categoryId);
+			scopeFilter +=
+				' AND f.category_id IN (WITH RECURSIVE category_scope(id) AS (SELECT id FROM categories WHERE id = ? AND user_id = ? UNION ALL SELECT child.id FROM categories child INNER JOIN category_scope parent ON child.parent_category_id = parent.id WHERE child.user_id = ?) SELECT id FROM category_scope)';
+			params.push(scope.categoryId, scope.userId, scope.userId);
 		}
 
 		// Cursor pagination: results are ordered by fts_rank ASC, sortTimestamp DESC, id DESC
@@ -603,7 +623,11 @@ export class ArticleRepository {
 			params.push(cursorRank, cursorRank, cursorSeconds, cursorSeconds, cursorId);
 		}
 
-		const sqlQuery = `WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE ` + scopeFilter + cursorCondition + ` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
+		const sqlQuery =
+			`WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE ` +
+			scopeFilter +
+			cursorCondition +
+			` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
 
 		// Add limit
 		params.push(limit + 1);
@@ -614,26 +638,9 @@ export class ArticleRepository {
 			return [];
 		}
 
-		const rows = rawDb.query(sqlQuery).all(...params) as Array<{
-			id: string;
-			feedId: string;
-			title: string | null;
-			author: string | null;
-			excerpt: string | null;
-			heroImageUrl: string | null;
-			publishedAt: Date | null;
-			fetchedAt: Date;
-			feedTitle: string;
-			feedFaviconUrl: string | null;
-			isRead: number | boolean;
-			ftsRank: number;
-		}>;
+		const rows = rawDb.query(sqlQuery).all(...params) as RawSearchRow[];
 
-		// Convert SQLite boolean (0/1) to JS boolean
-		return rows.map((row) => ({
-			...row,
-			isRead: Boolean(row.isRead),
-		}));
+		return rows.map(mapSearchRow);
 	}
 
 	async insertMedia(data: (typeof articleMedia.$inferInsert)[]) {
