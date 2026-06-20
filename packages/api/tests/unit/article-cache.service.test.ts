@@ -52,13 +52,23 @@ function redisForPopulate() {
 	};
 }
 
+function cacheMetrics() {
+	return {
+		recordCacheHit: vi.fn(),
+		recordCacheMiss: vi.fn(),
+	};
+}
+
 describe('ArticleCacheService - getCachedArticleList', () => {
 	it('returns null on cache miss', async () => {
 		const redis = { get: vi.fn().mockResolvedValue(null) };
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
+		expect(metrics.recordCacheMiss).toHaveBeenCalledWith('article_list');
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
 	});
 
 	it('returns null when the cached generation does not match the current one', async () => {
@@ -85,21 +95,27 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const redis = {
 			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('2'),
 		};
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
+		expect(metrics.recordCacheMiss).toHaveBeenCalledWith('article_list');
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
 	});
 
 	it('returns null for unread-only requests because the bounded cache can be incomplete', async () => {
 		const redis = {
 			get: vi.fn(),
 		};
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20, unreadOnly: true });
 		expect(result).toBeNull();
 		expect(redis.get).not.toHaveBeenCalled();
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
 	});
 
 	it('returns an opaque latest cursor from the last returned cached article', async () => {
@@ -116,25 +132,50 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const redis = {
 			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
 		};
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 2 });
 
 		expect(result?.articles.map((article) => article.id)).toEqual(['a3', 'a2']);
 		expect(result?.cursor).toBe(`a2:${Date.parse('2026-01-02T00:00:00.000Z') / 1000}:d`);
 		expect(result?.hasMore).toBe(true);
+		expect(metrics.recordCacheHit).toHaveBeenCalledWith('article_list');
+		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+	});
+
+	it('records scoped article-list cache hit types', async () => {
+		const cached = {
+			articles: [cachedArticle('a1', '2026-01-01T00:00:00.000Z')],
+			cursor: null,
+			hasMore: false,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const redis = {
+			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+		};
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
+
+		const result = await service.getCachedArticleList('user-1', { feedId: 'feed-1', limit: 20 });
+
+		expect(result?.articles.map((article) => article.id)).toEqual(['a1']);
+		expect(metrics.recordCacheHit).toHaveBeenCalledWith('article_list_feed');
 	});
 
 	it('returns null for oldest requests because the bounded cache is latest-first only', async () => {
 		const redis = {
 			get: vi.fn(),
 		};
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 2, sort: 'oldest' });
 
 		expect(result).toBeNull();
 		expect(redis.get).not.toHaveBeenCalled();
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
 	});
 
 	it('returns null and deletes the key when the cached payload is corrupt', async () => {
@@ -142,11 +183,14 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 			get: vi.fn().mockResolvedValueOnce('not json'),
 			del: vi.fn().mockResolvedValue(1),
 		};
-		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
 
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
 		expect(redis.del).toHaveBeenCalled();
+		expect(metrics.recordCacheMiss).toHaveBeenCalledWith('article_list');
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
 	});
 });
 

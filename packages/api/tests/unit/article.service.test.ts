@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ArticleService } from '../../src/services/article.service.js';
 
+function cacheMetrics() {
+	return {
+		recordCacheHit: vi.fn(),
+		recordCacheMiss: vi.fn(),
+	};
+}
+
 describe('ArticleService', () => {
 	it('lists articles through a user-scoped repository query without materializing feed ids', async () => {
 		const articleRepo = {
@@ -224,6 +231,7 @@ describe('ArticleService', () => {
 				media: [],
 			})),
 		};
+		const metrics = cacheMetrics();
 		const service = new ArticleService(
 			articleRepo as never,
 			{} as never,
@@ -233,6 +241,11 @@ describe('ArticleService', () => {
 				setex: vi.fn(async () => 'OK'),
 				del: vi.fn(async () => 0),
 			} as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			metrics,
 		);
 
 		const result = await service.getArticle('user-1', 'article-1');
@@ -241,6 +254,110 @@ describe('ArticleService', () => {
 		expect(result.publishedAt).toBe('2026-06-01T00:00:00.000Z');
 		expect(result.fetchedAt).toBe('2026-06-01T00:01:00.000Z');
 		expect(result.isEnriched).toBe(false);
+		expect(metrics.recordCacheMiss).toHaveBeenCalledWith('article_detail');
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+	});
+
+	it('returns article detail from cache and records a cache hit', async () => {
+		const cachedArticle = {
+			id: 'article-1',
+			feedId: 'feed-1',
+			guid: 'guid-1',
+			canonicalUrl: 'https://example.com/post-1',
+			title: 'Post 1',
+			author: null,
+			excerpt: 'Excerpt',
+			contentHtml: '<p>Body</p>',
+			contentText: 'Body',
+			heroImageUrl: null,
+			publishedAt: null,
+			fetchedAt: '2026-06-01T00:01:00.000Z',
+			hash: 'hash-1',
+			feedTitle: 'Feed',
+			feedFaviconUrl: null,
+			feedSiteUrl: 'https://example.com',
+			isRead: false,
+			isEnriched: false,
+			media: [],
+		};
+		const articleRepo = {
+			findDetailForUser: vi.fn(),
+		};
+		const redis = {
+			get: vi.fn(async () => JSON.stringify(cachedArticle)),
+			setex: vi.fn(async () => 'OK'),
+			del: vi.fn(async () => 0),
+		};
+		const metrics = cacheMetrics();
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			metrics,
+		);
+
+		const result = await service.getArticle('user-1', 'article-1');
+
+		expect(result).toEqual(cachedArticle);
+		expect(articleRepo.findDetailForUser).not.toHaveBeenCalled();
+		expect(redis.setex).not.toHaveBeenCalled();
+		expect(metrics.recordCacheHit).toHaveBeenCalledWith('article_detail');
+		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+	});
+
+	it('treats corrupt article detail cache entries as misses and refreshes from the database', async () => {
+		const articleRepo = {
+			findDetailForUser: vi.fn(async () => ({
+				id: 'article-1',
+				feedId: 'feed-1',
+				guid: 'guid-1',
+				canonicalUrl: 'https://example.com/post-1',
+				title: 'Post 1',
+				author: null,
+				excerpt: 'Excerpt',
+				contentHtml: '<p>Body</p>',
+				contentText: 'Body',
+				heroImageUrl: null,
+				publishedAt: null,
+				fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
+				hash: 'hash-1',
+				feedTitle: 'Feed',
+				feedFaviconUrl: null,
+				feedSiteUrl: 'https://example.com',
+				isRead: false,
+				media: [],
+			})),
+		};
+		const redis = {
+			get: vi.fn(async () => 'not json'),
+			setex: vi.fn(async () => 'OK'),
+			del: vi.fn(async () => 1),
+		};
+		const metrics = cacheMetrics();
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			metrics,
+		);
+
+		const result = await service.getArticle('user-1', 'article-1');
+
+		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
+		expect(articleRepo.findDetailForUser).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(result.fetchedAt).toBe('2026-06-01T00:01:00.000Z');
+		expect(metrics.recordCacheMiss).toHaveBeenCalledWith('article_detail');
+		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
 	});
 
 	it('waits for enrichment to complete before returning success', async () => {

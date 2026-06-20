@@ -4,6 +4,7 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { encodeArticleCursor, encodeCachedArticleCursor } from '../utils/article-cursor.js';
 import { createLogger } from '../utils/logger.js';
+import type { MetricsService } from './metrics.service.js';
 
 const logger = createLogger();
 
@@ -101,11 +102,20 @@ interface ArticleListCacheMeta {
 	generation: number;
 }
 
+type CacheMetrics = Pick<MetricsService, 'recordCacheHit' | 'recordCacheMiss'>;
+
+function cacheMetricType(options: { feedId?: string; categoryId?: string }): string {
+	if (options.feedId) return 'article_list_feed';
+	if (options.categoryId) return 'article_list_category';
+	return 'article_list';
+}
+
 export class ArticleCacheService {
 	constructor(
 		private articleRepo: ArticleRepository,
 		private feedRepo: FeedRepository,
 		private redis: Redis,
+		private cacheMetrics?: CacheMetrics,
 	) {}
 
 	/**
@@ -143,8 +153,12 @@ export class ArticleCacheService {
 			cacheKey = CacheKeys.articleListCache(userId);
 		}
 
+		const metricType = cacheMetricType(options);
 		const cached = await this.redis.get(cacheKey);
-		if (!cached) return null;
+		if (!cached) {
+			this.cacheMetrics?.recordCacheMiss(metricType);
+			return null;
+		}
 
 		try {
 			const data: CachedArticleList = JSON.parse(cached);
@@ -157,6 +171,7 @@ export class ArticleCacheService {
 					cachedGen: data.meta.generation,
 					currentGen: currentGeneration,
 				});
+				this.cacheMetrics?.recordCacheMiss(metricType);
 				return null;
 			}
 
@@ -170,6 +185,7 @@ export class ArticleCacheService {
 			const hasMore = result.length > cursorIndex;
 			const items = result.slice(0, cursorIndex);
 
+			this.cacheMetrics?.recordCacheHit(metricType);
 			return {
 				articles: items,
 				cursor: hasMore
@@ -184,6 +200,7 @@ export class ArticleCacheService {
 				error: err instanceof Error ? err.message : String(err),
 			});
 			await this.redis.del(cacheKey);
+			this.cacheMetrics?.recordCacheMiss(metricType);
 			return null;
 		}
 	}
