@@ -50,9 +50,10 @@ android {
             useSupportLibrary = true
         }
 
-        // Use localhost which maps to host machine in newer emulator engines, 
-        // or fallback to 10.0.2.2 if needed.
-        buildConfigField("String", "API_BASE_URL", "\"https://rss.gustavo.ca/api/v1/\"")
+        // Debug builds target the host machine's local API from the Android
+        // emulator. Release overrides this below and requires an explicit
+        // HTTPS endpoint.
+        buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3000/api/v1/\"")
     }
 
     buildTypes {

@@ -96,7 +96,6 @@ class ArticlesViewModel @Inject constructor(
             )
         }
         refreshArticlePager()
-        loadArticles()
     }
 
     fun setFilter(sort: String?, hideRead: Boolean?) {
@@ -116,12 +115,10 @@ class ArticlesViewModel @Inject constructor(
         }
         if (changed) {
             refreshArticlePager()
-            loadArticles()
         }
     }
 
     fun refreshArticles() {
-        loadArticles()
         refreshArticlePager()
     }
 
@@ -375,7 +372,7 @@ class ArticlesViewModel @Inject constructor(
                 readDelta = if (!changed) 0 else if (event.isRead) 1 else -1,
             ),
         )
-        if (shouldReloadArticles) loadArticles()
+        if (shouldReloadArticles) refreshArticlePager()
     }
 
     private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {

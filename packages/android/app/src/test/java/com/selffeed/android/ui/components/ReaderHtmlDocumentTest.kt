@@ -32,6 +32,8 @@ class ReaderHtmlDocumentTest {
         assertTrue(document.contains("prepareEmbeds()"))
         assertTrue(document.contains("allowfullscreen"))
         assertTrue(document.contains("picture-in-picture; web-share"))
+        assertTrue(document.contains("fallbackChecks >= 10"))
+        assertTrue(document.contains("clearInterval(fallbackTimer)"))
     }
 
     @Test

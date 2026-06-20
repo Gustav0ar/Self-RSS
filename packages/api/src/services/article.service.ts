@@ -180,14 +180,14 @@ export class ArticleService {
 		}
 
 		if (changed) {
-			// The cache invalidations and the realtime publish are all
-			// independent of the DB write that just succeeded. Run them in
-			// parallel so the route returns as soon as the slowest of the
-			// three completes, not their sum.
+			// The list-cache patch can scan every scoped cache key for this
+			// user, so run it as best-effort background work. The small
+			// invalidations and realtime publish still complete before the
+			// route returns.
+			this.patchCachedReadState(userId, articleId, read);
 			await Promise.all([
 				this.invalidateUnreadCache(userId, [article.feedId]),
 				this.invalidateArticleDetailCache(userId, articleId),
-				this.articleCache?.updateCachedReadState(userId, articleId, read),
 				this.realtimeService?.publishReadStateEvent(userId, {
 					type: 'article.read_state_changed',
 					eventId: crypto.randomUUID(),
@@ -215,6 +215,18 @@ export class ArticleService {
 		} catch {
 			// Best-effort. Stale entries expire on their own via the
 			// 5-minute TTL.
+		}
+	}
+
+	private patchCachedReadState(userId: string, articleId: string, read: boolean): void {
+		try {
+			void this.articleCache?.updateCachedReadState(userId, articleId, read).catch(() => {
+				// Best-effort. The client performs an optimistic update and the
+				// cached list rows expire quickly, so this must not slow or fail
+				// the read-state mutation route.
+			});
+		} catch {
+			// Best-effort only.
 		}
 	}
 

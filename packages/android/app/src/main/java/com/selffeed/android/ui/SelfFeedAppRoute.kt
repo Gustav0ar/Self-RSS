@@ -48,7 +48,7 @@ fun SelfFeedAppRoute(
                 settingsViewModel.loadPreferences()
                 settingsViewModel.loadStats()
                 settingsViewModel.loadAdminSettings()
-                articlesViewModel.loadArticles()
+                articlesViewModel.refreshArticles()
                 articlesViewModel.startReadStateSync()
             } else {
                 articlesViewModel.stopReadStateSync()

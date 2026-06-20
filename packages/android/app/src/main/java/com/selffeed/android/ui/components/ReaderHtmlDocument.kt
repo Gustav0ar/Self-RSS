@@ -374,13 +374,18 @@ internal fun buildReaderHtmlDocument(
                 });
 
                 let lastH = 0;
-                setInterval(() => {
+                let fallbackChecks = 0;
+                const fallbackTimer = setInterval(() => {
+                    fallbackChecks += 1;
                     const h = measureContentHeight();
                     if (h !== lastH) {
                         lastH = h;
                         postHeight();
                     }
-                }, 1000);
+                    if (fallbackChecks >= 10) {
+                        clearInterval(fallbackTimer);
+                    }
+                }, 250);
 
                 function parseMessageData(data) {
                     if (typeof data !== 'string') {

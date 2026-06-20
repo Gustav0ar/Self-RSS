@@ -19,6 +19,7 @@ import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.MarkReadResponse
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
+import com.selffeed.android.network.SyncResponse
 import com.squareup.moshi.Moshi
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -200,6 +201,34 @@ class RssRepositoryTest {
         assertTrue(readResult is AppResult.Success)
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         coVerify(exactly = 1) { api.markRead(articleId, MarkReadRequest(read = true)) }
+    }
+
+    @Test
+    fun `sync invalidation preserves pending offline read state mutations`() = runTest {
+        val articleId = "article-pending-sync"
+        onlineState.value = false
+        localStore.writeArticleRemotePage(
+            queryKey = ArticlePageQuery().remoteKey(),
+            payload = ApiListResponse(data = listOf(sampleArticle(articleId)), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+
+        val queuedResult = repository.markRead(articleId, true)
+        assertTrue(queuedResult is AppResult.Success)
+        assertEquals(1, localStore.readPendingReadStateMutations().size)
+
+        onlineState.value = true
+        coEvery { api.syncAllFeeds() } returns com.selffeed.android.network.ApiEnvelope(
+            SyncResponse(status = "queued", totalFeeds = 1),
+        )
+
+        val syncResult = repository.syncAllFeeds()
+
+        assertTrue(syncResult is AppResult.Success)
+        val pending = localStore.readPendingReadStateMutations()
+        assertEquals(1, pending.size)
+        assertEquals(articleId, pending.first().articleId)
+        coVerify(exactly = 0) { api.markRead(any(), any()) }
     }
 
     @Test

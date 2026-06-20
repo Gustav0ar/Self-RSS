@@ -91,21 +91,12 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `setScope updates selected ids and clears pagination`() = runTest {
+    fun `setScope updates selected ids and refreshes paging without legacy page fetch`() = runTest {
         val viewModel = ArticlesViewModel(repository)
         viewModel.setScope(feedId = "f-1", categoryId = null)
         assertEquals("f-1", viewModel.state.value.selectedFeedId)
         assertNull(viewModel.state.value.selectedCategoryId)
-        coVerify {
-            repository.articles(
-                feedId = "f-1",
-                categoryId = null,
-                unreadOnly = false,
-                sort = null,
-                limit = 30,
-                cursor = null,
-            )
-        }
+        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -191,21 +182,23 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `setFilter reloads with unread and sort query`() = runTest {
+    fun `setFilter updates state and refreshes paging without legacy page fetch`() = runTest {
         val viewModel = ArticlesViewModel(repository)
 
         viewModel.setFilter(sort = "oldest", hideRead = true)
 
-        coVerify {
-            repository.articles(
-                feedId = null,
-                categoryId = null,
-                unreadOnly = true,
-                sort = "oldest",
-                limit = 30,
-                cursor = null,
-            )
-        }
+        assertEquals("oldest", viewModel.state.value.sort)
+        assertEquals(true, viewModel.state.value.hideRead)
+        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `refreshArticles refreshes paging without legacy page fetch`() = runTest {
+        val viewModel = ArticlesViewModel(repository)
+
+        viewModel.refreshArticles()
+
+        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(

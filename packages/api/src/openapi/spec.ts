@@ -623,6 +623,32 @@ export const openApiSpec = {
 			get: {
 				tags: ['Search'],
 				security: bearerSecurity,
+				parameters: [
+					{
+						name: 'q',
+						in: 'query',
+						required: true,
+						schema: { type: 'string', minLength: 2, maxLength: 500 },
+					},
+					{
+						name: 'categoryId',
+						in: 'query',
+						required: false,
+						schema: { type: 'string', format: 'uuid' },
+					},
+					{
+						name: 'cursor',
+						in: 'query',
+						required: false,
+						schema: { type: 'string' },
+					},
+					{
+						name: 'limit',
+						in: 'query',
+						required: false,
+						schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+					},
+				],
 				responses: {
 					'200': json(listResponse('#/components/schemas/ArticleListItem')),
 				},
