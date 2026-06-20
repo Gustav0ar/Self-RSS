@@ -354,6 +354,7 @@ private fun EmbedPlayer(
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
+                settings.safeBrowsingEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
                 setBackgroundColor(backgroundColor.toArgb())
                 webChromeClient = readerWebChromeClient(
@@ -361,42 +362,32 @@ private fun EmbedPlayer(
                     onHideFullscreenMedia = onHideFullscreenMedia,
                 )
 
-                addJavascriptInterface(object {
-                    @android.webkit.JavascriptInterface
-                    fun updateHeight(h: Float) {
-                        post {
-                            val newHeightDp = h.toInt()
-                            if (newHeightDp > 0 && newHeightDp != heightDp) {
-                                heightDp = newHeightDp
+                if (youtubeShellHtml != null) {
+                    addJavascriptInterface(object {
+                        @android.webkit.JavascriptInterface
+                        fun updateHeight(h: Float) {
+                            post {
+                                val newHeightDp = h.toInt()
+                                if (newHeightDp > 0 && newHeightDp != heightDp) {
+                                    heightDp = newHeightDp
+                                }
                             }
                         }
-                    }
-                }, "Android")
+                    }, "Android")
+                }
 
                 webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val url = request?.url?.toString() ?: return true
+                        if (isTrustedEmbedUrl(url)) return false
+                        openExternalUrl(context, url)
+                        return true
+                    }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        evaluateJavascript(
-                            """
-                                (function() {
-                                    var lastHeight = 0;
-                                    function sendHeight() {
-                                        var h = document.body.scrollHeight || document.documentElement.scrollHeight;
-                                        if (h > 0 && h !== lastHeight) {
-                                            lastHeight = h;
-                                            window.Android.updateHeight(h);
-                                        }
-                                    }
-                                    new ResizeObserver(sendHeight).observe(document.body);
-                                    var fallbackChecks = 0;
-                                    var fallbackTimer = setInterval(function() {
-                                        fallbackChecks += 1;
-                                        sendHeight();
-                                        if (fallbackChecks >= 10) clearInterval(fallbackTimer);
-                                    }, 250);
-                                    sendHeight();
-                                })();
-                            """.trimIndent()
-                        ) { }
+                        if (youtubeShellHtml != null) {
+                            view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
+                        }
                     }
                 }
             }

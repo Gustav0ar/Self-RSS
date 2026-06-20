@@ -17,6 +17,41 @@ function cachedArticle(id: string, displayedAt: string, isRead = false) {
 	};
 }
 
+function articleRow(index: number) {
+	const date = new Date(Date.UTC(2026, 0, 1, 0, index));
+	return {
+		id: `article-${index}`,
+		feedId: 'feed-1',
+		feedTitle: 'Feed',
+		feedFaviconUrl: null,
+		title: `Article ${index}`,
+		author: null,
+		excerpt: null,
+		heroImageUrl: null,
+		publishedAt: date,
+		fetchedAt: date,
+		isRead: false,
+	};
+}
+
+function redisForPopulate() {
+	const pipeline = {
+		sadd: vi.fn().mockReturnThis(),
+		expire: vi.fn().mockReturnThis(),
+		exec: vi.fn(async () => []),
+	};
+	const setex = vi.fn(async (_key: string, _ttl: number, _value: string) => 'OK');
+	return {
+		set: vi.fn(
+			async (_key: string, _value: string, _mode: string, _ttl: number, _nx: string) => 'OK',
+		),
+		del: vi.fn(async (..._keys: string[]) => 1),
+		get: vi.fn(async (_key: string) => null),
+		setex,
+		pipeline: vi.fn(() => pipeline),
+	};
+}
+
 describe('ArticleCacheService - getCachedArticleList', () => {
 	it('returns null on cache miss', async () => {
 		const redis = { get: vi.fn().mockResolvedValue(null) };
@@ -112,6 +147,52 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		const result = await service.getCachedArticleList('user-1', { limit: 20 });
 		expect(result).toBeNull();
 		expect(redis.del).toHaveBeenCalled();
+	});
+});
+
+describe('ArticleCacheService - populateCache', () => {
+	it('does not report more pages when the cache query returns exactly the cache limit', async () => {
+		const redis = redisForPopulate();
+		const articleRepo = {
+			findByFeeds: vi.fn(async () => Array.from({ length: 100 }, (_, index) => articleRow(index))),
+		};
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1' }]),
+		};
+		const service = new ArticleCacheService(
+			articleRepo as never,
+			feedRepo as never,
+			redis as never,
+		);
+
+		await service.populateCache('user-1');
+
+		const cachedPayload = JSON.parse(redis.setex.mock.calls[0]?.[2] ?? '{}');
+		expect(cachedPayload.articles).toHaveLength(100);
+		expect(cachedPayload.hasMore).toBe(false);
+		expect(cachedPayload.cursor).toBeNull();
+	});
+
+	it('trims the over-fetched row and reports more pages when the cache query exceeds the limit', async () => {
+		const redis = redisForPopulate();
+		const articleRepo = {
+			findByFeeds: vi.fn(async () => Array.from({ length: 101 }, (_, index) => articleRow(index))),
+		};
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1' }]),
+		};
+		const service = new ArticleCacheService(
+			articleRepo as never,
+			feedRepo as never,
+			redis as never,
+		);
+
+		await service.populateCache('user-1');
+
+		const cachedPayload = JSON.parse(redis.setex.mock.calls[0]?.[2] ?? '{}');
+		expect(cachedPayload.articles).toHaveLength(100);
+		expect(cachedPayload.hasMore).toBe(true);
+		expect(cachedPayload.cursor).toBe('article-99:1767231540:d');
 	});
 });
 

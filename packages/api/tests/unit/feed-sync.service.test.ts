@@ -141,6 +141,71 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ newArticles: 1, total: 1 });
 	});
 
+	it('derives enriched text and excerpt from sanitized content', async () => {
+		const redis = {
+			set: vi.fn(async () => 'OK'),
+			del: vi.fn(async () => 1),
+		};
+		const articleRepo = {
+			findById: vi.fn(async () => ({
+				id: 'article-1',
+				canonicalUrl: 'https://example.com/post-1',
+				title: 'Post 1',
+				author: null,
+				contentHtml: '<p>Short</p>',
+				heroImageUrl: null,
+			})),
+			updateContent: vi.fn(async () => undefined),
+			replaceMedia: vi.fn(async () => undefined),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		vi.spyOn(
+			service as unknown as { resolveEnrichedArticleHtml: () => Promise<string | null> },
+			'resolveEnrichedArticleHtml',
+		).mockResolvedValue(
+			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
+		);
+
+		await (
+			service as unknown as {
+				enrichSingleArticle: (enrichment: {
+					articleId: string;
+					userId: string;
+					canonicalUrl: string;
+					contentHtml: string | null;
+					heroImageUrl: string | null;
+					fetchedAt: Date;
+				}) => Promise<void>;
+			}
+		).enrichSingleArticle({
+			articleId: 'article-1',
+			userId: 'user-1',
+			canonicalUrl: 'https://example.com/post-1',
+			contentHtml: '<p>Short</p>',
+			heroImageUrl: null,
+			fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
+		});
+
+		expect(articleRepo.updateContent).toHaveBeenCalledWith(
+			'article-1',
+			expect.objectContaining({
+				contentHtml:
+					'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p></article>',
+				contentText:
+					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.',
+				excerpt:
+					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.',
+			}),
+		);
+	});
+
 	it('skips a feed sync when the per-feed lock is already held', async () => {
 		const feedRepo = {
 			findById: vi.fn(async () => ({

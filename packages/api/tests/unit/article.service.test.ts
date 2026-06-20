@@ -52,6 +52,49 @@ describe('ArticleService', () => {
 		});
 	});
 
+	it('does not fail article listing when best-effort activity tracking rejects', async () => {
+		const articleRepo = {
+			findByScope: vi.fn(async () => [
+				{
+					id: 'article-1',
+					feedId: 'feed-1',
+					feedTitle: 'Feed',
+					feedFaviconUrl: null,
+					title: 'Post 1',
+					author: null,
+					excerpt: 'Excerpt',
+					heroImageUrl: null,
+					publishedAt: null,
+					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
+					isRead: false,
+				},
+			]),
+		};
+		const feedRepo = {
+			findById: vi.fn(async () => ({ id: 'feed-1' })),
+		};
+		const articleCache = {
+			trackUserActivity: vi.fn(async () => {
+				throw new Error('redis unavailable');
+			}),
+			getCachedArticleList: vi.fn(async () => null),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			undefined,
+			undefined,
+			articleCache as never,
+		);
+
+		const result = await service.getArticles('user-1', { feedId: 'feed-1', limit: 20 });
+
+		expect(articleCache.trackUserActivity).toHaveBeenCalledWith('user-1');
+		expect(result.data).toHaveLength(1);
+	});
+
 	it('searches through a scoped repository query and records search metrics', async () => {
 		const articleRepo = {
 			searchByScope: vi.fn(async () => [

@@ -50,10 +50,14 @@ wait_for_container_health() {
 	container="$1"
 	label="$2"
 	for _ in $(seq 1 30); do
-		status="$("${CONTAINER_CLI}" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
-		if [ "${status}" = "healthy" ] || [ "${status}" = "running" ]; then
+		status="$("${CONTAINER_CLI}" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing-healthcheck:{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
+		if [ "${status}" = "healthy" ]; then
 			echo "${label} healthy"
 			return 0
+		fi
+		if [[ "${status}" == missing-healthcheck:* ]]; then
+			echo "${label} has no container healthcheck: ${status#missing-healthcheck:}"
+			return 1
 		fi
 		if [ "${status}" = "unhealthy" ] || [ "${status}" = "exited" ] || [ "${status}" = "dead" ]; then
 			echo "${label} failed with container status: ${status}"

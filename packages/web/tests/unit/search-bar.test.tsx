@@ -151,6 +151,7 @@ describe('SearchBar', () => {
 	});
 
 	it('caps rendered result rows and lazy-loads thumbnails', () => {
+		const fetchNextPage = vi.fn();
 		useSearchMock.mockReturnValue({
 			data: {
 				pages: [
@@ -167,7 +168,7 @@ describe('SearchBar', () => {
 					},
 				],
 			},
-			fetchNextPage: vi.fn(),
+			fetchNextPage,
 			hasNextPage: true,
 			isFetchingNextPage: false,
 			isLoading: false,
@@ -181,6 +182,9 @@ describe('SearchBar', () => {
 		});
 
 		expect(screen.getAllByRole('option')).toHaveLength(80);
+		expect(screen.queryByRole('button', { name: 'Load more results' })).toBeNull();
+		expect(screen.getByText(/Showing the first 80 results/)).toBeTruthy();
+		expect(fetchNextPage).not.toHaveBeenCalled();
 		const image = document.querySelector<HTMLImageElement>('img[src="https://example.com/0.jpg"]');
 		expect(image?.getAttribute('loading')).toBe('lazy');
 		expect(image?.getAttribute('decoding')).toBe('async');

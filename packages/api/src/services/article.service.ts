@@ -5,9 +5,12 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
 import { encodeArticleCursor } from '../utils/article-cursor.js';
+import { createLogger } from '../utils/logger.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
 import type { RealtimeService } from './realtime.service.js';
+
+const logger = createLogger();
 
 // Shape of a single article as serialized for the API response and
 // stored in the per-article detail cache. Derived from the repository
@@ -49,7 +52,12 @@ export class ArticleService {
 		const limit = options.limit ?? 20;
 
 		// Track user activity for priority warming (fire-and-forget)
-		void this.articleCache?.trackUserActivity(userId);
+		void this.articleCache?.trackUserActivity(userId).catch((error) => {
+			logger.warn('Failed to track article-list activity', {
+				userId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 		// Try cache first (only for initial load without cursor)
 		if (!options.cursor && this.articleCache) {

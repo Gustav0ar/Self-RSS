@@ -5,10 +5,15 @@ export const markReadSchema = z.object({
 	source: z.enum(['manual', 'auto_navigate', 'auto_open']).optional().default('manual'),
 });
 
-export const markAllReadSchema = z.object({
-	categoryId: z.string().uuid().optional(),
-	feedId: z.string().uuid().optional(),
-});
+export const markAllReadSchema = z
+	.object({
+		categoryId: z.string().uuid().optional(),
+		feedId: z.string().uuid().optional(),
+	})
+	.refine((value) => !(value.categoryId && value.feedId), {
+		message: 'Specify either categoryId or feedId, not both',
+		path: ['feedId'],
+	});
 
 export const articleQuerySchema = z.object({
 	categoryId: z.string().uuid().optional(),

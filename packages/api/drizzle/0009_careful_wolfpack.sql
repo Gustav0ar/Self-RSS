@@ -1,0 +1,1 @@
+CREATE INDEX `categories_user_parent_idx` ON `categories` (`user_id`,`parent_category_id`);

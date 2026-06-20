@@ -75,6 +75,17 @@ describe('ReaderPane', () => {
 		expect(mediaPanel?.querySelectorAll('img')).toHaveLength(0);
 	});
 
+	it('hardens external media iframes in the lower panel', () => {
+		render(<ReaderPane articleId="article-1" />);
+
+		const iframe = document.querySelector<HTMLIFrameElement>('.surface-card iframe');
+		expect(iframe?.getAttribute('loading')).toBe('lazy');
+		expect(iframe?.getAttribute('referrerpolicy')).toBe('strict-origin-when-cross-origin');
+		expect(iframe?.getAttribute('sandbox')).toBe(
+			'allow-scripts allow-same-origin allow-presentation allow-popups',
+		);
+	});
+
 	it('does not mark articles read on open when auto-mark is on navigate', () => {
 		render(<ReaderPane articleId="article-1" />);
 

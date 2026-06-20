@@ -672,7 +672,23 @@ export const openApiSpec = {
 			patch: {
 				tags: ['Articles'],
 				security: bearerSecurity,
-				requestBody: json({ type: 'object' }),
+				requestBody: json({
+					oneOf: [
+						{ type: 'object', additionalProperties: false },
+						{
+							type: 'object',
+							additionalProperties: false,
+							required: ['feedId'],
+							properties: { feedId: { type: 'string', format: 'uuid' } },
+						},
+						{
+							type: 'object',
+							additionalProperties: false,
+							required: ['categoryId'],
+							properties: { categoryId: { type: 'string', format: 'uuid' } },
+						},
+					],
+				}),
 				responses: { '200': json(apiDataRef('#/components/schemas/MarkAllReadResult')) },
 			},
 		},
