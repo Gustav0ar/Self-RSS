@@ -22,6 +22,37 @@ function buildInfiniteKey(params: ArticleQueryParams) {
 type Page = ApiListResponse<ArticleListItem>;
 type ArticleList = InfiniteData<Page, string | null>;
 
+function articleListItemsEqual(a: ArticleListItem, b: ArticleListItem) {
+	return (
+		a.id === b.id &&
+		a.feedId === b.feedId &&
+		a.feedTitle === b.feedTitle &&
+		a.feedFaviconUrl === b.feedFaviconUrl &&
+		a.title === b.title &&
+		a.author === b.author &&
+		a.excerpt === b.excerpt &&
+		a.heroImageUrl === b.heroImageUrl &&
+		a.publishedAt === b.publishedAt &&
+		a.displayedAt === b.displayedAt &&
+		a.isRead === b.isRead
+	);
+}
+
+function firstPageHasChanged(cached: Page, fresh: Page) {
+	if (cached.cursor !== fresh.cursor || cached.hasMore !== fresh.hasMore) {
+		return true;
+	}
+
+	if (cached.data.length !== fresh.data.length) {
+		return true;
+	}
+
+	return cached.data.some((article, index) => {
+		const freshArticle = fresh.data[index];
+		return !freshArticle || !articleListItemsEqual(article, freshArticle);
+	});
+}
+
 /**
  * Returns the active QueryClient, or null when no QueryClientProvider is
  * mounted above (e.g. in isolated unit tests). When null, callers should
@@ -32,9 +63,10 @@ function useOptionalQueryClient(): QueryClient | null {
 }
 
 /**
- * Periodically re-fetches the first page of the article list and merges
- * any new items by invalidating the exact active article query. Query
- * refetching keeps all pages and cursors aligned with the API.
+ * Periodically re-fetches the first page of the article list and invalidates
+ * the exact active article query when the first-page shape or visible article
+ * metadata changes. Query refetching keeps all pages and cursors aligned with
+ * the API.
  *
  * Triggers: window focus, tab becoming visible, and a 5-minute interval
  * (only while the tab is visible). Skipped if the cached data is fresher
@@ -68,11 +100,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 			const qs = buildArticleSearchParams({ feedId, categoryId, unreadOnly, sort, limit }, null);
 			const fresh = await apiFetch<Page>(`/articles${qs ? `?${qs}` : ''}`);
 
-			const existing = cached.pages[0].data;
-			const existingIds = new Set(existing.map((a) => a.id));
-			const newOnes = fresh.data.filter((a) => !existingIds.has(a.id));
-
-			if (newOnes.length === 0) return;
+			if (!firstPageHasChanged(cached.pages[0], fresh)) return;
 
 			await qc.invalidateQueries({ queryKey, exact: true });
 		} catch {
