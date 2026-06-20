@@ -22,7 +22,21 @@ function toFtsQuery(query: string): string | null {
 		return null;
 	}
 
-	return terms.map((term) => `"${term.replaceAll('"', '""')}"*`).join(' ');
+	// Sanitize each term: remove any FTS5 special operators and control characters
+	// that could manipulate the query. Only allow alphanumeric characters, underscores,
+	// and basic accented letters (Unicode alphanumerics). This prevents injection of
+	// operators like *, ^, (, ), AND, OR, NOT, NEAR, :, ", ', etc.
+	const sanitizeForFts = (term: string): string => term.replace(/[^\p{L}\p{N}_]/gu, '');
+
+	return terms
+		.map((term) => {
+			const sanitized = sanitizeForFts(term);
+			// Skip empty terms after sanitization
+			if (!sanitized) return null;
+			return `"${sanitized}"*`;
+		})
+		.filter(Boolean)
+		.join(' ');
 }
 
 interface RawSearchRow {

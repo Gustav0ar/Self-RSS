@@ -1,4 +1,7 @@
 const API_BASE = '/api/v1';
+const RETRY_INITIAL_DELAY_MS = 300;
+const RETRY_MAX_DELAY_MS = 2000;
+const RETRY_MAX_ATTEMPTS = 3;
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
@@ -78,14 +81,25 @@ function buildRequestHeaders(options: RequestInit) {
 
 async function authorizedFetch(path: string, options: RequestInit = {}) {
 	const headers = buildRequestHeaders(options);
+	const method = options.method?.toUpperCase() ?? 'GET';
+	const isMutation = method !== 'GET';
 
-	let res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
+	async function doFetch(): Promise<Response> {
+		return fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
+	}
+
+	let res: Response;
+	if (isMutation) {
+		res = await doFetch();
+	} else {
+		res = await withRetry(doFetch, isRetriableResponse);
+	}
 
 	if (res.status === 401) {
 		const refreshed = await refreshAccessToken();
 		if (refreshed) {
 			headers.Authorization = `Bearer ${accessToken}`;
-			res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
+			res = await doFetch();
 		}
 	}
 
@@ -110,6 +124,55 @@ function parseContentDispositionFilename(header: string | null) {
 
 	const basicMatch = header.match(/filename="([^"]+)"|filename=([^;]+)/i);
 	return basicMatch?.[1] ?? basicMatch?.[2]?.trim() ?? null;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getExponentialBackoffDelay(attempt: number): number {
+	const baseDelay = Math.min(RETRY_INITIAL_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+	// Add jitter: random value between 0% and 50% of base delay
+	const jitter = Math.random() * baseDelay * 0.5;
+	return baseDelay + jitter;
+}
+
+function isRetriableResponse(res: Response): boolean {
+	return res.status >= 500;
+}
+
+async function withRetry<T>(
+	fetchFn: () => Promise<Response>,
+	isRetriable: (res: Response) => boolean,
+): Promise<Response> {
+	let lastError: Error | null = null;
+
+	for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+		try {
+			const res = await fetchFn();
+
+			if (res.ok || !isRetriable(res)) {
+				return res;
+			}
+
+			// Server error and we have retries left
+			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+				lastError = new Error(`API error: ${res.status}`);
+				await sleep(getExponentialBackoffDelay(attempt));
+				continue;
+			}
+
+			return res;
+		} catch (err) {
+			lastError = err instanceof Error ? err : new Error(String(err));
+
+			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
+				await sleep(getExponentialBackoffDelay(attempt));
+			}
+		}
+	}
+
+	throw lastError ?? new Error('Retry exhausted');
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {

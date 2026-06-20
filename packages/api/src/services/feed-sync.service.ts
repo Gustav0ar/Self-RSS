@@ -22,6 +22,16 @@ import {
 } from '../utils/sanitizer.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 
+/** Escape special characters for safe use in HTML attribute values */
+function escapeHtmlAttr(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;');
+}
+
 const logger = createLogger();
 
 const FAILED_SYNC_RETRY_MINUTES = {
@@ -882,19 +892,19 @@ export class FeedSyncService {
 							if (post.media) {
 								const media = post.media;
 								if (media.type === 'image') {
-									reconstructedHtml += `<img src="${media.content}" />`;
+									reconstructedHtml += `<img src="${escapeHtmlAttr(media.content ?? '')}" />`;
 								} else if (media.type === 'twitter') {
-									reconstructedHtml += `<iframe class="embedded-media embedded-media--x" src="https://platform.twitter.com/embed/Tweet.html?id=${media.content}"></iframe>`;
+									reconstructedHtml += `<iframe class="embedded-media embedded-media--x" src="https://platform.twitter.com/embed/Tweet.html?id=${escapeHtmlAttr(media.content ?? '')}"></iframe>`;
 								} else if (media.type === 'html') {
-									reconstructedHtml += media.content || '';
+									reconstructedHtml += sanitizeHtml(media.content) || '';
 								} else if (media.type === 'video') {
-									reconstructedHtml += `<video src="${media.content}" controls></video>`;
+									reconstructedHtml += `<video src="${escapeHtmlAttr(media.content ?? '')}" controls></video>`;
 								} else {
-									reconstructedHtml += media.content || '';
+									reconstructedHtml += sanitizeHtml(media.content) || '';
 								}
 							}
 							if (post.description && typeof post.description === 'string') {
-								reconstructedHtml += post.description;
+								reconstructedHtml += sanitizeHtml(post.description);
 							}
 							return reconstructedHtml || null;
 						}

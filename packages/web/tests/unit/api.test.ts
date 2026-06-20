@@ -317,4 +317,124 @@ describe('api module', () => {
 			await promise1;
 		});
 	});
+
+	describe('retry with exponential backoff', () => {
+		it('retries on 5xx responses for GET requests', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				if (callCount < 3) {
+					return new Response('', { status: 503 });
+				}
+				return new Response('{"data":{"result":"success"}}', { status: 200 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			// 300ms initial + 450ms max = ~750ms for retries to complete
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(callCount).toBe(3);
+			expect(result.data.result).toBe('success');
+		});
+
+		it('does not retry on 4xx responses for GET requests', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('{"error":{"message":"Not found"}}', { status: 404 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/feeds')).rejects.toThrow('Not found');
+
+			expect(callCount).toBe(1);
+		});
+
+		it('retries on network errors with backoff', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				if (callCount < 2) {
+					throw new Error('Network failure');
+				}
+				return new Response('{"data":{"result":"success"}}', { status: 200 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(callCount).toBe(2);
+			expect(result.data.result).toBe('success');
+		});
+
+		it('does not retry mutations (POST requests)', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('', { status: 500 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(
+				apiFetch('/test', { method: 'POST', body: JSON.stringify({}) }),
+			).rejects.toThrow();
+
+			expect(callCount).toBe(1);
+		});
+
+		it('does not retry mutations (PUT requests)', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('', { status: 503 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(
+				apiFetch('/test', { method: 'PUT', body: JSON.stringify({}) }),
+			).rejects.toThrow();
+
+			expect(callCount).toBe(1);
+		});
+
+		it('does not retry mutations (DELETE requests)', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('', { status: 503 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/test', { method: 'DELETE' })).rejects.toThrow();
+
+			expect(callCount).toBe(1);
+		});
+
+		it('respects max retry limit and throws after all retries fail', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('', { status: 503 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/feeds')).rejects.toThrow();
+
+			expect(callCount).toBe(3); // Initial + 2 retries
+		});
+
+		it('succeeds on first try without retry', async () => {
+			let callCount = 0;
+			const fetchMock = vi.fn(async () => {
+				callCount++;
+				return new Response('{"data":{"result":"success"}}', { status: 200 });
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(callCount).toBe(1);
+			expect(result.data.result).toBe('success');
+		});
+	});
 });
