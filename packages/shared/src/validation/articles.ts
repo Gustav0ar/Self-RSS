@@ -27,6 +27,36 @@ export const articleQuerySchema = z.object({
 	limit: z.string().transform(Number).pipe(z.number().int().min(1).max(100)).optional().default(20),
 });
 
+const readStateEventMetadataSchema = z.object({
+	eventId: z.string().min(1),
+	clientId: z.string().min(1).nullable(),
+	updatedAt: z.string().min(1),
+});
+
+export const articleReadStateChangedEventSchema = readStateEventMetadataSchema.extend({
+	type: z.literal('article.read_state_changed'),
+	articleId: z.string().min(1),
+	feedId: z.string().min(1),
+	isRead: z.boolean(),
+	source: z.string().min(1),
+});
+
+export const articlesMarkedReadEventSchema = readStateEventMetadataSchema.extend({
+	type: z.literal('articles.marked_read'),
+	feedIds: z.array(z.string().min(1)),
+	scope: z.object({
+		categoryId: z.string().min(1).optional(),
+		feedId: z.string().min(1).optional(),
+	}),
+	markedCount: z.number().int().nonnegative(),
+});
+
+export const readStateSyncEventSchema = z.discriminatedUnion('type', [
+	articleReadStateChangedEventSchema,
+	articlesMarkedReadEventSchema,
+]);
+
 export type MarkReadInput = z.infer<typeof markReadSchema>;
 export type MarkAllReadInput = z.infer<typeof markAllReadSchema>;
 export type ArticleQueryInput = z.infer<typeof articleQuerySchema>;
+export type ReadStateSyncEventInput = z.infer<typeof readStateSyncEventSchema>;

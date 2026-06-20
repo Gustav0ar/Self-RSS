@@ -124,6 +124,27 @@ describe('RealtimeService - publish / subscribe', () => {
 			'events:user:user-1:read-state',
 			JSON.stringify({ type: 'unknown_event' }),
 		);
+		await otherClient.publish(
+			'events:user:user-1:read-state',
+			JSON.stringify({
+				type: 'article.read_state_changed',
+				articleId: 'article-1',
+				feedId: 'feed-1',
+				isRead: true,
+			}),
+		);
+		await otherClient.publish(
+			'events:user:user-1:read-state',
+			JSON.stringify({
+				type: 'articles.marked_read',
+				eventId: 'evt-invalid',
+				feedIds: ['feed-1'],
+				scope: {},
+				markedCount: -1,
+				clientId: null,
+				updatedAt: '2026-01-01T00:00:00.000Z',
+			}),
+		);
 
 		expect(received).toEqual([]);
 	});
