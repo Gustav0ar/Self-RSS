@@ -6,26 +6,21 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.cachedIn
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
-import com.selffeed.android.data.repository.ArticleRepository
-import dagger.hilt.android.lifecycle.HiltViewModel
+import com.selffeed.android.data.SelfFeedRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
-import com.selffeed.android.network.ArticleReadStateChangedEvent
-import com.selffeed.android.network.ArticlesMarkedReadEvent
 import com.selffeed.android.network.EnrichArticleResponse
-import com.selffeed.android.network.ReadStateSyncEvent
-import kotlinx.coroutines.CancellationException
+import com.selffeed.android.ui.articles.ArticleWarmingManager
+import com.selffeed.android.ui.articles.EnrichmentManager
+import com.selffeed.android.ui.articles.ReadStateManager
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -63,7 +58,10 @@ sealed interface ArticleFeatureEvent {
 
 @HiltViewModel
 class ArticlesViewModel @Inject constructor(
-    private val repository: ArticleRepository,
+    private val repository: SelfFeedRepository,
+    private val readStateManager: ReadStateManager,
+    private val enrichmentManager: EnrichmentManager,
+    private val articleWarmingManager: ArticleWarmingManager,
 ) : ViewModel() {
     private val _state = MutableStateFlow(ArticlesUiState())
     val state: StateFlow<ArticlesUiState> = _state.asStateFlow()
@@ -78,13 +76,21 @@ class ArticlesViewModel @Inject constructor(
         .cachedIn(viewModelScope)
 
     private val requestSequence = AtomicLong(0)
-    private val manuallyUnread = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private val articleReadStates = ArticleReadStateStore()
-    private val backgroundEnrichAttemptedAt = java.util.Collections.synchronizedMap(mutableMapOf<String, Long>())
     private var articlePagingGeneration = 0L
-    private var enrichArticleJob: Job? = null
-    private var warmNextArticlesJob: Job? = null
-    private var readStateSyncJob: Job? = null
+
+    init {
+        // Initialize managers with viewModelScope
+        readStateManager.setScope(viewModelScope)
+        enrichmentManager.setScope(viewModelScope)
+        articleWarmingManager.setScope(viewModelScope)
+
+        // Forward read state manager events to our events flow
+        viewModelScope.launch {
+            readStateManager.events.collect { event ->
+                _events.emit(event)
+            }
+        }
+    }
 
     fun setScope(feedId: String?, categoryId: String?) {
         _state.update {
@@ -95,6 +101,7 @@ class ArticlesViewModel @Inject constructor(
                 errorMessage = null,
             )
         }
+        readStateManager.updateScope(feedId, categoryId)
         refreshArticlePager()
     }
 
@@ -114,6 +121,7 @@ class ArticlesViewModel @Inject constructor(
             }
         }
         if (changed) {
+            readStateManager.updateFilter(_state.value.hideRead)
             refreshArticlePager()
         }
     }
@@ -145,12 +153,14 @@ class ArticlesViewModel @Inject constructor(
                 is AppResult.Success -> {
                     if (!isCurrentArticleRequest(requestId) || _state.value.articleQuery() != query) return@launch
                     val readStates = knownArticleReadStates()
+                    val itemsWithReadStates = result.data.data.withReadStates(readStates)
                     _state.update {
                         it.copy(
-                            items = result.data.data.withReadStates(readStates),
+                            items = itemsWithReadStates,
                             loading = false,
                         )
                     }
+                    readStateManager.updateItems(itemsWithReadStates)
                     repository.prefetchHeroImages(result.data.data.map { it.heroImageUrl })
                 }
                 is AppResult.Error -> {
@@ -168,7 +178,9 @@ class ArticlesViewModel @Inject constructor(
 
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
         if (articles.isEmpty()) return
-        _state.update { it.copy(items = articles.withReadStates(knownArticleReadStates())) }
+        val itemsWithReadStates = articles.withReadStates(knownArticleReadStates())
+        _state.update { it.copy(items = itemsWithReadStates) }
+        readStateManager.updateItems(itemsWithReadStates)
     }
 
     fun openArticle(id: String, forceRefresh: Boolean = false) {
@@ -180,13 +192,16 @@ class ArticlesViewModel @Inject constructor(
                             selectedArticle = result.data,
                         )
                     }
+                    enrichmentManager.updateSelectedArticle(result.data)
+                    readStateManager.updateSelectedArticle(result.data)
+
                     if (!result.data.isRead) {
                         markRead(id, true)
                     } else {
-                        rememberArticleReadState(id, true)
+                        readStateManager.readStateStore.remember(id, true)
                     }
-                    maybeEnrichSelectedArticle(result.data)
-                    warmAdjacentArticles(id)
+                    enrichmentManager.maybeEnrichSelectedArticle(result.data)
+                    articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
             }
@@ -194,9 +209,11 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun closeArticle() {
-        enrichArticleJob?.cancel()
-        warmNextArticlesJob?.cancel()
+        enrichmentManager.cancelEnrichment()
+        articleWarmingManager.cancelWarming()
         _state.update { it.copy(selectedArticle = null) }
+        enrichmentManager.updateSelectedArticle(null)
+        readStateManager.updateSelectedArticle(null)
     }
 
     fun openAdjacentArticle(direction: Int) {
@@ -210,131 +227,87 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun markRead(articleId: String, read: Boolean) {
-        if (!read) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
+        val previousReadState = _state.value.articleReadState(articleId)
+        val previousArticle = _state.value.selectedArticle?.takeIf { it.id == articleId }
+        val feedId = _state.value.articleFeedId(articleId)
 
-        viewModelScope.launch {
-            val previousReadState = _state.value.articleReadState(articleId)
-            val previousArticle = _state.value.selectedArticle?.takeIf { it.id == articleId }
-            applyArticleReadState(
-                articleId = articleId,
-                feedId = _state.value.articleFeedId(articleId),
-                isRead = read,
-                previousReadState = previousReadState,
-                emitEvent = false,
-            )
-            when (val result = repository.markRead(articleId, read)) {
-                is AppResult.Success -> {
-                    val confirmed = result.data
-                    rememberArticleReadState(articleId, confirmed)
-                    applyArticleReadState(
-                        articleId = articleId,
-                        feedId = _state.value.articleFeedId(articleId),
-                        isRead = confirmed,
-                        previousReadState = previousReadState,
-                        emitEvent = true,
-                    )
-                }
-                is AppResult.Error -> _state.update { state ->
+        readStateManager.markRead(
+            articleId = articleId,
+            read = read,
+            onOptimisticUpdate = { id, fId, isRead ->
+                applyArticleReadStateOptimistic(id, isRead)
+            },
+            onError = { id, prevState, prevArticle ->
+                _state.update { state ->
                     state.copy(
-                        items = previousReadState?.let { previous ->
-                            state.items.map { if (it.id == articleId) it.copy(isRead = previous) else it }
+                        items = prevState?.let { previous ->
+                            state.items.map { if (it.id == id) it.copy(isRead = previous) else it }
                         } ?: state.items,
-                        selectedArticle = previousArticle ?: state.selectedArticle,
-                        errorMessage = result.message,
+                        selectedArticle = prevArticle ?: state.selectedArticle,
                     )
                 }
-            }
-        }
+                // Emit error message
+                _state.update { it.copy(errorMessage = "Failed to update read state") }
+            },
+            onConfirm = { id, fId, confirmed, prevState ->
+                applyArticleReadStateConfirmed(id, fId, confirmed, prevState)
+            },
+        )
     }
 
     fun markAllRead() {
-        viewModelScope.launch {
-            val snapshot = _state.value
-            when (val result = repository.markAllRead(snapshot.selectedFeedId, snapshot.selectedCategoryId)) {
-                is AppResult.Success -> {
-                    val marked = result.data
-                    val affectedFeedIds = when {
-                        marked.feedIds.isNotEmpty() -> marked.feedIds.toSet()
-                        snapshot.selectedFeedId != null -> setOf(snapshot.selectedFeedId)
-                        else -> emptySet()
-                    }
-                    _state.update { current ->
-                        current.items
-                            .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
-                            .forEach { rememberArticleReadState(it.id, true) }
-                        current.selectedArticle
-                            ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
-                            ?.let { rememberArticleReadState(it.id, true) }
+        val snapshot = _state.value
+        readStateManager.markAllRead(
+            selectedFeedId = snapshot.selectedFeedId,
+            selectedCategoryId = snapshot.selectedCategoryId,
+            onSuccess = { feedId, categoryId, affectedFeedIds, markedCount ->
+                _state.update { current ->
+                    current.items
+                        .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
+                        .forEach { readStateManager.readStateStore.remember(it.id, true) }
+                    current.selectedArticle
+                        ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
+                        ?.let { readStateManager.readStateStore.remember(it.id, true) }
 
-                        current.copy(
-                            items = current.items.map { article ->
-                                if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                                    article.copy(isRead = true)
-                                } else {
-                                    article
-                                }
-                            },
-                            selectedArticle = current.selectedArticle?.let { article ->
-                                if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                                    article.copy(isRead = true)
-                                } else {
-                                    article
-                                }
-                            },
-                            statusMessage = "Marked ${marked.markedCount} articles as read",
-                        )
-                    }
-                    _events.emit(
-                        ArticleFeatureEvent.ScopeMarkedRead(
-                            feedId = snapshot.selectedFeedId,
-                            categoryId = snapshot.selectedCategoryId,
-                            affectedFeedIds = affectedFeedIds,
-                            markedCount = marked.markedCount,
-                        ),
+                    current.copy(
+                        items = current.items.map { article ->
+                            if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                                article.copy(isRead = true)
+                            } else {
+                                article
+                            }
+                        },
+                        selectedArticle = current.selectedArticle?.let { article ->
+                            if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                                article.copy(isRead = true)
+                            } else {
+                                article
+                            }
+                        },
+                        statusMessage = "Marked $markedCount articles as read",
                     )
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
-            }
-        }
+            },
+            onError = { message ->
+                _state.update { it.copy(errorMessage = message) }
+            },
+        )
     }
 
     fun enrichArticle(articleId: String): AppResult<EnrichArticleResponse> {
-        viewModelScope.launch {
-            when (repository.enrichArticle(articleId)) {
-                is AppResult.Success, is AppResult.Error -> Unit
-            }
-        }
-        return AppResult.Success(EnrichArticleResponse(success = false, reason = "queued"))
+        return enrichmentManager.enrichArticle(articleId)
     }
 
     fun startReadStateSync() {
-        if (readStateSyncJob?.isActive == true) return
-        readStateSyncJob = viewModelScope.launch {
-            val job = currentCoroutineContext()[Job]
-            while (job?.isActive == true) {
-                try {
-                    repository.readStateEvents().collect { event ->
-                        if (event.clientId != null && event.clientId == repository.clientId()) return@collect
-                        applyReadStateSyncEvent(event)
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Read-state sync collector crashed; restarting", e)
-                }
-                delay(READ_STATE_SYNC_RESTART_DELAY_MS)
-            }
-        }
+        readStateManager.startReadStateSync()
     }
 
     fun stopReadStateSync() {
-        readStateSyncJob?.cancel()
-        readStateSyncJob = null
+        readStateManager.stopReadStateSync()
     }
 
     fun clearSessionReadStateMemory() {
-        articleReadStates.clear()
-        manuallyUnread.clear()
+        readStateManager.clearSessionMemory()
     }
 
     fun clearMessages() {
@@ -342,184 +315,41 @@ class ArticlesViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        enrichArticleJob?.cancel()
-        warmNextArticlesJob?.cancel()
-        stopReadStateSync()
+        enrichmentManager.cancelEnrichment()
+        articleWarmingManager.cancelWarming()
+        readStateManager.stopReadStateSync()
         super.onCleared()
     }
 
-    private suspend fun applyReadStateSyncEvent(event: ReadStateSyncEvent) {
-        when (event) {
-            is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
-            is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
-        }
-    }
-
-    private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
-        repository.invalidateReadStateCaches(event.articleId)
-        val previous = _state.value.articleReadState(event.articleId)
-        rememberArticleReadState(event.articleId, event.isRead)
-        var shouldReloadArticles = false
+    private fun applyArticleReadStateOptimistic(articleId: String, isRead: Boolean) {
         _state.update { state ->
-            shouldReloadArticles = !event.isRead &&
-                state.hideRead &&
-                state.isFeedVisible(event.feedId) &&
-                state.items.none { it.id == event.articleId }
             state.copy(
                 items = state.items.map {
-                    if (it.id == event.articleId) it.copy(isRead = event.isRead) else it
+                    if (it.id == articleId) it.copy(isRead = isRead) else it
                 },
                 selectedArticle = state.selectedArticle?.let {
-                    if (it.id == event.articleId) it.copy(isRead = event.isRead) else it
+                    if (it.id == articleId) it.copy(isRead = isRead) else it
                 },
             )
         }
-        val changed = previous?.let { it != event.isRead } ?: true
-        val unreadDelta = if (!changed) 0 else if (event.isRead) -1 else 1
-        _events.emit(
-            ArticleFeatureEvent.ArticleReadStateChanged(
-                articleId = event.articleId,
-                feedId = event.feedId,
-                read = event.isRead,
-                unreadDelta = unreadDelta,
-                readDelta = if (!changed) 0 else if (event.isRead) 1 else -1,
-            ),
-        )
-        if (shouldReloadArticles) refreshArticlePager()
     }
 
-    private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
-        repository.invalidateReadStateCaches()
-        val feedIds = event.feedIds.toSet()
-        _state.update { state ->
-            state.copy(
-                items = state.items.map { article ->
-                    if (article.feedId in feedIds) {
-                        rememberArticleReadState(article.id, true)
-                        article.copy(isRead = true)
-                    } else {
-                        article
-                    }
-                },
-                selectedArticle = state.selectedArticle?.let { article ->
-                    if (article.feedId in feedIds) {
-                        rememberArticleReadState(article.id, true)
-                        article.copy(isRead = true)
-                    } else {
-                        article
-                    }
-                },
-            )
-        }
-        _events.emit(
-            ArticleFeatureEvent.ScopeMarkedRead(
-                feedId = event.scope.feedId,
-                categoryId = event.scope.categoryId,
-                affectedFeedIds = feedIds,
-                markedCount = event.markedCount,
-            ),
-        )
-    }
-
-    private fun applyArticleReadState(
+    private fun applyArticleReadStateConfirmed(
         articleId: String,
         feedId: String?,
         isRead: Boolean,
         previousReadState: Boolean?,
-        emitEvent: Boolean,
     ) {
-        _state.update { state ->
-            state.copy(
-                items = state.items.map {
-                    if (it.id == articleId) it.copy(isRead = isRead) else it
-                },
-                selectedArticle = state.selectedArticle?.let {
-                    if (it.id == articleId) it.copy(isRead = isRead) else it
-                },
-            )
-        }
-        if (emitEvent) {
-            val (unreadDelta, readDelta) = readDelta(previousReadState, isRead)
-            _events.tryEmit(
-                ArticleFeatureEvent.ArticleReadStateChanged(
-                    articleId = articleId,
-                    feedId = feedId,
-                    read = isRead,
-                    unreadDelta = unreadDelta,
-                    readDelta = readDelta,
-                ),
-            )
-        }
-    }
-
-    private fun maybeEnrichSelectedArticle(article: ArticleDetail) {
-        if (article.isEnriched || article.canonicalUrl.isNullOrBlank()) return
-        enrichArticleJob?.cancel()
-        enrichArticleJob = viewModelScope.launch {
-            when (repository.enrichArticle(article.id)) {
-                is AppResult.Success -> {
-                    delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
-                    when (val refreshed = repository.article(article.id, forceRefresh = true)) {
-                        is AppResult.Success -> _state.update {
-                            if (it.selectedArticle?.id == article.id) it.copy(selectedArticle = refreshed.data) else it
-                        }
-                        is AppResult.Error -> Unit
-                    }
-                }
-                is AppResult.Error -> Unit
-            }
-        }
-    }
-
-    private fun warmAdjacentArticles(articleId: String) {
-        val state = _state.value
-        val currentIndex = state.items.indexOfFirst { it.id == articleId }
-        if (currentIndex == -1) return
-
-        val previous = state.items
-            .asReversed()
-            .drop(state.items.size - 1 - currentIndex)
-            .take(NEXT_ARTICLE_WARM_LIMIT)
-        val next = state.items
-            .drop(currentIndex + 1)
-            .take(NEXT_ARTICLE_WARM_LIMIT)
-        val articlesToWarm = (previous + next).distinct()
-        if (articlesToWarm.isEmpty()) return
-
-        repository.prefetchHeroImages(articlesToWarm.map { it.heroImageUrl })
-        warmNextArticlesJob?.cancel()
-        warmNextArticlesJob = viewModelScope.launch {
-            for (nextArticleId in articlesToWarm.map { it.id }) {
-                val detail = repository.cachedArticleDetail(nextArticleId)
-                    ?: when (val prefetched = repository.prefetchArticle(nextArticleId)) {
-                        is AppResult.Success -> prefetched.data
-                        is AppResult.Error -> continue
-                    }
-                repository.prefetchHeroImages(listOf(detail.heroImageUrl))
-                if (!shouldAttemptBackgroundEnrichment(detail)) continue
-                when (val enriched = repository.enrichArticle(nextArticleId, invalidateCaches = false)) {
-                    is AppResult.Success -> {
-                        if (enriched.data.success || enriched.data.reason == "already_enriched") {
-                            delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
-                            repository.refreshArticleDetail(nextArticleId)
-                        }
-                    }
-                    is AppResult.Error -> Unit
-                }
-            }
-        }
-    }
-
-    private fun shouldAttemptBackgroundEnrichment(article: ArticleDetail): Boolean {
-        if (article.isEnriched || article.canonicalUrl.isNullOrBlank()) return false
-        val now = System.currentTimeMillis()
-        backgroundEnrichAttemptedAt.entries.removeIf {
-            now - it.value >= ARTICLE_BACKGROUND_ENRICH_RETRY_MS
-        }
-        val lastAttemptAt = backgroundEnrichAttemptedAt[article.id]
-        if (lastAttemptAt != null && now - lastAttemptAt < ARTICLE_BACKGROUND_ENRICH_RETRY_MS) return false
-        backgroundEnrichAttemptedAt[article.id] = now
-        return true
+        val (unreadDelta, readDelta) = readDelta(previousReadState, isRead)
+        _events.tryEmit(
+            ArticleFeatureEvent.ArticleReadStateChanged(
+                articleId = articleId,
+                feedId = feedId,
+                read = isRead,
+                unreadDelta = unreadDelta,
+                readDelta = readDelta,
+            ),
+        )
     }
 
     private fun refreshArticlePager() {
@@ -530,19 +360,8 @@ class ArticlesViewModel @Inject constructor(
     private fun isCurrentArticleRequest(requestId: Long): Boolean =
         requestId == requestSequence.get()
 
-    private fun rememberArticleReadState(articleId: String, isRead: Boolean) {
-        if (articleId in manuallyUnread && isRead) return
-        articleReadStates.remember(articleId, isRead)
-    }
-
     private fun knownArticleReadStates(): Map<String, Boolean> =
-        _state.value.let {
-            articleReadStates.snapshot(
-                articles = it.items,
-                searchResults = emptyList(),
-                selectedArticle = it.selectedArticle,
-            )
-        }
+        readStateManager.knownArticleReadStates()
 
     private fun ArticlesUiState.articleReadState(articleId: String): Boolean? =
         selectedArticle?.takeIf { it.id == articleId }?.isRead
@@ -552,17 +371,6 @@ class ArticlesViewModel @Inject constructor(
     private fun ArticlesUiState.articleFeedId(articleId: String): String? =
         selectedArticle?.takeIf { it.id == articleId }?.feedId
             ?: items.firstOrNull { it.id == articleId }?.feedId
-
-    private fun ArticlesUiState.isFeedVisible(feedId: String): Boolean =
-        selectedFeedId == null || selectedFeedId == feedId
-
-    private fun ArticlesUiState.articleMatchesCurrentScope(article: ArticleListItem): Boolean {
-        return selectedFeedId == null || article.feedId == selectedFeedId
-    }
-
-    private fun ArticlesUiState.articleMatchesCurrentScope(article: ArticleDetail): Boolean {
-        return selectedFeedId == null || article.feedId == selectedFeedId
-    }
 
     private fun ArticlesUiState.articleMatchesAffectedFeeds(
         article: ArticleListItem,
@@ -603,6 +411,7 @@ class ArticlesViewModel @Inject constructor(
         if (!changed) return 0 to 0
         return if (newReadState) -1 to 1 else 1 to -1
     }
+
     private data class ArticleQuery(
         val feedId: String?,
         val categoryId: String?,
@@ -613,9 +422,5 @@ class ArticlesViewModel @Inject constructor(
     private companion object {
         const val TAG = "ArticlesViewModel"
         const val ARTICLE_PAGE_SIZE = 30
-        const val ARTICLE_ENRICH_REFRESH_DELAY_MS = 600L
-        const val ARTICLE_BACKGROUND_ENRICH_RETRY_MS = 10 * 60 * 1000L
-        const val NEXT_ARTICLE_WARM_LIMIT = 2
-        const val READ_STATE_SYNC_RESTART_DELAY_MS = 10_000L
     }
 }
