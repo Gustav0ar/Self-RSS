@@ -221,6 +221,7 @@ export const articles = sqliteTable(
 			sql`coalesce(${t.publishedAt}, ${t.fetchedAt})`,
 			t.id,
 		),
+		index('articles_sort_idx').on(sql`coalesce(${t.publishedAt}, ${t.fetchedAt})`, t.id),
 	],
 );
 
@@ -300,7 +301,10 @@ export const syncRuns = sqliteTable(
 		itemCount: integer('item_count').notNull().default(0),
 		errorMessage: text('error_message'),
 	},
-	(t) => [index('sync_runs_feed_id_idx').on(t.feedId)],
+	(t) => [
+		index('sync_runs_feed_id_idx').on(t.feedId),
+		index('sync_runs_started_at_idx').on(t.startedAt),
+	],
 );
 
 export const syncRunsRelations = relations(syncRuns, ({ one }) => ({

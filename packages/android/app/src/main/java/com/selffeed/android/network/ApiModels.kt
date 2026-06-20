@@ -281,6 +281,7 @@ data class MarkReadResponse(
 @JsonClass(generateAdapter = true)
 data class MarkAllReadResponse(
     val markedCount: Int,
+    val feedIds: List<String> = emptyList(),
 )
 
 @JsonClass(generateAdapter = true)

@@ -27,18 +27,34 @@ object UnreadStateReducer {
     fun applyCategoryDeltas(
         categories: List<CategoryWithCounts>,
         deltas: Map<String, Int>,
-    ): List<CategoryWithCounts> =
-        categories.map { category ->
-            val children = category.children?.let { applyCategoryDeltas(it, deltas) }
-            val delta = deltas[category.id] ?: 0
-            if (delta == 0 && children == category.children) {
-                category
-            } else {
-                category.copy(
-                    unreadCount = (category.unreadCount + delta).coerceAtLeast(0),
-                    children = children,
-                )
+    ): List<CategoryWithCounts> {
+        fun applyNode(category: CategoryWithCounts): Pair<CategoryWithCounts, Int> {
+            var totalDelta = deltas[category.id] ?: 0
+            val children = category.children?.map { child ->
+                val (updatedChild, childDelta) = applyNode(child)
+                totalDelta += childDelta
+                updatedChild
             }
+
+            if (totalDelta == 0 && children == category.children) {
+                return category to 0
+            }
+
+            return category.copy(
+                unreadCount = (category.unreadCount + totalDelta).coerceAtLeast(0),
+                children = children,
+            ) to totalDelta
+        }
+
+        return categories.map { applyNode(it).first }
+    }
+
+    fun clearCategoryUnreadCounts(categories: List<CategoryWithCounts>): List<CategoryWithCounts> =
+        categories.map { category ->
+            category.copy(
+                unreadCount = 0,
+                children = category.children?.let(::clearCategoryUnreadCounts),
+            )
         }
 
     fun applyStatsDelta(

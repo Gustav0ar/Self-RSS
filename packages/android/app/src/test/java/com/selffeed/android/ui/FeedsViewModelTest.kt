@@ -196,18 +196,61 @@ class FeedsViewModelTest {
         assertEquals(0, viewModel.state.value.categories.first().unreadCount)
     }
 
-    private fun sampleCategory(unreadCount: Int = 0): CategoryWithCounts = CategoryWithCounts(
-        id = "c-1",
+    @Test
+    fun `applyScopeMarkedRead for a parent category includes descendant feed ids`() = runTest {
+        coEvery { repository.categories() } returns AppResult.Success(
+            listOf(
+                sampleCategory(
+                    id = "c-parent",
+                    unreadCount = 5,
+                    children = listOf(sampleCategory(id = "c-child", unreadCount = 3)),
+                ),
+            ),
+        )
+        coEvery { repository.feeds(any()) } returns AppResult.Success(
+            listOf(
+                sampleFeed(id = "f-parent", categoryId = "c-parent", unreadCount = 2),
+                sampleFeed(id = "f-child", categoryId = "c-child", unreadCount = 3),
+                sampleFeed(id = "f-other", categoryId = "c-other", unreadCount = 4),
+            ),
+        )
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+        viewModel.loadFeeds()
+
+        viewModel.applyScopeMarkedRead(
+            feedId = null,
+            categoryId = "c-parent",
+            affectedFeedIds = emptySet(),
+        )
+
+        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-parent" }.unreadCount)
+        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-child" }.unreadCount)
+        assertEquals(4, viewModel.state.value.feeds.first { it.id == "f-other" }.unreadCount)
+        assertEquals(0, viewModel.state.value.categories.first().unreadCount)
+    }
+
+    private fun sampleCategory(
+        id: String = "c-1",
+        unreadCount: Int = 0,
+        children: List<CategoryWithCounts>? = null,
+    ): CategoryWithCounts = CategoryWithCounts(
+        id = id,
         name = "Tech",
         slug = "tech",
         sortOrder = 0,
         feedCount = 0,
         unreadCount = unreadCount,
+        children = children,
     )
 
-    private fun sampleFeed(id: String = "f-1", unreadCount: Int = 0): FeedWithCounts = FeedWithCounts(
+    private fun sampleFeed(
+        id: String = "f-1",
+        categoryId: String = "c-1",
+        unreadCount: Int = 0,
+    ): FeedWithCounts = FeedWithCounts(
         id = id,
-        categoryId = "c-1",
+        categoryId = categoryId,
         title = "Feed",
         feedUrl = "https://example.com/feed.xml",
         pollingIntervalMinutes = 60,

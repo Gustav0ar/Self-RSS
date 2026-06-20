@@ -111,6 +111,26 @@ export class CategoryRepository {
 		return cat;
 	}
 
+	async updateSortOrders(
+		userId: string,
+		updates: { id: string; sortOrder: number }[],
+	): Promise<number> {
+		if (updates.length === 0) return 0;
+		const now = new Date();
+		return this.db.transaction(async (tx) => {
+			let updatedCount = 0;
+			for (const update of updates) {
+				const result = await tx
+					.update(categories)
+					.set({ sortOrder: update.sortOrder, updatedAt: now })
+					.where(and(eq(categories.id, update.id), eq(categories.userId, userId)))
+					.returning({ id: categories.id });
+				updatedCount += result.length;
+			}
+			return updatedCount;
+		});
+	}
+
 	async delete(id: string, userId: string) {
 		const [cat] = await this.db
 			.delete(categories)

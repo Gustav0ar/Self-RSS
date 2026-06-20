@@ -160,21 +160,20 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 				const height = data['twttr.embed'].params?.[0]?.height;
 				if (typeof height === 'number') {
 					const tweetId = data['twttr.embed'].params?.[0]?.data?.tweet_id;
-					const iframes = document.querySelectorAll<HTMLIFrameElement>('iframe');
+					const root = scrollerRef.current;
+					if (!root) return;
+					const iframes = root.querySelectorAll<HTMLIFrameElement>(
+						'iframe[src*="platform.twitter.com"]',
+					);
 					let twitterIframesCount = 0;
 					let singleTwitterIframe: HTMLIFrameElement | null = null;
 					for (const iframe of iframes) {
-						if (iframe.src.includes('platform.twitter.com')) {
-							twitterIframesCount++;
-							singleTwitterIframe = iframe;
-						}
+						twitterIframesCount++;
+						singleTwitterIframe = iframe;
 					}
 
 					for (const iframe of iframes) {
 						const src = iframe.src;
-						if (!src.includes('platform.twitter.com')) {
-							continue;
-						}
 						const iframeTweetId = src.match(/[?&]id=(\d+)/)?.[1];
 						const matchesTweetId =
 							tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId);

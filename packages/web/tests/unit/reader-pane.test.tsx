@@ -143,4 +143,31 @@ describe('ReaderPane', () => {
 		requestAnimationFrame.mockRestore();
 		cancelAnimationFrame.mockRestore();
 	});
+
+	it('resizes only Twitter iframes inside the reader pane', () => {
+		const { container } = render(<ReaderPane articleId="article-1" />);
+		const readerRoot = container.firstElementChild as HTMLElement;
+		const twitterIframe = document.createElement('iframe');
+		twitterIframe.src = 'https://platform.twitter.com/embed/Tweet.html?id=123';
+		readerRoot.appendChild(twitterIframe);
+		const outsideIframe = document.createElement('iframe');
+		outsideIframe.src = 'https://platform.twitter.com/embed/Tweet.html?id=123';
+		document.body.appendChild(outsideIframe);
+
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				origin: 'https://platform.twitter.com',
+				data: {
+					'twttr.embed': {
+						method: 'twttr.private.resize',
+						params: [{ height: 420, data: { tweet_id: '123' } }],
+					},
+				},
+			}),
+		);
+
+		expect(twitterIframe.style.height).toBe('420px');
+		expect(outsideIframe.style.height).toBe('');
+		outsideIframe.remove();
+	});
 });

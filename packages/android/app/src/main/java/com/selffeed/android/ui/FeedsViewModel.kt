@@ -179,7 +179,10 @@ class FeedsViewModel @Inject constructor(
             val targetFeedIds = when {
                 affectedFeedIds.isNotEmpty() -> affectedFeedIds
                 feedId != null -> setOf(feedId)
-                categoryId != null -> state.feeds.filter { it.categoryId == categoryId }.map { it.id }.toSet()
+                categoryId != null -> {
+                    val categoryIds = descendantCategoryIds(state.categories, categoryId)
+                    state.feeds.filter { it.categoryId in categoryIds }.map { it.id }.toSet()
+                }
                 else -> state.feeds.map { it.id }.toSet()
             }
             val categoryDeltas = state.feeds
@@ -193,7 +196,7 @@ class FeedsViewModel @Inject constructor(
                     if (feed.id in targetFeedIds) feed.copy(unreadCount = 0) else feed
                 },
                 categories = if (shouldClearAllCategories) {
-                    state.categories.map { it.copy(unreadCount = 0) }
+                    UnreadStateReducer.clearCategoryUnreadCounts(state.categories)
                 } else {
                     UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas)
                 },
@@ -216,5 +219,26 @@ class FeedsViewModel @Inject constructor(
 
     fun clearMessages() {
         _state.update { it.copy(errorMessage = null, statusMessage = null) }
+    }
+
+    private fun descendantCategoryIds(categories: List<CategoryWithCounts>, categoryId: String): Set<String> {
+        val ids = mutableSetOf<String>()
+        fun visit(category: CategoryWithCounts) {
+            if (!ids.add(category.id)) return
+            category.children.orEmpty().forEach(::visit)
+        }
+
+        fun findAndVisit(nodes: List<CategoryWithCounts>): Boolean {
+            for (node in nodes) {
+                if (node.id == categoryId) {
+                    visit(node)
+                    return true
+                }
+                if (findAndVisit(node.children.orEmpty())) return true
+            }
+            return false
+        }
+
+        return if (findAndVisit(categories)) ids else setOf(categoryId)
     }
 }

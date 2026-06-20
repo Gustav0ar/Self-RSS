@@ -149,4 +149,40 @@ describe('SearchBar', () => {
 			'false',
 		);
 	});
+
+	it('caps rendered result rows and lazy-loads thumbnails', () => {
+		useSearchMock.mockReturnValue({
+			data: {
+				pages: [
+					{
+						data: Array.from({ length: 90 }, (_, index) => ({
+							id: `a-${index}`,
+							title: `Article ${index}`,
+							feedTitle: 'Feed A',
+							excerpt: null,
+							heroImageUrl: `https://example.com/${index}.jpg`,
+						})),
+						cursor: 'next',
+						hasMore: true,
+					},
+				],
+			},
+			fetchNextPage: vi.fn(),
+			hasNextPage: true,
+			isFetchingNextPage: false,
+			isLoading: false,
+		});
+
+		render(<SearchBar onSelectArticle={() => {}} />);
+		const input = screen.getByPlaceholderText('Search articles...');
+		fireEvent.change(input, { target: { value: 'Al' } });
+		act(() => {
+			vi.advanceTimersByTime(300);
+		});
+
+		expect(screen.getAllByRole('option')).toHaveLength(80);
+		const image = document.querySelector<HTMLImageElement>('img[src="https://example.com/0.jpg"]');
+		expect(image?.getAttribute('loading')).toBe('lazy');
+		expect(image?.getAttribute('decoding')).toBe('async');
+	});
 });

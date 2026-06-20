@@ -223,6 +223,13 @@ export const openApiSpec = {
 					totalUnread: { type: 'integer' },
 				},
 			},
+			ReorderCategoriesResult: {
+				type: 'object',
+				required: ['updatedCount'],
+				properties: {
+					updatedCount: { type: 'integer' },
+				},
+			},
 			ArticleListItem: {
 				type: 'object',
 				required: ['id', 'feedId', 'feedTitle', 'title', 'isRead'],
@@ -286,6 +293,14 @@ export const openApiSpec = {
 					{ $ref: '#/components/schemas/ArticleReadStateChangedEvent' },
 					{ $ref: '#/components/schemas/ArticlesMarkedReadEvent' },
 				],
+			},
+			MarkAllReadResult: {
+				type: 'object',
+				required: ['markedCount', 'feedIds'],
+				properties: {
+					markedCount: { type: 'integer' },
+					feedIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+				},
 			},
 			Preferences: {
 				type: 'object',
@@ -444,6 +459,32 @@ export const openApiSpec = {
 					},
 				}),
 				responses: { '201': json(apiDataRef('#/components/schemas/Category')) },
+			},
+		},
+		'/categories/reorder': {
+			patch: {
+				tags: ['Categories'],
+				security: bearerSecurity,
+				requestBody: json({
+					type: 'object',
+					required: ['updates'],
+					properties: {
+						updates: {
+							type: 'array',
+							minItems: 1,
+							maxItems: 500,
+							items: {
+								type: 'object',
+								required: ['id', 'sortOrder'],
+								properties: {
+									id: { type: 'string', format: 'uuid' },
+									sortOrder: { type: 'integer', minimum: 0 },
+								},
+							},
+						},
+					},
+				}),
+				responses: { '200': json(apiDataRef('#/components/schemas/ReorderCategoriesResult')) },
 			},
 		},
 		'/categories/{categoryId}': {
@@ -632,7 +673,7 @@ export const openApiSpec = {
 				tags: ['Articles'],
 				security: bearerSecurity,
 				requestBody: json({ type: 'object' }),
-				responses: { '200': json({ type: 'object' }) },
+				responses: { '200': json(apiDataRef('#/components/schemas/MarkAllReadResult')) },
 			},
 		},
 		'/events/read-state': {

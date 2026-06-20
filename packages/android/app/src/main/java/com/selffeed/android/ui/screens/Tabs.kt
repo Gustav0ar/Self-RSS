@@ -168,6 +168,9 @@ fun FeedsTab(
             }
         }
     }
+    val feedsByCategory = remember(state.feeds) {
+        state.feeds.groupBy { it.categoryId }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -219,9 +222,7 @@ fun FeedsTab(
             state.categories.forEach { category ->
                 add(category)
                 if (expandedCategories[category.id] ?: true) {
-                    state.feeds
-                        .filter { it.categoryId == category.id }
-                        .forEach { add(it) }
+                    feedsByCategory[category.id].orEmpty().forEach { add(it) }
                 }
             }
         }

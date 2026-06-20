@@ -112,6 +112,28 @@ export class CategoryService {
 		return this.categoryRepo.update(categoryId, userId, updates);
 	}
 
+	async reorder(userId: string, updates: { id: string; sortOrder: number }[]) {
+		const uniqueIds = new Set(updates.map((update) => update.id));
+		if (uniqueIds.size !== updates.length) {
+			throw AppError.badRequest('Category reorder contains duplicate category ids');
+		}
+
+		const allCategories = await this.categoryRepo.findAllByUser(userId);
+		const byId = new Map(allCategories.map((category) => [category.id, category]));
+		const targetCategories = updates.map((update) => byId.get(update.id));
+		if (targetCategories.some((category) => !category)) {
+			throw AppError.notFound('Category not found');
+		}
+
+		const parentId = targetCategories[0]?.parentCategoryId ?? null;
+		if (targetCategories.some((category) => (category?.parentCategoryId ?? null) !== parentId)) {
+			throw AppError.badRequest('Categories can only be reordered within the same parent');
+		}
+
+		const updatedCount = await this.categoryRepo.updateSortOrders(userId, updates);
+		return { updatedCount };
+	}
+
 	async delete(userId: string, categoryId: string) {
 		const cat = await this.categoryRepo.findById(categoryId, userId);
 		if (!cat) throw AppError.notFound('Category not found');

@@ -131,7 +131,13 @@ describe('ArticleCacheService - updateCachedReadState', () => {
 			articles: [cachedArticle('a1', '2026-01-01T00:00:00.000Z')],
 		};
 		const setex = vi.fn(async (_key: string, _ttl: number, _payload: string) => 'OK');
+		const pipeline = {
+			sadd: vi.fn().mockReturnThis(),
+			expire: vi.fn().mockReturnThis(),
+			exec: vi.fn(async () => []),
+		};
 		const redis = {
+			smembers: vi.fn().mockResolvedValue([]),
 			scan: vi.fn().mockResolvedValue(['0', ['articles:list:user-1:feed:f1']]),
 			get: vi
 				.fn()
@@ -145,15 +151,51 @@ describe('ArticleCacheService - updateCachedReadState', () => {
 			setex,
 			del: vi.fn(async () => 0),
 			incr: vi.fn(async () => 2),
+			pipeline: vi.fn(() => pipeline),
 		};
 		const service = new ArticleCacheService({} as never, {} as never, redis as never);
 
 		await service.updateCachedReadState('user-1', 'a1', true);
 
+		expect(redis.scan).toHaveBeenCalled();
 		expect(redis.incr).not.toHaveBeenCalled();
 		expect(setex).toHaveBeenCalledTimes(2);
 		const payloads = setex.mock.calls.map((call) => JSON.parse(call[2]));
 		expect(payloads.every((payload) => payload.articles[0].isRead === true)).toBe(true);
+	});
+
+	it('uses article membership indexes to avoid scanning scoped cache keys', async () => {
+		const scopedCached = {
+			articles: [cachedArticle('a1', '2026-01-01T00:00:00.000Z')],
+			cursor: null,
+			hasMore: false,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const setex = vi.fn(async (_key: string, _ttl: number, _payload: string) => 'OK');
+		const pipeline = {
+			sadd: vi.fn().mockReturnThis(),
+			expire: vi.fn().mockReturnThis(),
+			exec: vi.fn(async () => []),
+		};
+		const redis = {
+			smembers: vi.fn().mockResolvedValue(['articles:list:user-1:feed:f1']),
+			scan: vi.fn(),
+			get: vi.fn().mockResolvedValue(JSON.stringify(scopedCached)),
+			setex,
+			del: vi.fn(async () => 0),
+			pipeline: vi.fn(() => pipeline),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		await service.updateCachedReadState('user-1', 'a1', true);
+
+		expect(redis.smembers).toHaveBeenCalledWith('articles:list:index:user-1:a1');
+		expect(redis.scan).not.toHaveBeenCalled();
+		expect(setex).toHaveBeenCalledTimes(1);
+		expect(pipeline.sadd).toHaveBeenCalledWith(
+			'articles:list:index:user-1:a1',
+			'articles:list:user-1:feed:f1',
+		);
 	});
 });
 
