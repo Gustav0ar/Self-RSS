@@ -26,16 +26,45 @@ describe('getEnv', () => {
 		expect(getEnv().ALLOW_REGISTRATION).toBe(true);
 	});
 
+	it('defaults strict worker heartbeat only in production', () => {
+		applyEnv({ NODE_ENV: 'development' });
+		expect(getEnv().REQUIRE_WORKER_HEARTBEAT).toBe(false);
+
+		applyEnv({ NODE_ENV: 'production' });
+		expect(getEnv().REQUIRE_WORKER_HEARTBEAT).toBe(true);
+	});
+
+	it('parses cache warmer configuration', () => {
+		applyEnv({
+			CACHE_WARMER_INTERVAL_MS: '120000',
+			CACHE_WARMER_RECENT_WINDOW_MINUTES: '30',
+			CACHE_WARMER_RECENT_USERS_LIMIT: '50',
+			CACHE_WARMER_CONCURRENCY: '3',
+			CACHE_WARMER_IDLE_USERS_ENABLED: 'true',
+			CACHE_WARMER_IDLE_USERS_LIMIT: '10',
+		});
+
+		const env = getEnv();
+		expect(env.CACHE_WARMER_INTERVAL_MS).toBe(120000);
+		expect(env.CACHE_WARMER_RECENT_WINDOW_MINUTES).toBe(30);
+		expect(env.CACHE_WARMER_RECENT_USERS_LIMIT).toBe(50);
+		expect(env.CACHE_WARMER_CONCURRENCY).toBe(3);
+		expect(env.CACHE_WARMER_IDLE_USERS_ENABLED).toBe(true);
+		expect(env.CACHE_WARMER_IDLE_USERS_LIMIT).toBe(10);
+	});
+
 	it('correctly parses false string values for booleans', () => {
 		applyEnv({
 			TRUST_PROXY: 'false',
 			FEED_ALLOW_PRIVATE_HOSTS: 'false',
 			ALLOW_REGISTRATION: 'false',
+			REQUIRE_WORKER_HEARTBEAT: 'false',
 		});
 		const env = getEnv();
 		expect(env.TRUST_PROXY).toBe(false);
 		expect(env.FEED_ALLOW_PRIVATE_HOSTS).toBe(false);
 		expect(env.ALLOW_REGISTRATION).toBe(false);
+		expect(env.REQUIRE_WORKER_HEARTBEAT).toBe(false);
 	});
 
 	it('parses trusted proxy hop configuration', () => {

@@ -53,4 +53,12 @@ describe('TopBar', () => {
 		expect(setThemeMock).toHaveBeenCalledWith('system');
 		expect(mutateMock).toHaveBeenCalledWith({ theme: 'system' });
 	});
+
+	it('keeps stats navigation available at mobile sizes', () => {
+		render(<TopBar />);
+
+		const statsLink = screen.getByRole('link', { name: 'Stats' });
+		expect(statsLink.className).toContain('inline-flex');
+		expect(statsLink.className).not.toContain('hidden');
+	});
 });

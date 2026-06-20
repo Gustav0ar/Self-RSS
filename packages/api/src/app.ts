@@ -21,6 +21,10 @@ import { createPreferencesRoutes } from './routes/preferences.js';
 import { createStatsRoutes } from './routes/stats.js';
 import type { TokenUtils } from './utils/tokens.js';
 
+interface AppOptions {
+	requireWorkerHeartbeat?: boolean;
+}
+
 function getAllowedOrigins() {
 	const configured = (process.env.CORS_ALLOWED_ORIGINS ?? '')
 		.split(',')
@@ -29,7 +33,7 @@ function getAllowedOrigins() {
 	return new Set(configured);
 }
 
-export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils) {
+export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppOptions = {}) {
 	const app = new Hono();
 	const allowedOrigins = getAllowedOrigins();
 
@@ -72,7 +76,12 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils) {
 	);
 
 	// Health routes (no /api/v1 prefix)
-	app.route('/', createHealthRoutes(deps?.db, deps?.redis));
+	app.route(
+		'/',
+		createHealthRoutes(deps?.db, deps?.redis, {
+			requireWorkerHeartbeat: options.requireWorkerHeartbeat,
+		}),
+	);
 
 	// API v1 routes (only mounted when deps are available)
 	if (deps && tokenUtils) {

@@ -4,7 +4,11 @@ import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 
-export function createHealthRoutes(db?: Database, redis?: Redis) {
+interface HealthRouteOptions {
+	requireWorkerHeartbeat?: boolean;
+}
+
+export function createHealthRoutes(db?: Database, redis?: Redis, options: HealthRouteOptions = {}) {
 	const health = new Hono();
 
 	health.get('/health', (c) => {
@@ -24,12 +28,17 @@ export function createHealthRoutes(db?: Database, redis?: Redis) {
 		try {
 			await Promise.all([db.run(sql`select 1`), redis.ping()]);
 			const workerHeartbeat = await readWorkerHeartbeat(redis);
-			return c.json({
-				status: 'ok',
-				timestamp,
-				checks: { database: 'ok', redis: 'ok', worker: workerHeartbeat.status },
-				worker: workerHeartbeat,
-			});
+			const workerReady = workerHeartbeat.status === 'ok';
+			const status = options.requireWorkerHeartbeat && !workerReady ? 'error' : 'ok';
+			return c.json(
+				{
+					status,
+					timestamp,
+					checks: { database: 'ok', redis: 'ok', worker: workerHeartbeat.status },
+					worker: workerHeartbeat,
+				},
+				status === 'ok' ? 200 : 503,
+			);
 		} catch (error) {
 			return c.json(
 				{

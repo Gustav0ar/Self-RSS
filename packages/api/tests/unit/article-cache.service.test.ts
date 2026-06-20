@@ -191,4 +191,21 @@ describe('ArticleCacheService - trackUserActivity / getRecentlyActiveUserIds', (
 		const ids = await service.getRecentlyActiveUserIds(10);
 		expect(ids).toEqual(['user-1']);
 	});
+
+	it('stops scanning once the recent user limit is reached', async () => {
+		const recent = new Date().toISOString();
+		const redis = {
+			scan: vi
+				.fn()
+				.mockResolvedValueOnce(['1', ['user:lastseen:user-1', 'user:lastseen:user-2']])
+				.mockResolvedValueOnce(['0', ['user:lastseen:user-3']]),
+			mget: vi.fn().mockResolvedValue([recent, recent]),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		const ids = await service.getRecentlyActiveUserIds(10, 1);
+
+		expect(ids).toEqual(['user-1']);
+		expect(redis.scan).toHaveBeenCalledTimes(1);
+	});
 });

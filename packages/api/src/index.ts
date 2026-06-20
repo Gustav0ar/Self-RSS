@@ -33,7 +33,9 @@ try {
 		concurrency: env.FEED_SYNC_CONCURRENCY,
 		allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
 	});
-	const app = createApp(deps, tokenUtils);
+	const app = createApp(deps, tokenUtils, {
+		requireWorkerHeartbeat: env.REQUIRE_WORKER_HEARTBEAT,
+	});
 
 	const server = Bun.serve({
 		fetch: app.fetch,
