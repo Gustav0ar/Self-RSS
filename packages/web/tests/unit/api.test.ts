@@ -12,7 +12,7 @@ import {
 describe('api module', () => {
 	afterEach(() => {
 		clearTokens();
-		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	describe('setTokens and clearTokens', () => {
@@ -49,7 +49,7 @@ describe('api module', () => {
 		it('includes Authorization header when token is set', async () => {
 			setTokens('my-access-token');
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -61,7 +61,7 @@ describe('api module', () => {
 
 		it('includes X-Self-Feed-Client-Id header on every request', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -73,7 +73,7 @@ describe('api module', () => {
 
 		it('does not include Authorization header when no token is set', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -88,7 +88,7 @@ describe('api module', () => {
 		it('refreshAccessToken returns false and clears tokens on 401', async () => {
 			setTokens('expired-token');
 			const fetchMock = vi.fn(async () => new Response('', { status: 401 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await refreshAccessToken();
 
@@ -106,7 +106,7 @@ describe('api module', () => {
 				}
 				return new Response('{"data":{"tokens":{"accessToken":"new-token"}}}', { status: 200 });
 			});
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -124,7 +124,7 @@ describe('api module', () => {
 				}
 				return new Response('', { status: 401 });
 			});
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiFetch('/test')).rejects.toThrow();
 			expect(fetchMock).toHaveBeenCalledTimes(2); // 1st attempt + failed refresh
@@ -134,7 +134,7 @@ describe('api module', () => {
 	describe('request/response handling', () => {
 		it('sends requests to the correct API base path', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/feeds');
 
@@ -147,7 +147,7 @@ describe('api module', () => {
 			const fetchMock = vi.fn(
 				async () => new Response('{"data":{"id":"1","name":"Test"}}', { status: 200 }),
 			);
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiFetch<{ data: { id: string; name: string } }>('/test');
 
@@ -157,7 +157,7 @@ describe('api module', () => {
 
 		it('includes credentials in requests', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -175,7 +175,7 @@ describe('api module', () => {
 					status: 200,
 				});
 			});
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiDownload('/download');
 
@@ -185,7 +185,7 @@ describe('api module', () => {
 
 		it('apiDownload returns null filename when Content-Disposition is missing', async () => {
 			const fetchMock = vi.fn(async () => new Response(new Blob(['test']), { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiDownload('/download');
 
@@ -194,7 +194,7 @@ describe('api module', () => {
 
 		it('sets Content-Type to application/json by default', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test');
 
@@ -206,7 +206,7 @@ describe('api module', () => {
 
 		it('does not override Content-Type when body is FormData', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 			const formData = new FormData();
 
 			await apiFetch('/upload', { body: formData });
@@ -219,7 +219,7 @@ describe('api module', () => {
 
 		it('preserves custom headers passed to apiFetch', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await apiFetch('/test', {
 				headers: { 'X-Custom-Header': 'custom-value' },
@@ -237,21 +237,21 @@ describe('api module', () => {
 			const fetchMock = vi.fn(
 				async () => new Response('{"error":{"message":"Resource not found"}}', { status: 404 }),
 			);
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiFetch('/test')).rejects.toThrow('Resource not found');
 		});
 
 		it('throws generic error when response body has no error message', async () => {
 			const fetchMock = vi.fn(async () => new Response('', { status: 500 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiFetch('/test')).rejects.toThrow('API error: 500');
 		});
 
 		it('throws generic error when response body is not valid JSON', async () => {
 			const fetchMock = vi.fn(async () => new Response('not json', { status: 400 }));
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiFetch('/test')).rejects.toThrow('API error: 400');
 		});
@@ -260,7 +260,7 @@ describe('api module', () => {
 			const fetchMock = vi.fn(
 				async () => new Response('{"error":{"message":"Download failed"}}', { status: 500 }),
 			);
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiDownload('/download')).rejects.toThrow('Download failed');
 		});
@@ -269,7 +269,7 @@ describe('api module', () => {
 			const fetchMock = vi.fn(async () => {
 				throw new Error('Network failure');
 			});
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await refreshAccessToken();
 
@@ -290,7 +290,7 @@ describe('api module', () => {
 				}
 				return new Response('', { status: 401 });
 			});
-			vi.stubGlobal('fetch', fetchMock);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const promise1 = refreshAccessToken();
 			const _promise2 = refreshAccessToken();

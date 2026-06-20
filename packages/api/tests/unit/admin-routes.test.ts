@@ -285,11 +285,12 @@ describe('createAdminRoutes', () => {
 		it('enforces rate limit on settings update', async () => {
 			const rateLimiter = makeMockRateLimiter(true, 7);
 			const settingsRepo = { update: vi.fn().mockResolvedValue({ registrationLocked: true }) };
+			const auditLogRepo = { create: vi.fn().mockResolvedValue({}) };
 
 			const app = createTestApp(
 				{} as never,
 				settingsRepo as never,
-				{} as never,
+				auditLogRepo as never,
 				rateLimiter,
 				mockTokenUtils,
 			);
@@ -570,11 +571,12 @@ describe('createAdminRoutes', () => {
 					updatedAt: new Date('2024-01-01'),
 				}),
 			};
+			const auditLogRepo = { create: vi.fn().mockResolvedValue({}) };
 
 			const app = createTestApp(
 				authService as never,
 				{} as never,
-				{} as never,
+				auditLogRepo as never,
 				rateLimiter,
 				mockTokenUtils,
 			);
