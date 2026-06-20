@@ -5,18 +5,26 @@ const virtualConsole = new VirtualConsole();
 const window = new JSDOM('', { virtualConsole }).window;
 const purify = DOMPurify(window);
 
-const KNOWN_EMBED_HOSTS = [
+const KNOWN_EMBED_HOSTS = new Set([
 	'www.youtube.com',
 	'youtube.com',
+	'm.youtube.com',
+	'youtu.be',
 	'player.vimeo.com',
+	'www.vimeo.com',
+	'vimeo.com',
+	'www.streamable.com',
 	'streamable.com',
+	'www.videopress.com',
 	'videopress.com',
 	'videos.files.wordpress.com',
 	'videos.wordpress.com',
 	'platform.twitter.com',
+	'www.twitter.com',
 	'twitter.com',
+	'www.x.com',
 	'x.com',
-];
+]);
 
 const MEDIA_CONTENT_REGEX = /<(?:img|video|audio|picture|source|iframe)\b/i;
 const MEDIA_EXTRACTION_CANDIDATE_REGEX = /<(?:img|iframe|video|source|a)\b/i;
@@ -321,16 +329,15 @@ function promoteLazyAttribute(element: Element, attribute: 'src' | 'srcset' | 'p
 
 function getProviderFromUrl(url: string): string {
 	try {
-		const hostname = new URL(url, 'https://placeholder.invalid').hostname.toLowerCase();
-		const knownHost = KNOWN_EMBED_HOSTS.find(
-			(host) => hostname === host || hostname.endsWith(`.${host}`),
-		);
-		if (knownHost) {
-			if (knownHost.includes('youtube')) return 'youtube';
-			if (knownHost.includes('vimeo')) return 'vimeo';
-			if (knownHost.includes('streamable')) return 'streamable';
-			if (knownHost.includes('videopress') || knownHost.includes('wordpress')) return 'videopress';
-			if (knownHost.includes('twitter') || knownHost.includes('x.com')) return 'x';
+		const hostname = new URL(url, 'https://placeholder.invalid').hostname
+			.toLowerCase()
+			.replace(/\.$/, '');
+		if (KNOWN_EMBED_HOSTS.has(hostname)) {
+			if (hostname.includes('youtube') || hostname === 'youtu.be') return 'youtube';
+			if (hostname.includes('vimeo')) return 'vimeo';
+			if (hostname.includes('streamable')) return 'streamable';
+			if (hostname.includes('videopress') || hostname.includes('wordpress')) return 'videopress';
+			if (hostname.includes('twitter') || hostname.endsWith('x.com')) return 'x';
 		}
 		return hostname.replace(/^www\./, '') || 'embed';
 	} catch {
@@ -339,13 +346,94 @@ function getProviderFromUrl(url: string): string {
 }
 
 function toEmbedUrl(url: string): { provider: string; embedUrl: string } | null {
-	for (const pattern of EMBED_PATTERNS) {
-		const match = url.match(pattern.regex);
-		if (match) {
-			return { provider: pattern.provider, embedUrl: pattern.toEmbed(match) };
+	const parsed = parseHttpUrl(url);
+	if (!parsed) {
+		return null;
+	}
+
+	const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+	const segments = parsed.pathname.split('/').filter(Boolean);
+
+	if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(hostname)) {
+		const id =
+			segments[0] === 'watch'
+				? parsed.searchParams.get('v')
+				: segments[0] === 'embed' || segments[0] === 'shorts'
+					? segments[1]
+					: null;
+		if (isProviderId(id, /^[a-zA-Z0-9_-]+$/)) {
+			return { provider: 'youtube', embedUrl: `https://www.youtube.com/embed/${id}` };
+		}
+	}
+
+	if (hostname === 'youtu.be') {
+		const id = segments[0] ?? null;
+		if (isProviderId(id, /^[a-zA-Z0-9_-]+$/)) {
+			return { provider: 'youtube', embedUrl: `https://www.youtube.com/embed/${id}` };
+		}
+	}
+
+	if (hostname === 'player.vimeo.com' && segments[0] === 'video') {
+		const id = segments[1] ?? null;
+		if (isProviderId(id, /^\d+$/)) {
+			return { provider: 'vimeo', embedUrl: `https://player.vimeo.com/video/${id}` };
+		}
+	}
+
+	if (['vimeo.com', 'www.vimeo.com'].includes(hostname)) {
+		const id = segments[0] ?? null;
+		if (isProviderId(id, /^\d+$/)) {
+			return { provider: 'vimeo', embedUrl: `https://player.vimeo.com/video/${id}` };
+		}
+	}
+
+	if (['streamable.com', 'www.streamable.com'].includes(hostname)) {
+		const id = segments[0] === 'e' ? segments[1] : segments[0];
+		if (isProviderId(id, /^[a-zA-Z0-9]+$/)) {
+			return { provider: 'streamable', embedUrl: `https://streamable.com/e/${id}` };
+		}
+	}
+
+	if (['videopress.com', 'www.videopress.com'].includes(hostname)) {
+		const id = segments[0] === 'embed' || segments[0] === 'v' ? segments[1] : null;
+		if (isProviderId(id, /^[a-zA-Z0-9]+$/)) {
+			return { provider: 'videopress', embedUrl: `https://videopress.com/embed/${id}` };
+		}
+	}
+
+	if (
+		['videos.files.wordpress.com', 'videos.wordpress.com'].includes(hostname) &&
+		segments.length > 0
+	) {
+		return { provider: 'videopress', embedUrl: parsed.toString() };
+	}
+
+	if (hostname === 'platform.twitter.com' && parsed.pathname === '/embed/Tweet.html') {
+		const id = parsed.searchParams.get('id');
+		if (isProviderId(id, /^\d+$/)) {
+			return { provider: 'x', embedUrl: `https://platform.twitter.com/embed/Tweet.html?id=${id}` };
 		}
 	}
 	return null;
+}
+
+function parseHttpUrl(rawUrl: string): URL | null {
+	try {
+		const parsed = new URL(rawUrl.trim(), 'https://placeholder.invalid');
+		if (parsed.hostname === 'placeholder.invalid') {
+			return null;
+		}
+		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+			return null;
+		}
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+function isProviderId(value: string | null | undefined, pattern: RegExp): value is string {
+	return Boolean(value && value.length <= 128 && pattern.test(value));
 }
 
 function extractEmbedUrlFromInlineScript(scriptContent: string): string | null {
@@ -557,43 +645,6 @@ export function extractArticleContentFromPage(pageHtml: unknown): string | null 
 	const html = clone.innerHTML.trim();
 	return html || null;
 }
-
-const EMBED_PATTERNS: {
-	regex: RegExp;
-	provider: string;
-	toEmbed: (match: RegExpMatchArray) => string;
-}[] = [
-	{
-		regex: /(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]+)/,
-		provider: 'youtube',
-		toEmbed: (m) => `https://www.youtube.com/embed/${m[1]}`,
-	},
-	{
-		regex: /player\.vimeo\.com\/video\/(\d+)|vimeo\.com\/(\d+)/,
-		provider: 'vimeo',
-		toEmbed: (m) => `https://player.vimeo.com/video/${m[1] ?? m[2]}`,
-	},
-	{
-		regex: /streamable\.com\/(?:e\/)?([a-zA-Z0-9]+)/,
-		provider: 'streamable',
-		toEmbed: (m) => `https://streamable.com/e/${m[1]}`,
-	},
-	{
-		regex: /videopress\.com\/(?:embed\/|v\/)([a-zA-Z0-9]+)/,
-		provider: 'videopress',
-		toEmbed: (m) => `https://videopress.com/embed/${m[1]}`,
-	},
-	{
-		regex: /videos\.(?:files\.)?wordpress\.com\/[^"'\s]+/,
-		provider: 'videopress',
-		toEmbed: (m) => m[0],
-	},
-	{
-		regex: /platform\.twitter\.com\/embed\/Tweet\.html\?(?:[^"'\s>]*&)?id=(\d+)/i,
-		provider: 'x',
-		toEmbed: (m) => `https://platform.twitter.com/embed/Tweet.html?id=${m[1]}`,
-	},
-];
 
 export function extractMediaFromHtml(html: unknown) {
 	const normalizedHtml = normalizeHtmlInput(html);

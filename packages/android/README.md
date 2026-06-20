@@ -6,7 +6,7 @@ Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and t
 
 - Kotlin + Jetpack Compose UI
 - JWT bearer auth with automatic refresh using secure, persisted refresh cookie
-- Encrypted local session storage (`EncryptedSharedPreferences`)
+- Encrypted local session storage (DataStore preferences with per-value AES/GCM)
 - Feature coverage aligned with web app core flows:
   - Login / Register / Session restore
   - Categories and feeds (create/edit/delete/select)
@@ -103,8 +103,7 @@ Install these in Android Studio SDK Manager:
 
 ## CI
 
-- Android checks run in the main CI workflow.
-- A dedicated Android workflow is also available at `.github/workflows/android-ci.yml`.
+- Android checks run in the dedicated `.github/workflows/android-ci.yml` workflow.
 - Dedicated workflow triggers on Android path changes and supports manual runs (`workflow_dispatch`).
 
 ## Known Gaps vs Web

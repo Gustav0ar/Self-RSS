@@ -1,5 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryClientProvider, QueryClient as RealQueryClient } from '@tanstack/react-query';
+import { act, renderHook } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiFetchMock = vi.fn();
 
@@ -12,10 +15,15 @@ import {
 	applyReadStateSyncEvent,
 	buildArticleSearchParams,
 	invalidateReaderQueries,
+	useSyncAllFeeds,
 } from '../../src/hooks/queries';
 
 beforeEach(() => {
 	vi.clearAllMocks();
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 describe('applyReadStateSyncEvent', () => {
@@ -226,5 +234,35 @@ describe('buildArticleSearchParams', () => {
 	it('respects the explicit limit when given', () => {
 		const params = buildArticleSearchParams({ limit: 50 });
 		expect(params).toBe('limit=50');
+	});
+});
+
+describe('useSyncAllFeeds', () => {
+	it('clears delayed refresh timers on unmount', async () => {
+		vi.useFakeTimers();
+		apiFetchMock.mockResolvedValue({ data: { queued: true } });
+		const queryClient = new RealQueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+
+		const { result, unmount } = renderHook(() => useSyncAllFeeds(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync();
+		});
+		const invalidationsBeforeUnmount = invalidateSpy.mock.calls.length;
+
+		unmount();
+		act(() => {
+			vi.advanceTimersByTime(15_000);
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feeds', 'sync', 'status'] });
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
+		expect(invalidateSpy).toHaveBeenCalledTimes(invalidationsBeforeUnmount);
 	});
 });

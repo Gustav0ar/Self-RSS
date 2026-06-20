@@ -567,6 +567,44 @@ export const openApiSpec = {
 			get: {
 				tags: ['Articles'],
 				security: bearerSecurity,
+				parameters: [
+					{
+						name: 'feedId',
+						in: 'query',
+						required: false,
+						schema: { type: 'string', format: 'uuid' },
+					},
+					{
+						name: 'categoryId',
+						in: 'query',
+						required: false,
+						schema: { type: 'string', format: 'uuid' },
+					},
+					{
+						name: 'unreadOnly',
+						in: 'query',
+						required: false,
+						schema: { type: 'boolean' },
+					},
+					{
+						name: 'sort',
+						in: 'query',
+						required: false,
+						schema: { type: 'string', enum: ['latest', 'oldest'], default: 'latest' },
+					},
+					{
+						name: 'cursor',
+						in: 'query',
+						required: false,
+						schema: { type: 'string' },
+					},
+					{
+						name: 'limit',
+						in: 'query',
+						required: false,
+						schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+					},
+				],
 				responses: {
 					'200': json(listResponse('#/components/schemas/ArticleListItem')),
 				},

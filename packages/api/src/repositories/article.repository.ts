@@ -1,6 +1,12 @@
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { articleMedia, articleReads, articles, feeds } from '../db/schema.js';
+import { articleMedia, articleReads, articles, categories, feeds } from '../db/schema.js';
+
+export interface ArticleScope {
+	userId: string;
+	feedId?: string;
+	categoryId?: string;
+}
 
 function toFtsQuery(query: string): string | null {
 	const terms = query
@@ -44,6 +50,34 @@ function decodeCursor(
 	const seconds = Number.parseInt(secondsRaw, 10);
 	if (!Number.isFinite(seconds) || seconds < 0) return null;
 	return { id, seconds, direction };
+}
+
+function categoryScopeSql(scope: ArticleScope) {
+	return sql`${feeds.categoryId} IN (
+		WITH RECURSIVE category_scope(id) AS (
+			SELECT ${categories.id}
+			FROM ${categories}
+			WHERE ${categories.id} = ${scope.categoryId}
+				AND ${categories.userId} = ${scope.userId}
+			UNION ALL
+			SELECT child.id
+			FROM categories AS child
+			INNER JOIN category_scope AS parent ON child.parent_category_id = parent.id
+			WHERE child.user_id = ${scope.userId}
+		)
+		SELECT id FROM category_scope
+	)`;
+}
+
+function scopeConditions(scope: ArticleScope): SQL[] {
+	const conditions: SQL[] = [eq(feeds.userId, scope.userId)];
+	if (scope.feedId) {
+		conditions.push(eq(feeds.id, scope.feedId));
+	}
+	if (scope.categoryId) {
+		conditions.push(categoryScopeSql(scope));
+	}
+	return conditions;
 }
 
 export class ArticleRepository {
@@ -109,6 +143,55 @@ export class ArticleRepository {
 			.limit(options.limit + 1);
 	}
 
+	async findByScope(
+		scope: ArticleScope,
+		options: { limit: number; cursor?: string; sort?: string; unreadOnly?: boolean },
+	) {
+		const conditions: SQL[] = scopeConditions(scope);
+		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
+		const decodedCursor = decodeCursor(options.cursor, options.sort);
+		if (decodedCursor) {
+			conditions.push(
+				options.sort === 'oldest'
+					? sql`(${sortTimestamp} > ${decodedCursor.seconds} OR (${sortTimestamp} = ${decodedCursor.seconds} AND ${articles.id} > ${decodedCursor.id}))`
+					: sql`(${sortTimestamp} < ${decodedCursor.seconds} OR (${sortTimestamp} = ${decodedCursor.seconds} AND ${articles.id} < ${decodedCursor.id}))`,
+			);
+		}
+
+		if (options.unreadOnly) {
+			conditions.push(sql`${articleReads.userId} IS NULL`);
+		}
+
+		const orderBy =
+			options.sort === 'oldest'
+				? sql`${sortTimestamp} ASC, ${articles.id} ASC`
+				: sql`${sortTimestamp} DESC, ${articles.id} DESC`;
+
+		return this.db
+			.select({
+				id: articles.id,
+				feedId: articles.feedId,
+				title: articles.title,
+				author: articles.author,
+				excerpt: articles.excerpt,
+				heroImageUrl: articles.heroImageUrl,
+				publishedAt: articles.publishedAt,
+				fetchedAt: articles.fetchedAt,
+				feedTitle: feeds.title,
+				feedFaviconUrl: feeds.faviconUrl,
+				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+			})
+			.from(articles)
+			.innerJoin(feeds, eq(articles.feedId, feeds.id))
+			.leftJoin(
+				articleReads,
+				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, scope.userId)),
+			)
+			.where(and(...conditions))
+			.orderBy(orderBy)
+			.limit(options.limit + 1);
+	}
+
 	async countByFeeds(feedIds: string[]): Promise<number> {
 		if (feedIds.length === 0) return 0;
 		const result = await this.db
@@ -125,6 +208,25 @@ export class ArticleRepository {
 			.from(articleReads)
 			.innerJoin(articles, eq(articleReads.articleId, articles.id))
 			.where(and(eq(articleReads.userId, userId), inArray(articles.feedId, feedIds)));
+		return result[0]?.count ?? 0;
+	}
+
+	async countByScope(scope: ArticleScope): Promise<number> {
+		const result = await this.db
+			.select({ count: sql<number>`count(*)` })
+			.from(articles)
+			.innerJoin(feeds, eq(articles.feedId, feeds.id))
+			.where(and(...scopeConditions(scope)));
+		return result[0]?.count ?? 0;
+	}
+
+	async countReadByScope(scope: ArticleScope): Promise<number> {
+		const result = await this.db
+			.select({ count: sql<number>`count(*)` })
+			.from(articleReads)
+			.innerJoin(articles, eq(articleReads.articleId, articles.id))
+			.innerJoin(feeds, eq(articles.feedId, feeds.id))
+			.where(and(eq(articleReads.userId, scope.userId), ...scopeConditions(scope)));
 		return result[0]?.count ?? 0;
 	}
 
@@ -368,6 +470,52 @@ export class ArticleRepository {
 			.leftJoin(
 				articleReads,
 				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, _userId)),
+			)
+			.where(and(...conditions))
+			.orderBy(sql`${sortTimestamp} DESC, ${articles.id} DESC`)
+			.limit(limit + 1);
+	}
+
+	async searchByScope(scope: ArticleScope, query: string, limit: number, cursor?: string) {
+		const ftsQuery = toFtsQuery(query);
+		if (!ftsQuery) {
+			return [];
+		}
+
+		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
+		const decodedCursor = decodeCursor(cursor, 'latest');
+		const cursorSeconds = decodedCursor?.seconds;
+
+		const conditions: SQL[] = [
+			...scopeConditions(scope),
+			sql`${articles.id} IN (SELECT article_id FROM articles_fts WHERE articles_fts MATCH ${ftsQuery})`,
+		];
+
+		if (cursorSeconds != null && decodedCursor) {
+			conditions.push(
+				sql`(${sortTimestamp} < ${cursorSeconds} OR (${sortTimestamp} = ${cursorSeconds} AND ${articles.id} < ${decodedCursor.id}))`,
+			);
+		}
+
+		return this.db
+			.select({
+				id: articles.id,
+				feedId: articles.feedId,
+				title: articles.title,
+				author: articles.author,
+				excerpt: articles.excerpt,
+				heroImageUrl: articles.heroImageUrl,
+				publishedAt: articles.publishedAt,
+				fetchedAt: articles.fetchedAt,
+				feedTitle: feeds.title,
+				feedFaviconUrl: feeds.faviconUrl,
+				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+			})
+			.from(articles)
+			.innerJoin(feeds, eq(articles.feedId, feeds.id))
+			.leftJoin(
+				articleReads,
+				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, scope.userId)),
 			)
 			.where(and(...conditions))
 			.orderBy(sql`${sortTimestamp} DESC, ${articles.id} DESC`)

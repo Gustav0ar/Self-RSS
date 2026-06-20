@@ -69,31 +69,24 @@ export class ArticleService {
 			}
 		}
 
-		// Fallback to DB query
-		let feedIds: string[] = [];
-
 		if (options.feedId) {
 			const feed = await this.feedRepo.findById(options.feedId, userId);
 			if (!feed) throw AppError.notFound('Feed not found');
-			feedIds = [feed.id];
-		} else if (options.categoryId) {
-			const feeds = await this.feedRepo.findByCategory(userId, options.categoryId);
-			feedIds = feeds.map((f) => f.id);
-		} else {
-			const feeds = await this.feedRepo.findAllByUser(userId);
-			feedIds = feeds.map((f) => f.id);
 		}
 
-		if (feedIds.length === 0) {
-			return { data: [], cursor: null, hasMore: false };
-		}
-
-		const result = await this.articleRepo.findByFeeds(userId, feedIds, {
-			limit,
-			cursor: options.cursor,
-			sort: options.sort,
-			unreadOnly: options.unreadOnly,
-		});
+		const result = await this.articleRepo.findByScope(
+			{
+				userId,
+				feedId: options.feedId,
+				categoryId: options.categoryId,
+			},
+			{
+				limit,
+				cursor: options.cursor,
+				sort: options.sort,
+				unreadOnly: options.unreadOnly,
+			},
+		);
 		const hasMore = result.length > limit;
 		const items = result.slice(0, limit);
 
@@ -313,21 +306,12 @@ export class ArticleService {
 	}
 
 	async search(userId: string, query: string, categoryId?: string, limit = 20, cursor?: string) {
-		let feedIds: string[] = [];
-
-		if (categoryId) {
-			const feeds = await this.feedRepo.findByCategory(userId, categoryId);
-			feedIds = feeds.map((f) => f.id);
-		} else {
-			const feeds = await this.feedRepo.findAllByUser(userId);
-			feedIds = feeds.map((f) => f.id);
-		}
-
-		if (feedIds.length === 0) {
-			return { data: [], cursor: null, hasMore: false };
-		}
-
-		const results = await this.articleRepo.search(userId, query, feedIds, limit, cursor);
+		const results = await this.articleRepo.searchByScope(
+			{ userId, categoryId },
+			query,
+			limit,
+			cursor,
+		);
 		await this.metricsRepo.incrementSearchCount(userId);
 		const hasMore = results.length > limit;
 		const items = results.slice(0, limit);

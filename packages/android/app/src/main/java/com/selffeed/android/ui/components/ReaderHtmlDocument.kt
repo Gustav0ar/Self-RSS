@@ -2,6 +2,7 @@ package com.selffeed.android.ui.components
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.selffeed.android.ui.utils.isTrustedEmbedUrl
 import java.net.URI
 import java.util.Locale
 
@@ -35,8 +36,9 @@ internal fun readerHtmlColors(
 internal fun buildReaderHtmlDocument(
     html: String,
     colors: ReaderHtmlColors,
-): String =
-    """
+): String {
+    val safeHtml = sanitizeReaderHtml(html)
+    return """
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -149,7 +151,7 @@ internal fun buildReaderHtmlDocument(
             </style>
         </head>
         <body>
-            <div id="content-container">$html</div>
+            <div id="content-container">$safeHtml</div>
             <script>
                 const readerColors = {
                     background: '${colors.background}',
@@ -450,6 +452,25 @@ internal fun buildReaderHtmlDocument(
         </body>
         </html>
     """.trimIndent()
+}
+
+internal fun sanitizeReaderHtml(html: String): String {
+    if (!html.contains('<')) return html
+
+    return html
+        .replace(UNSAFE_BLOCK_TAG_REGEX, "")
+        .replace(UNSAFE_VOID_TAG_REGEX, "")
+        .replace(UNSAFE_EVENT_ATTRIBUTE_REGEX, "")
+        .replace(UNSAFE_URL_ATTRIBUTE_REGEX, "")
+        .replace(IFRAME_TAG_REGEX) { match ->
+            val src = SRC_ATTRIBUTE_REGEX.find(match.value)
+                ?.groups
+                ?.get(2)
+                ?.value
+                ?.trim()
+            if (isTrustedEmbedUrl(src)) match.value else ""
+        }
+}
 
 internal const val DefaultReaderDocumentBaseUrl = "https://self-feed.local/"
 
@@ -468,3 +489,33 @@ internal fun readerDocumentBaseUrl(vararg candidates: String?): String {
 
 private fun Color.toCssHex(): String =
     String.format(Locale.US, "#%06X", 0xFFFFFF and toArgb())
+
+private val UNSAFE_BLOCK_TAG_REGEX = Regex(
+    """<\s*(script|style|template|object|embed|applet|form|textarea|select)\b[^>]*>.*?<\s*/\s*\1\s*>""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+
+private val UNSAFE_VOID_TAG_REGEX = Regex(
+    """<\s*(script|style|template|object|embed|applet|form|input|button|textarea|select)\b[^>]*?/?>""",
+    RegexOption.IGNORE_CASE,
+)
+
+private val UNSAFE_EVENT_ATTRIBUTE_REGEX = Regex(
+    """\s+on[a-zA-Z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""",
+    RegexOption.IGNORE_CASE,
+)
+
+private val UNSAFE_URL_ATTRIBUTE_REGEX = Regex(
+    """\s+(href|src|poster)\s*=\s*("[^"]*(?:javascript:|vbscript:|data:text/html)[^"]*"|'[^']*(?:javascript:|vbscript:|data:text/html)[^']*'|[^\s>]*(?:javascript:|vbscript:|data:text/html)[^\s>]*)""",
+    RegexOption.IGNORE_CASE,
+)
+
+private val IFRAME_TAG_REGEX = Regex(
+    """<iframe\b[^>]*>(?:.*?</iframe>)?""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+
+private val SRC_ATTRIBUTE_REGEX = Regex(
+    """\bsrc\s*=\s*(["'])(.*?)\1""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)

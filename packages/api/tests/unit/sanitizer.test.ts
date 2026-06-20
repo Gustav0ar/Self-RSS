@@ -46,6 +46,21 @@ describe('sanitizeHtml', () => {
 		const result = sanitizeHtml('<img src="https://example.com/img.jpg" alt="test" />');
 		expect(result).toContain('src="https://example.com/img.jpg"');
 	});
+
+	it('removes iframe embeds from lookalike media hosts', () => {
+		const result = sanitizeHtml(`
+			<p>Before</p>
+			<iframe src="https://notyoutube.com/watch?v=abc123"></iframe>
+			<iframe src="https://evilplayer.vimeo.com/video/123"></iframe>
+			<p>After</p>
+		`);
+
+		expect(result).toContain('<p>Before</p>');
+		expect(result).toContain('<p>After</p>');
+		expect(result).not.toContain('notyoutube.com');
+		expect(result).not.toContain('evilplayer.vimeo.com');
+		expect(result).not.toContain('<iframe');
+	});
 });
 
 describe('stripHtml', () => {
@@ -140,6 +155,16 @@ describe('extractMediaFromHtml', () => {
 		const media = extractMediaFromHtml(html);
 		expect(media).toHaveLength(0);
 	});
+
+	it('does not treat lookalike media domains as embeds', () => {
+		const html = `
+			<iframe src="https://notyoutube.com/watch?v=abc123"></iframe>
+			<iframe src="https://evilplayer.vimeo.com/video/123"></iframe>
+			<a href="https://notstreamable.com/e/xyz123">Video</a>
+		`;
+
+		expect(extractMediaFromHtml(html)).toHaveLength(0);
+	});
 });
 
 describe('hasRichMedia', () => {
@@ -230,6 +255,29 @@ describe('extractArticleContentFromPage', () => {
 		expect(result).not.toContain('androidauthority.com');
 		expect(result).not.toContain('<iframe');
 		expect(media).toHaveLength(0);
+	});
+
+	it('does not promote lookalike provider links into article embeds', () => {
+		const html = `
+			<!doctype html>
+			<html>
+				<body>
+					<article>
+						<div class="entry-content">
+							<p><a href="https://notyoutube.com/watch?v=abc123">Watch video</a></p>
+							<p><a href="https://evilplayer.vimeo.com/video/123">Watch video</a></p>
+						</div>
+					</article>
+				</body>
+			</html>
+		`;
+
+		const result = extractArticleContentFromPage(html);
+
+		expect(result).toContain('notyoutube.com');
+		expect(result).toContain('evilplayer.vimeo.com');
+		expect(result).not.toContain('<iframe');
+		expect(extractMediaFromHtml(result)).toHaveLength(0);
 	});
 
 	it('extracts article body and normalizes lazy media', () => {
