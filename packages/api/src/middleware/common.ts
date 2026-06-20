@@ -69,6 +69,7 @@ export async function securityHeaders(c: Context, next: Next): Promise<void> {
 			"script-src 'self'",
 			"style-src 'self' 'unsafe-inline'",
 			"img-src 'self' https: data:",
+			"media-src 'self' https:",
 			"font-src 'self'",
 			'frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://streamable.com https://videopress.com https://video.wordpress.com https://platform.twitter.com',
 			"connect-src 'self'",
