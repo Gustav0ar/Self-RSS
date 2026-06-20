@@ -359,21 +359,31 @@ internal fun buildReaderHtmlDocument(
                     window.requestAnimationFrame(postHeight);
                 }
 
-                window.addEventListener('load', postHeight);
-                window.addEventListener('resize', postHeight);
-                document.addEventListener('DOMContentLoaded', postHeight);
+                // Named handlers so they can be removed during cleanup
+                function handleLoad() { postHeight(); }
+                function handleResize() { postHeight(); }
+                function handleDomContentLoaded() { postHeight(); }
+
+                window.addEventListener('load', handleLoad);
+                window.addEventListener('resize', handleResize);
+                document.addEventListener('DOMContentLoaded', handleDomContentLoaded);
 
                 const resizeObserver = new ResizeObserver(scheduleReaderUpdate);
                 resizeObserver.observe(document.body);
-                resizeObserver.observe(document.getElementById('content-container'));
+                const contentContainer = document.getElementById('content-container');
+                if (contentContainer) {
+                    resizeObserver.observe(contentContainer);
+                }
 
                 const mutationObserver = new MutationObserver(scheduleReaderUpdate);
-                mutationObserver.observe(document.getElementById('content-container'), {
-                    attributes: true,
-                    attributeFilter: ['class', 'style', 'bgcolor', 'color'],
-                    childList: true,
-                    subtree: true
-                });
+                if (contentContainer) {
+                    mutationObserver.observe(contentContainer, {
+                        attributes: true,
+                        attributeFilter: ['class', 'style', 'bgcolor', 'color'],
+                        childList: true,
+                        subtree: true
+                    });
+                }
 
                 let lastH = 0;
                 let fallbackChecks = 0;
@@ -388,6 +398,18 @@ internal fun buildReaderHtmlDocument(
                         clearInterval(fallbackTimer);
                     }
                 }, 250);
+
+                // Expose cleanup function to prevent memory leaks
+                window.SelfFeedApp = {
+                    cleanup: function() {
+                        window.removeEventListener('load', handleLoad);
+                        window.removeEventListener('resize', handleResize);
+                        document.removeEventListener('DOMContentLoaded', handleDomContentLoaded);
+                        if (resizeObserver) resizeObserver.disconnect();
+                        if (mutationObserver) mutationObserver.disconnect();
+                        if (fallbackTimer) clearInterval(fallbackTimer);
+                    }
+                };
 
                 function parseMessageData(data) {
                     if (typeof data !== 'string') {

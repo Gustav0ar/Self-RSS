@@ -1,3 +1,5 @@
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { createDialogErrorFallback } from '@/components/error-fallbacks';
 import { ModalShell } from './modal-shell';
 
 interface ConfirmDialogProps {
@@ -11,7 +13,7 @@ interface ConfirmDialogProps {
 	onClose: () => void;
 }
 
-export function ConfirmDialog({
+function ConfirmDialogContent({
 	title,
 	description,
 	confirmLabel,
@@ -56,5 +58,13 @@ export function ConfirmDialog({
 				</div>
 			) : null}
 		</ModalShell>
+	);
+}
+
+export function ConfirmDialog(props: ConfirmDialogProps) {
+	return (
+		<ErrorBoundary fallback={createDialogErrorFallback(props.onClose)}>
+			<ConfirmDialogContent {...props} />
+		</ErrorBoundary>
 	);
 }

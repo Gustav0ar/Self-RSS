@@ -1,5 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { BarChart3, LogOut, Menu, Monitor, Moon, Rss, Sun } from 'lucide-react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { TopBarErrorFallback } from '@/components/error-fallbacks';
 import { PreferencesPanel } from '@/components/preferences/preferences-panel';
 import { SearchBar } from '@/components/search/search-bar';
 import { useUpdatePreferences } from '@/hooks/queries';
@@ -12,7 +14,7 @@ interface TopBarProps {
 	categoryId?: string;
 }
 
-export function TopBar({ onSelectArticle, onOpenSidebar, categoryId }: TopBarProps) {
+function TopBarContent({ onSelectArticle, onOpenSidebar, categoryId }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
 	const { isAuthenticated, logout, username } = useAuth();
@@ -105,5 +107,13 @@ export function TopBar({ onSelectArticle, onOpenSidebar, categoryId }: TopBarPro
 				</div>
 			</div>
 		</header>
+	);
+}
+
+export function TopBar(props: TopBarProps) {
+	return (
+		<ErrorBoundary fallback={TopBarErrorFallback}>
+			<TopBarContent {...props} />
+		</ErrorBoundary>
 	);
 }

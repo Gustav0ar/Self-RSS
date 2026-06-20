@@ -77,4 +77,32 @@ export const RATE_LIMITS = {
 	get search() {
 		return { windowMs: 60_000, maxRequests: getEnv().RATE_LIMIT_SEARCH_MAX };
 	},
+	// Read-heavy endpoints - higher limits
+	get articlesRead() {
+		return { windowMs: 60_000, maxRequests: 100 };
+	},
+	get articlesMutate() {
+		return { windowMs: 60_000, maxRequests: 30 };
+	},
+	get categoriesRead() {
+		return { windowMs: 60_000, maxRequests: 100 };
+	},
+	get categoriesMutate() {
+		return { windowMs: 60_000, maxRequests: 30 };
+	},
+	get preferencesRead() {
+		return { windowMs: 60_000, maxRequests: 100 };
+	},
+	get preferencesMutate() {
+		return { windowMs: 60_000, maxRequests: 30 };
+	},
+	get statsRead() {
+		return { windowMs: 60_000, maxRequests: 100 };
+	},
+	get feedsRead() {
+		return { windowMs: 60_000, maxRequests: 100 };
+	},
+	get feedsMutate() {
+		return { windowMs: 60_000, maxRequests: 30 };
+	},
 } as const;

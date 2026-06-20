@@ -5,6 +5,7 @@ import type { AppDeps } from './config/deps.js';
 import {
 	createAuthMiddleware,
 	errorHandler,
+	httpMetricsMiddleware,
 	requestIdMiddleware,
 	requestLogger,
 	requireAdmin,
@@ -16,7 +17,7 @@ import { createAuthRoutes } from './routes/auth.js';
 import { createCategoryRoutes } from './routes/categories.js';
 import { createEventRoutes } from './routes/events.js';
 import { createFeedRoutes } from './routes/feeds.js';
-import { createHealthRoutes } from './routes/index.js';
+import { createHealthRoutes, createMetricsRoutes } from './routes/index.js';
 import { createPreferencesRoutes } from './routes/preferences.js';
 import { createStatsRoutes } from './routes/stats.js';
 import type { TokenUtils } from './utils/tokens.js';
@@ -40,6 +41,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 	// Global middleware
 	app.use('*', requestIdMiddleware);
 	app.use('*', requestLogger);
+	app.use('*', httpMetricsMiddleware());
 	app.use('*', securityHeaders);
 	app.use(
 		'*',
@@ -92,7 +94,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 
 		// Protected routes
 		v1.use('/categories/*', authMiddleware);
-		v1.route('/categories', createCategoryRoutes(deps.services.category));
+		v1.route('/categories', createCategoryRoutes(deps.services.category, deps.rateLimiter));
 		v1.use('/feeds/*', authMiddleware);
 		v1.route(
 			'/feeds',
@@ -111,9 +113,9 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 		v1.route('/search', createSearchRoutes(deps.services.article, deps.rateLimiter));
 
 		v1.use('/preferences/*', authMiddleware);
-		v1.route('/preferences', createPreferencesRoutes(deps.services.preferences));
+		v1.route('/preferences', createPreferencesRoutes(deps.services.preferences, deps.rateLimiter));
 		v1.use('/stats/*', authMiddleware);
-		v1.route('/stats', createStatsRoutes(deps.services.stats));
+		v1.route('/stats', createStatsRoutes(deps.services.stats, deps.rateLimiter));
 
 		v1.use('/events/*', authMiddleware);
 		v1.route('/events', createEventRoutes(deps.services.realtime));
@@ -123,6 +125,10 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 			'/admin',
 			createAdminRoutes(deps.services.auth, deps.repos.settings, deps.repos.auditLog),
 		);
+
+		// Metrics endpoint (requires authentication and admin role)
+		v1.use('/metrics/*', authMiddleware, requireAdmin);
+		v1.route('/metrics', createMetricsRoutes({ db: deps.db, redis: deps.redis }));
 
 		app.route('/api/v1', v1);
 	}

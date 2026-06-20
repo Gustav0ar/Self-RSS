@@ -244,11 +244,12 @@ export function sanitizeArticleHtml(dirty: string | null | undefined): string {
 	try {
 		cleaned = getPurify().sanitize(dirty, SANITIZE_OPTIONS) as string;
 	} catch {
-		// If the sanitizer isn't available (e.g. SSR), fall back to a
-		// plain string return. The server has already sanitized this
-		// payload, so the worst case here is an unsanitized render,
-		// which the server guarantee makes safe.
-		return dirty;
+		// If the sanitizer throws unexpectedly (e.g. malformed input,
+		// internal error), return an empty string rather than the raw
+		// content. The server's guarantee means the input is expected
+		// to be safe, but a sanitizer failure is not the same as
+		// "safe by guarantee" — the safest response is to show nothing.
+		return '';
 	}
 	return hardenRenderedHtml(cleaned);
 }

@@ -1307,4 +1307,117 @@ describe('FeedSyncService', () => {
 			globalThis.fetch = originalFetch;
 		}
 	});
+
+	describe('error logging in syncAllFeeds', () => {
+		const ORIGINAL_CONSOLE_ERROR = console.error;
+		let errorLogs: Array<{ msg: string; extra: Record<string, unknown> }>;
+
+		beforeEach(() => {
+			errorLogs = [];
+			console.error = vi.fn((output: string) => {
+				const parsed = JSON.parse(output);
+				errorLogs.push({ msg: parsed.msg, extra: parsed });
+			});
+		});
+
+		afterEach(() => {
+			console.error = ORIGINAL_CONSOLE_ERROR;
+		});
+
+		it('logs errors when syncFeed fails during bulk sync', async () => {
+			const feedRepo = {
+				findAllByUser: vi.fn(async () => [
+					{ id: 'feed-1', syncStatus: 'idle' },
+					{ id: 'feed-2', syncStatus: 'error' },
+				]),
+				update: vi.fn(async () => undefined),
+			};
+
+			const service = new FeedSyncService(
+				feedRepo as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			);
+
+			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
+			syncFeedSpy.mockImplementation(async (feedId) => {
+				if (feedId === 'feed-1') {
+					return { newArticles: 2, total: 4 };
+				}
+				throw new Error('Database connection failed');
+			});
+
+			const result = await service.syncAllFeeds('user-1');
+
+			expect(result.failedFeeds).toBe(1);
+			expect(errorLogs.length).toBeGreaterThan(0);
+
+			const errorLog = errorLogs.find((l) => l.msg === 'Feed sync failed during bulk sync');
+			expect(errorLog).toBeDefined();
+			expect(errorLog!.extra.operation).toBe('bulkFeedSync');
+			expect(errorLog!.extra.feedId).toBe('feed-2');
+			expect(errorLog!.extra.userId).toBe('user-1');
+			expect(errorLog!.extra.error).toBe('Database connection failed');
+			expect(errorLog!.extra.stack).toBeDefined();
+		});
+
+		it('logs errors with non-Error thrown values', async () => {
+			const feedRepo = {
+				findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
+			};
+
+			const service = new FeedSyncService(
+				feedRepo as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			);
+
+			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
+			syncFeedSpy.mockRejectedValue('String error thrown');
+
+			await service.syncAllFeeds('user-1');
+
+			const errorLog = errorLogs.find((l) => l.msg === 'Feed sync failed during bulk sync');
+			expect(errorLog!.extra.error).toBe('String error thrown');
+		});
+
+		it('continues syncing remaining feeds after one fails', async () => {
+			const feedRepo = {
+				findAllByUser: vi.fn(async () => [
+					{ id: 'feed-1', syncStatus: 'idle' },
+					{ id: 'feed-2', syncStatus: 'idle' },
+					{ id: 'feed-3', syncStatus: 'idle' },
+				]),
+			};
+
+			const service = new FeedSyncService(
+				feedRepo as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{} as never,
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			);
+
+			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
+			syncFeedSpy.mockImplementation(async (feedId) => {
+				if (feedId === 'feed-2') {
+					throw new Error('Network timeout');
+				}
+				return { newArticles: 1, total: 1 };
+			});
+
+			const result = await service.syncAllFeeds('user-1');
+
+			expect(result.syncedFeeds).toBe(2);
+			expect(result.failedFeeds).toBe(1);
+			expect(errorLogs.filter((l) => l.msg === 'Feed sync failed during bulk sync')).toHaveLength(1);
+		});
+	});
 });

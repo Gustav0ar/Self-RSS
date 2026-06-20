@@ -1,5 +1,7 @@
 import type { CategoryWithCounts } from '@self-feed/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { createDialogErrorFallback } from '@/components/error-fallbacks';
 import { useCreateCategory, useUpdateCategory } from '@/hooks/queries';
 import { categoryPathLabel } from '@/lib/categories';
 import { ModalShell } from './modal-shell';
@@ -12,7 +14,7 @@ interface CategoryDialogProps {
 	onClose: () => void;
 }
 
-export function CategoryDialog({
+function CategoryDialogContent({
 	mode,
 	categories,
 	category,
@@ -126,6 +128,14 @@ export function CategoryDialog({
 				</div>
 			</form>
 		</ModalShell>
+	);
+}
+
+export function CategoryDialog(props: CategoryDialogProps) {
+	return (
+		<ErrorBoundary fallback={createDialogErrorFallback(props.onClose)}>
+			<CategoryDialogContent {...props} />
+		</ErrorBoundary>
 	);
 }
 

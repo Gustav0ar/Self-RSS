@@ -603,6 +603,8 @@ private fun SecureHtmlContent(
 internal fun WebView.releaseReaderResources() {
     runCatching {
         stopLoading()
+        // Call cleanup function to remove event listeners and disconnect observers
+        evaluateJavascript("if (window.SelfFeedApp && typeof window.SelfFeedApp.cleanup === 'function') { window.SelfFeedApp.cleanup(); }", null)
         loadUrl("about:blank")
         removeJavascriptInterface("Android")
         webChromeClient = WebChromeClient()
@@ -759,9 +761,22 @@ private fun youtubeEmbedHtml(embedUrl: String, background: String): String {
                         window.Android.updateHeight(Math.ceil(container.getBoundingClientRect().height));
                     }
                 }
-                window.addEventListener('load', postHeight);
-                window.addEventListener('resize', postHeight);
-                new ResizeObserver(postHeight).observe(document.getElementById('embed-container'));
+                function handleEmbedLoad() { postHeight(); }
+                function handleEmbedResize() { postHeight(); }
+                window.addEventListener('load', handleEmbedLoad);
+                window.addEventListener('resize', handleEmbedResize);
+                const embedContainer = document.getElementById('embed-container');
+                const embedResizeObserver = new ResizeObserver(handleEmbedResize);
+                if (embedContainer) {
+                    embedResizeObserver.observe(embedContainer);
+                }
+                window.SelfFeedApp = {
+                    cleanup: function() {
+                        window.removeEventListener('load', handleEmbedLoad);
+                        window.removeEventListener('resize', handleEmbedResize);
+                        if (embedResizeObserver) embedResizeObserver.disconnect();
+                    }
+                };
                 postHeight();
             </script>
         </body>

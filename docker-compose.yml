@@ -22,6 +22,14 @@ services:
     volumes:
       - redisdata:/data
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -58,6 +66,14 @@ services:
       RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-30}
       RATE_LIMIT_FEED_CREATE_MAX: ${RATE_LIMIT_FEED_CREATE_MAX:-100}
       RATE_LIMIT_SEARCH_MAX: ${RATE_LIMIT_SEARCH_MAX:-100}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
     depends_on:
       redis:
         condition: service_healthy
@@ -94,6 +110,14 @@ services:
       FEED_SYNC_TIMEOUT_MS: ${FEED_SYNC_TIMEOUT_MS:-30000}
       FEED_MAX_CONTENT_LENGTH: ${FEED_MAX_CONTENT_LENGTH:-5242880}
       FEED_ALLOW_PRIVATE_HOSTS: "false"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
     depends_on:
       api:
         condition: service_healthy
@@ -135,6 +159,14 @@ services:
       - "traefik.http.middlewares.self-feed-https-redirect.redirectscheme.scheme=https"
       - "traefik.http.services.self-feed.loadbalancer.server.port=8080"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-web}"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
     healthcheck:
       test:
         ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]

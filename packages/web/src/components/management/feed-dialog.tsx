@@ -1,5 +1,7 @@
 import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
 import { useEffect, useState } from 'react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { createDialogErrorFallback } from '@/components/error-fallbacks';
 import { useCreateFeed, useUpdateFeed } from '@/hooks/queries';
 import { categoryPathLabel } from '@/lib/categories';
 import { ModalShell } from './modal-shell';
@@ -12,7 +14,7 @@ interface FeedDialogProps {
 	onClose: () => void;
 }
 
-export function FeedDialog({
+function FeedDialogContent({
 	mode,
 	categories,
 	feed,
@@ -159,5 +161,13 @@ export function FeedDialog({
 				</div>
 			</form>
 		</ModalShell>
+	);
+}
+
+export function FeedDialog(props: FeedDialogProps) {
+	return (
+		<ErrorBoundary fallback={createDialogErrorFallback(props.onClose)}>
+			<FeedDialogContent {...props} />
+		</ErrorBoundary>
 	);
 }

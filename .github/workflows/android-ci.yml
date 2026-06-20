@@ -28,8 +28,15 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Run Android unit tests
-        run: ./packages/android/gradlew -p packages/android :app:testDebugUnitTest
+      - name: Run Android unit tests with coverage
+        run: ./packages/android/gradlew -p packages/android :app:testDebugUnitTest :app:createDebugUnitTestCoverageReport
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./packages/android/app/build/reports/jacoco/jacocoTestReport.xml
+          flags: android
+          fail_ci_if_error: true
+          verbose: true
 
   android-build-check:
     name: Android Lint & Build
@@ -45,3 +52,7 @@ jobs:
         run: ./packages/android/gradlew -p packages/android :app:lintDebug
       - name: Assemble Android debug
         run: ./packages/android/gradlew -p packages/android :app:assembleDebug
+      - name: Assemble Android release
+        env:
+          SELF_FEED_API_BASE_URL: https://example.invalid/api/v1/
+        run: ./packages/android/gradlew -p packages/android :app:assembleRelease

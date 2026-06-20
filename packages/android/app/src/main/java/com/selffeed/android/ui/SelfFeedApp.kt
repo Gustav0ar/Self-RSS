@@ -570,7 +570,7 @@ internal fun AuthScreen(
     onRegister: (String, String) -> Unit,
 ) {
     var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
 
     Box(
         modifier = Modifier
@@ -659,6 +659,7 @@ internal fun AuthScreen(
                 Button(
                     onClick = {
                         if (mode == AuthMode.LOGIN) onLogin(email, password) else onRegister(email, password)
+                        password = ""
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(22.dp),

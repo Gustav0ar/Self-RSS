@@ -121,7 +121,7 @@ SelfFeed/
 │   │   ├── src/
 │   │   │   ├── db/           # Schema, client, repositories
 │   │   │   ├── middleware/   # Auth, security, rate limiting
-│   │   │   ├── routes/       # HTTP route handlersd
+│   │   │   ├── routes/       # HTTP route handlers
 │   │   │   └── services/     # Business logic layer
 │   │   └── tests/
 │   └── web/          # React SPA with TanStack
@@ -158,7 +158,6 @@ bun run test          # Run all tests (API + Web)
 bun run db:generate   # Generate Drizzle SQL migrations
 bun run db:seed       # Seed the configured admin user
 bun run dev           # One-line local dev (infra + API/Web watch mode)
-bun run dev:prepare:docker  # Stop docker api/web containers before local watch mode
 bun run openapi:generate  # Refresh packages/api/openapi.json
 ```
 

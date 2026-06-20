@@ -116,19 +116,24 @@ export class CategoryRepository {
 		updates: { id: string; sortOrder: number }[],
 	): Promise<number> {
 		if (updates.length === 0) return 0;
-		const now = new Date();
-		return this.db.transaction(async (tx) => {
-			let updatedCount = 0;
-			for (const update of updates) {
-				const result = await tx
-					.update(categories)
-					.set({ sortOrder: update.sortOrder, updatedAt: now })
-					.where(and(eq(categories.id, update.id), eq(categories.userId, userId)))
-					.returning({ id: categories.id });
-				updatedCount += result.length;
-			}
-			return updatedCount;
-		});
+
+		// Build CASE expressions for bulk update (1 query instead of N)
+		const sortOrderCases = updates.map((u) => sql`WHEN ${categories.id} = ${u.id} THEN ${u.sortOrder}`);
+		const idConditions = updates.map((u) => sql`${u.id}`);
+
+		const result = await this.db
+			.update(categories)
+			.set({
+				sortOrder: sql`CASE ${sql.join(sortOrderCases, sql` `)} ELSE ${categories.sortOrder} END`,
+				updatedAt: new Date(),
+			})
+			.where(and(
+				eq(categories.userId, userId),
+				sql`${categories.id} IN (${sql.join(idConditions, sql`, `)})`,
+			))
+			.returning({ id: categories.id });
+
+		return result.length;
 	}
 
 	async delete(id: string, userId: string) {

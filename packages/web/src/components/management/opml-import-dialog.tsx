@@ -1,5 +1,7 @@
 import type { OpmlImportSummary } from '@self-feed/shared';
 import { useState } from 'react';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { createDialogErrorFallback } from '@/components/error-fallbacks';
 import { useImportOpml } from '@/hooks/queries';
 import { ModalShell } from './modal-shell';
 
@@ -7,7 +9,7 @@ interface OpmlImportDialogProps {
 	onClose: () => void;
 }
 
-export function OpmlImportDialog({ onClose }: OpmlImportDialogProps) {
+function OpmlImportDialogContent({ onClose }: OpmlImportDialogProps) {
 	const importOpml = useImportOpml();
 	const [file, setFile] = useState<File | null>(null);
 	const [summary, setSummary] = useState<OpmlImportSummary | null>(null);
@@ -106,5 +108,13 @@ export function OpmlImportDialog({ onClose }: OpmlImportDialogProps) {
 				</div>
 			) : null}
 		</ModalShell>
+	);
+}
+
+export function OpmlImportDialog(props: OpmlImportDialogProps) {
+	return (
+		<ErrorBoundary fallback={createDialogErrorFallback(props.onClose)}>
+			<OpmlImportDialogContent {...props} />
+		</ErrorBoundary>
 	);
 }

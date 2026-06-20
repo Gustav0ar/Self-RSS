@@ -5,6 +5,7 @@ import type { CategoryRepository } from '../repositories/category.repository.js'
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
+import { fetchWithRetry } from '../utils/retry.js';
 
 interface FeedMetadata {
 	title: string;
@@ -134,16 +135,21 @@ export class FeedService {
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15_000);
 		try {
-			const response = await fetchWithValidatedRedirects(
-				feedUrl,
-				{
-					signal: controller.signal,
-					headers: {
-						'User-Agent': 'SelfFeed/1.0',
-						Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-					},
-				},
-				{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+			const response = await fetchWithRetry(
+				() =>
+					fetchWithValidatedRedirects(
+						feedUrl,
+						{
+							signal: controller.signal,
+							headers: {
+								'User-Agent': 'SelfFeed/1.0',
+								Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
+							},
+						},
+						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+					),
+				{ maxRetries: 3 },
+				{ operation: 'fetchFeedMetadata', feedUrl },
 			);
 			if (!response.ok) {
 				throw new Error(`HTTP ${response.status}: ${response.statusText}`);

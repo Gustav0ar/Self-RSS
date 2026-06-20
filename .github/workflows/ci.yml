@@ -46,7 +46,15 @@ jobs:
       - run: bun run openapi:generate
       - name: Verify generated OpenAPI is committed
         run: git diff --exit-code -- packages/api/openapi.json
-      - run: bun run test
+      - name: Run unit tests with coverage
+        run: bun run test --coverage --reporter=verbose
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./packages/api/coverage/lcov.info,./packages/web/coverage/lcov.info
+          flags: unittests
+          fail_ci_if_error: true
+          verbose: true
       - run: bun run --filter '@self-feed/web' playwright:install
       - run: bun run test:integration
       - run: bun run test:e2e

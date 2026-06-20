@@ -13,6 +13,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 	const routes = new Hono();
 
 	routes.get('/', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
 		const userId = c.get('userId');
 		const query = parseQuery(c, articleQuerySchema);
 		const result = await articleService.getArticles(userId, query);
@@ -20,6 +21,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 	});
 
 	routes.get('/:articleId', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const article = await articleService.getArticle(userId, articleId);
@@ -44,6 +46,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 	});
 
 	routes.patch('/:articleId/read', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-mutate', RATE_LIMITS.articlesMutate);
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const body = await parseBody(c, markReadSchema);
@@ -59,6 +62,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 	});
 
 	routes.patch('/mark-all-read', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-mutate', RATE_LIMITS.articlesMutate);
 		const userId = c.get('userId');
 		const body = await parseBody(c, markAllReadSchema);
 		const clientId = c.req.header('X-Self-Feed-Client-Id') ?? null;
