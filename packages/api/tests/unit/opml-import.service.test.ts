@@ -291,6 +291,56 @@ describe('OpmlImportService', () => {
 		expect(feedRepo.createMany).toHaveBeenCalledTimes(1);
 	});
 
+	it('rolls back categories created by the import when feed batch insertion fails', async () => {
+		const categoryRepo = {
+			findAllByUser: vi.fn(async () => []),
+			createManyInTransaction: vi.fn(
+				async (rows: Array<{ name: string; parentCategoryId: string | null }>) =>
+					rows.map((row, index) => ({
+						id: `category-${index + 1}`,
+						name: row.name,
+						parentCategoryId: row.parentCategoryId,
+					})),
+			),
+			delete: vi.fn(async (id: string) => ({ id })),
+		};
+		const feedRepo = {
+			findByUrls: vi.fn(async () => []),
+			createMany: vi.fn(async () => {
+				throw new Error('feed batch failed');
+			}),
+		};
+		const service = new OpmlImportService(categoryRepo as never, feedRepo as never, {
+			allowPrivateHosts: true,
+		});
+
+		const summary = await service.import(
+			'user-1',
+			'feeds.opml',
+			`<?xml version="1.0" encoding="UTF-8"?>
+			<opml version="2.0">
+				<body>
+					<outline text="Engineering">
+						<outline text="Frontend">
+							<outline text="DevTools Digest" xmlUrl="https://example.com/devtools.xml" />
+						</outline>
+					</outline>
+				</body>
+			</opml>`,
+		);
+
+		expect(summary.createdCategories).toBe(0);
+		expect(summary.createdFeeds).toBe(0);
+		expect(summary.warnings).toEqual([
+			{
+				code: 'IMPORT_FAILED',
+				message: 'feed batch failed',
+			},
+		]);
+		expect(categoryRepo.delete).toHaveBeenNthCalledWith(1, 'category-2', 'user-1');
+		expect(categoryRepo.delete).toHaveBeenNthCalledWith(2, 'category-1', 'user-1');
+	});
+
 	it('rejects malformed OPML documents', () => {
 		const service = new OpmlImportService({} as never, {} as never);
 

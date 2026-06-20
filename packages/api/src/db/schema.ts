@@ -222,6 +222,7 @@ export const articles = sqliteTable(
 		uniqueIndex('articles_feed_guid_idx').on(t.feedId, t.guid),
 		index('articles_feed_id_idx').on(t.feedId),
 		index('articles_published_at_idx').on(t.publishedAt),
+		index('articles_fetched_at_idx').on(t.fetchedAt),
 		index('articles_feed_sort_idx').on(
 			t.feedId,
 			sql`coalesce(${t.publishedAt}, ${t.fetchedAt})`,

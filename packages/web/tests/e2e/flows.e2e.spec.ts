@@ -48,10 +48,6 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
-async function ensureRegistrationUnlocked(request: APIRequestContext) {
-	await setRegistrationLocked(request, false);
-}
-
 test.describe.configure({ mode: 'serial' });
 
 test('reader can toggle a read article back to unread', async ({ page }) => {

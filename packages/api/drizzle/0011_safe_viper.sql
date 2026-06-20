@@ -1,0 +1,1 @@
+CREATE INDEX `articles_fetched_at_idx` ON `articles` (`fetched_at`);

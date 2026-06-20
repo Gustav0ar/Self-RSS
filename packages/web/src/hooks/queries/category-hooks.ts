@@ -7,9 +7,10 @@ import { apiFetch } from '@/lib/api';
 export function useCategories() {
 	return useQuery({
 		queryKey: ['categories'],
-		queryFn: () =>
+		queryFn: ({ signal }) =>
 			apiFetch<ApiResponse<{ categories: CategoryWithCounts[]; totalUnread: number }>>(
 				'/categories',
+				{ signal },
 			).then((r) => r.data.categories),
 	});
 }

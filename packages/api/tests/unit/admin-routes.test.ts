@@ -157,6 +157,7 @@ describe('createAdminRoutes', () => {
 			expect(rateLimiter.check).toHaveBeenCalledWith('admin:admin-user-1', {
 				windowMs: 60_000,
 				maxRequests: 10,
+				failureMode: 'closed',
 			});
 		});
 	});
@@ -304,6 +305,7 @@ describe('createAdminRoutes', () => {
 			expect(rateLimiter.check).toHaveBeenCalledWith('admin:admin-user-1', {
 				windowMs: 60_000,
 				maxRequests: 10,
+				failureMode: 'closed',
 			});
 		});
 
@@ -593,6 +595,7 @@ describe('createAdminRoutes', () => {
 			expect(rateLimiter.check).toHaveBeenCalledWith('admin:admin-user-1', {
 				windowMs: 60_000,
 				maxRequests: 10,
+				failureMode: 'closed',
 			});
 		});
 

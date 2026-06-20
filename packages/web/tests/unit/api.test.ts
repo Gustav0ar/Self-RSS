@@ -12,6 +12,7 @@ import {
 describe('api module', () => {
 	afterEach(() => {
 		clearTokens();
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -286,6 +287,49 @@ describe('api module', () => {
 			const result = await refreshAccessToken();
 
 			expect(result).toBe(false);
+		});
+	});
+
+	describe('request cancellation', () => {
+		it('does not start a request when the signal is already aborted', async () => {
+			const controller = new AbortController();
+			controller.abort();
+			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/test', { signal: controller.signal })).rejects.toMatchObject({
+				name: 'AbortError',
+			});
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it('does not retry when fetch rejects with an abort error', async () => {
+			const abortError = new Error('aborted');
+			abortError.name = 'AbortError';
+			const fetchMock = vi.fn(async () => {
+				throw abortError;
+			});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/test')).rejects.toMatchObject({ name: 'AbortError' });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('stops retrying when a signal aborts during retry backoff', async () => {
+			vi.useFakeTimers();
+			const controller = new AbortController();
+			const fetchMock = vi.fn(async () => new Response('', { status: 503 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const request = apiFetch('/test', { signal: controller.signal });
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			controller.abort();
+
+			await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
 	});
 

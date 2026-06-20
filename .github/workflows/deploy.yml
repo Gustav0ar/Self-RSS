@@ -26,18 +26,102 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
+
+concurrency:
+  group: self-feed-production
+  cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: Verify Required Workflows
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Skip checks for forced manual deploy
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.force == 'true' }}
+        run: echo "Forced manual deploy requested; skipping workflow preflight."
+
+      - name: Require CI, Security, and Containers for this SHA
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.force != 'true' }}
+        uses: actions/github-script@v8
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const headSha = process.env.HEAD_SHA;
+            const requiredWorkflows = ['CI', 'Security', 'Containers'];
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            if (!headSha) {
+              core.setFailed('Unable to determine deploy commit SHA.');
+              return;
+            }
+
+            for (let attempt = 1; attempt <= 60; attempt += 1) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner,
+                repo,
+                head_sha: headSha,
+                per_page: 100,
+              });
+
+              const waiting = [];
+              const failed = [];
+
+              for (const workflowName of requiredWorkflows) {
+                const runs = data.workflow_runs
+                  .filter((run) => run.name === workflowName && run.head_sha === headSha)
+                  .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+                const latest = runs[0];
+
+                if (!latest) {
+                  waiting.push(`${workflowName}: missing`);
+                  continue;
+                }
+
+                if (latest.status !== 'completed') {
+                  waiting.push(`${workflowName}: ${latest.status}`);
+                  continue;
+                }
+
+                if (latest.conclusion !== 'success') {
+                  failed.push(`${workflowName}: ${latest.conclusion} (${latest.html_url})`);
+                }
+              }
+
+              if (failed.length > 0) {
+                core.setFailed(`Required workflow failed for ${headSha}: ${failed.join(', ')}`);
+                return;
+              }
+
+              if (waiting.length === 0) {
+                core.info(`All required workflows passed for ${headSha}.`);
+                return;
+              }
+
+              if (attempt === 60) {
+                core.setFailed(`Timed out waiting for required workflows on ${headSha}: ${waiting.join(', ')}`);
+                return;
+              }
+
+              core.info(`Waiting for required workflows on ${headSha}: ${waiting.join(', ')}`);
+              await sleep(10_000);
+            }
+
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    needs: preflight
     # `environment: production` gates the job on the repo's protected
     # environment configuration. Configure the environment in the GitHub
     # UI to require reviewers and to limit visibility to repo members.
     environment: production
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+    if: needs.preflight.result == 'success'
     steps:
       - uses: actions/checkout@v6
         with:

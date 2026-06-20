@@ -10,6 +10,8 @@ IMAGE_OWNER="${IMAGE_OWNER:?IMAGE_OWNER is required}"
 IMAGE_TAG="${IMAGE_TAG:-sha-${HEAD_SHA_SHORT}}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+APP_UID="${APP_UID:-$(id -u)}"
+APP_GID="${APP_GID:-$(id -g)}"
 
 read -r -a COMPOSE_ARGS <<< "${COMPOSE_CMD}"
 if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
@@ -162,7 +164,9 @@ backup_existing_database() {
 	fi
 
 	mkdir -p data/backups
-	chmod 777 data/backups
+	if ! chmod 750 data/backups 2>/dev/null; then
+		echo "Warning: could not chmod data/backups before backup; continuing with existing permissions."
+	fi
 
 	timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 	backup_name="self-feed-${timestamp}-${HEAD_SHA_SHORT}.db"
@@ -171,8 +175,9 @@ backup_existing_database() {
 
 	if [ "${running}" = "true" ]; then
 		echo "Creating SQLite pre-deploy backup with VACUUM INTO: ${backup_path}"
-		"${CONTAINER_CLI}" exec selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();"
-		"${CONTAINER_CLI}" exec selffeed-api chmod 600 "/app/data/backups/${backup_name}"
+		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();"
+		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chown "${APP_UID}:${APP_GID}" "/app/data/backups/${backup_name}"
+		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chmod 600 "/app/data/backups/${backup_name}"
 	else
 		echo "API container is not running; copying SQLite files for pre-deploy backup: ${backup_path}"
 		cp "${db_file}" "${backup_path}"
@@ -190,9 +195,28 @@ backup_existing_database() {
 	done
 }
 
+ensure_data_permissions() {
+	mkdir -p data data/backups
+	running="$("${CONTAINER_CLI}" inspect -f '{{.State.Running}}' selffeed-api 2>/dev/null || true)"
+	if [ "${running}" = "true" ]; then
+		echo "Normalizing data directory ownership for runtime uid/gid ${APP_UID}:${APP_GID}"
+		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api sh -c \
+			"chown -R ${APP_UID}:${APP_GID} /app/data && find /app/data -type d -exec chmod 750 {} + && find /app/data -type f -exec chmod 600 {} +"
+	else
+		echo "Normalizing host data directory permissions for runtime uid/gid ${APP_UID}:${APP_GID}"
+		if ! chown -R "${APP_UID}:${APP_GID}" data 2>/dev/null; then
+			echo "Warning: could not chown data to ${APP_UID}:${APP_GID}; continuing with existing ownership."
+		fi
+		chmod 750 data data/backups
+		find data -type f -exec chmod 600 {} + 2>/dev/null || true
+	fi
+}
+
 # Ensure the data dir exists for the SQLite volume.
 mkdir -p data
-chmod 777 data
+if ! chmod 750 data 2>/dev/null; then
+	echo "Warning: could not chmod data before permission normalization; continuing with existing permissions."
+fi
 
 curl_headers=(-H "Accept: application/vnd.github.raw")
 if [ -n "${GITHUB_TOKEN}" ]; then
@@ -217,11 +241,14 @@ normalize_domain_name
 upsert_env_var REGISTRY "${REGISTRY}"
 upsert_env_var IMAGE_OWNER_LOWERCASE "${IMAGE_OWNER}"
 upsert_env_var IMAGE_TAG "${IMAGE_TAG}"
+upsert_env_var APP_UID "${APP_UID}"
+upsert_env_var APP_GID "${APP_GID}"
 
 export IMAGE_TAG
 export IMAGE_OWNER_LOWERCASE="${IMAGE_OWNER}"
 export REGISTRY
 
+ensure_data_permissions
 backup_existing_database
 
 # Save current image before deploying for rollback capability
@@ -229,6 +256,7 @@ save_current_image
 
 # Pull images, restart services, prune.
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull || fail_with_diagnostics
+ensure_data_permissions
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || fail_with_diagnostics
 
 wait_for_container_health selffeed-redis Redis || { echo "[DEPLOY] Redis health check failed"; rollback_deploy; }

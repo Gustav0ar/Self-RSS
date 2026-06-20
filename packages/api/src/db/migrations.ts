@@ -247,6 +247,45 @@ function latestAppliedMigration(db: Database, migrationsTable: string): DbMigrat
 	return rows[0];
 }
 
+function appliedMigrations(db: Database, migrationsTable: string): DbMigrationRow[] {
+	return db.all<DbMigrationRow>(
+		sql`SELECT id, hash, created_at FROM ${sql.identifier(
+			migrationsTable,
+		)} ORDER BY created_at ASC, id ASC`,
+	);
+}
+
+function assertAppliedMigrationHashes(migrations: MigrationMeta[], applied: DbMigrationRow[]) {
+	const migrationsByCreatedAt = new Map(
+		migrations.map((migration) => [migration.folderMillis, migration]),
+	);
+
+	for (const row of applied) {
+		const createdAt = Number(row.created_at);
+		if (!Number.isFinite(createdAt)) {
+			throw new MigrationGuardError({
+				message: `Applied migration ${row.id} has an invalid created_at value: ${row.created_at}`,
+				backupPath: null,
+			});
+		}
+
+		const expected = migrationsByCreatedAt.get(createdAt);
+		if (!expected) {
+			throw new MigrationGuardError({
+				message: `Database has applied migration ${createdAt} that is not present in local migrations`,
+				backupPath: null,
+			});
+		}
+
+		if (row.hash !== expected.hash) {
+			throw new MigrationGuardError({
+				message: `Applied migration hash mismatch for ${createdAt}`,
+				backupPath: null,
+			});
+		}
+	}
+}
+
 function pendingMigrations(migrations: MigrationMeta[], latest: DbMigrationRow | undefined) {
 	const latestCreatedAt = latest ? Number(latest.created_at) : null;
 	return migrations.filter(
@@ -276,6 +315,8 @@ export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
 	const migrations = readMigrationFiles({ migrationsFolder: options.migrationsFolder });
 
 	createMigrationTable(db, migrationsTable);
+	const applied = appliedMigrations(db, migrationsTable);
+	assertAppliedMigrationHashes(migrations, applied);
 	const latest = latestAppliedMigration(db, migrationsTable);
 	const pending = pendingMigrations(migrations, latest);
 	if (pending.length === 0) {

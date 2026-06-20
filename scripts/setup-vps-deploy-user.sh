@@ -48,7 +48,7 @@ chmod 750 "/var/lib/${DEPLOY_USER}"
 mkdir -p "${DEPLOY_PATH}/data"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_PATH}"
 chmod 750 "${DEPLOY_PATH}"
-chmod 777 "${DEPLOY_PATH}/data"
+chmod 750 "${DEPLOY_PATH}/data"
 
 # --- 3. Generate a dedicated SSH key for GitHub Actions. ---
 install -d -m 0700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" \

@@ -21,6 +21,6 @@ export interface Stats {
 export function useStats() {
 	return useQuery({
 		queryKey: ['stats'],
-		queryFn: () => apiFetch<ApiResponse<Stats>>('/stats').then((r) => r.data),
+		queryFn: ({ signal }) => apiFetch<ApiResponse<Stats>>('/stats', { signal }).then((r) => r.data),
 	});
 }

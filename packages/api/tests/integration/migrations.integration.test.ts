@@ -1,10 +1,11 @@
 import { Database as BunDatabase } from 'bun:sqlite';
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../src/db/migrations.js';
 import * as schema from '../../src/db/schema.js';
@@ -48,6 +49,12 @@ function markMigratedThrough0004(sqlite: BunDatabase) {
 	if (!migration0004) {
 		throw new Error('Could not find migration 0004 journal entry');
 	}
+	const migrationMeta = readMigrationFiles({ migrationsFolder }).find(
+		(migration) => migration.folderMillis === migration0004.when,
+	);
+	if (!migrationMeta) {
+		throw new Error('Could not read migration 0004 metadata');
+	}
 
 	sqlite.exec(`
 		CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (
@@ -58,7 +65,7 @@ function markMigratedThrough0004(sqlite: BunDatabase) {
 	`);
 	sqlite
 		.query('INSERT INTO "__drizzle_migrations" ("id", "hash", "created_at") VALUES (?, ?, ?)')
-		.run(4, 'test-migration-0004', migration0004.when);
+		.run(4, migrationMeta.hash, migration0004.when);
 	return migration0004.when;
 }
 
@@ -140,12 +147,30 @@ function createDangerousMigrationFolder(baseDir: string, migratedThrough: number
 	const folder = join(baseDir, 'dangerous-drizzle');
 	const metaFolder = join(folder, 'meta');
 	mkdirSync(metaFolder, { recursive: true });
+	const sourceJournal = JSON.parse(
+		readFileSync(join(migrationsFolder, 'meta/_journal.json'), 'utf8'),
+	) as {
+		version: string;
+		dialect: string;
+		entries: {
+			idx: number;
+			version: string;
+			when: number;
+			tag: string;
+			breakpoints: boolean;
+		}[];
+	};
+	const priorEntries = sourceJournal.entries.filter((entry) => entry.when <= migratedThrough);
+	for (const entry of priorEntries) {
+		copyFileSync(join(migrationsFolder, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+	}
 	writeFileSync(
 		join(metaFolder, '_journal.json'),
 		JSON.stringify({
-			version: '7',
-			dialect: 'sqlite',
+			version: sourceJournal.version,
+			dialect: sourceJournal.dialect,
 			entries: [
+				...priorEntries,
 				{
 					idx: 5,
 					version: '6',
@@ -183,6 +208,14 @@ describe('SQLite migrations', () => {
 			expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
 			expect(
 				sqlite
+					.query(
+						`SELECT name FROM sqlite_master
+						 WHERE type = 'index' AND name = 'articles_fetched_at_idx'`,
+					)
+					.get(),
+			).toMatchObject({ name: 'articles_fetched_at_idx' });
+			expect(
+				sqlite
 					.query('PRAGMA foreign_key_list(categories)')
 					.all()
 					.some(
@@ -216,6 +249,28 @@ describe('SQLite migrations', () => {
 			expect(countRows(sqlite, 'articles')).toBe(1);
 			expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
 			expect(readdirSync(join(tempDir, 'backups')).some((file) => file.endsWith('.db'))).toBe(true);
+		} finally {
+			sqlite.close();
+		}
+	});
+
+	it('rejects an applied migration whose recorded hash differs from local migrations', async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-migration-'));
+		tempDirs.push(tempDir);
+		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
+		sqlite.exec('PRAGMA foreign_keys = ON;');
+
+		try {
+			seedDatabaseBeforeCategoryRebuild(sqlite);
+			sqlite
+				.query('UPDATE "__drizzle_migrations" SET "hash" = ? WHERE "id" = ?')
+				.run('tampered-migration-hash', 4);
+			const db = drizzle(sqlite, { schema });
+
+			expect(() => applyMigrations(db, { migrationsFolder })).toThrow(/hash mismatch/);
+			expect(countRows(sqlite, 'categories')).toBe(1);
+			expect(countRows(sqlite, 'feeds')).toBe(1);
+			expect(countRows(sqlite, 'articles')).toBe(1);
 		} finally {
 			sqlite.close();
 		}

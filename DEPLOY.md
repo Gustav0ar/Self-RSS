@@ -86,6 +86,8 @@ JWT_REFRESH_EXPIRES_IN=7d
 REGISTRY=ghcr.io
 IMAGE_OWNER_LOWERCASE=gustav0ar
 IMAGE_TAG=latest
+APP_UID=$(id -u selffeed-deploy)
+APP_GID=$(id -g selffeed-deploy)
 CORS_ALLOWED_ORIGINS=https://rss.yourdomain.com
 DOMAIN_NAME=rss.yourdomain.com
 TRAEFIK_NETWORK=web
@@ -130,12 +132,15 @@ proxy with no upstream proxy, set `TRUSTED_PROXY_HOPS=0`. Do not increase
 this value unless every hop counted from the right side of
 `X-Forwarded-For` is controlled by your infrastructure.
 
-The setup helper leaves `/mnt/storage/containers/selfrss/data` writable
-by the unprivileged `bun` user inside the API container. If you create
-the directory manually, run:
+The setup helper leaves `/mnt/storage/containers/selfrss/data` owned by
+the deploy user and readable only by that account. The deploy workflow
+also writes `APP_UID` and `APP_GID` into `.env`, and the API/worker
+containers run with that same host uid/gid so SQLite files do not need
+world-writable permissions. If you create the directory manually, run:
 
 ```bash
-sudo chmod 777 /mnt/storage/containers/selfrss/data
+sudo chown -R selffeed-deploy:selffeed-deploy /mnt/storage/containers/selfrss/data
+sudo chmod 750 /mnt/storage/containers/selfrss/data
 ```
 
 Set the production environment secrets to the same account:

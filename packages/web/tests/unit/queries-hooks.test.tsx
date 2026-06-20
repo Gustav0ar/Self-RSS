@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { QueryClientProvider, QueryClient as RealQueryClient } from '@tanstack/react-query';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +15,16 @@ import {
 	applyReadStateSyncEvent,
 	buildArticleSearchParams,
 	invalidateReaderQueries,
+	useArticle,
+	useArticles,
+	useCategories,
+	useFeeds,
+	useInfiniteArticles,
+	usePreferences,
+	useSearch,
+	useStats,
 	useSyncAllFeeds,
+	useSyncAllFeedsStatus,
 } from '../../src/hooks/queries';
 
 beforeEach(() => {
@@ -234,6 +243,84 @@ describe('buildArticleSearchParams', () => {
 	it('respects the explicit limit when given', () => {
 		const params = buildArticleSearchParams({ limit: 50 });
 		expect(params).toBe('limit=50');
+	});
+});
+
+describe('read query cancellation', () => {
+	it('passes React Query abort signals to API reads', async () => {
+		apiFetchMock.mockImplementation(async (path: string) => {
+			if (path === '/articles/article-1') {
+				return { data: { id: 'article-1' } };
+			}
+			if (path.startsWith('/articles') || path.startsWith('/search')) {
+				return { data: [], cursor: null, hasMore: false };
+			}
+			if (path.startsWith('/feeds/sync/status')) {
+				return { data: { queued: false, running: false, active: false } };
+			}
+			if (path.startsWith('/feeds')) {
+				return { data: [] };
+			}
+			if (path.startsWith('/categories')) {
+				return { data: { categories: [], totalUnread: 0 } };
+			}
+			if (path.startsWith('/preferences')) {
+				return {
+					data: {
+						theme: 'system',
+						fontFamily: 'Inter',
+						textSize: 16,
+						density: 'comfortable',
+						defaultSort: 'latest',
+						hideRead: false,
+						keyboardShortcutsEnabled: true,
+						autoMarkReadMode: 'on_navigate',
+						accentColor: 'indigo',
+					},
+				};
+			}
+			if (path.startsWith('/stats')) {
+				return {
+					data: {
+						totalUnread: 0,
+						totalRead: 0,
+						totalFeeds: 0,
+						totalCategories: 0,
+						recentSyncRuns: [],
+						dailyMetrics: [],
+					},
+				};
+			}
+			throw new Error(`Unexpected path ${path}`);
+		});
+		const queryClient = new RealQueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+
+		renderHook(
+			() => {
+				useArticles({ limit: 20 });
+				useInfiniteArticles({ limit: 20 });
+				useArticle('article-1');
+				useFeeds();
+				useCategories();
+				usePreferences();
+				useStats();
+				useSyncAllFeedsStatus();
+				useSearch('query');
+			},
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(apiFetchMock).toHaveBeenCalledTimes(9);
+		});
+		for (const [, options] of apiFetchMock.mock.calls) {
+			expect((options as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+		}
 	});
 });
 

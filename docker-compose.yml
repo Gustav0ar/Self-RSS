@@ -6,7 +6,7 @@
 # Instructions:
 # 1. Copy this file to your server as `docker-compose.yml`
 # 2. Create a `.env` file in the same directory using the variables required below.
-# 3. Create the data directory: `mkdir -p data && chmod 777 data` (or set ownership)
+# 3. Create the data directory: `mkdir -p data && chmod 750 data`
 # 4. Run `docker compose up -d` to start the service stack.
 
 services:
@@ -40,6 +40,7 @@ services:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-api:${IMAGE_TAG:-latest}
     container_name: selffeed-api
     init: true
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
     volumes:
       - ./data:/app/data
@@ -94,6 +95,7 @@ services:
     image: ${REGISTRY:-ghcr.io}/${IMAGE_OWNER_LOWERCASE:?Set IMAGE_OWNER_LOWERCASE to your lowercase GitHub owner or organization}/self-feed-api:${IMAGE_TAG:-latest}
     container_name: selffeed-worker
     init: true
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
     command: ["start:worker"]
     volumes:

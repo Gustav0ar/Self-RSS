@@ -51,17 +51,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
-          node-version: "20"
-          cache: "npm"
+          bun-version: "1.3.14"
       - name: Install dependencies
-        run: npm ci
-      - name: Audit dependencies
-        run: npm audit --audit-level=high --json > audit-results.json || true
+        run: bun install --frozen-lockfile
+      - name: Audit dependencies for high and critical advisories
+        shell: bash
+        run: |
+          set +e
+          bun audit --json > audit-results.json
+          audit_status=$?
+          set -e
+          if [ "${audit_status}" -gt 1 ]; then
+            exit "${audit_status}"
+          fi
+          bun scripts/check-bun-audit.ts audit-results.json high
       - name: Upload audit results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: npm-audit-results
+          name: bun-audit-results
           path: audit-results.json
+          if-no-files-found: ignore
           retention-days: 30

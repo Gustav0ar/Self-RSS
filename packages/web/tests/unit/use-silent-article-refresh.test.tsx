@@ -89,7 +89,9 @@ describe('useSilentArticleRefresh', () => {
 		});
 
 		await waitFor(() => {
-			expect(apiFetchMock).toHaveBeenCalledWith('/articles?limit=30');
+			expect(apiFetchMock).toHaveBeenCalledWith('/articles?limit=30', {
+				signal: expect.any(AbortSignal),
+			});
 		});
 		expect(invalidateSpy).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(queryKey)).toEqual(cached);

@@ -80,6 +80,7 @@ function buildRequestHeaders(options: RequestInit) {
 }
 
 async function authorizedFetch(path: string, options: RequestInit = {}) {
+	throwIfAborted(options.signal);
 	const headers = buildRequestHeaders(options);
 	const method = options.method?.toUpperCase() ?? 'GET';
 	const isMutation = method !== 'GET';
@@ -92,11 +93,13 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 	if (isMutation) {
 		res = await doFetch();
 	} else {
-		res = await withRetry(doFetch, isRetriableResponse);
+		res = await withRetry(doFetch, isRetriableResponse, options.signal);
 	}
 
 	if (res.status === 401) {
+		throwIfAborted(options.signal);
 		const refreshed = await refreshAccessToken();
+		throwIfAborted(options.signal);
 		if (refreshed) {
 			headers.Authorization = `Bearer ${accessToken}`;
 			res = await doFetch();
@@ -126,8 +129,51 @@ function parseContentDispositionFilename(header: string | null) {
 	return basicMatch?.[1] ?? basicMatch?.[2]?.trim() ?? null;
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+function createAbortError(reason?: unknown): Error {
+	if (reason instanceof Error) {
+		return reason;
+	}
+	const error = new Error(typeof reason === 'string' ? reason : 'The operation was aborted');
+	error.name = 'AbortError';
+	return error;
+}
+
+function isAbortError(error: unknown): boolean {
+	return error instanceof Error && error.name === 'AbortError';
+}
+
+function throwIfAborted(signal?: AbortSignal | null): void {
+	if (signal?.aborted) {
+		throw createAbortError(signal.reason);
+	}
+}
+
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(createAbortError(signal.reason));
+			return;
+		}
+
+		let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+		const cleanup = () => {
+			if (timer !== null) {
+				globalThis.clearTimeout(timer);
+				timer = null;
+			}
+			signal?.removeEventListener('abort', onAbort);
+		};
+		const onAbort = () => {
+			cleanup();
+			reject(createAbortError(signal?.reason));
+		};
+
+		timer = globalThis.setTimeout(() => {
+			cleanup();
+			resolve();
+		}, ms);
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
 }
 
 function getExponentialBackoffDelay(attempt: number): number {
@@ -141,13 +187,16 @@ function isRetriableResponse(res: Response): boolean {
 	return res.status >= 500;
 }
 
-async function withRetry<T>(
+async function withRetry(
 	fetchFn: () => Promise<Response>,
 	isRetriable: (res: Response) => boolean,
+	signal?: AbortSignal | null,
 ): Promise<Response> {
 	let lastError: Error | null = null;
 
 	for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+		throwIfAborted(signal);
+
 		try {
 			const res = await fetchFn();
 
@@ -158,16 +207,19 @@ async function withRetry<T>(
 			// Server error and we have retries left
 			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
 				lastError = new Error(`API error: ${res.status}`);
-				await sleep(getExponentialBackoffDelay(attempt));
+				await sleep(getExponentialBackoffDelay(attempt), signal);
 				continue;
 			}
 
 			return res;
 		} catch (err) {
+			if (isAbortError(err) || signal?.aborted) {
+				throw createAbortError(signal?.reason ?? err);
+			}
 			lastError = err instanceof Error ? err : new Error(String(err));
 
 			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
-				await sleep(getExponentialBackoffDelay(attempt));
+				await sleep(getExponentialBackoffDelay(attempt), signal);
 			}
 		}
 	}

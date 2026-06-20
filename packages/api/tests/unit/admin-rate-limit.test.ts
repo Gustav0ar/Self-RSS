@@ -28,6 +28,7 @@ describe('admin rate limit configuration', () => {
 		const { RATE_LIMITS } = await import('../../src/utils/rate-limiter.js');
 		expect(RATE_LIMITS.admin.windowMs).toBe(60_000);
 		expect(RATE_LIMITS.admin.maxRequests).toBe(10);
+		expect(RATE_LIMITS.admin.failureMode).toBe('closed');
 	});
 
 	it('admin rate limit is stricter than standard endpoint limits', async () => {

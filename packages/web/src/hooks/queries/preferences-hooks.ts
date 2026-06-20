@@ -19,7 +19,8 @@ export interface Preferences {
 export function usePreferences() {
 	return useQuery({
 		queryKey: ['preferences'],
-		queryFn: () => apiFetch<ApiResponse<Preferences>>('/preferences').then((r) => r.data),
+		queryFn: ({ signal }) =>
+			apiFetch<ApiResponse<Preferences>>('/preferences', { signal }).then((r) => r.data),
 	});
 }
 

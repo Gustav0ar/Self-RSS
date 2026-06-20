@@ -20,8 +20,10 @@ import {
 	invalidateReaderQueries,
 } from './cache-utils';
 
-function fetchArticle(articleId: string) {
-	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`).then((r) => r.data);
+function fetchArticle(articleId: string, signal?: AbortSignal) {
+	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`, { signal }).then(
+		(r) => r.data,
+	);
 }
 
 function enrichArticle(articleId: string) {
@@ -41,7 +43,10 @@ export function useArticles(params: ArticleQueryParams = {}) {
 	const qs = buildArticleSearchParams(params, params.cursor);
 	return useQuery({
 		queryKey: ['articles', params],
-		queryFn: () => apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`),
+		queryFn: ({ signal }) =>
+			apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`, {
+				signal,
+			}),
 		// Optimistic UI: show cached data immediately, refresh in background
 		placeholderData: (prev) => prev,
 		staleTime: REFRESH_INTERVALS.ARTICLE_STALE_MS, // Consider data fresh for 30s to avoid unnecessary refetches
@@ -61,7 +66,7 @@ export function useInfiniteArticles(params: ArticleQueryParams = {}) {
 			limit,
 		],
 		initialPageParam: null as string | null,
-		queryFn: ({ pageParam }) => {
+		queryFn: ({ pageParam, signal }) => {
 			const qs = buildArticleSearchParams(
 				{
 					...params,
@@ -69,7 +74,9 @@ export function useInfiniteArticles(params: ArticleQueryParams = {}) {
 				},
 				pageParam,
 			);
-			return apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`);
+			return apiFetch<ApiListResponse<ArticleListItem>>(`/articles${qs ? `?${qs}` : ''}`, {
+				signal,
+			});
 		},
 		getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.cursor : undefined),
 	});
@@ -78,7 +85,7 @@ export function useInfiniteArticles(params: ArticleQueryParams = {}) {
 export function useArticle(articleId: string | null) {
 	return useQuery({
 		queryKey: articleId ? articleQueryKey(articleId) : ['article', null],
-		queryFn: () => fetchArticle(articleId!),
+		queryFn: ({ signal }) => fetchArticle(articleId!, signal),
 		enabled: !!articleId,
 	});
 }
@@ -89,7 +96,7 @@ export function usePrefetchArticle() {
 		(articleId: string) =>
 			qc.prefetchQuery({
 				queryKey: articleQueryKey(articleId),
-				queryFn: () => fetchArticle(articleId),
+				queryFn: ({ signal }) => fetchArticle(articleId, signal),
 				staleTime: 1000 * 60,
 			}),
 		[qc],
@@ -128,7 +135,7 @@ export function useWarmNextArticles() {
 					try {
 						await qc.fetchQuery({
 							queryKey,
-							queryFn: () => fetchArticle(articleId),
+							queryFn: ({ signal }) => fetchArticle(articleId, signal),
 							staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
 						});
 					} catch {

@@ -251,6 +251,18 @@ export class OpmlImportService {
 						existingFeedUrls.add(row.feedUrl);
 					}
 				} catch (error) {
+					const rollback = await this.rollbackCreatedCategories(
+						userId,
+						createdCategoryIdsByQueueIdx,
+					);
+					if (rollback.failed.length === 0) {
+						summary.createdCategories = 0;
+					} else {
+						summary.warnings.push({
+							code: 'IMPORT_ROLLBACK_FAILED',
+							message: `Failed to roll back ${rollback.failed.length} created categories after feed import failure`,
+						});
+					}
 					summary.warnings.push({
 						code: 'IMPORT_FAILED',
 						message: error instanceof Error ? error.message : 'Failed to import feeds',
@@ -260,6 +272,21 @@ export class OpmlImportService {
 		}
 
 		return summary;
+	}
+
+	private async rollbackCreatedCategories(userId: string, categoryIds: string[]) {
+		const uniqueCategoryIds = Array.from(new Set(categoryIds.filter(Boolean))).reverse();
+		const failed: string[] = [];
+
+		for (const categoryId of uniqueCategoryIds) {
+			try {
+				await this.categoryRepo.delete(categoryId, userId);
+			} catch {
+				failed.push(categoryId);
+			}
+		}
+
+		return { attempted: uniqueCategoryIds.length, failed };
 	}
 
 	private categoryPathKey(parentCategoryId: string | null, name: string): string {

@@ -6,11 +6,13 @@ export function useSearch(q: string, categoryId?: string) {
 	const normalizedQuery = q.trim();
 	return useInfiniteQuery({
 		queryKey: ['search', normalizedQuery, categoryId],
-		queryFn: ({ pageParam }) => {
+		queryFn: ({ pageParam, signal }) => {
 			const params = new URLSearchParams({ q: normalizedQuery, limit: '20' });
 			if (categoryId) params.set('categoryId', categoryId);
 			if (pageParam) params.set('cursor', pageParam);
-			return apiFetch<ApiListResponse<ArticleListItem>>(`/search?${params.toString()}`);
+			return apiFetch<ApiListResponse<ArticleListItem>>(`/search?${params.toString()}`, {
+				signal,
+			});
 		},
 		initialPageParam: null as string | null,
 		getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.cursor : undefined),

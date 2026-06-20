@@ -10,14 +10,15 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "echo 'no tests yet'",
-		"test:unit": "echo 'no tests yet'",
+		"test": "vitest run tests/unit",
+		"test:unit": "vitest run tests/unit",
 		"build": "tsc"
 	},
 	"dependencies": {
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
 	}
 }

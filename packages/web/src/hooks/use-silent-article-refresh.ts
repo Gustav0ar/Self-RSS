@@ -82,7 +82,14 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 		[feedId, categoryId, unreadOnly, sort, limit],
 	);
 	const inFlightRef = useRef(false);
+	const inFlightControllerRef = useRef<AbortController | null>(null);
 	const lastFetchedAtRef = useRef(0);
+
+	const abortInFlight = useCallback(() => {
+		inFlightControllerRef.current?.abort();
+		inFlightControllerRef.current = null;
+		inFlightRef.current = false;
+	}, []);
 
 	const refresh = useCallback(async () => {
 		if (!qc) return;
@@ -93,10 +100,14 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 		const cached = qc.getQueryData<ArticleList>(queryKey);
 		if (!cached?.pages[0]) return;
 
+		const controller = new AbortController();
 		inFlightRef.current = true;
+		inFlightControllerRef.current = controller;
 		try {
 			const qs = buildArticleSearchParams({ feedId, categoryId, unreadOnly, sort, limit }, null);
-			const fresh = await apiFetch<Page>(`/articles${qs ? `?${qs}` : ''}`);
+			const fresh = await apiFetch<Page>(`/articles${qs ? `?${qs}` : ''}`, {
+				signal: controller.signal,
+			});
 
 			if (!firstPageHasChanged(cached.pages[0], fresh)) return;
 
@@ -104,8 +115,11 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 		} catch {
 			// Network errors are expected; the next tick will retry.
 		} finally {
-			inFlightRef.current = false;
-			lastFetchedAtRef.current = Date.now();
+			if (inFlightControllerRef.current === controller) {
+				inFlightControllerRef.current = null;
+				inFlightRef.current = false;
+				lastFetchedAtRef.current = Date.now();
+			}
 		}
 	}, [qc, queryKey, feedId, categoryId, unreadOnly, sort, limit]);
 
@@ -124,9 +138,10 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 		const interval = window.setInterval(refresh, REFRESH_INTERVALS.SILENT_REFRESH_MS);
 
 		return () => {
+			abortInFlight();
 			window.removeEventListener('focus', onFocus);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.clearInterval(interval);
 		};
-	}, [qc, refresh]);
+	}, [qc, refresh, abortInFlight]);
 }

@@ -107,6 +107,23 @@ describe('RateLimiter', () => {
 		expect(result).toEqual({ allowed: true, remaining: Infinity });
 	});
 
+	it('fails closed when the bucket is configured for closed Redis failure mode', async () => {
+		const redis = {
+			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+			pexpire: vi.fn().mockResolvedValue(1),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		const result = await limiter.check('auth', {
+			windowMs: 60_000,
+			maxRequests: 5,
+			failureMode: 'closed',
+		});
+
+		expect(result).toEqual({ allowed: false, remaining: 0 });
+		expect(redis.pexpire).not.toHaveBeenCalled();
+	});
+
 	it('fails closed when Redis incr throws during incrementDailyCount', async () => {
 		const redis = {
 			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
@@ -175,14 +192,30 @@ describe('RateLimiter', () => {
 describe('RATE_LIMITS', () => {
 	it('caps the auth limit at 100 in the test environment', () => {
 		process.env.NODE_ENV = 'test';
-		expect(RATE_LIMITS.auth).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.auth).toEqual({
+			windowMs: 60_000,
+			maxRequests: 100,
+			failureMode: 'closed',
+		});
 	});
 
 	it('exposes the named buckets used by routes', () => {
 		expect(RATE_LIMITS.feedExport).toEqual({ windowMs: 60_000, maxRequests: 30 });
-		expect(RATE_LIMITS.feedImport).toEqual({ windowMs: 60_000, maxRequests: 20 });
-		expect(RATE_LIMITS.feedSync).toEqual({ windowMs: 60_000, maxRequests: 60 });
-		expect(RATE_LIMITS.articleEnrich).toEqual({ windowMs: 60_000, maxRequests: 120 });
+		expect(RATE_LIMITS.feedImport).toEqual({
+			windowMs: 60_000,
+			maxRequests: 20,
+			failureMode: 'closed',
+		});
+		expect(RATE_LIMITS.feedSync).toEqual({
+			windowMs: 60_000,
+			maxRequests: 60,
+			failureMode: 'closed',
+		});
+		expect(RATE_LIMITS.articleEnrich).toEqual({
+			windowMs: 60_000,
+			maxRequests: 120,
+			failureMode: 'closed',
+		});
 	});
 
 	it('exposes read-heavy endpoint limits at 100/min', () => {
@@ -194,10 +227,26 @@ describe('RATE_LIMITS', () => {
 	});
 
 	it('exposes mutation endpoint limits at 30/min', () => {
-		expect(RATE_LIMITS.articlesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
-		expect(RATE_LIMITS.categoriesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
-		expect(RATE_LIMITS.preferencesMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
-		expect(RATE_LIMITS.feedsMutate).toEqual({ windowMs: 60_000, maxRequests: 30 });
+		expect(RATE_LIMITS.articlesMutate).toEqual({
+			windowMs: 60_000,
+			maxRequests: 30,
+			failureMode: 'closed',
+		});
+		expect(RATE_LIMITS.categoriesMutate).toEqual({
+			windowMs: 60_000,
+			maxRequests: 30,
+			failureMode: 'closed',
+		});
+		expect(RATE_LIMITS.preferencesMutate).toEqual({
+			windowMs: 60_000,
+			maxRequests: 30,
+			failureMode: 'closed',
+		});
+		expect(RATE_LIMITS.feedsMutate).toEqual({
+			windowMs: 60_000,
+			maxRequests: 30,
+			failureMode: 'closed',
+		});
 	});
 });
 

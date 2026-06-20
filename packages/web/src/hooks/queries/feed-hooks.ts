@@ -11,9 +11,11 @@ import { invalidateReaderQueries } from './cache-utils';
 export function useFeeds(categoryId?: string) {
 	return useQuery({
 		queryKey: ['feeds', categoryId],
-		queryFn: () => {
+		queryFn: ({ signal }) => {
 			const params = categoryId ? `?categoryId=${categoryId}` : '';
-			return apiFetch<ApiResponse<FeedWithCounts[]>>(`/feeds${params}`).then((r) => r.data);
+			return apiFetch<ApiResponse<FeedWithCounts[]>>(`/feeds${params}`, { signal }).then(
+				(r) => r.data,
+			);
 		},
 	});
 }
@@ -134,8 +136,8 @@ export function useSyncAllFeeds() {
 export function useSyncAllFeedsStatus() {
 	return useQuery({
 		queryKey: ['feeds', 'sync', 'status'],
-		queryFn: () =>
-			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status').then(
+		queryFn: ({ signal }) =>
+			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status', { signal }).then(
 				(response) => response.data,
 			),
 		refetchInterval: (query) =>

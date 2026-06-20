@@ -8,6 +8,7 @@ const logger = createLogger();
 export interface RateLimitConfig {
 	windowMs: number;
 	maxRequests: number;
+	failureMode?: 'open' | 'closed';
 }
 
 export class RateLimiter {
@@ -26,12 +27,15 @@ export class RateLimiter {
 			const remaining = Math.max(0, config.maxRequests - current);
 			return { allowed: current <= config.maxRequests, remaining };
 		} catch (error) {
-			// Redis unavailable - fail open for rate limiting (allow request)
-			logger.warn('Rate limiter Redis unavailable, allowing request', {
+			const failureMode = config.failureMode ?? 'open';
+			logger.warn('Rate limiter Redis unavailable during check', {
 				key,
+				failureMode,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return { allowed: true, remaining: Infinity };
+			return failureMode === 'closed'
+				? { allowed: false, remaining: 0 }
+				: { allowed: true, remaining: Infinity };
 		}
 	}
 
@@ -90,22 +94,26 @@ export class RateLimiter {
 export const RATE_LIMITS = {
 	get auth() {
 		const maxRequests = process.env.NODE_ENV === 'test' ? 100 : getEnv().RATE_LIMIT_AUTH_MAX;
-		return { windowMs: 60_000, maxRequests };
+		return { windowMs: 60_000, maxRequests, failureMode: 'closed' as const };
 	},
 	get feedCreate() {
-		return { windowMs: 60_000, maxRequests: getEnv().RATE_LIMIT_FEED_CREATE_MAX };
+		return {
+			windowMs: 60_000,
+			maxRequests: getEnv().RATE_LIMIT_FEED_CREATE_MAX,
+			failureMode: 'closed' as const,
+		};
 	},
 	get feedExport() {
 		return { windowMs: 60_000, maxRequests: 30 };
 	},
 	get feedImport() {
-		return { windowMs: 60_000, maxRequests: 20 };
+		return { windowMs: 60_000, maxRequests: 20, failureMode: 'closed' as const };
 	},
 	get feedSync() {
-		return { windowMs: 60_000, maxRequests: 60 };
+		return { windowMs: 60_000, maxRequests: 60, failureMode: 'closed' as const };
 	},
 	get articleEnrich() {
-		return { windowMs: 60_000, maxRequests: 120 };
+		return { windowMs: 60_000, maxRequests: 120, failureMode: 'closed' as const };
 	},
 	get search() {
 		return { windowMs: 60_000, maxRequests: getEnv().RATE_LIMIT_SEARCH_MAX };
@@ -115,19 +123,19 @@ export const RATE_LIMITS = {
 		return { windowMs: 60_000, maxRequests: 100 };
 	},
 	get articlesMutate() {
-		return { windowMs: 60_000, maxRequests: 30 };
+		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get categoriesRead() {
 		return { windowMs: 60_000, maxRequests: 100 };
 	},
 	get categoriesMutate() {
-		return { windowMs: 60_000, maxRequests: 30 };
+		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get preferencesRead() {
 		return { windowMs: 60_000, maxRequests: 100 };
 	},
 	get preferencesMutate() {
-		return { windowMs: 60_000, maxRequests: 30 };
+		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get statsRead() {
 		return { windowMs: 60_000, maxRequests: 100 };
@@ -136,10 +144,10 @@ export const RATE_LIMITS = {
 		return { windowMs: 60_000, maxRequests: 100 };
 	},
 	get feedsMutate() {
-		return { windowMs: 60_000, maxRequests: 30 };
+		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get admin() {
-		return { windowMs: 60_000, maxRequests: 10 };
+		return { windowMs: 60_000, maxRequests: 10, failureMode: 'closed' as const };
 	},
 } as const;
 
