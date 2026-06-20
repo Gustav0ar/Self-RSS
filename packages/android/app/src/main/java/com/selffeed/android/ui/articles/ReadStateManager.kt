@@ -2,7 +2,7 @@ package com.selffeed.android.ui.articles
 
 import android.util.Log
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.SelfFeedRepository
+import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
@@ -83,7 +83,7 @@ class ReadStateManager @Inject constructor(
         read: Boolean,
         onOptimisticUpdate: (String, String?, Boolean) -> Unit,
         onError: (String, Boolean?, ArticleDetail?) -> Unit,
-        onConfirm: (String, String?, Boolean, Boolean) -> Unit,
+        onConfirm: (String, String?, Boolean, Boolean?) -> Unit,
     ) {
         if (!read) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
 

@@ -204,7 +204,7 @@ class TokenAuthenticator(
 
         private const val TAG = "TokenAuthenticator"
         private const val PRODUCTION_API_HOSTNAME = "api.selffeed.com"
-        private val certificatePinner: CertificatePinner? by lazy { buildCertificatePinner() }
+        val certificatePinner: CertificatePinner? by lazy { buildCertificatePinner() }
 
         fun logCertificatePinningFailure(e: SSLPeerUnverifiedException) {
             // Log security-critical event with details for forensic analysis.

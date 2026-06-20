@@ -266,6 +266,7 @@ private fun ArticleDetailView(
                                     .clickable { openExternalUrl(context, media.url) },
                                 contentScale = ContentScale.Fit,
                             )
+                        }
                         media.embedUrl?.let { url ->
                             if (canPreviewMedia(media.provider, url)) {
                                 EmbedPlayer(

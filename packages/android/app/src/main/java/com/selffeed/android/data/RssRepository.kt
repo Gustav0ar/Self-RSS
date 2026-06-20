@@ -623,7 +623,7 @@ class RssRepository @Inject constructor(
         if (!networkMonitor.online.value) return
         val pending = localStore.readPendingReadStateMutations()
         if (pending.isEmpty()) return
-        val failedIds = mutableListOf<Long>()
+        val failedIds = mutableListOf<String>()
         for (mutation in pending) {
             try {
                 runtime.withRetry {

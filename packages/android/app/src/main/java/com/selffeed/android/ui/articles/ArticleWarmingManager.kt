@@ -1,7 +1,7 @@
 package com.selffeed.android.ui.articles
 
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.SelfFeedRepository
+import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.CoroutineScope

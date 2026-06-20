@@ -6,7 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.cachedIn
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
-import com.selffeed.android.data.SelfFeedRepository
+import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
@@ -287,6 +287,14 @@ class ArticlesViewModel @Inject constructor(
                         statusMessage = "Marked $markedCount articles as read",
                     )
                 }
+                _events.tryEmit(
+                    ArticleFeatureEvent.ScopeMarkedRead(
+                        feedId = feedId,
+                        categoryId = categoryId,
+                        affectedFeedIds = affectedFeedIds,
+                        markedCount = markedCount,
+                    ),
+                )
             },
             onError = { message ->
                 _state.update { it.copy(errorMessage = message) }
