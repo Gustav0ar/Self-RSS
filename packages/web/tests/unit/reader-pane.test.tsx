@@ -185,6 +185,29 @@ describe('ReaderPane', () => {
 		cancelAnimationFrame.mockRestore();
 	});
 
+	it('resets scroll position and progress when the selected article changes', () => {
+		const { rerender } = render(<ReaderPane articleId="article-1" />);
+		const progress = document.querySelector<HTMLElement>('.reader-scroll-progress');
+		expect(progress).toBeTruthy();
+		const scroller = progress?.parentElement as HTMLElement;
+		Object.defineProperty(scroller, 'scrollTop', {
+			configurable: true,
+			writable: true,
+			value: 320,
+		});
+		progress!.style.transform = 'scaleX(0.7)';
+
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			id: 'article-2',
+			title: 'Post 2',
+		};
+		rerender(<ReaderPane articleId="article-2" />);
+
+		expect(scroller.scrollTop).toBe(0);
+		expect(progress?.style.transform).toBe('scaleX(0)');
+	});
+
 	it('resizes only Twitter iframes inside the reader pane', () => {
 		const { container } = render(<ReaderPane articleId="article-1" />);
 		const readerRoot = container.firstElementChild as HTMLElement;
