@@ -167,14 +167,18 @@ describe('api module', () => {
 		});
 
 		it('apiDownload returns blob and filename from Content-Disposition', async () => {
-			const fetchMock = vi.fn(async () => {
-				const headers = new Headers();
-				headers.set('Content-Disposition', 'attachment; filename="test.pdf"');
-				return new Response(new Blob(['test'], { type: 'application/pdf' }), {
-					headers,
-					status: 200,
-				});
-			});
+			// Create a mock response that properly handles blob() calls
+			const headers = new Headers();
+			headers.set('Content-Disposition', 'attachment; filename="test.pdf"');
+			const mockBlob = new Blob(['test'], { type: 'application/pdf' });
+			const mockResponse = {
+				ok: true,
+				status: 200,
+				headers,
+				blob: async () => mockBlob,
+				json: async () => ({}),
+			} as unknown as Response;
+			const fetchMock = vi.fn(async () => mockResponse);
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiDownload('/download');
@@ -184,7 +188,15 @@ describe('api module', () => {
 		});
 
 		it('apiDownload returns null filename when Content-Disposition is missing', async () => {
-			const fetchMock = vi.fn(async () => new Response(new Blob(['test']), { status: 200 }));
+			const mockBlob = new Blob(['test']);
+			const mockResponse = {
+				ok: true,
+				status: 200,
+				headers: new Headers(),
+				blob: async () => mockBlob,
+				json: async () => ({}),
+			} as unknown as Response;
+			const fetchMock = vi.fn(async () => mockResponse);
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiDownload('/download');
