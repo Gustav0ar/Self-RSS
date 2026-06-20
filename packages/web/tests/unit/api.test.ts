@@ -279,12 +279,12 @@ describe('api module', () => {
 
 	describe('refresh token deduplication', () => {
 		it('returns the same promise when refresh is already in progress', async () => {
-			let resolveRefresh: ((value: boolean) => void) | null = null;
+			let resolveRefresh: ((value: Response) => void) | null = null;
 			let callCount = 0;
-			const fetchMock = vi.fn(async () => {
+			const fetchMock = vi.fn(async (): Promise<Response> => {
 				callCount++;
 				if (callCount === 1) {
-					return new Promise((resolve) => {
+					return new Promise<Response>((resolve) => {
 						resolveRefresh = resolve;
 					});
 				}
@@ -301,7 +301,7 @@ describe('api module', () => {
 			// Verify only one fetch call was made (deduplication worked)
 			expect(callCount).toBe(1);
 
-			resolveRefresh!(true);
+			resolveRefresh!(new Response('', { status: 401 }));
 			await promise1;
 		});
 	});

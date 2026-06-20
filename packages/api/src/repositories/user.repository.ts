@@ -24,7 +24,7 @@ export class UserRepository {
 			})
 			.returning();
 		if (!user) {
-			throw new Error('Failed to create user');
+			throw AppError.internal('Failed to create user');
 		}
 		return user;
 	}
@@ -40,7 +40,7 @@ export class UserRepository {
 				})
 				.returning();
 			if (!user) {
-				throw new Error('Failed to create user');
+				throw AppError.internal('Failed to create user');
 			}
 			await tx.insert(userPreferences).values({ userId: user.id });
 			return user;
@@ -70,7 +70,7 @@ export class UserRepository {
 				})
 				.returning();
 			if (!user) {
-				throw new Error('Failed to create user');
+				throw AppError.internal('Failed to create user');
 			}
 			await tx.insert(userPreferences).values({ userId: user.id });
 
@@ -81,7 +81,7 @@ export class UserRepository {
 	async createPreferences(userId: string) {
 		const [prefs] = await this.db.insert(userPreferences).values({ userId }).returning();
 		if (!prefs) {
-			throw new Error('Failed to create user preferences');
+			throw AppError.internal('Failed to create user preferences');
 		}
 		return prefs;
 	}

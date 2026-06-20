@@ -113,6 +113,11 @@ class TokenAuthenticator(
             .build()
 
         val client = OkHttpClient.Builder()
+            .apply {
+                certificatePinner?.let { pinner ->
+                    certificatePinner(pinner)
+                }
+            }
             .cookieJar(PersistedRefreshCookieJar(sessionStore))
             .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -145,6 +150,67 @@ class TokenAuthenticator(
         private const val REFRESH_READ_TIMEOUT_SECONDS = 10L
         private const val REFRESH_WRITE_TIMEOUT_SECONDS = 10L
         private const val REFRESH_CALL_TIMEOUT_SECONDS = 15L
+
+        /**
+         * Builds a [CertificatePinner] from BuildConfig pins if configured.
+         * Returns null in debug builds or if no pins are configured.
+         *
+         * Pins are configured as pipe-separated SHA-256 hashes with the "sha256/" prefix:
+         * "sha256/AAA...|sha256/BBB..."
+         *
+         * Certificate pinning prevents MITM attacks by verifying the server's certificate
+         * matches one of the pinned public key hashes. If pinning fails, the connection
+         * is rejected with a clear security error.
+         *
+         * For rotation: always keep at least one backup pin. Deploy new cert with its
+         * pin as backup first, then promote to primary after full rollout.
+         */
+        private fun buildCertificatePinner(): CertificatePinner? {
+            if (BuildConfig.DEBUG) {
+                // Disable pinning in debug to allow local development with self-signed certs
+                return null
+            }
+
+            val primaryPins = BuildConfig.CERTIFICATE_PINS
+            val backupPins = BuildConfig.BACKUP_CERTIFICATE_PINS
+
+            if (primaryPins.isBlank() && backupPins.isBlank()) {
+                // No pins configured - log a warning in release builds
+                Log.w(TAG, "Certificate pinning not configured. Set CERTIFICATE_PINS in build.gradle.kts for production.")
+                return null
+            }
+
+            if (primaryPins.isBlank()) {
+                Log.w(TAG, "Primary certificate pins not configured. Set CERTIFICATE_PINS in build.gradle.kts.")
+                return null
+            }
+
+            return CertificatePinner.Builder()
+                .apply {
+                    // Primary domain pinning
+                    add(
+                        PRODUCTION_API_HOSTNAME,
+                        *primaryPins.split("|").filter { it.isNotBlank() }.toTypedArray(),
+                    )
+
+                    // Backup pins for certificate rotation
+                    if (backupPins.isNotBlank()) {
+                        val backupList = backupPins.split("|").filter { it.isNotBlank() }
+                        add(PRODUCTION_API_HOSTNAME, *backupList.toTypedArray())
+                    }
+                }
+                .build()
+        }
+
+        private const val TAG = "TokenAuthenticator"
+        private const val PRODUCTION_API_HOSTNAME = "api.selffeed.com"
+        private val certificatePinner: CertificatePinner? by lazy { buildCertificatePinner() }
+
+        fun logCertificatePinningFailure(e: SSLPeerUnverifiedException) {
+            // Log security-critical event with details for forensic analysis.
+            // Do NOT log sensitive data like certificate contents - only the hostname.
+            Log.e(TAG, "Certificate pinning failure: ${e.message}", e)
+        }
     }
 }
 
@@ -182,11 +248,9 @@ object NetworkModule {
 
         val authenticator = TokenAuthenticator(sessionStore, moshi)
 
-        val certificatePinner = buildCertificatePinner()
-
         return OkHttpClient.Builder()
             .apply {
-                certificatePinner?.let { pinner ->
+                TokenAuthenticator.certificatePinner?.let { pinner ->
                     certificatePinner(pinner)
                 }
             }
@@ -194,7 +258,7 @@ object NetworkModule {
                 try {
                     chain.proceed(chain.request())
                 } catch (e: SSLPeerUnverifiedException) {
-                    logCertificatePinningFailure(e)
+                    TokenAuthenticator.logCertificatePinningFailure(e)
                     throw e
                 }
             }
@@ -237,71 +301,13 @@ object NetworkModule {
         return retrofit.create(RssApi::class.java)
     }
 
-    /**
-     * Builds a [CertificatePinner] from BuildConfig pins if configured.
-     * Returns null in debug builds or if no pins are configured.
-     *
-     * Pins are configured as pipe-separated SHA-256 hashes with the "sha256/" prefix:
-     * "sha256/AAA...|sha256/BBB..."
-     *
-     * Certificate pinning prevents MITM attacks by verifying the server's certificate
-     * matches one of the pinned public key hashes. If pinning fails, the connection
-     * is rejected with a clear security error.
-     *
-     * For rotation: always keep at least one backup pin. Deploy new cert with its
-     * pin as backup first, then promote to primary after full rollout.
-     */
-    private fun buildCertificatePinner(): CertificatePinner? {
-        if (BuildConfig.DEBUG) {
-            // Disable pinning in debug to allow local development with self-signed certs
-            return null
-        }
-
-        val primaryPins = BuildConfig.CERTIFICATE_PINS
-        val backupPins = BuildConfig.BACKUP_CERTIFICATE_PINS
-
-        if (primaryPins.isBlank() && backupPins.isBlank()) {
-            // No pins configured - log a warning in release builds
-            Log.w(TAG, "Certificate pinning not configured. Set CERTIFICATE_PINS in build.gradle.kts for production.")
-            return null
-        }
-
-        if (primaryPins.isBlank()) {
-            Log.w(TAG, "Primary certificate pins not configured. Set CERTIFICATE_PINS in build.gradle.kts.")
-            return null
-        }
-
-        return CertificatePinner.Builder()
-            .apply {
-                // Primary domain pinning
-                add(
-                    PRODUCTION_API_HOSTNAME,
-                    *primaryPins.split("|").filter { it.isNotBlank() }.toTypedArray(),
-                )
-
-                // Backup pins for certificate rotation
-                if (backupPins.isNotBlank()) {
-                    val backupList = backupPins.split("|").filter { it.isNotBlank() }
-                    add(PRODUCTION_API_HOSTNAME, *backupList.toTypedArray())
-                }
-            }
-            .build()
-    }
-
     private const val HTTP_CACHE_SIZE_BYTES = 10L * 1024 * 1024
     private const val CONNECT_TIMEOUT_SECONDS = 10L
     private const val READ_TIMEOUT_SECONDS = 15L
     private const val WRITE_TIMEOUT_SECONDS = 15L
     private const val CALL_TIMEOUT_SECONDS = 30L
     private const val PING_INTERVAL_SECONDS = 30L
-    private const val PRODUCTION_API_HOSTNAME = "api.selffeed.com"
     private const val TAG = "NetworkModule"
-
-    private fun logCertificatePinningFailure(e: SSLPeerUnverifiedException) {
-        // Log security-critical event with details for forensic analysis.
-        // Do NOT log sensitive data like certificate contents - only the hostname.
-        Log.e(TAG, "Certificate pinning failure: ${e.message}", e)
-    }
 }
 
 private object Types {

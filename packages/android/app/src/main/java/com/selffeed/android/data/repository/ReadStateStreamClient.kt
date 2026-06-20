@@ -9,6 +9,7 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -35,13 +37,22 @@ class ReadStateStreamClient(
     private val sseLastEventId = AtomicLong(0)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
 
+    // Heartbeat tracking: timestamp of the last received event
+    @Volatile
+    private var lastEventTimestampMs: Long = 0L
+
     /**
-     * Reuses the authenticated app client while removing read/call timeouts so
-     * the long-lived SSE stream is not interrupted by normal REST timeouts.
+     * Reuses the authenticated app client while configuring timeouts for SSE streams.
+     *
+     * - Read timeout: 60 seconds - allows detecting stuck connections via heartbeat.
+     *   If no data arrives within this window, the connection is considered stale.
+     * - Write timeout: 30 seconds - sufficient for any client-initiated writes.
+     * - Call timeout: 0 (infinite) - SSE calls are long-lived; individual operations
+     *   are bounded by read/write timeouts instead.
      */
     private val readStateClient: OkHttpClient = okHttpClient.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .addInterceptor { chain ->
             val original = chain.request()
@@ -80,12 +91,29 @@ class ReadStateStreamClient(
     }
 
     private fun eventsOnce(): Flow<ReadStateSyncEvent> = callbackFlow stream@ {
+        // Reset heartbeat tracking for a new connection
+        lastEventTimestampMs = System.currentTimeMillis()
+
         val request = Request.Builder()
             .url("${BuildConfig.API_BASE_URL.trimEnd('/')}/events/read-state")
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
             .build()
         val call = readStateClient.newCall(request)
+
+        // Launch heartbeat monitor to detect stuck connections
+        val heartbeatJob = launch {
+            while (isActive) {
+                delay(HEARTBEAT_CHECK_INTERVAL_MS)
+                val elapsed = System.currentTimeMillis() - lastEventTimestampMs
+                if (elapsed > HEARTBEAT_TIMEOUT_MS) {
+                    runtime.debugLog("Read-state stream heartbeat timeout after ${elapsed / 1000}s - closing connection")
+                    call.cancel()
+                    break
+                }
+            }
+        }
+
         call.enqueue(
             object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
@@ -110,10 +138,12 @@ class ReadStateStreamClient(
                                 val line = source.readUtf8Line() ?: break
                                 parser.pushLine(line)
                                     ?.toReadStateEvent(readStateEventAdapter)
+                                    ?.also { lastEventTimestampMs = System.currentTimeMillis() }
                                     ?.let { this@stream.trySend(it) }
                             }
                             parser.flush()
                                 ?.toReadStateEvent(readStateEventAdapter)
+                                ?.also { lastEventTimestampMs = System.currentTimeMillis() }
                                 ?.let { this@stream.trySend(it) }
                             this@stream.close()
                         } catch (e: IOException) {
@@ -128,7 +158,10 @@ class ReadStateStreamClient(
             },
         )
 
-        awaitClose { call.cancel() }
+        awaitClose {
+            heartbeatJob.cancel()
+            call.cancel()
+        }
     }.flowOn(Dispatchers.IO)
 
     private fun readStateReconnectDelay(attempt: Int): Long =
@@ -141,5 +174,14 @@ class ReadStateStreamClient(
         const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1_000L
         const val READ_STATE_RECONNECT_MAX_DELAY_MS = 30_000L
         const val READ_STATE_RECONNECT_MAX_ATTEMPTS = 50
+
+        /** Interval between heartbeat checks for stuck connection detection. */
+        const val HEARTBEAT_CHECK_INTERVAL_MS = 30_000L
+
+        /**
+         * Maximum time between SSE events before considering the connection stuck.
+         * This should be larger than the read timeout (60s) to allow for slow responses.
+         */
+        const val HEARTBEAT_TIMEOUT_MS = 90_000L
     }
 }

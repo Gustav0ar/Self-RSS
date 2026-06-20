@@ -623,6 +623,7 @@ class RssRepository @Inject constructor(
         if (!networkMonitor.online.value) return
         val pending = localStore.readPendingReadStateMutations()
         if (pending.isEmpty()) return
+        val failedIds = mutableListOf<Long>()
         for (mutation in pending) {
             try {
                 runtime.withRetry {
@@ -631,8 +632,11 @@ class RssRepository @Inject constructor(
                 localStore.deletePendingReadStateMutation(mutation.articleId)
             } catch (e: Exception) {
                 runtime.debugLog("Pending read-state flush failed for ${mutation.articleId}: ${e.message ?: e::class.java.simpleName}")
-                return
+                failedIds.add(mutation.articleId)
             }
+        }
+        if (failedIds.isNotEmpty()) {
+            runtime.debugLog("Pending read-state flush failed for ${failedIds.size} mutation(s): ${failedIds.joinToString()}")
         }
     }
 
