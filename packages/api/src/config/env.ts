@@ -12,7 +12,7 @@ const booleanCoercible = z.preprocess((val) => {
 	return val;
 }, z.coerce.boolean());
 
-const envSchema = z
+const rawEnvSchema = z
 	.object({
 		NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 		DATABASE_URL: z.string().default('data/rss.db'),
@@ -38,6 +38,13 @@ const envSchema = z
 		RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(30),
 		RATE_LIMIT_FEED_CREATE_MAX: z.coerce.number().int().min(1).default(100),
 		RATE_LIMIT_SEARCH_MAX: z.coerce.number().int().min(1).default(100),
+		REQUIRE_WORKER_HEARTBEAT: booleanCoercible.optional(),
+		CACHE_WARMER_INTERVAL_MS: z.coerce.number().int().min(1000).max(3600000).default(60000),
+		CACHE_WARMER_RECENT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
+		CACHE_WARMER_RECENT_USERS_LIMIT: z.coerce.number().int().min(1).max(1000).default(25),
+		CACHE_WARMER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
+		CACHE_WARMER_IDLE_USERS_ENABLED: booleanCoercible.default(false),
+		CACHE_WARMER_IDLE_USERS_LIMIT: z.coerce.number().int().min(1).max(1000).default(25),
 	})
 	.superRefine((env, ctx) => {
 		if (env.JWT_SECRET === env.JWT_REFRESH_SECRET) {
@@ -92,6 +99,11 @@ const envSchema = z
 			});
 		}
 	});
+
+const envSchema = rawEnvSchema.transform((env) => ({
+	...env,
+	REQUIRE_WORKER_HEARTBEAT: env.REQUIRE_WORKER_HEARTBEAT ?? env.NODE_ENV === 'production',
+}));
 
 export type Env = z.infer<typeof envSchema>;
 

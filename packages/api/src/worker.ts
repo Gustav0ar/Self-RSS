@@ -41,11 +41,14 @@ try {
 		syncCoordinator,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article);
-	const stopCacheWarmer = startCacheWarmer(
-		deps.services.articleCache,
-		deps.repos.user,
-		60 * 1000, // 1 minute interval
-	);
+	const stopCacheWarmer = startCacheWarmer(deps.services.articleCache, deps.repos.user, {
+		intervalMs: env.CACHE_WARMER_INTERVAL_MS,
+		recentWindowMinutes: env.CACHE_WARMER_RECENT_WINDOW_MINUTES,
+		recentUsersLimit: env.CACHE_WARMER_RECENT_USERS_LIMIT,
+		concurrency: env.CACHE_WARMER_CONCURRENCY,
+		includeIdleUsers: env.CACHE_WARMER_IDLE_USERS_ENABLED,
+		idleUsersLimit: env.CACHE_WARMER_IDLE_USERS_LIMIT,
+	});
 	const stopWorkerHeartbeat = startWorkerHeartbeat(redis);
 
 	let shuttingDown = false;

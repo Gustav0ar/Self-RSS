@@ -41,6 +41,8 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - run: export DATABASE_URL=data/rss.db && bun run db:generate
+      - name: Verify generated Drizzle migrations are committed
+        run: git diff --exit-code -- packages/api/drizzle
       - run: bun run openapi:generate
       - name: Verify generated OpenAPI is committed
         run: git diff --exit-code -- packages/api/openapi.json

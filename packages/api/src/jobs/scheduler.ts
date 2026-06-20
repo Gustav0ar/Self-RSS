@@ -104,36 +104,66 @@ export function startRetentionCleanup(
 	return () => clearInterval(interval);
 }
 
+interface CacheWarmerOptions {
+	intervalMs?: number;
+	recentWindowMinutes?: number;
+	recentUsersLimit?: number;
+	concurrency?: number;
+	includeIdleUsers?: boolean;
+	idleUsersLimit?: number;
+	runOnStart?: boolean;
+}
+
 /**
- * Periodically warms the article cache for all active users.
- * Prioritizes recently active users for faster perceived performance.
- * Runs every minute to ensure fresh cached data is available on user refresh.
+ * Periodically warms the article cache for recently active users.
+ * Idle users can be enabled explicitly, but are capped so background work
+ * stays bounded as the user table grows.
  */
 export function startCacheWarmer(
 	articleCache: ArticleCacheService,
 	userRepo: { findActiveUserIds(): Promise<string[]> },
-	intervalMs: number = 60 * 1000, // 1 minute
+	optionsOrIntervalMs: CacheWarmerOptions | number = {},
 ) {
-	logger.info('Article cache warmer started', { intervalMs });
+	const options =
+		typeof optionsOrIntervalMs === 'number'
+			? { intervalMs: optionsOrIntervalMs }
+			: optionsOrIntervalMs;
+	const intervalMs = options.intervalMs ?? 60 * 1000;
+	const recentWindowMinutes = options.recentWindowMinutes ?? 10;
+	const recentUsersLimit = options.recentUsersLimit ?? 25;
+	const concurrency = options.concurrency ?? 5;
+	const includeIdleUsers = options.includeIdleUsers ?? false;
+	const idleUsersLimit = options.idleUsersLimit ?? 25;
+	const runOnStart = options.runOnStart ?? true;
+
+	logger.info('Article cache warmer started', {
+		intervalMs,
+		recentWindowMinutes,
+		recentUsersLimit,
+		concurrency,
+		includeIdleUsers,
+		idleUsersLimit,
+	});
 	let isRunning = false;
 
 	const warmOnce = async () => {
 		if (isRunning) return;
 		isRunning = true;
 		try {
-			// Get recently active users first (priority)
-			const recentUserIds = await articleCache.getRecentlyActiveUserIds(10);
-			const allUserIds = await userRepo.findActiveUserIds();
+			const recentUserIds = await articleCache.getRecentlyActiveUserIds(
+				recentWindowMinutes,
+				recentUsersLimit,
+			);
+			let idleUsers: string[] = [];
 
-			// Use Set for O(1) lookup instead of O(N) includes()
-			const recentSet = new Set(recentUserIds);
-			const priorityUsers = recentUserIds;
-			const idleUsers = allUserIds.filter((id) => !recentSet.has(id));
+			if (includeIdleUsers) {
+				const recentSet = new Set(recentUserIds);
+				const allUserIds = await userRepo.findActiveUserIds();
+				idleUsers = allUserIds.filter((id) => !recentSet.has(id)).slice(0, idleUsersLimit);
+			}
 
-			// Warm priority users first (they're more likely to refresh soon)
 			const warmUsers = async (users: string[], label: string) => {
 				if (users.length === 0) return;
-				const concurrency = 5;
 				for (let i = 0; i < users.length; i += concurrency) {
 					const batch = users.slice(i, i + concurrency);
 					await Promise.allSettled(batch.map((userId) => articleCache.populateCache(userId)));
@@ -141,10 +171,7 @@ export function startCacheWarmer(
 				logger.debug(`Cache warming ${label}`, { userCount: users.length });
 			};
 
-			// Warm recently active users first
-			await warmUsers(priorityUsers, 'priority');
-
-			// Then warm idle users (lower priority)
+			await warmUsers(recentUserIds, 'recent');
 			await warmUsers(idleUsers, 'idle');
 		} catch (err) {
 			logger.error('Cache warmer error', {
@@ -155,8 +182,9 @@ export function startCacheWarmer(
 		}
 	};
 
-	// Run immediately on startup, then on interval
-	void warmOnce();
+	if (runOnStart) {
+		void warmOnce();
+	}
 	const interval = setInterval(() => {
 		void warmOnce();
 	}, intervalMs);

@@ -5,11 +5,15 @@ on:
     branches: [main, master]
     paths:
       - 'packages/android/**'
+      - 'packages/api/openapi.json'
+      - 'packages/shared/**'
       - '.github/workflows/android-ci.yml'
   pull_request:
     branches: [main, master]
     paths:
       - 'packages/android/**'
+      - 'packages/api/openapi.json'
+      - 'packages/shared/**'
       - '.github/workflows/android-ci.yml'
   workflow_dispatch:
 

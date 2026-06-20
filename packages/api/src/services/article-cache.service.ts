@@ -533,31 +533,57 @@ export class ArticleCacheService {
 	/**
 	 * Get users who were recently active (for priority warming)
 	 */
-	async getRecentlyActiveUserIds(withinMinutes: number = 10): Promise<string[]> {
+	async getRecentlyActiveUserIds(
+		withinMinutes: number = 10,
+		limit: number = 25,
+	): Promise<string[]> {
+		if (limit <= 0) return [];
+
 		const threshold = Date.now() - withinMinutes * 60 * 1000;
 		const pattern = `user:lastseen:*`;
-		const keys = await scanKeys(this.redis, pattern);
-
-		if (keys.length === 0) return [];
-
-		// Use MGET for efficiency instead of N individual GET calls
-		const values = await this.redis.mget(...keys);
 		const results: string[] = [];
+		const seenUserIds = new Set<string>();
+		let cursor = '0';
 
-		for (let i = 0; i < keys.length; i++) {
-			const key = keys[i];
-			const lastSeen = values[i];
-			if (key && lastSeen) {
+		do {
+			const [nextCursor, keys] = await this.redis.scan(
+				cursor,
+				'MATCH',
+				pattern,
+				'COUNT',
+				SCAN_BATCH,
+			);
+			cursor = nextCursor;
+
+			if (keys.length === 0) {
+				continue;
+			}
+
+			// Use MGET for efficiency instead of N individual GET calls.
+			const values = await this.redis.mget(...keys);
+			for (let i = 0; i < keys.length; i++) {
+				const key = keys[i];
+				const lastSeen = values[i];
+				if (!key || !lastSeen) {
+					continue;
+				}
+
 				const timestamp = new Date(lastSeen).getTime();
-				if (timestamp > threshold) {
-					// Extract userId from key pattern: user:lastseen:{userId}
-					const userId = key.split(':')[2];
-					if (userId) {
-						results.push(userId);
+				if (timestamp <= threshold) {
+					continue;
+				}
+
+				// Extract userId from key pattern: user:lastseen:{userId}
+				const userId = key.split(':')[2];
+				if (userId && !seenUserIds.has(userId)) {
+					seenUserIds.add(userId);
+					results.push(userId);
+					if (results.length >= limit) {
+						return results;
 					}
 				}
 			}
-		}
+		} while (cursor !== '0');
 
 		return results;
 	}

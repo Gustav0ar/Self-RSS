@@ -582,7 +582,7 @@ function SidebarBody({
 						<FolderPlus className="h-4 w-4" />
 					</SidebarAction>
 					<SidebarAction label="Import OPML" title="Import OPML" onClick={onImportOpml}>
-						<Download className="h-4 w-4" />
+						<Upload className="h-4 w-4" />
 					</SidebarAction>
 					<SidebarAction
 						label="Export OPML"
@@ -590,7 +590,7 @@ function SidebarBody({
 						onClick={onExportOpml}
 						disabled={isExporting}
 					>
-						<Upload className="h-4 w-4" />
+						<Download className="h-4 w-4" />
 					</SidebarAction>
 				</div>
 

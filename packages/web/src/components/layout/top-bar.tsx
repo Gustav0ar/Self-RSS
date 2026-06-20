@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { LogOut, Menu, Monitor, Moon, Rss, Sun } from 'lucide-react';
+import { BarChart3, LogOut, Menu, Monitor, Moon, Rss, Sun } from 'lucide-react';
 import { PreferencesPanel } from '@/components/preferences/preferences-panel';
 import { SearchBar } from '@/components/search/search-bar';
 import { useUpdatePreferences } from '@/hooks/queries';
@@ -82,9 +82,10 @@ export function TopBar({ onSelectArticle, onOpenSidebar, categoryId }: TopBarPro
 							<Link
 								to="/stats"
 								aria-label="Stats"
-								className="hidden h-9 items-center justify-center rounded-xl px-3 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:inline-flex"
+								className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:w-auto sm:px-3"
 							>
-								Stats
+								<BarChart3 className="h-4 w-4 sm:mr-1.5" />
+								<span className="sr-only sm:not-sr-only">Stats</span>
 							</Link>
 							{username ? (
 								<div className="surface-muted hidden max-w-52 items-center rounded-full px-3 py-1.5 text-xs text-muted-foreground lg:flex">
