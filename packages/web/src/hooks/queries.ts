@@ -924,10 +924,12 @@ export function useMarkRead() {
 			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
 			const previousFeeds = qc.getQueriesData({ queryKey: ['feeds'] });
 			const previousCategories = qc.getQueriesData({ queryKey: ['categories'] });
+			const previousStats = qc.getQueryData<StatsResponse>(['stats']);
 
 			applyArticleReadState(qc, articleId, read);
 			if (previousSnapshot && previousSnapshot.isRead !== read) {
 				applyUnreadCountDelta(qc, previousSnapshot.feedId, read ? -1 : 1);
+				applyStatsDelta(qc, read ? -1 : 1, read ? 1 : -1);
 			}
 
 			return {
@@ -936,6 +938,7 @@ export function useMarkRead() {
 				previousSearch,
 				previousFeeds,
 				previousCategories,
+				previousStats,
 			};
 		},
 		onError: (_error, { articleId }, context) => {
@@ -959,6 +962,7 @@ export function useMarkRead() {
 			for (const [queryKey, data] of context?.previousCategories ?? []) {
 				qc.setQueryData(queryKey, data);
 			}
+			qc.setQueryData(['stats'], context?.previousStats);
 		},
 		onSettled: () => {
 			qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
