@@ -12,5 +12,18 @@ export const updateCategorySchema = z.object({
 	sortOrder: z.number().int().min(0).optional(),
 });
 
+export const reorderCategoriesSchema = z.object({
+	updates: z
+		.array(
+			z.object({
+				id: z.string().uuid(),
+				sortOrder: z.number().int().min(0),
+			}),
+		)
+		.min(1)
+		.max(500),
+});
+
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+export type ReorderCategoriesInput = z.infer<typeof reorderCategoriesSchema>;

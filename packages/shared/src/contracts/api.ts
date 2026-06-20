@@ -56,6 +56,10 @@ export interface CategoryWithCounts extends Category {
 
 export type CategoryTreeResponse = CategoryWithCounts[];
 
+export interface ReorderCategoriesResponse {
+	updatedCount: number;
+}
+
 // Feeds
 export interface FeedWithCounts extends Feed {
 	unreadCount: number;
@@ -98,6 +102,11 @@ export interface ArticleDetail extends Article {
 	media: ArticleMedia[];
 	isRead: boolean;
 	isEnriched: boolean;
+}
+
+export interface MarkAllReadResponse {
+	markedCount: number;
+	feedIds: string[];
 }
 
 export interface ArticleReadStateChangedEvent {

@@ -57,6 +57,13 @@
       "when": 1781910236320,
       "tag": "0007_article_reads_article_id_index",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781921664344,
+      "tag": "0008_old_spencer_smythe",
+      "breakpoints": true
     }
   ]
 }

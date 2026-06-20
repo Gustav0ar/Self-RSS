@@ -504,7 +504,7 @@ class RssRepository @Inject constructor(
         }
     }
 
-    suspend fun markAllRead(): AppResult<Int> = markAllRead(feedId = null, categoryId = null)
+    suspend fun markAllRead() = markAllRead(feedId = null, categoryId = null)
 
     override fun clientId(): String = sessionStore.getClientId()
 

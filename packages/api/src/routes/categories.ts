@@ -1,4 +1,8 @@
-import { createCategorySchema, updateCategorySchema } from '@self-feed/shared';
+import {
+	createCategorySchema,
+	reorderCategoriesSchema,
+	updateCategorySchema,
+} from '@self-feed/shared';
 import { Hono } from 'hono';
 import type { CategoryService } from '../services/category.service.js';
 import { parseBody, parseUuidParam } from '../utils/validation.js';
@@ -26,6 +30,13 @@ export function createCategoryRoutes(categoryService: CategoryService) {
 			},
 			201,
 		);
+	});
+
+	routes.patch('/reorder', async (c) => {
+		const userId = c.get('userId');
+		const body = await parseBody(c, reorderCategoriesSchema);
+		const result = await categoryService.reorder(userId, body.updates);
+		return c.json({ data: result });
 	});
 
 	routes.patch('/:categoryId', async (c) => {

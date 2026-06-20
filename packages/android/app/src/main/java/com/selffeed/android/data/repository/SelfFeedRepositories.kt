@@ -10,6 +10,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
@@ -71,7 +72,7 @@ interface ArticleRepository {
     fun prefetchHeroImages(imageUrls: Iterable<String?>)
     suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean = true): AppResult<EnrichArticleResponse>
     suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean>
-    suspend fun markAllRead(feedId: String? = null, categoryId: String? = null): AppResult<Int>
+    suspend fun markAllRead(feedId: String? = null, categoryId: String? = null): AppResult<MarkAllReadResponse>
     fun clientId(): String
     fun readStateEvents(): Flow<ReadStateSyncEvent>
     suspend fun invalidateReadStateCaches(articleId: String? = null)

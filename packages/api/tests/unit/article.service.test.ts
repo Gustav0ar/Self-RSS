@@ -388,7 +388,7 @@ describe('ArticleService', () => {
 				clientId: 'client-1',
 			}),
 		);
-		expect(result).toEqual({ markedCount: 3 });
+		expect(result).toEqual({ markedCount: 3, feedIds: ['feed-1', 'feed-2'] });
 	});
 
 	it('does not publish markAllRead events when nothing changed', async () => {
@@ -421,6 +421,6 @@ describe('ArticleService', () => {
 		expect(metricsRepo.incrementReadCount).not.toHaveBeenCalled();
 		expect(realtime.publishReadStateEvent).not.toHaveBeenCalled();
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
-		expect(result).toEqual({ markedCount: 0 });
+		expect(result).toEqual({ markedCount: 0, feedIds: ['feed-1'] });
 	});
 });

@@ -99,7 +99,8 @@ export function ArticleList({
 	useEffect(() => {
 		if (!hasMore || loadingMore) return;
 		if (articles.length === 0) return;
-		if (lastVisibleIndex >= articles.length - 1) {
+		const loadMoreIndex = Math.max(0, articles.length - 1 - ROW_OVERSCAN);
+		if (lastVisibleIndex >= loadMoreIndex) {
 			maybeLoadMore();
 		}
 	}, [articles.length, hasMore, lastVisibleIndex, loadingMore, maybeLoadMore]);

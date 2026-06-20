@@ -86,8 +86,8 @@ class ArticleRemoteDataSource @Inject constructor(
     suspend fun markRead(articleId: String, read: Boolean): Boolean =
         api.markRead(articleId, MarkReadRequest(read = read)).data.success
 
-    suspend fun markAllRead(feedId: String?, categoryId: String?): Int =
-        api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data.markedCount
+    suspend fun markAllRead(feedId: String?, categoryId: String?) =
+        api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data
 }
 
 class SearchRemoteDataSource @Inject constructor(

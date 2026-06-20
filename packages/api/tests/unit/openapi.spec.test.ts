@@ -32,4 +32,10 @@ describe('openApiSpec route drift guards', () => {
 		);
 		expect(queryParameterNames('/search', 'get')).not.toContain('offset');
 	});
+
+	it('documents bulk category reorder and mark-all-read response contracts', () => {
+		expect(openApiSpec.paths).toHaveProperty('/categories/reorder');
+		expect(openApiSpec.components.schemas).toHaveProperty('ReorderCategoriesResult');
+		expect(openApiSpec.components.schemas).toHaveProperty('MarkAllReadResult');
+	});
 });

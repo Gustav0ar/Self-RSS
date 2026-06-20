@@ -256,6 +256,70 @@ describe('CategoryService - update', () => {
 	});
 });
 
+describe('CategoryService - reorder', () => {
+	it('updates sibling category sort orders in one service call', async () => {
+		const categoryRepo = {
+			findAllByUser: vi
+				.fn()
+				.mockResolvedValue([
+					buildCategory({ id: 'cat-1', parentCategoryId: 'parent' }),
+					buildCategory({ id: 'cat-2', parentCategoryId: 'parent' }),
+				]),
+			updateSortOrders: vi.fn().mockResolvedValue(2),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		const result = await service.reorder('user-1', [
+			{ id: 'cat-2', sortOrder: 0 },
+			{ id: 'cat-1', sortOrder: 1 },
+		]);
+
+		expect(categoryRepo.updateSortOrders).toHaveBeenCalledWith('user-1', [
+			{ id: 'cat-2', sortOrder: 0 },
+			{ id: 'cat-1', sortOrder: 1 },
+		]);
+		expect(result).toEqual({ updatedCount: 2 });
+	});
+
+	it('rejects duplicate category ids', async () => {
+		const categoryRepo = {
+			findAllByUser: vi.fn(),
+			updateSortOrders: vi.fn(),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await expect(
+			service.reorder('user-1', [
+				{ id: 'cat-1', sortOrder: 0 },
+				{ id: 'cat-1', sortOrder: 1 },
+			]),
+		).rejects.toMatchObject({ code: 'BAD_REQUEST', statusCode: 400 });
+		expect(categoryRepo.findAllByUser).not.toHaveBeenCalled();
+		expect(categoryRepo.updateSortOrders).not.toHaveBeenCalled();
+	});
+
+	it('rejects reorder attempts across different parents', async () => {
+		const categoryRepo = {
+			findAllByUser: vi
+				.fn()
+				.mockResolvedValue([
+					buildCategory({ id: 'cat-1', parentCategoryId: 'parent-a' }),
+					buildCategory({ id: 'cat-2', parentCategoryId: 'parent-b' }),
+				]),
+			updateSortOrders: vi.fn(),
+		};
+		const service = new CategoryService(categoryRepo as never, {} as never, {} as never);
+
+		await expect(
+			service.reorder('user-1', [
+				{ id: 'cat-1', sortOrder: 0 },
+				{ id: 'cat-2', sortOrder: 1 },
+			]),
+		).rejects.toMatchObject({ code: 'BAD_REQUEST', statusCode: 400 });
+		expect(categoryRepo.updateSortOrders).not.toHaveBeenCalled();
+	});
+});
+
 describe('CategoryService - delete', () => {
 	it('rejects deletion when feeds still reference the category', async () => {
 		const categoryRepo = {

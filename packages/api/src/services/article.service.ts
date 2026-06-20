@@ -266,7 +266,7 @@ export class ArticleService {
 			);
 		}
 		await Promise.all(fanOut);
-		return { markedCount: count };
+		return { markedCount: count, feedIds };
 	}
 
 	async enrichArticle(userId: string, articleId: string) {

@@ -7,6 +7,7 @@ import type {
 	FeedWithCounts,
 	OpmlImportSummary,
 	ReadStateSyncEvent,
+	ReorderCategoriesResponse,
 	SortOrder,
 	StatsResponse,
 } from '@self-feed/shared';
@@ -595,6 +596,21 @@ export function useUpdateCategory() {
 			sortOrder?: number;
 		}) =>
 			apiFetch<ApiResponse<CategoryWithCounts>>(`/categories/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify(data),
+			}),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ['categories'] });
+			qc.invalidateQueries({ queryKey: ['stats'] });
+		},
+	});
+}
+
+export function useReorderCategories() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (data: { updates: { id: string; sortOrder: number }[] }) =>
+			apiFetch<ApiResponse<ReorderCategoriesResponse>>('/categories/reorder', {
 				method: 'PATCH',
 				body: JSON.stringify(data),
 			}),

@@ -13,16 +13,16 @@ export class StatsService {
 	) {}
 
 	async getStats(userId: string) {
-		const feeds = await this.feedRepo.findAllByUser(userId);
-		const categories = await this.categoryRepo.findAllByUser(userId);
-		const [totalArticles, totalRead] = await Promise.all([
-			this.articleRepo.countByScope({ userId }),
-			this.articleRepo.countReadByScope({ userId }),
-		]);
+		const [feeds, categories, totalArticles, totalRead, recentSyncRuns, dailyMetrics] =
+			await Promise.all([
+				this.feedRepo.findAllByUser(userId),
+				this.categoryRepo.findAllByUser(userId),
+				this.articleRepo.countByScope({ userId }),
+				this.articleRepo.countReadByScope({ userId }),
+				this.syncRunRepo.findRecentByUser(userId, 10),
+				this.metricsRepo.getDailyMetrics(userId, 30),
+			]);
 		const totalUnread = Math.max(0, totalArticles - totalRead);
-
-		const recentSyncRuns = await this.syncRunRepo.findRecentByUser(userId, 10);
-		const dailyMetrics = await this.metricsRepo.getDailyMetrics(userId, 30);
 
 		return {
 			totalUnread,

@@ -5,6 +5,7 @@ import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.MarkAllReadResponse
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -43,7 +44,9 @@ class ArticlesViewModelTest {
         )
         coEvery { repository.article(any(), any()) } returns AppResult.Success(sampleDetail("a1"))
         coEvery { repository.markRead(any(), any()) } returns AppResult.Success(true)
-        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(0)
+        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
+            MarkAllReadResponse(markedCount = 0),
+        )
         coEvery { repository.enrichArticle(any(), any()) } returns AppResult.Success(
             com.selffeed.android.network.EnrichArticleResponse(success = false),
         )
@@ -166,7 +169,9 @@ class ArticlesViewModelTest {
 
     @Test
     fun `markAllRead emits empty feed set for all-feeds scope so consumers clear entire scope`() = runTest {
-        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(4)
+        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
+            MarkAllReadResponse(markedCount = 4),
+        )
         val viewModel = ArticlesViewModel(repository)
         viewModel.loadArticles()
 
@@ -179,6 +184,31 @@ class ArticlesViewModelTest {
         assertNull(marked.categoryId)
         assertTrue(marked.affectedFeedIds.isEmpty())
         assertEquals(4, marked.markedCount)
+    }
+
+    @Test
+    fun `markAllRead emits affected feed ids returned by the API`() = runTest {
+        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
+            MarkAllReadResponse(markedCount = 2, feedIds = listOf("f-child")),
+        )
+        coEvery { repository.articles(any(), any(), any(), any(), any(), any()) } returns AppResult.Success(
+            ApiListResponse(
+                data = listOf(sampleArticle("a1", feedId = "f-1"), sampleArticle("a2", feedId = "f-child")),
+                cursor = null,
+                hasMore = false,
+            ),
+        )
+        val viewModel = ArticlesViewModel(repository)
+        viewModel.loadArticles()
+
+        val event = backgroundScope.async { viewModel.events.first() }
+        runCurrent()
+        viewModel.markAllRead()
+
+        val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
+        assertEquals(setOf("f-child"), marked.affectedFeedIds)
+        assertEquals(false, viewModel.state.value.items.first { it.id == "a1" }.isRead)
+        assertEquals(true, viewModel.state.value.items.first { it.id == "a2" }.isRead)
     }
 
     @Test
@@ -201,9 +231,9 @@ class ArticlesViewModelTest {
         coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
-    private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(
+    private fun sampleArticle(id: String, feedId: String = "f-1"): ArticleListItem = ArticleListItem(
         id = id,
-        feedId = "f-1",
+        feedId = feedId,
         feedTitle = "F",
         title = "T",
         isRead = false,

@@ -36,6 +36,10 @@ async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
 	return matched;
 }
 
+function isArticleListCacheKey(userId: string, key: string): boolean {
+	return key === CacheKeys.articleListCache(userId) || key.startsWith(`articles:list:${userId}:`);
+}
+
 export interface CachedArticleList {
 	articles: CachedArticle[];
 	cursor: string | null;
@@ -281,6 +285,7 @@ export class ArticleCacheService {
 			await Promise.all([
 				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
 				this.redis.setex(metaKey, CacheTTL.articleList * 3, JSON.stringify(cached.meta)),
+				this.registerArticleListMembership(userId, cacheKey, cached),
 			]);
 
 			logger.debug('Article cache populated', {
@@ -344,7 +349,10 @@ export class ArticleCacheService {
 			if (!(await this.isGenerationCurrent(userId, generation))) {
 				return;
 			}
-			await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached));
+			await Promise.all([
+				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
+				this.registerArticleListMembership(userId, cacheKey, cached),
+			]);
 		} catch (err) {
 			logger.error('Failed to populate feed cache', {
 				userId,
@@ -425,7 +433,10 @@ export class ArticleCacheService {
 			if (!(await this.isGenerationCurrent(userId, generation))) {
 				return;
 			}
-			await this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached));
+			await Promise.all([
+				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
+				this.registerArticleListMembership(userId, cacheKey, cached),
+			]);
 		} catch (err) {
 			logger.error('Failed to populate category cache', {
 				userId,
@@ -470,11 +481,17 @@ export class ArticleCacheService {
 	 */
 	async updateCachedReadState(userId: string, articleId: string, read: boolean): Promise<void> {
 		try {
-			const scopedKeys = await scanKeys(this.redis, `articles:list:${userId}:*`);
-			const keys = Array.from(new Set([CacheKeys.articleListCache(userId), ...scopedKeys]));
+			const indexKey = CacheKeys.articleListMembership(userId, articleId);
+			const indexedKeys = await this.redis.smembers(indexKey);
+			const keys = indexedKeys.filter((key) => isArticleListCacheKey(userId, key));
+			if (keys.length === 0) {
+				const scopedKeys = await scanKeys(this.redis, `articles:list:${userId}:*`);
+				keys.push(CacheKeys.articleListCache(userId), ...scopedKeys);
+			}
+			const uniqueKeys = Array.from(new Set(keys));
 
 			await Promise.allSettled(
-				keys.map(async (key) => {
+				uniqueKeys.map(async (key) => {
 					const cached = await this.redis.get(key);
 					if (!cached) {
 						return;
@@ -501,7 +518,11 @@ export class ArticleCacheService {
 						return;
 					}
 
-					await this.redis.setex(key, CacheTTL.articleList, JSON.stringify({ ...data, articles }));
+					const nextData = { ...data, articles };
+					await Promise.all([
+						this.redis.setex(key, CacheTTL.articleList, JSON.stringify(nextData)),
+						this.registerArticleListMembership(userId, key, nextData),
+					]);
 				}),
 			);
 		} catch (err) {
@@ -511,6 +532,21 @@ export class ArticleCacheService {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
+	}
+
+	private async registerArticleListMembership(
+		userId: string,
+		cacheKey: string,
+		data: CachedArticleList,
+	): Promise<void> {
+		if (data.articles.length === 0) return;
+		const pipeline = this.redis.pipeline();
+		for (const article of data.articles) {
+			const indexKey = CacheKeys.articleListMembership(userId, article.id);
+			pipeline.sadd(indexKey, cacheKey);
+			pipeline.expire(indexKey, CacheTTL.articleList);
+		}
+		await pipeline.exec();
 	}
 
 	/**

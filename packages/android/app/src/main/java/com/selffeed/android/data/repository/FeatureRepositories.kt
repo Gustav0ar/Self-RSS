@@ -10,6 +10,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
@@ -99,7 +100,7 @@ class ArticleRepositoryImpl @Inject constructor(
     ): AppResult<EnrichArticleResponse> = source.enrichArticle(articleId, invalidateCaches)
 
     override suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> = source.markRead(articleId, read)
-    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<Int> =
+    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> =
         source.markAllRead(feedId, categoryId)
 
     override fun clientId(): String = source.clientId()

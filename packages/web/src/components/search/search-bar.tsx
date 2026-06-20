@@ -9,6 +9,8 @@ interface SearchBarProps {
 	categoryId?: string;
 }
 
+const MAX_RENDERED_RESULTS = 80;
+
 export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 	const [query, setQuery] = useState('');
 	const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -75,9 +77,12 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 	}, []);
 
 	const resultIds = useMemo(() => results?.pages.flatMap((page) => page.data) ?? [], [results]);
+	const renderedResults = useMemo(() => resultIds.slice(0, MAX_RENDERED_RESULTS), [resultIds]);
 	const showDropdown = isOpen && debouncedQuery.trim().length >= 2;
 	const activeArticle =
-		activeIndex >= 0 && activeIndex < resultIds.length ? resultIds[activeIndex] : undefined;
+		activeIndex >= 0 && activeIndex < renderedResults.length
+			? renderedResults[activeIndex]
+			: undefined;
 	const activeOptionId = activeArticle ? `${listboxId}-option-${activeArticle.id}` : undefined;
 
 	const onInputKeyDown = useCallback(
@@ -86,20 +91,22 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 			if (event.key === 'ArrowDown') {
 				event.preventDefault();
 				setActiveIndex((prev) => {
+					if (renderedResults.length === 0) return -1;
 					const next = prev + 1;
-					return next >= resultIds.length ? 0 : next;
+					return next >= renderedResults.length ? 0 : next;
 				});
 			} else if (event.key === 'ArrowUp') {
 				event.preventDefault();
 				setActiveIndex((prev) => {
-					if (prev <= 0) return resultIds.length - 1;
+					if (renderedResults.length === 0) return -1;
+					if (prev <= 0) return renderedResults.length - 1;
 					return prev - 1;
 				});
 			} else if (event.key === 'Enter') {
 				const target =
-					activeIndex >= 0 && activeIndex < resultIds.length
-						? resultIds[activeIndex]
-						: resultIds[0];
+					activeIndex >= 0 && activeIndex < renderedResults.length
+						? renderedResults[activeIndex]
+						: renderedResults[0];
 				if (target) {
 					event.preventDefault();
 					onSelectArticle(target.id);
@@ -113,7 +120,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 				setActiveIndex(-1);
 			}
 		},
-		[activeIndex, onSelectArticle, resultIds, showDropdown],
+		[activeIndex, onSelectArticle, renderedResults, showDropdown],
 	);
 
 	// Reset the highlight when the debounced query changes so the user
@@ -195,12 +202,12 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
 								Searching...
 							</div>
-						) : resultIds.length === 0 ? (
+						) : renderedResults.length === 0 ? (
 							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
 								No results found
 							</div>
 						) : (
-							resultIds.map((article, index) => {
+							renderedResults.map((article, index) => {
 								const displayedAt = article.displayedAt ? new Date(article.displayedAt) : null;
 								const timeAgo = displayedAt
 									? formatDistanceToNow(displayedAt, { addSuffix: true })
@@ -249,6 +256,8 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 											<img
 												src={article.heroImageUrl}
 												alt=""
+												loading="lazy"
+												decoding="async"
 												className="hidden h-24 w-36 rounded-2xl object-cover md:block"
 											/>
 										) : null}

@@ -32,9 +32,25 @@ class UnreadStateReducerTest {
             deltas = mapOf("child" to -2),
         )
 
-        assertEquals(5, updated.first { it.id == "parent" }.unreadCount)
+        assertEquals(3, updated.first { it.id == "parent" }.unreadCount)
         assertEquals(1, updated.first { it.id == "parent" }.children!!.first().unreadCount)
         assertEquals(7, updated.first { it.id == "other" }.unreadCount)
+    }
+
+    @Test
+    fun clearCategoryUnreadCounts_clearsNestedCategoryBadges() {
+        val categories = listOf(
+            sampleCategory(
+                id = "parent",
+                unreadCount = 5,
+                children = listOf(sampleCategory(id = "child", unreadCount = 3)),
+            ),
+        )
+
+        val updated = UnreadStateReducer.clearCategoryUnreadCounts(categories)
+
+        assertEquals(0, updated.first().unreadCount)
+        assertEquals(0, updated.first().children!!.first().unreadCount)
     }
 
     @Test

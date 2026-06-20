@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ArticleList } from '../../src/components/articles/article-list';
 
@@ -66,5 +66,33 @@ describe('ArticleList', () => {
 
 		expect(screen.getByText('No unread articles')).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Show all articles' })).toBeTruthy();
+	});
+
+	it('requests the next page before the user reaches the final row', async () => {
+		const onLoadMore = vi.fn();
+		render(
+			<ArticleList
+				articles={Array.from({ length: 20 }, (_, index) => ({
+					id: `article-${index}`,
+					feedId: 'feed-1',
+					feedTitle: 'Feed',
+					feedFaviconUrl: null,
+					title: `Article ${index}`,
+					author: null,
+					excerpt: null,
+					heroImageUrl: null,
+					publishedAt: new Date().toISOString(),
+					isRead: false,
+				}))}
+				selectedId={null}
+				onSelect={() => {}}
+				hasMore
+				onLoadMore={onLoadMore}
+			/>,
+		);
+
+		await waitFor(() => {
+			expect(onLoadMore).toHaveBeenCalledTimes(1);
+		});
 	});
 });

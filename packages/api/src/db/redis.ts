@@ -44,6 +44,8 @@ export const CacheKeys = {
 	// Pre-computed article cache (populated during background sync)
 	articleListCache: (userId: string) => `articles:list:${userId}`,
 	articleListCacheMeta: (userId: string) => `articles:meta:${userId}`,
+	articleListMembership: (userId: string, articleId: string) =>
+		`articles:list:index:${userId}:${articleId}`,
 	// Generation counter for cache invalidation (handles race conditions)
 	articleCacheGeneration: (userId: string) => `articles:gen:${userId}`,
 	// Warming lock to prevent duplicate warming

@@ -9,6 +9,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
@@ -133,7 +134,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         AppResult.Success(EnrichArticleResponse(success = true))
 
     override suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> = AppResult.Success(read)
-    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<Int> = AppResult.Success(1)
+    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> =
+        AppResult.Success(MarkAllReadResponse(markedCount = 1, feedIds = listOf("feed-1")))
     override fun clientId(): String = "android-test-client"
     override fun readStateEvents(): Flow<ReadStateSyncEvent> = emptyFlow()
     override suspend fun invalidateReadStateCaches(articleId: String?) = Unit

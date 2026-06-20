@@ -252,23 +252,36 @@ class ArticlesViewModel @Inject constructor(
             val snapshot = _state.value
             when (val result = repository.markAllRead(snapshot.selectedFeedId, snapshot.selectedCategoryId)) {
                 is AppResult.Success -> {
-                    val affectedFeedIds = snapshot.selectedFeedId?.let(::setOf).orEmpty()
+                    val marked = result.data
+                    val affectedFeedIds = when {
+                        marked.feedIds.isNotEmpty() -> marked.feedIds.toSet()
+                        snapshot.selectedFeedId != null -> setOf(snapshot.selectedFeedId)
+                        else -> emptySet()
+                    }
                     _state.update { current ->
                         current.items
-                            .filter { current.articleMatchesCurrentScope(it) }
+                            .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
                             .forEach { rememberArticleReadState(it.id, true) }
                         current.selectedArticle
-                            ?.takeIf { current.articleMatchesCurrentScope(it) }
+                            ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
                             ?.let { rememberArticleReadState(it.id, true) }
 
                         current.copy(
                             items = current.items.map { article ->
-                                if (current.articleMatchesCurrentScope(article)) article.copy(isRead = true) else article
+                                if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                                    article.copy(isRead = true)
+                                } else {
+                                    article
+                                }
                             },
                             selectedArticle = current.selectedArticle?.let { article ->
-                                if (current.articleMatchesCurrentScope(article)) article.copy(isRead = true) else article
+                                if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                                    article.copy(isRead = true)
+                                } else {
+                                    article
+                                }
                             },
-                            statusMessage = "Marked ${result.data} articles as read",
+                            statusMessage = "Marked ${marked.markedCount} articles as read",
                         )
                     }
                     _events.emit(
@@ -276,7 +289,7 @@ class ArticlesViewModel @Inject constructor(
                             feedId = snapshot.selectedFeedId,
                             categoryId = snapshot.selectedCategoryId,
                             affectedFeedIds = affectedFeedIds,
-                            markedCount = result.data,
+                            markedCount = marked.markedCount,
                         ),
                     )
                 }
@@ -549,6 +562,20 @@ class ArticlesViewModel @Inject constructor(
 
     private fun ArticlesUiState.articleMatchesCurrentScope(article: ArticleDetail): Boolean {
         return selectedFeedId == null || article.feedId == selectedFeedId
+    }
+
+    private fun ArticlesUiState.articleMatchesAffectedFeeds(
+        article: ArticleListItem,
+        affectedFeedIds: Set<String>,
+    ): Boolean {
+        return affectedFeedIds.isEmpty() || article.feedId in affectedFeedIds
+    }
+
+    private fun ArticlesUiState.articleMatchesAffectedFeeds(
+        article: ArticleDetail,
+        affectedFeedIds: Set<String>,
+    ): Boolean {
+        return affectedFeedIds.isEmpty() || article.feedId in affectedFeedIds
     }
 
     private fun ArticlesUiState.articleQuery(): ArticleQuery =

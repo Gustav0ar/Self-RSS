@@ -27,7 +27,7 @@ import {
 	useDeleteCategory,
 	useDeleteFeed,
 	useExportOpml,
-	useUpdateCategory,
+	useReorderCategories,
 } from '@/hooks/queries';
 import { categoryAncestorIds, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 import { cn } from '@/lib/utils';
@@ -91,7 +91,7 @@ export function Sidebar({
 	const deleteCategory = useDeleteCategory();
 	const deleteFeed = useDeleteFeed();
 	const exportOpml = useExportOpml();
-	const updateCategory = useUpdateCategory();
+	const reorderCategories = useReorderCategories();
 	const [draggingId, setDraggingId] = useState<string | null>(null);
 	const [dragOverId, setDragOverId] = useState<string | null>(null);
 	const hydratedRef = useRef(false);
@@ -243,19 +243,12 @@ export function Sidebar({
 
 		if (updates.length === 0) return;
 
-		// Persist sequentially. The local query cache invalidation in
-		// `useUpdateCategory` will re-fetch categories after the last
-		// mutation completes, so the UI eventually reflects the new
-		// server order.
-		for (const update of updates) {
-			try {
-				await updateCategory.mutateAsync({ id: update.id, sortOrder: update.sortOrder });
-			} catch {
-				// The next successful invalidate will repaint, so we
-				// bail quietly on the first error rather than retrying
-				// with a partially-stale list.
-				break;
-			}
+		try {
+			await reorderCategories.mutateAsync({ updates });
+		} catch {
+			// Leave the current cache untouched on failure. The next
+			// successful server-backed refresh will repaint from the last
+			// committed order.
 		}
 	}
 
