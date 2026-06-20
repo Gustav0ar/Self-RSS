@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RootLayout } from '../../src/components/layout/root-layout';
 
 const navigateMock = vi.fn();
@@ -49,12 +49,17 @@ vi.mock('../../src/components/layout/sidebar', () => ({
 }));
 
 vi.mock('../../src/components/layout/top-bar', () => ({
-	TopBar: (props: { onSelectArticle?: (id: string) => void }) => {
+	TopBar: (props: { onOpenSidebar?: () => void; onSelectArticle?: (id: string) => void }) => {
 		topBarPropsSpy(props);
 		return (
-			<button type="button" onClick={() => props.onSelectArticle?.('article-9')}>
-				Open article
-			</button>
+			<div>
+				<button type="button" onClick={props.onOpenSidebar}>
+					Open menu
+				</button>
+				<button type="button" onClick={() => props.onSelectArticle?.('article-9')}>
+					Open article
+				</button>
+			</div>
 		);
 	},
 }));
@@ -82,6 +87,10 @@ vi.mock('../../src/hooks/use-read-state-sync', () => ({
 }));
 
 describe('RootLayout routing', () => {
+	afterEach(() => {
+		document.body.style.overflow = '';
+	});
+
 	it('navigates to article URLs while preserving the current feed context', () => {
 		render(<RootLayout />);
 
@@ -111,5 +120,17 @@ describe('RootLayout routing', () => {
 			to: '/',
 			search: { categoryId: 'category-2' },
 		});
+	});
+
+	it('restores body overflow when the mobile sidebar drawer closes', () => {
+		document.body.style.overflow = 'clip';
+
+		render(<RootLayout />);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+		expect(document.body.style.overflow).toBe('hidden');
+
+		fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
+		expect(document.body.style.overflow).toBe('clip');
 	});
 });
