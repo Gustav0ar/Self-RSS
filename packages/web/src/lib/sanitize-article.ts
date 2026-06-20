@@ -144,6 +144,100 @@ const SANITIZE_OPTIONS = {
 
 let cachedPurify: ReturnType<typeof DOMPurify> | null = null;
 
+function parseHttpUrl(rawUrl: string): URL | null {
+	try {
+		const parsed = new URL(rawUrl.trim(), 'https://placeholder.invalid');
+		if (parsed.hostname === 'placeholder.invalid') {
+			return null;
+		}
+		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+			return null;
+		}
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+function isProviderId(value: string | null | undefined, pattern: RegExp): value is string {
+	return Boolean(value && value.length <= 128 && pattern.test(value));
+}
+
+function getApprovedEmbedUrl(rawUrl: string): string | null {
+	const parsed = parseHttpUrl(rawUrl);
+	if (!parsed) {
+		return null;
+	}
+
+	const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+	const segments = parsed.pathname.split('/').filter(Boolean);
+
+	if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(hostname)) {
+		const id =
+			segments[0] === 'watch'
+				? parsed.searchParams.get('v')
+				: segments[0] === 'embed' || segments[0] === 'shorts'
+					? segments[1]
+					: null;
+		return isProviderId(id, /^[a-zA-Z0-9_-]+$/) ? `https://www.youtube.com/embed/${id}` : null;
+	}
+
+	if (hostname === 'youtu.be') {
+		const id = segments[0] ?? null;
+		return isProviderId(id, /^[a-zA-Z0-9_-]+$/) ? `https://www.youtube.com/embed/${id}` : null;
+	}
+
+	if (hostname === 'player.vimeo.com' && segments[0] === 'video') {
+		const id = segments[1] ?? null;
+		return isProviderId(id, /^\d+$/) ? `https://player.vimeo.com/video/${id}` : null;
+	}
+
+	if (['vimeo.com', 'www.vimeo.com'].includes(hostname)) {
+		const id = segments[0] ?? null;
+		return isProviderId(id, /^\d+$/) ? `https://player.vimeo.com/video/${id}` : null;
+	}
+
+	if (['streamable.com', 'www.streamable.com'].includes(hostname)) {
+		const id = segments[0] === 'e' ? segments[1] : segments[0];
+		return isProviderId(id, /^[a-zA-Z0-9]+$/) ? `https://streamable.com/e/${id}` : null;
+	}
+
+	if (['videopress.com', 'www.videopress.com'].includes(hostname)) {
+		const id = segments[0] === 'embed' || segments[0] === 'v' ? segments[1] : null;
+		return isProviderId(id, /^[a-zA-Z0-9]+$/) ? `https://videopress.com/embed/${id}` : null;
+	}
+
+	if (
+		['videos.files.wordpress.com', 'videos.wordpress.com'].includes(hostname) &&
+		segments.length > 0
+	) {
+		parsed.protocol = 'https:';
+		return parsed.toString();
+	}
+
+	if (hostname === 'platform.twitter.com' && parsed.pathname === '/embed/Tweet.html') {
+		const id = parsed.searchParams.get('id');
+		return isProviderId(id, /^\d+$/)
+			? `https://platform.twitter.com/embed/Tweet.html?id=${id}`
+			: null;
+	}
+
+	return null;
+}
+
+function removeIframeAndEmptyParent(iframe: HTMLIFrameElement) {
+	const parent = iframe.parentElement;
+	iframe.remove();
+	if (
+		parent &&
+		['P', 'DIV', 'FIGURE', 'SECTION', 'ARTICLE'].includes(parent.tagName) &&
+		parent.childElementCount === 0 &&
+		!parent.textContent?.trim()
+	) {
+		parent.remove();
+	}
+}
+
 function getPurify(): ReturnType<typeof DOMPurify> {
 	if (cachedPurify) return cachedPurify;
 	// In the browser, DOMPurify uses the global `window`. In a non-DOM
@@ -190,22 +284,17 @@ function hardenRenderedHtml(html: string): string {
 		// content stream here and let the panel re-render them from
 		// the `article.media` array.
 		if (iframe.classList.contains('embedded-media')) {
-			const parent = iframe.parentElement;
-			iframe.remove();
-			if (
-				parent &&
-				['P', 'DIV', 'FIGURE', 'SECTION', 'ARTICLE'].includes(parent.tagName) &&
-				parent.childElementCount === 0 &&
-				!parent.textContent?.trim()
-			) {
-				parent.remove();
-			}
+			removeIframeAndEmptyParent(iframe);
 			continue;
 		}
 
-		// Other iframes (rare) get the strictest sandbox so they
-		// cannot run scripts, submit forms, or escape into the parent
-		// frame.
+		const embedUrl = getApprovedEmbedUrl(iframe.getAttribute('src') ?? '');
+		if (!embedUrl) {
+			removeIframeAndEmptyParent(iframe);
+			continue;
+		}
+
+		iframe.setAttribute('src', embedUrl);
 		iframe.setAttribute('loading', 'lazy');
 		iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
 		iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation');
