@@ -382,6 +382,67 @@ describe('read-state sync', () => {
 		});
 	});
 
+	it('uses category-tree feed counts for mark-all events when flat feeds are not cached', () => {
+		const qc = createQueryClient();
+		qc.setQueryData(['stats'], stats(3, 2));
+		qc.setQueryData(
+			['categories'],
+			[
+				{
+					id: 'category-parent',
+					parentCategoryId: null,
+					unreadCount: 3,
+					feeds: [],
+					children: [
+						{
+							id: 'category-child',
+							parentCategoryId: 'category-parent',
+							unreadCount: 3,
+							feeds: [{ id: 'feed-1', categoryId: 'category-child', unreadCount: 3 }],
+							children: [],
+						},
+					],
+				},
+			],
+		);
+
+		applyReadStateSyncEvent(
+			qc,
+			{
+				type: 'articles.marked_read',
+				eventId: 'event-1',
+				feedIds: ['feed-1'],
+				scope: {},
+				markedCount: 3,
+				clientId: 'other-client',
+				updatedAt: '2026-06-01T00:00:00.000Z',
+			},
+			{ clientId: 'this-client' },
+		);
+
+		expect(qc.getQueryData(['categories'])).toEqual([
+			{
+				id: 'category-parent',
+				parentCategoryId: null,
+				unreadCount: 0,
+				feeds: [],
+				children: [
+					{
+						id: 'category-child',
+						parentCategoryId: 'category-parent',
+						unreadCount: 0,
+						feeds: [{ id: 'feed-1', categoryId: 'category-child', unreadCount: 0 }],
+						children: [],
+					},
+				],
+			},
+		]);
+		expect(qc.getQueryData<StatsResponse>(['stats'])).toMatchObject({
+			totalUnread: 0,
+			totalRead: 5,
+		});
+	});
+
 	it('caps reconnect backoff at thirty seconds', () => {
 		expect(getReadStateReconnectDelay(0)).toBe(1000);
 		expect(getReadStateReconnectDelay(1)).toBe(2000);

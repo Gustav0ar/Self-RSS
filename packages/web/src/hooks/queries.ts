@@ -493,6 +493,38 @@ function cachedUnreadCountForFeed(qc: QueryClient, feedId: string) {
 			return Math.max(0, Number(feed.unreadCount ?? 0));
 		}
 	}
+
+	const findInCategories = (categories: unknown): number | null => {
+		if (!Array.isArray(categories)) {
+			return null;
+		}
+
+		for (const category of categories) {
+			if (!category || typeof category !== 'object') {
+				continue;
+			}
+
+			const node = category as CategoryWithCounts;
+			const feed = node.feeds?.find((item) => item.id === feedId);
+			if (feed) {
+				return Math.max(0, Number(feed.unreadCount ?? 0));
+			}
+
+			const nested = findInCategories(node.children);
+			if (nested != null) {
+				return nested;
+			}
+		}
+
+		return null;
+	};
+
+	for (const [, value] of qc.getQueriesData({ queryKey: ['categories'] })) {
+		const unreadCount = findInCategories(value);
+		if (unreadCount != null) {
+			return unreadCount;
+		}
+	}
 	return 0;
 }
 
