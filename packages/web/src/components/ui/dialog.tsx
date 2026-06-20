@@ -76,13 +76,14 @@ export function Dialog({
 
 		window.addEventListener('keydown', handleKey);
 		document.body.style.overflow = 'hidden';
-		window.setTimeout(() => {
+		const focusTimer = window.setTimeout(() => {
 			const firstFocusable = getFocusable()[0];
 			(firstFocusable ?? dialogRef.current)?.focus();
 		}, 0);
 
 		return () => {
 			window.removeEventListener('keydown', handleKey);
+			window.clearTimeout(focusTimer);
 			document.body.style.overflow = previousOverflow;
 			previouslyFocused?.focus();
 		};

@@ -58,6 +58,10 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 
 test.describe.configure({ mode: 'serial' });
 
+test.beforeEach(async ({ request }) => {
+	await setRegistrationLocked(request, false);
+});
+
 test.afterEach(async ({ request }) => {
 	await setRegistrationLocked(request, false);
 });
