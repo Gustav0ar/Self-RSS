@@ -171,24 +171,32 @@ backup_existing_database() {
 	timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 	backup_name="self-feed-${timestamp}-${HEAD_SHA_SHORT}.db"
 	backup_path="data/backups/${backup_name}"
-	running="$("${CONTAINER_CLI}" inspect -f '{{.State.Running}}' selffeed-api 2>/dev/null || true)"
+	api_status="$("${CONTAINER_CLI}" inspect -f '{{.State.Status}}' selffeed-api 2>/dev/null || true)"
 
-	if [ "${running}" = "true" ]; then
+	if [ "${api_status}" = "running" ]; then
 		echo "Creating SQLite pre-deploy backup with VACUUM INTO: ${backup_path}"
-		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();"
-		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chown "${APP_UID}:${APP_GID}" "/app/data/backups/${backup_name}"
-		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chmod 600 "/app/data/backups/${backup_name}"
+		if "${CONTAINER_CLI}" exec --user 0:0 selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();" &&
+			"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chown "${APP_UID}:${APP_GID}" "/app/data/backups/${backup_name}" &&
+			"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chmod 600 "/app/data/backups/${backup_name}"; then
+			find data/backups -maxdepth 1 -type f -name 'self-feed-*.db' | sort | head -n -10 | while read -r old_backup; do
+				rm -f "${old_backup}" "${old_backup}-wal" "${old_backup}-shm"
+			done
+			return 0
+		fi
+		echo "Warning: container VACUUM backup failed; falling back to host-side SQLite file copy."
 	else
-		echo "API container is not running; copying SQLite files for pre-deploy backup: ${backup_path}"
-		cp "${db_file}" "${backup_path}"
-		if [ -f "${db_file}-wal" ]; then
-			cp "${db_file}-wal" "${backup_path}-wal"
-		fi
-		if [ -f "${db_file}-shm" ]; then
-			cp "${db_file}-shm" "${backup_path}-shm"
-		fi
-		chmod 600 "${backup_path}"*
+		echo "API container status is '${api_status:-missing}'; copying SQLite files for pre-deploy backup: ${backup_path}"
 	fi
+
+	rm -f "${backup_path}" "${backup_path}-wal" "${backup_path}-shm"
+	cp "${db_file}" "${backup_path}"
+	if [ -f "${db_file}-wal" ]; then
+		cp "${db_file}-wal" "${backup_path}-wal"
+	fi
+	if [ -f "${db_file}-shm" ]; then
+		cp "${db_file}-shm" "${backup_path}-shm"
+	fi
+	chmod 600 "${backup_path}"*
 
 	find data/backups -maxdepth 1 -type f -name 'self-feed-*.db' | sort | head -n -10 | while read -r old_backup; do
 		rm -f "${old_backup}" "${old_backup}-wal" "${old_backup}-shm"
@@ -197,19 +205,23 @@ backup_existing_database() {
 
 ensure_data_permissions() {
 	mkdir -p data data/backups
-	running="$("${CONTAINER_CLI}" inspect -f '{{.State.Running}}' selffeed-api 2>/dev/null || true)"
-	if [ "${running}" = "true" ]; then
+	api_status="$("${CONTAINER_CLI}" inspect -f '{{.State.Status}}' selffeed-api 2>/dev/null || true)"
+	if [ "${api_status}" = "running" ]; then
 		echo "Normalizing data directory ownership for runtime uid/gid ${APP_UID}:${APP_GID}"
-		"${CONTAINER_CLI}" exec --user 0:0 selffeed-api sh -c \
-			"chown -R ${APP_UID}:${APP_GID} /app/data && find /app/data -type d -exec chmod 750 {} + && find /app/data -type f -exec chmod 600 {} +"
-	else
-		echo "Normalizing host data directory permissions for runtime uid/gid ${APP_UID}:${APP_GID}"
-		if ! chown -R "${APP_UID}:${APP_GID}" data 2>/dev/null; then
-			echo "Warning: could not chown data to ${APP_UID}:${APP_GID}; continuing with existing ownership."
+		if "${CONTAINER_CLI}" exec --user 0:0 selffeed-api sh -c \
+			"chown -R ${APP_UID}:${APP_GID} /app/data && find /app/data -type d -exec chmod 750 {} + && find /app/data -type f -exec chmod 600 {} +"; then
+			return 0
 		fi
-		chmod 750 data data/backups
-		find data -type f -exec chmod 600 {} + 2>/dev/null || true
+		echo "Warning: container permission normalization failed; falling back to host-side permissions."
+	else
+		echo "API container status is '${api_status:-missing}'; normalizing host data directory permissions for runtime uid/gid ${APP_UID}:${APP_GID}"
 	fi
+
+	if ! chown -R "${APP_UID}:${APP_GID}" data 2>/dev/null; then
+		echo "Warning: could not chown data to ${APP_UID}:${APP_GID}; continuing with existing ownership."
+	fi
+	chmod 750 data data/backups
+	find data -type f -exec chmod 600 {} + 2>/dev/null || true
 }
 
 # Ensure the data dir exists for the SQLite volume.
