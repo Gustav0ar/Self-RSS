@@ -138,6 +138,39 @@ describe('ArticleService', () => {
 		expect(result).toEqual({ success: true });
 	});
 
+	it('does not wait for scoped list cache patching on markRead', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			markRead: vi.fn(async () => true),
+		};
+		const metricsRepo = {
+			incrementReadCount: vi.fn(async () => undefined),
+		};
+		const redis = {
+			del: vi.fn(async () => 1),
+		};
+		const realtime = {
+			publishReadStateEvent: vi.fn(async () => undefined),
+		};
+		const articleCache = {
+			updateCachedReadState: vi.fn(() => new Promise(() => undefined)),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			metricsRepo as never,
+			redis as never,
+			undefined,
+			realtime as never,
+			articleCache as never,
+		);
+
+		await expect(
+			service.markRead('user-1', 'article-1', true, 'manual', 'client-1'),
+		).resolves.toEqual({ success: true });
+		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
+	});
+
 	it('does not publish or count duplicate markRead requests', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),

@@ -473,6 +473,25 @@ export function FeedView({
 						density={density}
 						emptyTitle={emptyState.title}
 						emptyDescription={emptyState.description}
+						emptyAction={
+							feedSyncError ? (
+								<ToolbarButton onClick={handleRefresh} label="Retry refresh">
+									<RefreshCw className="h-3.5 w-3.5" />
+								</ToolbarButton>
+							) : unreadOnly ? (
+								<ToolbarButton onClick={handleUnreadOnlyToggle} label="Show all articles">
+									<Filter className="h-3.5 w-3.5" />
+								</ToolbarButton>
+							) : (
+								<ToolbarButton
+									onClick={handleRefresh}
+									label="Refresh articles"
+									disabled={isRefreshingCurrentSelection}
+								>
+									<RefreshCw className="h-3.5 w-3.5" />
+								</ToolbarButton>
+							)
+						}
 					/>
 				</div>
 			</div>

@@ -51,4 +51,20 @@ describe('ArticleList', () => {
 		expect(row.classList.contains('overflow-hidden')).toBe(true);
 		expect(row.style.height).toBe('82px');
 	});
+
+	it('renders an empty-state action when provided', () => {
+		render(
+			<ArticleList
+				articles={[]}
+				selectedId={null}
+				onSelect={() => {}}
+				emptyTitle="No unread articles"
+				emptyDescription="Turn off the unread filter to review older stories."
+				emptyAction={<button type="button">Show all articles</button>}
+			/>,
+		);
+
+		expect(screen.getByText('No unread articles')).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Show all articles' })).toBeTruthy();
+	});
 });

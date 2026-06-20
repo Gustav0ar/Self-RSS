@@ -1,7 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { formatDistanceToNow } from 'date-fns';
 import { Circle, CircleDot } from 'lucide-react';
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { DisplayDensityPreference } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +30,7 @@ interface ArticleListProps {
 	density?: DisplayDensityPreference;
 	emptyTitle?: string;
 	emptyDescription?: string;
+	emptyAction?: ReactNode;
 }
 
 const ROW_HEIGHT_PX = {
@@ -51,6 +52,7 @@ export function ArticleList({
 	density = 'comfortable',
 	emptyTitle = 'No articles found',
 	emptyDescription,
+	emptyAction,
 }: ArticleListProps) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const lastScrolledSelectedIdRef = useRef<string | null>(null);
@@ -179,6 +181,7 @@ export function ArticleList({
 					{emptyDescription ? (
 						<p className="mt-1 text-sm leading-6 text-muted-foreground">{emptyDescription}</p>
 					) : null}
+					{emptyAction ? <div className="mt-4 flex justify-center">{emptyAction}</div> : null}
 				</div>
 			</div>
 		);

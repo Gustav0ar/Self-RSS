@@ -2,7 +2,7 @@ import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useArticle, useEnrichArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
@@ -42,29 +42,46 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const lastAutoMarkedId = useRef<string | null>(null);
 	const enrichmentAttemptedIds = useRef(new Set<string>());
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
-	const [scrollProgress, setScrollProgress] = useState(0);
+	const scrollProgressRef = useRef<HTMLDivElement | null>(null);
+	const scrollProgressFrame = useRef<number | null>(null);
 
 	useEffect(() => {
 		const node = scrollerRef.current;
 		if (!node) return;
 
 		const updateProgress = () => {
+			scrollProgressFrame.current = null;
 			const max = node.scrollHeight - node.clientHeight;
-			if (max <= 0) {
-				setScrollProgress(0);
+			const ratio = max <= 0 ? 0 : Math.min(1, Math.max(0, node.scrollTop / max));
+			if (scrollProgressRef.current) {
+				scrollProgressRef.current.style.transform = `scaleX(${ratio})`;
+			}
+		};
+
+		const scheduleProgressUpdate = () => {
+			if (scrollProgressFrame.current != null) {
 				return;
 			}
-			const ratio = Math.min(1, Math.max(0, node.scrollTop / max));
-			setScrollProgress(ratio);
+			if (typeof window.requestAnimationFrame !== 'function') {
+				updateProgress();
+				return;
+			}
+			scrollProgressFrame.current = window.requestAnimationFrame(updateProgress);
 		};
 
 		updateProgress();
-		node.addEventListener('scroll', updateProgress, { passive: true });
+		node.addEventListener('scroll', scheduleProgressUpdate, { passive: true });
 		const observer =
-			typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateProgress) : null;
+			typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleProgressUpdate) : null;
 		observer?.observe(node);
 		return () => {
-			node.removeEventListener('scroll', updateProgress);
+			node.removeEventListener('scroll', scheduleProgressUpdate);
+			if (scrollProgressFrame.current != null) {
+				if (typeof window.cancelAnimationFrame === 'function') {
+					window.cancelAnimationFrame(scrollProgressFrame.current);
+				}
+				scrollProgressFrame.current = null;
+			}
 			observer?.disconnect();
 		};
 	}, []);
@@ -257,8 +274,9 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	return (
 		<div ref={scrollerRef} className="h-full overflow-auto">
 			<div
+				ref={scrollProgressRef}
 				className="reader-scroll-progress"
-				style={{ transform: `scaleX(${scrollProgress})` }}
+				style={{ transform: 'scaleX(0)' }}
 				aria-hidden="true"
 			/>
 			<div className="reader-mobile-bar">

@@ -1094,26 +1094,8 @@ function FeedTreeRow({
 }
 
 function SidebarOverflowText({ text }: { text: string }) {
-	const ref = useRef<HTMLParagraphElement>(null);
-	const [showTitle, setShowTitle] = useState(false);
-
-	useEffect(() => {
-		const element = ref.current;
-		if (!element) {
-			return;
-		}
-
-		const update = () => {
-			setShowTitle(element.scrollWidth > element.clientWidth);
-		};
-
-		update();
-		window.addEventListener('resize', update);
-		return () => window.removeEventListener('resize', update);
-	}, []);
-
 	return (
-		<p ref={ref} className="truncate" title={showTitle ? text : undefined}>
+		<p className="truncate" title={text}>
 			{text}
 		</p>
 	);

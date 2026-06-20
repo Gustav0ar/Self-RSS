@@ -156,6 +156,28 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `clearing article cache preserves pending read state mutations`() = runBlocking {
+        val payload = ApiListResponse(
+            data = listOf(sampleArticle("a-1")),
+            cursor = null,
+            hasMore = false,
+        )
+        store.writeArticleRemotePage(
+            queryKey = "query-read-state",
+            payload = payload,
+            clearExisting = true,
+        )
+        store.queueReadStateMutation("a-1", read = true)
+
+        store.clearTable(LocalStore.TABLE_ARTICLES)
+
+        val pending = store.readPendingReadStateMutations()
+        assertEquals(1, pending.size)
+        assertEquals("a-1", pending.first().articleId)
+        assertTrue(pending.first().read)
+    }
+
+    @Test
     fun `article detail write and read round-trip`() = runBlocking {
         val detail = sampleDetail("a-1")
         store.writeArticleDetail(detail)

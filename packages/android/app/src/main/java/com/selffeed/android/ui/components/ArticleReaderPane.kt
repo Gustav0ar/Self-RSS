@@ -376,16 +376,26 @@ private fun EmbedPlayer(
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
                         evaluateJavascript(
-                            "(function() { " +
-                                "var lastHeight = 0; " +
-                                "function sendHeight() { " +
-                                "  var h = document.body.scrollHeight || document.documentElement.scrollHeight; " +
-                                "  if (h > 0 && h !== lastHeight) { lastHeight = h; window.Android.updateHeight(h); } " +
-                                "} " +
-                                "new ResizeObserver(sendHeight).observe(document.body); " +
-                                "setInterval(sendHeight, 1000); " +
-                                "sendHeight(); " +
-                                "})();"
+                            """
+                                (function() {
+                                    var lastHeight = 0;
+                                    function sendHeight() {
+                                        var h = document.body.scrollHeight || document.documentElement.scrollHeight;
+                                        if (h > 0 && h !== lastHeight) {
+                                            lastHeight = h;
+                                            window.Android.updateHeight(h);
+                                        }
+                                    }
+                                    new ResizeObserver(sendHeight).observe(document.body);
+                                    var fallbackChecks = 0;
+                                    var fallbackTimer = setInterval(function() {
+                                        fallbackChecks += 1;
+                                        sendHeight();
+                                        if (fallbackChecks >= 10) clearInterval(fallbackTimer);
+                                    }, 250);
+                                    sendHeight();
+                                })();
+                            """.trimIndent()
                         ) { }
                     }
                 }

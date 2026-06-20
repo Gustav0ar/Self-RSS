@@ -1,6 +1,6 @@
 # SelfFeed Android App
 
-Jetpack Compose Android client for SelfFeed API, targeting **Android 13 / API 33**.
+Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and targeting **API 35**.
 
 ## Highlights
 
@@ -41,16 +41,16 @@ packages/android/
 
 ## Base URL
 
-- Debug build uses `http://10.0.2.2:3000/api/v1/` for emulator-to-host API access.
-- Release build placeholder is `https://your-api-domain/api/v1/`.
+- Debug builds use `http://10.0.2.2:3000/api/v1/` for emulator-to-host API access.
+- Release builds require `SELF_FEED_API_BASE_URL` to be set to an HTTPS API endpoint.
 
-Update `API_BASE_URL` in `app/build.gradle.kts` for your environment.
+For physical-device debug testing, update the debug `API_BASE_URL` in `app/build.gradle.kts` to your LAN host IP.
 
 ## Run
 
 1. Open `packages/android` in Android Studio.
 2. Let Gradle sync.
-3. Run on Android 13 emulator or Waydroid (API 33).
+3. Run on a current emulator or Waydroid image supported by the configured SDK.
 4. Ensure API is running at `localhost:3000` from host machine.
 
 ## First-time Setup
@@ -59,7 +59,7 @@ Update `API_BASE_URL` in `app/build.gradle.kts` for your environment.
 
 Install these in Android Studio SDK Manager:
 
-- Android SDK Platform 33
+- Android SDK Platform 37
 - Android SDK Build-Tools (latest)
 - Android SDK Platform-Tools
 - Android Emulator
@@ -67,7 +67,7 @@ Install these in Android Studio SDK Manager:
 ### Recommended Emulator Profile
 
 - Device: Pixel 8 (or equivalent)
-- System image: Android 13 (API 33, Google APIs)
+- System image: Android 15+ (Google APIs)
 - Network: default NAT (so app can reach host API via `10.0.2.2`)
 
 ### Local API Connectivity Checklist
@@ -115,7 +115,7 @@ Install these in Android Studio SDK Manager:
 
 Before shipping a production build:
 
-- Set release `API_BASE_URL` in `app/build.gradle.kts` to your HTTPS API domain.
+- Set `SELF_FEED_API_BASE_URL` to your HTTPS API domain before building release artifacts.
 - Confirm release network policy keeps cleartext disabled (`src/release/res/xml/network_security_config.xml`).
 - Ensure signing config/keystore is configured in Android Studio or CI secrets.
 - Run full Android checks:

@@ -212,7 +212,6 @@ class LocalStore(
                 dao.clearArticles()
                 dao.clearArticleQueryEntries()
                 dao.clearArticleRemoteKeys()
-                dao.clearPendingReadStateMutations()
             }
             TABLE_ARTICLE_PAGES -> dao.clearArticlePages()
             TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()

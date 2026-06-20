@@ -83,4 +83,13 @@ describe('Sidebar overflow tooltip', () => {
 		const label = await screen.findByTitle(longTitle);
 		expect(label).toBeTruthy();
 	});
+
+	it('does not register one resize listener per feed title', async () => {
+		const addEventListener = vi.spyOn(window, 'addEventListener');
+
+		renderSidebar();
+		await screen.findByTitle(longTitle);
+
+		expect(addEventListener.mock.calls.some(([type]) => type === 'resize')).toBe(false);
+	});
 });

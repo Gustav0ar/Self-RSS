@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReaderPane } from '../../src/components/articles/reader-pane';
 
@@ -107,5 +107,40 @@ describe('ReaderPane', () => {
 		await waitFor(() => {
 			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
 		});
+	});
+
+	it('updates scroll progress through a scheduled DOM write', () => {
+		const animation = { callback: undefined as FrameRequestCallback | undefined };
+		const requestAnimationFrame = vi
+			.spyOn(window, 'requestAnimationFrame')
+			.mockImplementation((callback) => {
+				animation.callback = callback;
+				return 1;
+			});
+		const cancelAnimationFrame = vi
+			.spyOn(window, 'cancelAnimationFrame')
+			.mockImplementation(() => {});
+
+		const { unmount } = render(<ReaderPane articleId="article-1" />);
+		const progress = document.querySelector<HTMLElement>('.reader-scroll-progress');
+		expect(progress).toBeTruthy();
+		const scroller = progress?.parentElement as HTMLElement;
+		Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
+		Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 });
+		Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 250 });
+
+		fireEvent.scroll(scroller);
+		expect(progress?.style.transform).toBe('scaleX(0)');
+
+		if (!animation.callback) {
+			throw new Error('Expected scroll progress to schedule an animation frame');
+		}
+		animation.callback(0);
+		expect(progress?.style.transform).toBe('scaleX(0.5)');
+
+		unmount();
+		expect(cancelAnimationFrame).not.toHaveBeenCalled();
+		requestAnimationFrame.mockRestore();
+		cancelAnimationFrame.mockRestore();
 	});
 });

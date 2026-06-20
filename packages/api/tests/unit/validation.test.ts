@@ -100,6 +100,16 @@ describe('searchQuerySchema', () => {
 		expect(result.success).toBe(false);
 	});
 
+	it('rejects one-character queries', () => {
+		const result = searchQuerySchema.safeParse({ q: 'x' });
+		expect(result.success).toBe(false);
+	});
+
+	it('trims accepted queries', () => {
+		const result = searchQuerySchema.parse({ q: '  hello  ' });
+		expect(result.q).toBe('hello');
+	});
+
 	it('accepts query with category filter', () => {
 		const result = searchQuerySchema.parse({
 			q: 'test',
