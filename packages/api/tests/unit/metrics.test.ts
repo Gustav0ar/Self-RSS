@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMetricsRoutes } from '../../src/routes/metrics.js';
 import { getMetricsService, resetMetricsService } from '../../src/services/metrics.service.js';
+
+function readMetricValue(metrics: string, name: string): number {
+	const metricLine = metrics.split('\n').find((line) => line.startsWith(`${name} `));
+
+	expect(metricLine).toBeDefined();
+	return Number(metricLine?.split(/\s+/)[1]);
+}
 
 describe('Metrics routes', () => {
 	// Create a shared app instance for all tests
@@ -85,5 +92,27 @@ describe('Metrics routes', () => {
 
 		expect(contentType).toContain('text/plain');
 		expect(contentType).toContain('version=');
+	});
+
+	it('does not mutate cache hit counters while scraping Redis-backed metrics', async () => {
+		const redis = {
+			ping: vi.fn().mockResolvedValue('PONG'),
+			scan: vi.fn().mockResolvedValue(['0', ['articles:list:user-1']]),
+		};
+		const redisBackedApp = new Hono();
+		redisBackedApp.route('/api/v1', createMetricsRoutes({ redis: redis as never }));
+
+		getMetricsService().recordCacheHit('article_list');
+
+		const firstRes = await redisBackedApp.request('/api/v1/metrics');
+		const firstBody = await firstRes.text();
+		const firstCacheHits = readMetricValue(firstBody, 'cache_hits_total');
+
+		const secondRes = await redisBackedApp.request('/api/v1/metrics');
+		const secondBody = await secondRes.text();
+
+		expect(readMetricValue(secondBody, 'cache_hits_total')).toBe(firstCacheHits);
+		expect(redis.ping).toHaveBeenCalledTimes(2);
+		expect(redis.scan).not.toHaveBeenCalled();
 	});
 });

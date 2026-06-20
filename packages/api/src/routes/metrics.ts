@@ -74,40 +74,4 @@ async function updateDynamicMetrics(options: MetricsRouteOptions) {
 			console.error('Failed to update feed sync metrics:', err);
 		}
 	}
-
-	// Update cache metrics from Redis
-	if (redis) {
-		try {
-			// Count cached article lists
-			const cachedKeys = await scanKeys(redis, 'articles:list:*');
-			// Extract unique user IDs from cache keys
-			const userIds = new Set<string>();
-			for (const key of cachedKeys) {
-				const parts = key.split(':');
-				if (parts.length >= 3 && parts[2]) {
-					userIds.add(parts[2]);
-				}
-			}
-			// Set cache metrics (this is a simplified approach)
-			getMetricsService().recordCacheHit('article_list');
-		} catch (err) {
-			console.error('Failed to update cache metrics:', err);
-		}
-	}
-}
-
-async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
-	const matched: string[] = [];
-	let cursor = '0';
-	const SCAN_BATCH = 500;
-
-	do {
-		const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', SCAN_BATCH);
-		if (batch.length > 0) {
-			matched.push(...batch);
-		}
-		cursor = nextCursor;
-	} while (cursor !== '0');
-
-	return matched;
 }
