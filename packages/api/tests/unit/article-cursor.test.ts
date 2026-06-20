@@ -9,6 +9,9 @@ function isValidUuid(value: string): boolean {
 	return UUID_REGEX.test(value);
 }
 
+// Maximum reasonable timestamp: year 2100
+const MAX_REASONABLE_TIMESTAMP = 4102444800;
+
 // Re-implement decodeCursor to test validation logic
 // (The actual function is not exported, so we test the validation pattern)
 
@@ -36,6 +39,8 @@ function decodeCursor(
 		const ftsRank = rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
 		const seconds = Number.parseInt(secondsRaw, 10);
 		if (!Number.isFinite(seconds) || seconds < 0) return null;
+		// Validate timestamp bounds
+		if (seconds > MAX_REASONABLE_TIMESTAMP) return null;
 		return { id, seconds, direction, ftsRank };
 	}
 
@@ -47,6 +52,8 @@ function decodeCursor(
 	if (direction !== expectedDirection) return null;
 	const seconds = Number.parseInt(secondsRaw, 10);
 	if (!Number.isFinite(seconds) || seconds < 0) return null;
+	// Validate timestamp bounds
+	if (seconds > MAX_REASONABLE_TIMESTAMP) return null;
 	return { id, seconds, direction };
 }
 
@@ -224,5 +231,78 @@ describe('decodeCursor - malformed/invalid cursors', () => {
 		expect(
 			decodeCursor('550e8400-e29b-41d4\x00-a716-446655440000:1704067200:d', 'latest'),
 		).toBeNull();
+	});
+});
+
+describe('decodeCursor - timestamp bounds validation', () => {
+	const validUuid = '550e8400-e29b-41d4-a716-446655440000';
+
+	it('returns null for timestamp exceeding year 2100 (Unix overflow)', () => {
+		// Year 2100 in Unix seconds is 4102444800
+		// Overflow timestamp: 9999999999 (clearly invalid)
+		expect(decodeCursor(`${validUuid}:9999999999:d`, 'latest')).toBeNull();
+	});
+
+	it('returns null for timestamp exceeding MAX_REASONABLE_TIMESTAMP', () => {
+		// 4102444801 is 1 second after year 2100
+		expect(decodeCursor(`${validUuid}:4102444801:d`, 'latest')).toBeNull();
+	});
+
+	it('accepts timestamp at MAX_REASONABLE_TIMESTAMP boundary', () => {
+		// Exactly year 2100 boundary
+		const result = decodeCursor(`${validUuid}:4102444800:d`, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 4102444800,
+			direction: 'd',
+		});
+	});
+
+	it('accepts timestamp below MAX_REASONABLE_TIMESTAMP', () => {
+		// One second before year 2100
+		const result = decodeCursor(`${validUuid}:4102444799:d`, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 4102444799,
+			direction: 'd',
+		});
+	});
+
+	it('accepts typical timestamp', () => {
+		// January 2024
+		const result = decodeCursor(`${validUuid}:1704067200:d`, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 1704067200,
+			direction: 'd',
+		});
+	});
+
+	it('returns null for FTS cursor with timestamp exceeding year 2100', () => {
+		expect(decodeCursor(`1000001234:9999999999:${validUuid}:d`, 'latest')).toBeNull();
+	});
+
+	it('returns null for FTS cursor with timestamp exceeding MAX_REASONABLE_TIMESTAMP', () => {
+		expect(decodeCursor(`1000001234:4102444801:${validUuid}:d`, 'latest')).toBeNull();
+	});
+
+	it('accepts FTS cursor with timestamp at MAX_REASONABLE_TIMESTAMP boundary', () => {
+		const result = decodeCursor(`1000001234:4102444800:${validUuid}:d`, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 4102444800,
+			direction: 'd',
+			ftsRank: 1234 / 10000,
+		});
+	});
+
+	it('accepts zero timestamp (Unix epoch)', () => {
+		// Zero is valid - represents Jan 1, 1970 UTC
+		const result = decodeCursor(`${validUuid}:0:d`, 'latest');
+		expect(result).toEqual({
+			id: validUuid,
+			seconds: 0,
+			direction: 'd',
+		});
 	});
 });

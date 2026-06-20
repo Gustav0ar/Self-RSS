@@ -408,7 +408,7 @@ private fun FeedRow(
     ) {
         AsyncImage(
             model = feed.faviconUrl,
-            contentDescription = null,
+            contentDescription = "Feed icon for ${feed.title}",
             modifier = Modifier
                 .size(24.dp)
                 .clip(RoundedCornerShape(6.dp))
@@ -582,7 +582,7 @@ fun ArticlesTab(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.MarkEmailRead,
-                                contentDescription = null,
+                                contentDescription = "No articles",
                                 modifier = Modifier.size(64.dp),
                                 tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
                             )
@@ -972,7 +972,7 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("Search titles and article content") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search articles") },
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
                 )
@@ -1084,8 +1084,8 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 Text("Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = null) })
-                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) })
+                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = "Toggle light mode") })
+                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = "Toggle dark mode") })
                     FilterChip(selected = selectedTheme == ThemePreference.SYSTEM, onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) }, label = { Text("System") })
                 }
             }
@@ -1165,7 +1165,7 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Sign out")
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Logout")
                 }

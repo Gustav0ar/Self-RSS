@@ -1,6 +1,9 @@
 import type Redis from 'ioredis';
 import { getEnv } from '../config/index.js';
 import { CacheKeys } from '../db/redis.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger();
 
 export interface RateLimitConfig {
 	windowMs: number;
@@ -15,12 +18,21 @@ export class RateLimiter {
 		config: RateLimitConfig,
 	): Promise<{ allowed: boolean; remaining: number }> {
 		const redisKey = CacheKeys.rateLimit(key);
-		const current = await this.redis.incr(redisKey);
-		if (current === 1) {
-			await this.redis.pexpire(redisKey, config.windowMs);
+		try {
+			const current = await this.redis.incr(redisKey);
+			if (current === 1) {
+				await this.redis.pexpire(redisKey, config.windowMs);
+			}
+			const remaining = Math.max(0, config.maxRequests - current);
+			return { allowed: current <= config.maxRequests, remaining };
+		} catch (error) {
+			// Redis unavailable - fail open for rate limiting (allow request)
+			logger.warn('Rate limiter Redis unavailable, allowing request', {
+				key,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return { allowed: true, remaining: Infinity };
 		}
-		const remaining = Math.max(0, config.maxRequests - current);
-		return { allowed: current <= config.maxRequests, remaining };
 	}
 
 	/**
@@ -32,24 +44,45 @@ export class RateLimiter {
 	 * to compare the returned count against its own quota and decide
 	 * whether to reject. This lets the caller return a quota-specific error
 	 * code or message instead of the generic 429 from the rate limiter.
+	 *
+	 * Fails closed (throws) when Redis is unavailable to prevent quota bypass.
 	 */
 	async incrementDailyCount(baseKey: string): Promise<number> {
 		const today = new Date().toISOString().slice(0, 10);
 		const redisKey = CacheKeys.rateLimit(`${baseKey}:${today}`);
-		const current = await this.redis.incr(redisKey);
-		if (current === 1) {
-			// 48h covers the longest possible day boundary in any timezone.
-			await this.redis.expire(redisKey, 60 * 60 * 48);
+		try {
+			const current = await this.redis.incr(redisKey);
+			if (current === 1) {
+				// 48h covers the longest possible day boundary in any timezone.
+				await this.redis.expire(redisKey, 60 * 60 * 48);
+			}
+			return current;
+		} catch (error) {
+			logger.error('Rate limiter Redis unavailable during daily count increment', {
+				key: baseKey,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw new Error('Rate limit service unavailable');
 		}
-		return current;
 	}
 
+	/**
+	 * Release a reserved daily counter slot. Fails closed when Redis is unavailable.
+	 */
 	async releaseDailyCount(baseKey: string): Promise<void> {
 		const today = new Date().toISOString().slice(0, 10);
 		const redisKey = CacheKeys.rateLimit(`${baseKey}:${today}`);
-		const current = await this.redis.decr(redisKey);
-		if (current <= 0) {
-			await this.redis.del(redisKey);
+		try {
+			const current = await this.redis.decr(redisKey);
+			if (current <= 0) {
+				await this.redis.del(redisKey);
+			}
+		} catch (error) {
+			logger.error('Rate limiter Redis unavailable during daily count release', {
+				key: baseKey,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw new Error('Rate limit service unavailable');
 		}
 	}
 }

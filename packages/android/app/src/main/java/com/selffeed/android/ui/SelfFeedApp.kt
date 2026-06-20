@@ -515,25 +515,25 @@ private fun AppBottomBar(
         NavigationBarItem(
             selected = activeTab == HomeTab.ARTICLES,
             onClick = { onTabSelected(HomeTab.ARTICLES) },
-            icon = { Icon(Icons.Default.GridView, contentDescription = null) },
+            icon = { Icon(Icons.Default.GridView, contentDescription = "Articles tab") },
             label = { Text("Articles") },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.SEARCH,
             onClick = { onTabSelected(HomeTab.SEARCH) },
-            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+            icon = { Icon(Icons.Default.Search, contentDescription = "Search tab") },
             label = { Text("Search") },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.FEEDS,
             onClick = { onTabSelected(HomeTab.FEEDS) },
-            icon = { Icon(Icons.Default.RssFeed, contentDescription = null) },
+            icon = { Icon(Icons.Default.RssFeed, contentDescription = "Feeds tab") },
             label = { Text("Feeds") },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.SETTINGS,
             onClick = { onTabSelected(HomeTab.SETTINGS) },
-            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+            icon = { Icon(Icons.Outlined.Settings, contentDescription = "Settings tab") },
             label = { Text("Settings") },
         )
     }
@@ -607,7 +607,7 @@ internal fun AuthScreen(
                 ) {
                     Image(
                         painter = painterResource(R.drawable.ic_self_feed_logo),
-                        contentDescription = null,
+                        contentDescription = "SelfFeed app logo",
                         modifier = Modifier.size(56.dp),
                     )
                 }
@@ -641,7 +641,7 @@ internal fun AuthScreen(
                     value = email,
                     onValueChange = { email = it },
                     label = { Text("Email") },
-                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = "Email address") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
@@ -650,7 +650,7 @@ internal fun AuthScreen(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
-                    leadingIcon = { Icon(Icons.Default.Password, contentDescription = null) },
+                    leadingIcon = { Icon(Icons.Default.Password, contentDescription = "Password") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
