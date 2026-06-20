@@ -2,7 +2,7 @@ import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useArticle, useEnrichArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
@@ -44,6 +44,23 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	const scrollProgressRef = useRef<HTMLDivElement | null>(null);
 	const scrollProgressFrame = useRef<number | null>(null);
+
+	useLayoutEffect(() => {
+		if (!articleId) return;
+		const node = scrollerRef.current;
+		if (!node) return;
+
+		node.scrollTop = 0;
+		if (scrollProgressFrame.current != null) {
+			if (typeof window.cancelAnimationFrame === 'function') {
+				window.cancelAnimationFrame(scrollProgressFrame.current);
+			}
+			scrollProgressFrame.current = null;
+		}
+		if (scrollProgressRef.current) {
+			scrollProgressRef.current.style.transform = 'scaleX(0)';
+		}
+	}, [articleId]);
 
 	useEffect(() => {
 		const node = scrollerRef.current;
