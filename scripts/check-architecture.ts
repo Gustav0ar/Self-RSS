@@ -76,6 +76,21 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 		reason:
 			'Unread count cache helpers should stay focused on feed, category tree, and stats count updates.',
 	},
+	'packages/web/src/components/articles/feed-view.tsx': {
+		maxLines: 430,
+		reason:
+			'Feed view should orchestrate data fetching and rendering; keep article-list model logic and retained-read behavior in domain helpers.',
+	},
+	'packages/web/src/components/articles/feed-view-model.ts': {
+		maxLines: 180,
+		reason:
+			'Feed view model helpers should remain pure transformations for list metadata, empty states, and article selection.',
+	},
+	'packages/web/src/components/articles/use-retained-read-articles.ts': {
+		maxLines: 100,
+		reason:
+			'Retained-read article state should stay limited to unread-filter retention and reset behavior.',
+	},
 	'packages/web/src/components/articles/reader-pane.tsx': {
 		maxLines: 500,
 		reason:

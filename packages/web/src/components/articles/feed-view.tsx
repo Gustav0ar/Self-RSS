@@ -1,8 +1,14 @@
-import type { ArticleListItem, SortOrder } from '@self-feed/shared';
+import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
+import {
+	buildFeedViewModel,
+	dedupeArticlePages,
+	resolveEffectiveArticleId,
+} from '@/components/articles/feed-view-model';
 import { ReaderPane } from '@/components/articles/reader-pane';
+import { useRetainedReadArticles } from '@/components/articles/use-retained-read-articles';
 import {
 	useCategories,
 	useInfiniteArticles,
@@ -16,7 +22,6 @@ import {
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
 import { useSilentArticleRefresh } from '@/hooks/use-silent-article-refresh';
-import { categoryPathLabel, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 import {
 	normalizeAutoMarkReadPreference,
 	normalizeDensityPreference,
@@ -39,10 +44,7 @@ interface FeedViewProps {
 	onSelectArticle: (id: string | null) => void;
 }
 
-interface RetainedReadArticle {
-	article: ArticleListItem;
-	index: number;
-}
+const EMPTY_CATEGORY_TREE = [] as const;
 
 export function FeedView({
 	feedId,
@@ -77,104 +79,19 @@ export function FeedView({
 
 	const markRead = useMarkRead();
 	const markAllRead = useMarkAllRead();
-	const [retainedReadArticles, setRetainedReadArticles] = useState<
-		Map<string, RetainedReadArticle>
-	>(() => new Map());
-	const retentionScope = `${feedId ?? 'all'}:${categoryId ?? 'all'}:${sort}:${unreadOnly}`;
-	const previousRetentionScope = useRef(retentionScope);
-
-	const fetchedArticles = useMemo(() => {
-		const seenArticleIds = new Set<string>();
-		return (
-			data?.pages
-				.flatMap((page) => page.data)
-				.filter((article) => {
-					if (seenArticleIds.has(article.id)) {
-						return false;
-					}
-					seenArticleIds.add(article.id);
-					return true;
-				}) ?? []
-		);
-	}, [data?.pages]);
-	const categoryTree = categories ?? [];
-	const flatCategories = useMemo(() => flattenCategories(categoryTree), [categoryTree]);
-	const flatFeeds = useMemo(() => flattenCategoryFeeds(categoryTree), [categoryTree]);
-	const selectedFeed = useMemo(
-		() => (feedId ? flatFeeds.find((feed) => feed.id === feedId) : null),
-		[feedId, flatFeeds],
+	const fetchedArticles = useMemo(() => dedupeArticlePages(data?.pages), [data?.pages]);
+	const categoryTree = categories ?? EMPTY_CATEGORY_TREE;
+	const { emptyState, scopeUnreadCount, viewTitle } = useMemo(
+		() => buildFeedViewModel({ categoryId, categoryTree, feedId, feedSyncError, unreadOnly }),
+		[categoryId, categoryTree, feedId, feedSyncError, unreadOnly],
 	);
-	const selectedCategory = useMemo(
-		() => (categoryId ? flatCategories.find((category) => category.id === categoryId) : null),
-		[categoryId, flatCategories],
-	);
-	const viewTitle = useMemo(() => {
-		if (selectedFeed) {
-			return selectedFeed.title;
-		}
-		if (categoryId) {
-			return categoryPathLabel(categoryTree, categoryId) || selectedCategory?.name || 'Category';
-		}
-		return 'Latest articles';
-	}, [categoryId, categoryTree, selectedCategory?.name, selectedFeed]);
-	const scopeUnreadCount = useMemo(() => {
-		if (selectedFeed) {
-			return selectedFeed.unreadCount ?? 0;
-		}
-		if (selectedCategory) {
-			return selectedCategory.unreadCount ?? 0;
-		}
-		return flatFeeds.reduce((count, feed) => count + (feed.unreadCount ?? 0), 0);
-	}, [flatFeeds, selectedCategory, selectedFeed]);
-	const emptyState = useMemo(() => {
-		if (feedSyncError) {
-			return {
-				title: 'Unable to refresh articles',
-				description: feedSyncError,
-			};
-		}
-		if (unreadOnly) {
-			return {
-				title: 'No unread articles',
-				description: 'Turn off the unread filter to review older stories in this view.',
-			};
-		}
-		if (feedId) {
-			return {
-				title: 'No articles in this feed',
-				description: 'Refresh the feed or check that the source is publishing RSS items.',
-			};
-		}
-		if (categoryId) {
-			return {
-				title: 'No articles in this category',
-				description: 'Add feeds to this category or refresh existing sources.',
-			};
-		}
-		return {
-			title: 'No articles yet',
-			description: 'Add a feed or import OPML to start building your reading queue.',
-		};
-	}, [categoryId, feedId, feedSyncError, unreadOnly]);
-	const articles = useMemo(() => {
-		if (!unreadOnly || retainedReadArticles.size === 0) {
-			return fetchedArticles;
-		}
-
-		const seenArticleIds = new Set(fetchedArticles.map((article) => article.id));
-		const retainedArticles = Array.from(retainedReadArticles.values())
-			.filter(({ article }) => !seenArticleIds.has(article.id))
-			.sort((a, b) => a.index - b.index);
-		if (retainedArticles.length === 0) {
-			return fetchedArticles;
-		}
-
-		const mergedArticles = [...fetchedArticles];
-		for (const retained of retainedArticles) {
-			mergedArticles.splice(Math.min(retained.index, mergedArticles.length), 0, retained.article);
-		}
-		return mergedArticles;
-	}, [fetchedArticles, retainedReadArticles, unreadOnly]);
+	const { articles, resetRetainedReadArticles, retainReadArticle } = useRetainedReadArticles({
+		categoryId,
+		feedId,
+		fetchedArticles,
+		sort,
+		unreadOnly,
+	});
 	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	// The article URL (`/articles/:articleId`) can be deep-linked or
 	// bookmarked. The article list is loaded asynchronously, so an
@@ -189,8 +106,11 @@ export function FeedView({
 	// when the surrounding list is empty or hasn't loaded it yet. In the
 	// list-view case (`/`) the absence from the loaded list is what
 	// triggers the effect below to clear the selection.
-	const effectiveArticleId =
-		selectedArticleId && (articleIsInLoadedList || fromDeepLink) ? selectedArticleId : null;
+	const effectiveArticleId = resolveEffectiveArticleId({
+		articleIds: articleIdsSet,
+		fromDeepLink,
+		selectedArticleId,
+	});
 	const loadedUnreadCount = articles.reduce(
 		(count, article) => count + (article.isRead ? 0 : 1),
 		0,
@@ -204,39 +124,6 @@ export function FeedView({
 	const handleLoadMore = useCallback(() => {
 		void fetchNextPage();
 	}, [fetchNextPage]);
-
-	const retainReadArticle = useCallback(
-		(article: ArticleListItem, index: number) => {
-			if (!unreadOnly) {
-				return;
-			}
-
-			setRetainedReadArticles((current) => {
-				const retainedArticle = { ...article, isRead: true };
-				const previous = current.get(article.id);
-				if (
-					previous?.index === index &&
-					previous.article.isRead === retainedArticle.isRead &&
-					previous.article.title === retainedArticle.title
-				) {
-					return current;
-				}
-
-				const next = new Map(current);
-				next.set(article.id, { article: retainedArticle, index });
-				return next;
-			});
-		},
-		[unreadOnly],
-	);
-
-	useEffect(() => {
-		if (previousRetentionScope.current === retentionScope) {
-			return;
-		}
-		previousRetentionScope.current = retentionScope;
-		setRetainedReadArticles(new Map());
-	}, [retentionScope]);
 
 	useEffect(() => {
 		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
@@ -331,12 +218,12 @@ export function FeedView({
 	});
 
 	function handleMarkAllRead() {
-		setRetainedReadArticles(new Map());
+		resetRetainedReadArticles();
 		markAllRead.mutate({ feedId, categoryId });
 	}
 
 	function handleRefresh() {
-		setRetainedReadArticles(new Map());
+		resetRetainedReadArticles();
 		if (feedId) {
 			void refreshFeed(feedId, { force: true });
 		} else {
@@ -372,7 +259,7 @@ export function FeedView({
 
 	function handleUnreadOnlyToggle() {
 		const nextUnreadOnly = !unreadOnly;
-		setRetainedReadArticles(new Map());
+		resetRetainedReadArticles();
 		setUnreadOnly(nextUnreadOnly);
 		updatePrefs.mutate({ hideRead: nextUnreadOnly });
 	}
