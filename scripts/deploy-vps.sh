@@ -156,6 +156,42 @@ normalize_domain_name() {
 	fi
 }
 
+curl_public_route() {
+	domain="$1"
+	path="$2"
+	label="$3"
+	url="https://${domain}${path}"
+
+	if curl --fail --silent --max-time 15 \
+		--resolve "${domain}:443:127.0.0.1" \
+		-o /dev/null \
+		"${url}"; then
+		echo "${label} public route responded through local Traefik"
+		return 0
+	fi
+
+	if curl --fail --silent --max-time 15 \
+		-o /dev/null \
+		"${url}"; then
+		echo "${label} public route responded through DNS"
+		return 0
+	fi
+
+	echo "${label} public route did not respond"
+	return 1
+}
+
+verify_public_routes() {
+	domain="$(read_env_var DOMAIN_NAME)"
+	if [ -z "${domain}" ]; then
+		echo "[DEPLOY] DOMAIN_NAME is missing; cannot verify public routes"
+		return 1
+	fi
+
+	curl_public_route "${domain}" "/health" "API health" &&
+		curl_public_route "${domain}" "/" "Web root"
+}
+
 backup_existing_database() {
 	db_file="data/self-feed.db"
 	if [ ! -f "${db_file}" ]; then
@@ -275,5 +311,6 @@ wait_for_container_health selffeed-redis Redis || { echo "[DEPLOY] Redis health 
 wait_for_container_health selffeed-api API || { echo "[DEPLOY] API health check failed"; rollback_deploy; }
 wait_for_container_health selffeed-web Web || { echo "[DEPLOY] Web health check failed"; rollback_deploy; }
 wait_for_container_health selffeed-worker Worker || { echo "[DEPLOY] Worker health check failed"; rollback_deploy; }
+verify_public_routes || { echo "[DEPLOY] Public route smoke check failed"; fail_with_diagnostics; }
 
 "${CONTAINER_CLI}" image prune -f
