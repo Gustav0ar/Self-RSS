@@ -26,8 +26,107 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.io.File
+import java.io.IOException
 import javax.net.ssl.SSLPeerUnverifiedException
 import java.util.concurrent.TimeUnit
+
+sealed interface SessionRefreshResult {
+    data class Success(val accessToken: String) : SessionRefreshResult
+    data object Rejected : SessionRefreshResult
+    data class Unavailable(val error: Throwable? = null) : SessionRefreshResult
+}
+
+class SessionRefreshCoordinator(
+    private val sessionStore: SessionStore,
+    moshi: Moshi,
+) {
+    private val lock = Any()
+    private val responseAdapter: JsonAdapter<ApiEnvelope<RefreshData>> = moshi.adapter(
+        Types.apiEnvelopeRefreshType,
+    )
+    private val refreshClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .apply {
+                TokenAuthenticator.certificatePinner?.let { pinner ->
+                    certificatePinner(pinner)
+                }
+            }
+            .cookieJar(PersistedRefreshCookieJar(sessionStore))
+            .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(REFRESH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @Volatile
+    private var lastRejectedAtMs: Long = 0L
+
+    fun refreshAccessToken(): SessionRefreshResult = synchronized(lock) {
+        val refreshCookie = runCatching { sessionStore.getRefreshCookie() }
+            .getOrElse { error -> return@synchronized SessionRefreshResult.Unavailable(error) }
+        if (refreshCookie.isNullOrBlank()) {
+            return@synchronized SessionRefreshResult.Unavailable(
+                IOException("No refresh cookie is stored"),
+            )
+        }
+
+        val request = Request.Builder()
+            .url(apiEndpointUrl(sessionStore.getApiBaseUrl(), "auth/refresh"))
+            .post("{}".toRequestBody("application/json".toMediaType()))
+            .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
+            .header("X-Self-Feed-Device-Name", androidDeviceName())
+            .header("User-Agent", androidUserAgent())
+            .build()
+
+        runCatching {
+            refreshClient.newCall(request).execute().use { response ->
+                when {
+                    response.code == 401 -> {
+                        markRejected()
+                        SessionRefreshResult.Rejected
+                    }
+                    !response.isSuccessful -> SessionRefreshResult.Unavailable(
+                        IOException("Refresh failed with HTTP ${response.code}"),
+                    )
+                    else -> {
+                        val body = response.body?.string()
+                            ?: return@use SessionRefreshResult.Unavailable(
+                                IOException("Refresh response was empty"),
+                            )
+                        val parsed = responseAdapter.fromJson(body)
+                            ?: return@use SessionRefreshResult.Unavailable(
+                                IOException("Refresh response was empty or invalid"),
+                            )
+                        val accessToken = parsed.data.tokens.accessToken
+                        sessionStore.setAccessToken(accessToken)
+                        lastRejectedAtMs = 0L
+                        SessionRefreshResult.Success(accessToken)
+                    }
+                }
+            }
+        }.getOrElse { error ->
+            SessionRefreshResult.Unavailable(error)
+        }
+    }
+
+    fun hasRecentRefreshRejection(windowMs: Long = RECENT_REFRESH_REJECTION_WINDOW_MS): Boolean {
+        val ageMs = System.currentTimeMillis() - lastRejectedAtMs
+        return ageMs in 0..windowMs
+    }
+
+    private fun markRejected() {
+        lastRejectedAtMs = System.currentTimeMillis()
+    }
+
+    private companion object {
+        const val REFRESH_CONNECT_TIMEOUT_SECONDS = 5L
+        const val REFRESH_READ_TIMEOUT_SECONDS = 10L
+        const val REFRESH_WRITE_TIMEOUT_SECONDS = 10L
+        const val REFRESH_CALL_TIMEOUT_SECONDS = 15L
+        const val RECENT_REFRESH_REJECTION_WINDOW_MS = 10_000L
+    }
+}
 
 class PersistedRefreshCookieJar(
     private val sessionStore: SessionStore,
@@ -82,78 +181,29 @@ class ApiBaseUrlInterceptor(
 
 class TokenAuthenticator(
     private val sessionStore: SessionStore,
-    private val moshi: Moshi,
+    private val sessionRefreshCoordinator: SessionRefreshCoordinator,
 ) : Authenticator {
-    private val lock = Any()
-    private val responseAdapter: JsonAdapter<ApiEnvelope<RefreshData>> = moshi.adapter(
-        Types.apiEnvelopeRefreshType,
-    )
-
     override fun authenticate(route: okhttp3.Route?, response: okhttp3.Response): Request? {
         if (responseCount(response) >= 2) return null
         if (response.request.url.encodedPath.endsWith("/auth/refresh")) return null
 
-        synchronized(lock) {
-            val currentToken = sessionStore.getAccessToken()
-            val requestToken = response.request.header("Authorization")
-                ?.removePrefix("Bearer ")
-            if (!currentToken.isNullOrBlank() && currentToken != requestToken) {
-                return response.request.newBuilder()
-                    .header("Authorization", "Bearer $currentToken")
-                    .build()
-            }
-
-            val refreshedToken = refreshAccessToken(response.request.url) ?: run {
-                // Refresh failed (e.g. revoked/expired refresh cookie). Clear the local
-                // session so the next call goes unauthenticated and the UI can
-                // route to the login screen.
-                sessionStore.clear()
-                return null
-            }
-            sessionStore.setAccessToken(refreshedToken)
+        val currentToken = sessionStore.getAccessToken()
+        val requestToken = response.request.header("Authorization")
+            ?.removePrefix("Bearer ")
+        if (!currentToken.isNullOrBlank() && currentToken != requestToken) {
             return response.request.newBuilder()
-                .header("Authorization", "Bearer $refreshedToken")
+                .header("Authorization", "Bearer $currentToken")
                 .build()
         }
-    }
 
-    /**
-     * Performs a token refresh using a fresh one-shot OkHttpClient that shares
-     * the cookie jar (so the refresh cookie is attached) but no authenticator
-     * and no other application interceptors — to avoid recursion through
-     * [authenticate] and to keep the request path minimal.
-     */
-    private fun refreshAccessToken(url: HttpUrl): String? {
-        val baseUrl = url.newBuilder().encodedPath("/api/v1/auth/refresh").build()
-        val request = Request.Builder()
-            .url(baseUrl)
-            .post("{}".toRequestBody("application/json".toMediaType()))
-            .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
-            .header("X-Self-Feed-Device-Name", androidDeviceName())
-            .header("User-Agent", androidUserAgent())
-            .build()
-
-        val client = OkHttpClient.Builder()
-            .apply {
-                certificatePinner?.let { pinner ->
-                    certificatePinner(pinner)
-                }
-            }
-            .cookieJar(PersistedRefreshCookieJar(sessionStore))
-            .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .callTimeout(REFRESH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build()
-
-        return runCatching {
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use null
-                val body = response.body?.string() ?: return@use null
-                val parsed = responseAdapter.fromJson(body) ?: return@use null
-                parsed.data.tokens.accessToken
-            }
-        }.getOrNull()
+        return when (val refresh = sessionRefreshCoordinator.refreshAccessToken()) {
+            is SessionRefreshResult.Success -> response.request.newBuilder()
+                .header("Authorization", "Bearer ${refresh.accessToken}")
+                .build()
+            SessionRefreshResult.Rejected,
+            is SessionRefreshResult.Unavailable,
+            -> null
+        }
     }
 
     private fun responseCount(response: okhttp3.Response): Int {
@@ -167,11 +217,6 @@ class TokenAuthenticator(
     }
 
     companion object {
-        private const val REFRESH_CONNECT_TIMEOUT_SECONDS = 5L
-        private const val REFRESH_READ_TIMEOUT_SECONDS = 10L
-        private const val REFRESH_WRITE_TIMEOUT_SECONDS = 10L
-        private const val REFRESH_CALL_TIMEOUT_SECONDS = 15L
-
         /**
          * Builds a [CertificatePinner] from BuildConfig pins if configured.
          * Returns null in debug builds or if no pins are configured.
@@ -256,7 +301,7 @@ object NetworkModule {
     fun provideOkHttpClient(
         context: Context,
         sessionStore: SessionStore,
-        moshi: Moshi,
+        sessionRefreshCoordinator: SessionRefreshCoordinator,
     ): OkHttpClient {
         val logging = HttpLoggingInterceptor().apply {
             level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
@@ -267,7 +312,7 @@ object NetworkModule {
             HTTP_CACHE_SIZE_BYTES,
         )
 
-        val authenticator = TokenAuthenticator(sessionStore, moshi)
+        val authenticator = TokenAuthenticator(sessionStore, sessionRefreshCoordinator)
 
         return OkHttpClient.Builder()
             .apply {

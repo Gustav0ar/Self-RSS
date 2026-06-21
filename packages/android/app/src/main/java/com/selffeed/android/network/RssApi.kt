@@ -23,9 +23,6 @@ interface RssApi {
     @POST("auth/register")
     suspend fun register(@Body request: RegisterRequest): ApiEnvelope<AuthResponse>
 
-    @POST("auth/refresh")
-    suspend fun refresh(): ApiEnvelope<RefreshData>
-
     @POST("auth/logout")
     suspend fun logout(): ApiEnvelope<SuccessResponse>
 

@@ -63,15 +63,24 @@ class AuthViewModel @Inject constructor(
                         errorMessage = null,
                     )
                     is AppResult.Error -> {
-                        val enabled = loadRegistrationEnabled()
-                        _state.value = _state.value.copy(
-                            loading = false,
-                            isAuthenticated = false,
-                            authMode = AuthMode.LOGIN,
-                            apiBaseUrl = apiBaseUrl,
-                            registrationEnabled = enabled,
-                            errorMessage = result.message.takeIf { it == AUTH_LOST_MESSAGE },
-                        )
+                        if (result.message == AUTH_LOST_MESSAGE) {
+                            val enabled = loadRegistrationEnabled()
+                            _state.value = _state.value.copy(
+                                loading = false,
+                                isAuthenticated = false,
+                                authMode = AuthMode.LOGIN,
+                                apiBaseUrl = apiBaseUrl,
+                                registrationEnabled = enabled,
+                                errorMessage = result.message,
+                            )
+                        } else {
+                            _state.value = _state.value.copy(
+                                loading = false,
+                                isAuthenticated = true,
+                                apiBaseUrl = apiBaseUrl,
+                                errorMessage = null,
+                            )
+                        }
                     }
                 }
             } else {

@@ -24,6 +24,8 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.ReadStateSyncEvent
+import com.selffeed.android.network.SessionRefreshCoordinator
+import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.squareup.moshi.Moshi
 import coil3.ImageLoader
@@ -58,6 +60,7 @@ class RssRepository @Inject constructor(
     private val searchRemote: SearchRemoteDataSource,
     private val settingsRemote: SettingsRemoteDataSource,
     private val sessionStore: SessionStore,
+    private val sessionRefreshCoordinator: SessionRefreshCoordinator,
     okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val localStore: LocalStore,
@@ -122,15 +125,13 @@ class RssRepository @Inject constructor(
             throw IllegalStateException("No saved session")
         }
 
-        if (hasRefreshCookie) {
-            try {
-                val refreshed = authRemote.refresh()
-                sessionStore.setAccessToken(refreshed.tokens.accessToken)
-            } catch (e: HttpException) {
-                if (e.code() == 401) throw e
-            } catch (_: Exception) {
-                // Network-only refresh failures should not log the user out
-                // while a still-valid access token can confirm the session.
+        if (!hasAccessToken && hasRefreshCookie) {
+            when (sessionRefreshCoordinator.refreshAccessToken()) {
+                is SessionRefreshResult.Success -> Unit
+                SessionRefreshResult.Rejected -> throw AuthenticationLostException()
+                is SessionRefreshResult.Unavailable -> throw IllegalStateException(
+                    "Unable to refresh session. Please check your connection.",
+                )
             }
         }
 
@@ -616,11 +617,22 @@ class RssRepository @Inject constructor(
 
     private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> {
         val result = runtime.safeCall(block)
-        if (result is AppResult.Error && result.cause is HttpException && result.cause.code() == 401) {
+        if (result is AppResult.Error && isAuthenticationLost(result)) {
             handleAuthenticationLost()
             return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
         }
         return result
+    }
+
+    private fun isAuthenticationLost(result: AppResult.Error): Boolean {
+        if (result.cause is AuthenticationLostException) {
+            return true
+        }
+        val http = result.cause as? HttpException ?: return false
+        if (http.code() != 401) {
+            return false
+        }
+        return result.message == AUTH_LOST_MESSAGE || sessionRefreshCoordinator.hasRecentRefreshRejection()
     }
 
     private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> = runtime.safeCall(block)
@@ -713,3 +725,7 @@ class RssRepository @Inject constructor(
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
     }
 }
+
+private class AuthenticationLostException : IllegalStateException(
+    "Authentication was lost. Please sign in again.",
+)

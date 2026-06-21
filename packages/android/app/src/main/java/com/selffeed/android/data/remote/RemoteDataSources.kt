@@ -17,7 +17,6 @@ import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.RegisterRequest
 import com.selffeed.android.network.RegistrationStatusResponse
-import com.selffeed.android.network.RefreshData
 import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.SyncResponse
@@ -38,7 +37,6 @@ class AuthRemoteDataSource @Inject constructor(
     suspend fun registrationStatus(): RegistrationStatusResponse = api.registrationStatus().data
     suspend fun login(email: String, password: String): AuthResponse = api.login(LoginRequest(email, password)).data
     suspend fun register(email: String, password: String): AuthResponse = api.register(RegisterRequest(email, password)).data
-    suspend fun refresh(): RefreshData = api.refresh().data
     suspend fun logout(): Boolean = api.logout().data.success
     suspend fun me(): User = api.me().data
 }

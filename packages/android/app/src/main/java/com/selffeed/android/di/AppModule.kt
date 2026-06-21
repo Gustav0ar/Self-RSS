@@ -28,6 +28,7 @@ import com.selffeed.android.network.AndroidNetworkMonitor
 import com.selffeed.android.network.NetworkModule
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
+import com.selffeed.android.network.SessionRefreshCoordinator
 import com.squareup.moshi.Moshi
 import dagger.Binds
 import dagger.Module
@@ -53,11 +54,22 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideSessionRefreshCoordinator(
+        sessionStore: SessionStore,
+        moshi: Moshi,
+    ): SessionRefreshCoordinator = SessionRefreshCoordinator(sessionStore, moshi)
+
+    @Provides
+    @Singleton
     fun provideOkHttpClient(
         @ApplicationContext context: Context,
         sessionStore: SessionStore,
-        moshi: Moshi,
-    ): OkHttpClient = NetworkModule.provideOkHttpClient(context, sessionStore, moshi)
+        sessionRefreshCoordinator: SessionRefreshCoordinator,
+    ): OkHttpClient = NetworkModule.provideOkHttpClient(
+        context,
+        sessionStore,
+        sessionRefreshCoordinator,
+    )
 
     @Provides
     @Singleton

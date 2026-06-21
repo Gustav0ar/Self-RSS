@@ -21,6 +21,8 @@ import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.MarkReadResponse
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
+import com.selffeed.android.network.SessionRefreshCoordinator
+import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.SyncResponse
 import com.squareup.moshi.Moshi
 import io.mockk.coEvery
@@ -29,7 +31,9 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -39,6 +43,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import retrofit2.HttpException
+import retrofit2.Response
 
 /**
  * Focused unit tests for the [RssRepository] behavior that doesn't depend on
@@ -51,6 +57,7 @@ class RssRepositoryTest {
     private lateinit var context: Context
     private lateinit var api: RssApi
     private lateinit var sessionStore: SessionStore
+    private lateinit var sessionRefreshCoordinator: SessionRefreshCoordinator
     private lateinit var cacheStore: OfflineCacheStore
     private lateinit var localStore: LocalStore
     private lateinit var offlineReadStore: OfflineReadStore
@@ -64,6 +71,7 @@ class RssRepositoryTest {
         context = ApplicationProvider.getApplicationContext()
         api = mockk(relaxed = true)
         sessionStore = mockk(relaxed = true)
+        sessionRefreshCoordinator = mockk(relaxed = true)
         // The production Moshi includes the reflective
         // KotlinJsonAdapterFactory as a fallback for DTOs whose generated
         // adapters aren't on the test classpath. The test suite uses the
@@ -83,6 +91,7 @@ class RssRepositoryTest {
             searchRemote = SearchRemoteDataSource(api),
             settingsRemote = SettingsRemoteDataSource(api),
             sessionStore = sessionStore,
+            sessionRefreshCoordinator = sessionRefreshCoordinator,
             okHttpClient = OkHttpClient(),
             moshi = moshi,
             localStore = localStore,
@@ -332,13 +341,84 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `restoreSession uses saved access token before refreshing`() = runTest {
+        every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
+        every { sessionStore.getAccessToken() } returns "access-token"
+        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
+
+        val result = repository.restoreSession()
+
+        assertTrue(result is AppResult.Success)
+        io.mockk.verify(exactly = 0) { sessionRefreshCoordinator.refreshAccessToken() }
+    }
+
+    @Test
+    fun `restoreSession refreshes through the shared coordinator when only a refresh cookie exists`() = runTest {
+        every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
+        every { sessionStore.getAccessToken() } returns null
+        every { sessionRefreshCoordinator.refreshAccessToken() } returns
+            SessionRefreshResult.Success("new-access-token")
+        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
+
+        val result = repository.restoreSession()
+
+        assertTrue(result is AppResult.Success)
+        io.mockk.verify(exactly = 1) { sessionRefreshCoordinator.refreshAccessToken() }
+        coVerify(exactly = 1) { api.me() }
+    }
+
+    @Test
+    fun `unauthorized protected call without auth lost signal does not clear the local session`() = runTest {
+        coEvery { api.me() } throws httpError(
+            code = 401,
+            message = "Invalid or expired token",
+        )
+        every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns false
+
+        val result = repository.me()
+
+        assertTrue(result is AppResult.Error)
+        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+    }
+
+    @Test
+    fun `auth lost response clears the local session and emits auth lost`() = runTest {
+        coEvery { api.me() } throws httpError(
+            code = 401,
+            message = "Authentication was lost. Please sign in again.",
+        )
+
+        val result = repository.me()
+
+        assertTrue(result is AppResult.Error)
+        assertEquals("Authentication was lost. Please sign in again.", (result as AppResult.Error).message)
+        io.mockk.verify(exactly = 1) { sessionStore.clear() }
+    }
+
+    @Test
     fun `isLoggedIn mirrors the access token presence`() {
+        every { sessionStore.getRefreshCookie() } returns null
         every { sessionStore.getAccessToken() } returns null
         assertEquals(false, repository.isLoggedIn())
         every { sessionStore.getAccessToken() } returns "token"
         assertEquals(true, repository.isLoggedIn())
         every { sessionStore.getAccessToken() } returns ""
         assertEquals(false, repository.isLoggedIn())
+    }
+
+    private fun sampleUser(): com.selffeed.android.network.User =
+        com.selffeed.android.network.User("u", "x@x.com", "user", true)
+
+    private fun httpError(code: Int, message: String): HttpException {
+        val body = """
+            {
+              "error": {
+                "code": "UNAUTHORIZED",
+                "message": "$message"
+              }
+            }
+        """.trimIndent().toResponseBody("application/json".toMediaType())
+        return HttpException(Response.error<Any>(code, body))
     }
 
     private fun sampleArticleDetail(id: String, isRead: Boolean): ArticleDetail = ArticleDetail(

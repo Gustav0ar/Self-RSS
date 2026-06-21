@@ -91,6 +91,21 @@ class AuthViewModelTest {
     }
 
     @Test
+    fun `bootstrap with transient saved session restore failure keeps authenticated`() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.restoreSession() } returns AppResult.Error(
+            "Unable to refresh session. Please check your connection.",
+        )
+        val viewModel = AuthViewModel(repository)
+        viewModel.bootstrap()
+        val state = viewModel.state.value
+        assertFalse(state.loading)
+        assertTrue(state.isAuthenticated)
+        assertNull(state.errorMessage)
+        assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
+    }
+
+    @Test
     fun `bootstrap with registration API failure disables registration`() = runTest {
         coEvery { repository.registrationStatus() } returns AppResult.Error("status unavailable")
         val viewModel = AuthViewModel(repository)
