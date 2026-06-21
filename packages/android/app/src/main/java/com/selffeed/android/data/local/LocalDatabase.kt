@@ -188,6 +188,9 @@ interface LocalStoreDao {
     @Query("UPDATE articles SET isRead = :read WHERE id = :articleId")
     suspend fun updateArticleReadState(articleId: String, read: Boolean)
 
+    @Query("UPDATE articles SET isRead = 1 WHERE feedId IN (:feedIds)")
+    suspend fun markArticlesReadByFeeds(feedIds: List<String>)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticlePage(page: ArticlePageEntity)
 

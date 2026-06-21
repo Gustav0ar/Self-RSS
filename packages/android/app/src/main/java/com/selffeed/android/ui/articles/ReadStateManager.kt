@@ -50,7 +50,6 @@ class ReadStateManager @Inject constructor(
     // Internal state holders
     private var currentFeedId: String? = null
     private var currentCategoryId: String? = null
-    private var hideRead: Boolean = false
     private var items: List<ArticleListItem> = emptyList()
     private var selectedArticle: ArticleDetail? = null
 
@@ -63,9 +62,7 @@ class ReadStateManager @Inject constructor(
         currentCategoryId = categoryId
     }
 
-    fun updateFilter(hideRead: Boolean) {
-        this.hideRead = hideRead
-    }
+    fun updateFilter(@Suppress("UNUSED_PARAMETER") hideRead: Boolean) = Unit
 
     fun updateItems(items: List<ArticleListItem>) {
         this.items = items
@@ -81,27 +78,46 @@ class ReadStateManager @Inject constructor(
     fun markRead(
         articleId: String,
         read: Boolean,
+        source: ReadStateChangeSource,
         onOptimisticUpdate: (String, String?, Boolean) -> Unit,
         onError: (String, Boolean?, ArticleDetail?) -> Unit,
         onConfirm: (String, String?, Boolean, Boolean?) -> Unit,
     ) {
-        if (!read) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
+        if (source.isAutomatic && read && articleId in manuallyUnread) {
+            return
+        }
+
+        val wasManuallyUnread = articleId in manuallyUnread
+        if (source == ReadStateChangeSource.Manual) {
+            if (!read) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
+        }
 
         scope?.launch {
             val previousReadState = currentArticleReadState(articleId)
             val previousArticle = selectedArticle?.takeIf { it.id == articleId }
             val feedId = currentFeedId(articleId)
+            val previousItems = items
+            val previousSelectedArticle = selectedArticle
 
             // Apply optimistic update
+            items = items.withReadState(articleId, read)
+            selectedArticle = selectedArticle?.withReadState(articleId, read)
             onOptimisticUpdate(articleId, feedId, read)
 
-            when (val result = repository.markRead(articleId, read)) {
+            when (val result = repository.markRead(articleId, read, source.apiValue)) {
                 is AppResult.Success -> {
                     val confirmed = result.data
                     rememberArticleReadState(articleId, confirmed)
+                    repository.updateCachedReadState(articleId, confirmed)
                     onConfirm(articleId, feedId, confirmed, previousReadState)
                 }
                 is AppResult.Error -> {
+                    if (source == ReadStateChangeSource.Manual) {
+                        if (wasManuallyUnread) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
+                    }
+                    items = previousItems
+                    selectedArticle = previousSelectedArticle
+                    previousReadState?.let { rememberArticleReadState(articleId, it) }
                     // Revert optimistic update
                     onError(articleId, previousReadState, previousArticle)
                 }
@@ -179,15 +195,12 @@ class ReadStateManager @Inject constructor(
     }
 
     private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
-        repository.invalidateReadStateCaches(event.articleId)
         val previous = currentArticleReadState(event.articleId)
+        repository.updateCachedReadState(event.articleId, event.isRead)
+        repository.invalidateReadStateCaches(event.articleId)
         rememberArticleReadState(event.articleId, event.isRead)
-
-        val shouldReload = !event.isRead && hideRead && isFeedVisible(event.feedId) &&
-            items.none { it.id == event.articleId }
-
-        items = items.map { if (it.id == event.articleId) it.copy(isRead = event.isRead) else it }
-        selectedArticle = selectedArticle?.let { if (it.id == event.articleId) it.copy(isRead = event.isRead) else it }
+        items = items.withReadState(event.articleId, event.isRead)
+        selectedArticle = selectedArticle?.withReadState(event.articleId, event.isRead)
 
         val changed = previous?.let { it != event.isRead } ?: true
         val unreadDelta = if (!changed) 0 else if (event.isRead) -1 else 1
@@ -200,34 +213,26 @@ class ReadStateManager @Inject constructor(
                 readDelta = if (!changed) 0 else if (event.isRead) 1 else -1,
             ),
         )
-
-        if (shouldReload) {
-            _events.emit(
-                ArticleFeatureEvent.ScopeMarkedRead(
-                    feedId = currentFeedId,
-                    categoryId = currentCategoryId,
-                    affectedFeedIds = emptySet(),
-                    markedCount = 0,
-                ),
-            )
-        }
     }
 
     private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
         repository.invalidateReadStateCaches()
         val feedIds = event.feedIds.toSet()
+        repository.markCachedArticlesReadByFeeds(feedIds)
 
         items = items.map { article ->
-            if (article.feedId in feedIds) {
+            if (articleMatchesAffectedFeeds(article, feedIds)) {
                 rememberArticleReadState(article.id, true)
+                repository.updateCachedReadState(article.id, true)
                 article.copy(isRead = true)
             } else {
                 article
             }
         }
         selectedArticle = selectedArticle?.let { article ->
-            if (article.feedId in feedIds) {
+            if (articleMatchesAffectedFeeds(article, feedIds)) {
                 rememberArticleReadState(article.id, true)
+                repository.updateCachedReadState(article.id, true)
                 article.copy(isRead = true)
             } else {
                 article
@@ -252,29 +257,13 @@ class ReadStateManager @Inject constructor(
         selectedArticle?.takeIf { it.id == articleId }?.feedId
             ?: items.firstOrNull { it.id == articleId }?.feedId
 
-    private fun isFeedVisible(feedId: String): Boolean =
-        currentFeedId == null || currentFeedId == feedId
-
     private fun articleMatchesAffectedFeeds(article: ArticleListItem, affectedFeedIds: Set<String>): Boolean =
         affectedFeedIds.isEmpty() || article.feedId in affectedFeedIds
 
     private fun articleMatchesAffectedFeeds(article: ArticleDetail, affectedFeedIds: Set<String>): Boolean =
         affectedFeedIds.isEmpty() || article.feedId in affectedFeedIds
 
-    fun rememberArticlesReadState(articles: List<ArticleListItem>, affectedFeedIds: Set<String>) {
-        articles
-            .filter { articleMatchesAffectedFeeds(it, affectedFeedIds) }
-            .forEach { rememberArticleReadState(it.id, true) }
-    }
-
-    fun rememberSelectedArticleReadState(affectedFeedIds: Set<String>) {
-        selectedArticle
-            ?.takeIf { articleMatchesAffectedFeeds(it, affectedFeedIds) }
-            ?.let { rememberArticleReadState(it.id, true) }
-    }
-
     private fun rememberArticleReadState(articleId: String, isRead: Boolean) {
-        if (articleId in manuallyUnread && isRead) return
         readStateStore.remember(articleId, isRead)
     }
 
@@ -283,3 +272,18 @@ class ReadStateManager @Inject constructor(
         const val READ_STATE_SYNC_RESTART_DELAY_MS = 10_000L
     }
 }
+
+enum class ReadStateChangeSource(val apiValue: String) {
+    Manual("manual"),
+    AutoOpen("auto_open"),
+    ;
+
+    val isAutomatic: Boolean
+        get() = this != Manual
+}
+
+private fun List<ArticleListItem>.withReadState(articleId: String, isRead: Boolean): List<ArticleListItem> =
+    map { article -> if (article.id == articleId) article.copy(isRead = isRead) else article }
+
+private fun ArticleDetail.withReadState(articleId: String, isRead: Boolean): ArticleDetail =
+    if (id == articleId) copy(isRead = isRead) else this

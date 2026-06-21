@@ -2,6 +2,9 @@ package com.selffeed.android.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
@@ -49,6 +52,22 @@ class MainActivityHiltUiTest {
     }
 
     @Test
+    fun readerAutoMarksReadAndRetainsRowInUnreadOnlyList() {
+        repository.reset(authenticated = true, hideRead = true)
+        launchActivity()
+
+        waitForText("Injected Article")
+        composeRule.onNodeWithText("Injected Article").performClick()
+
+        waitForContentDescription("Mark as unread")
+        composeRule.onNodeWithContentDescription("Mark as unread").assertIsDisplayed()
+
+        composeRule.onNodeWithContentDescription("Back to list").performClick()
+        waitForContentDescription("Open feeds")
+        composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+    }
+
+    @Test
     fun loginFlow_acceptsHostOnlyServerAndOpensWorkspace() {
         repository.reset(authenticated = false)
         launchActivity()
@@ -67,5 +86,17 @@ class MainActivityHiltUiTest {
 
     private fun launchActivity() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun waitForContentDescription(contentDescription: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(contentDescription).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 }

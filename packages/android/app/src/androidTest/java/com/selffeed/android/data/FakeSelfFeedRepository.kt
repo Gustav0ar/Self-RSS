@@ -31,6 +31,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private val online = MutableStateFlow(true)
     private var apiBaseUrl = "10.0.2.2:3000"
     private var authenticated = true
+    private var preferences = defaultPreferences
+    private val articleReadStates = mutableMapOf<String, Boolean>()
     private val fakeArticles = listOf(
         ArticleListItem(
             id = "article-1",
@@ -51,9 +53,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(apiBaseUrl)
     }
 
-    fun reset(authenticated: Boolean = true) {
+    fun reset(authenticated: Boolean = true, hideRead: Boolean = false) {
         this.authenticated = authenticated
         apiBaseUrl = "10.0.2.2:3000"
+        preferences = defaultPreferences.copy(hideRead = hideRead)
+        articleReadStates.clear()
     }
 
     override suspend fun login(email: String, password: String): AppResult<User> {
@@ -85,7 +89,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 slug = "injected-category",
                 sortOrder = 0,
                 feedCount = 1,
-                unreadCount = 1,
+                unreadCount = unreadCount(),
             ),
         ),
     )
@@ -110,7 +114,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 feedUrl = "https://example.com/feed.xml",
                 pollingIntervalMinutes = 60,
                 syncStatus = "idle",
-                unreadCount = 1,
+                unreadCount = unreadCount(),
             ),
         ),
     )
@@ -140,14 +144,19 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         sort: String?,
         limit: Int?,
         cursor: String?,
-    ): AppResult<ApiListResponse<ArticleListItem>> = AppResult.Success(
-        ApiListResponse(data = fakeArticles, cursor = null, hasMore = false),
-    )
+    ): AppResult<ApiListResponse<ArticleListItem>> =
+        AppResult.Success(ApiListResponse(data = currentArticles(unreadOnly), cursor = null, hasMore = false))
 
     override fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,
-    ): Flow<PagingData<ArticleListItem>> = flowOf(PagingData.from(fakeArticles))
+    ): Flow<PagingData<ArticleListItem>> {
+        val overrides = readStateOverrides()
+        val articles = currentArticles(query.unreadOnly).map { article ->
+            overrides[article.id]?.let { article.copy(isRead = it) } ?: article
+        }
+        return flowOf(PagingData.from(articles))
+    }
 
     override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> =
         AppResult.Success(fakeArticleDetail(articleId))
@@ -163,22 +172,54 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean): AppResult<EnrichArticleResponse> =
         AppResult.Success(EnrichArticleResponse(success = true))
 
-    override suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> = AppResult.Success(read)
-    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> =
-        AppResult.Success(MarkAllReadResponse(markedCount = 1, feedIds = listOf("feed-1")))
+    override suspend fun markRead(articleId: String, read: Boolean, source: String): AppResult<Boolean> {
+        articleReadStates[articleId] = read
+        return AppResult.Success(read)
+    }
+    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> {
+        val unreadBefore = unreadCount()
+        fakeArticles.forEach { articleReadStates[it.id] = true }
+        return AppResult.Success(MarkAllReadResponse(markedCount = unreadBefore, feedIds = listOf("feed-1")))
+    }
     override fun clientId(): String = "android-test-client"
     override fun readStateEvents(): Flow<ReadStateSyncEvent> = emptyFlow()
     override suspend fun invalidateReadStateCaches(articleId: String?) = Unit
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
+        articleReadStates[articleId] = read
+    }
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
+        fakeArticles
+            .filter { feedIds.isEmpty() || it.feedId in feedIds }
+            .forEach { articleReadStates[it.id] = true }
+    }
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =
-        AppResult.Success(ApiListResponse(data = fakeArticles, cursor = null, hasMore = false))
+        AppResult.Success(ApiListResponse(data = currentArticles(), cursor = null, hasMore = false))
 
-    override suspend fun preferences(): AppResult<UserPreferences> = AppResult.Success(fakePreferences)
-    override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> =
-        AppResult.Success(fakePreferences.copy(hideRead = request.hideRead ?: fakePreferences.hideRead))
+    override suspend fun preferences(): AppResult<UserPreferences> = AppResult.Success(preferences)
+    override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> {
+        preferences = preferences.copy(
+            theme = request.theme ?: preferences.theme,
+            fontFamily = request.fontFamily ?: preferences.fontFamily,
+            textSize = request.textSize ?: preferences.textSize,
+            density = request.density ?: preferences.density,
+            defaultSort = request.defaultSort ?: preferences.defaultSort,
+            hideRead = request.hideRead ?: preferences.hideRead,
+            keyboardShortcutsEnabled = request.keyboardShortcutsEnabled ?: preferences.keyboardShortcutsEnabled,
+            autoMarkReadMode = request.autoMarkReadMode ?: preferences.autoMarkReadMode,
+        )
+        return AppResult.Success(preferences)
+    }
 
     override suspend fun stats(): AppResult<StatsResponse> =
-        AppResult.Success(StatsResponse(totalUnread = 1, totalRead = 0, totalFeeds = 1, totalCategories = 1))
+        AppResult.Success(
+            StatsResponse(
+                totalUnread = unreadCount(),
+                totalRead = fakeArticles.size - unreadCount(),
+                totalFeeds = 1,
+                totalCategories = 1,
+            ),
+        )
 
     override suspend fun authSessions(): AppResult<List<AuthSession>> = AppResult.Success(listOf(fakeSession))
 
@@ -196,6 +237,13 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun observeOnline(): Flow<Boolean> = online
     override fun trimMemoryCaches() = Unit
 
+    private fun currentArticles(unreadOnly: Boolean? = null): List<ArticleListItem> =
+        fakeArticles
+            .map { article -> article.copy(isRead = articleReadStates[article.id] ?: article.isRead) }
+            .filter { article -> unreadOnly != true || !article.isRead }
+
+    private fun unreadCount(): Int = fakeArticles.count { articleReadStates[it.id] != true }
+
     private fun fakeArticleDetail(articleId: String) = ArticleDetail(
         id = articleId,
         feedId = "feed-1",
@@ -206,7 +254,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         hash = "hash-$articleId",
         feedTitle = "Injected Feed",
         media = emptyList(),
-        isRead = false,
+        isRead = articleReadStates[articleId] ?: false,
         isEnriched = false,
     )
 
@@ -220,7 +268,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             lastSeenAt = "2026-06-21T00:00:00.000Z",
             current = true,
         )
-        val fakePreferences = UserPreferences(
+        val defaultPreferences = UserPreferences(
             theme = "system",
             fontFamily = "system",
             textSize = 16,

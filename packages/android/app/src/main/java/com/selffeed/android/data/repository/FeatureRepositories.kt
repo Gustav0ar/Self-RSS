@@ -73,7 +73,7 @@ class FeedRepositoryImpl @Inject constructor(
 }
 
 class ArticleRepositoryImpl @Inject constructor(
-    private val source: SelfFeedRepository,
+    private val delegate: SelfFeedRepository,
 ) : ArticleRepository {
     override suspend fun articles(
         feedId: String?,
@@ -83,34 +83,39 @@ class ArticleRepositoryImpl @Inject constructor(
         limit: Int?,
         cursor: String?,
     ): AppResult<ApiListResponse<ArticleListItem>> =
-        source.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
+        delegate.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
 
     override fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,
-    ): Flow<PagingData<ArticleListItem>> = source.articlePagingData(query, readStateOverrides)
+    ): Flow<PagingData<ArticleListItem>> = delegate.articlePagingData(query, readStateOverrides)
 
     override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> =
-        source.article(articleId, forceRefresh)
+        delegate.article(articleId, forceRefresh)
 
-    override fun cachedArticleDetail(articleId: String): ArticleDetail? = source.cachedArticleDetail(articleId)
-    override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> = source.prefetchArticle(articleId)
+    override fun cachedArticleDetail(articleId: String): ArticleDetail? = delegate.cachedArticleDetail(articleId)
+    override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> = delegate.prefetchArticle(articleId)
     override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> =
-        source.refreshArticleDetail(articleId)
+        delegate.refreshArticleDetail(articleId)
 
-    override fun prefetchHeroImages(imageUrls: Iterable<String?>) = source.prefetchHeroImages(imageUrls)
+    override fun prefetchHeroImages(imageUrls: Iterable<String?>) = delegate.prefetchHeroImages(imageUrls)
     override suspend fun enrichArticle(
         articleId: String,
         invalidateCaches: Boolean,
-    ): AppResult<EnrichArticleResponse> = source.enrichArticle(articleId, invalidateCaches)
+    ): AppResult<EnrichArticleResponse> = delegate.enrichArticle(articleId, invalidateCaches)
 
-    override suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> = source.markRead(articleId, read)
+    override suspend fun markRead(articleId: String, read: Boolean, source: String): AppResult<Boolean> =
+        delegate.markRead(articleId, read, source)
     override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> =
-        source.markAllRead(feedId, categoryId)
+        delegate.markAllRead(feedId, categoryId)
 
-    override fun clientId(): String = source.clientId()
-    override fun readStateEvents(): Flow<ReadStateSyncEvent> = source.readStateEvents()
-    override suspend fun invalidateReadStateCaches(articleId: String?) = source.invalidateReadStateCaches(articleId)
+    override fun clientId(): String = delegate.clientId()
+    override fun readStateEvents(): Flow<ReadStateSyncEvent> = delegate.readStateEvents()
+    override suspend fun invalidateReadStateCaches(articleId: String?) = delegate.invalidateReadStateCaches(articleId)
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean) =
+        delegate.updateCachedReadState(articleId, read)
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) =
+        delegate.markCachedArticlesReadByFeeds(feedIds)
 }
 
 class SearchRepositoryImpl @Inject constructor(

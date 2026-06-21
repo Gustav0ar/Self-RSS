@@ -145,6 +145,18 @@ class LocalStore(
         notifyInvalidation(TABLE_ARTICLES)
     }
 
+    suspend fun updateArticleReadState(articleId: String, read: Boolean) {
+        dao.updateArticleReadState(articleId, read)
+        notifyInvalidation(TABLE_ARTICLES)
+    }
+
+    suspend fun markArticlesReadByFeeds(feedIds: Collection<String>) {
+        val ids = feedIds.distinct()
+        if (ids.isEmpty()) return
+        dao.markArticlesReadByFeeds(ids)
+        notifyInvalidation(TABLE_ARTICLES)
+    }
+
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =
         dao.readPendingReadStateMutations()
 

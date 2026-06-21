@@ -152,7 +152,6 @@ fun SelfFeedAppRoute(
                     feedsViewModel.loadCategories()
                     feedsViewModel.loadFeeds()
                     settingsViewModel.loadStats()
-                    articlesViewModel.refreshArticles()
                 },
                 onHideReadChanged = {
                     settingsViewModel.updateHideRead(it)

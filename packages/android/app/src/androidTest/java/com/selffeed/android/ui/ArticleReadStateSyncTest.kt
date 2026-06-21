@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +45,7 @@ class ArticleReadStateSyncTest {
         ArticleDetail(
             id = id,
             feedId = "feed-1",
+            guid = id,
             feedTitle = "Test Feed",
             title = title,
             excerpt = "Test excerpt",
@@ -53,6 +55,7 @@ class ArticleReadStateSyncTest {
             canonicalUrl = "https://example.com/article/$id",
             feedSiteUrl = "https://example.com",
             publishedAt = "2024-01-01T00:00:00Z",
+            hash = "hash-$id",
             media = emptyList(),
             isRead = isRead,
         )
@@ -302,23 +305,21 @@ class ArticleReadStateSyncTest {
     @Test
     fun readStateOverrides_persistAcrossNavigation() {
         // Test that read state overrides persist when navigating back to list
-        var readStateOverrides = mutableMapOf<String, Boolean>()
-
+        var inReaderObserved = false
         val articles = listOf(
             sampleArticleListItem("article-1", "First Article", isRead = false),
             sampleArticleListItem("article-2", "Second Article", isRead = false),
         )
         val selectedArticle = sampleArticleDetail("article-1", "First Article", isRead = true)
 
-        // Articles with read states (simulating what SelfFeedApp does)
-        val articlesWithOverrides = remember(articles, readStateOverrides) {
-            articles.map { article ->
-                readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
-            }
-        }
-
         composeRule.setContent {
             var inReader by remember { mutableStateOf(false) }
+            val readStateOverrides = remember {
+                mutableStateMapOf("article-1" to true)
+            }
+            val articlesWithOverrides = articles.map { article ->
+                readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
+            }
 
             SelfFeedTheme {
                 if (inReader) {
@@ -326,7 +327,10 @@ class ArticleReadStateSyncTest {
                         articles = articlesWithOverrides,
                         selectedArticle = selectedArticle,
                         onOpenOriginal = {},
-                        onBackToList = { inReader = false },
+                        onBackToList = {
+                            inReader = false
+                            inReaderObserved = false
+                        },
                         onArticleSelected = { newId ->
                             // Mark the new article as read when navigating
                             readStateOverrides[newId] = true
@@ -344,7 +348,10 @@ class ArticleReadStateSyncTest {
                         actions = ArticleTabActions(
                             onRefresh = {},
                             onLoadMore = {},
-                            onOpenArticle = { inReader = true },
+                            onOpenArticle = {
+                                inReader = true
+                                inReaderObserved = true
+                            },
                             onToggleRead = { _, _ -> },
                             onArticleSnapshot = {},
                         ),
@@ -359,17 +366,23 @@ class ArticleReadStateSyncTest {
 
         // Click to open reader
         composeRule.onNodeWithText("First Article").performClick()
-        composeRule.runOnIdle { assertTrue(inReader) }
+        composeRule.runOnIdle { assertTrue(inReaderObserved) }
 
         // Go back to list
-        composeRule.onNodeWithText("Second Article").assertIsDisplayed() // Still visible
+        composeRule.runOnUiThread {
+            composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { assertTrue(!inReaderObserved) }
+        composeRule.onNodeWithText("First Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Second Article").assertIsDisplayed()
     }
 
     @Test
     fun readStateOverridesUpdateImmediately() {
         // Test that read state overrides update immediately without delay
         // This simulates the behavior when a user opens an article and it gets marked as read
-        var readStateOverrides = mutableMapOf<String, Boolean>()
+        val observedReadStates = mutableMapOf<String, Boolean>()
         var articleClicked = false
 
         val articles = listOf(
@@ -379,10 +392,9 @@ class ArticleReadStateSyncTest {
 
         composeRule.setContent {
             // Track the overrides - when updated, the articles list should re-render
-            val articlesWithOverrides = remember(articles, readStateOverrides) {
-                articles.map { article ->
-                    readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
-                }
+            val readStateOverrides = remember { mutableStateMapOf<String, Boolean>() }
+            val articlesWithOverrides = articles.map { article ->
+                readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
             }
 
             SelfFeedTheme {
@@ -400,6 +412,7 @@ class ArticleReadStateSyncTest {
                         onOpenArticle = { articleId ->
                             // Simulate immediate read state update (as in applyArticleReadStateOptimistic)
                             readStateOverrides[articleId] = true
+                            observedReadStates[articleId] = true
                             articleClicked = true
                         },
                         onToggleRead = { _, _ -> },
@@ -418,15 +431,14 @@ class ArticleReadStateSyncTest {
         composeRule.runOnIdle {
             assertTrue("Article should be clicked", articleClicked)
             // The read state override should be updated immediately
-            assertEquals(true, readStateOverrides["article-1"])
+            assertEquals(true, observedReadStates["article-1"])
         }
     }
 
     @Test
     fun articleReadStateVisibleImmediatelyAfterOpeningReader() {
         // Tests the complete flow: open article -> marked as read -> back to list shows greyed out
-        var readStateOverrides = mutableMapOf<String, Boolean>()
-        var isInReader = false
+        val observedReadStates = mutableMapOf<String, Boolean>()
         var selectedArticleId: String? = null
 
         val articles = listOf(
@@ -436,10 +448,10 @@ class ArticleReadStateSyncTest {
         val selectedArticle = sampleArticleDetail("article-1", "First Article", isRead = true)
 
         composeRule.setContent {
-            val articlesWithOverrides = remember(articles, readStateOverrides) {
-                articles.map { article ->
-                    readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
-                }
+            var isInReader by remember { mutableStateOf(false) }
+            val readStateOverrides = remember { mutableStateMapOf<String, Boolean>() }
+            val articlesWithOverrides = articles.map { article ->
+                readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
             }
 
             SelfFeedTheme {
@@ -452,6 +464,7 @@ class ArticleReadStateSyncTest {
                         onArticleSelected = { newId ->
                             // Mark as read immediately
                             readStateOverrides[newId] = true
+                            observedReadStates[newId] = true
                         },
                     )
                 } else {
@@ -469,6 +482,7 @@ class ArticleReadStateSyncTest {
                             onOpenArticle = { id ->
                                 selectedArticleId = id
                                 readStateOverrides[id] = true
+                                observedReadStates[id] = true
                                 isInReader = true
                             },
                             onToggleRead = { _, _ -> },
@@ -482,9 +496,8 @@ class ArticleReadStateSyncTest {
         // Click to open article
         composeRule.onNodeWithText("First Article").performClick()
         composeRule.runOnIdle {
-            assertTrue(isInReader)
             // Read state should be updated immediately
-            assertEquals(true, readStateOverrides["article-1"])
+            assertEquals(true, observedReadStates["article-1"])
         }
     }
 }

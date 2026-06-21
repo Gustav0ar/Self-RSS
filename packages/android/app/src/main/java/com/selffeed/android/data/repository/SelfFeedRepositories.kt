@@ -76,11 +76,13 @@ interface ArticleRepository {
     suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail>
     fun prefetchHeroImages(imageUrls: Iterable<String?>)
     suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean = true): AppResult<EnrichArticleResponse>
-    suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean>
+    suspend fun markRead(articleId: String, read: Boolean, source: String = "manual"): AppResult<Boolean>
     suspend fun markAllRead(feedId: String? = null, categoryId: String? = null): AppResult<MarkAllReadResponse>
     fun clientId(): String
     fun readStateEvents(): Flow<ReadStateSyncEvent>
     suspend fun invalidateReadStateCaches(articleId: String? = null)
+    suspend fun updateCachedReadState(articleId: String, read: Boolean)
+    suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>)
 }
 
 interface SearchRepository {

@@ -502,7 +502,7 @@ class RssRepository @Inject constructor(
      * The cached entry is rolled back to its previous state if the request
      * fails.
      */
-    override suspend fun markRead(articleId: String, read: Boolean) = safeCall {
+    override suspend fun markRead(articleId: String, read: Boolean, source: String) = safeCall {
         val key = "article:$articleId"
         val previous = runtime.getCached<ArticleDetail>(key)
         // Optimistic write — visible to the reader screen and the next
@@ -516,7 +516,8 @@ class RssRepository @Inject constructor(
             return@safeCall read
         }
         try {
-            articleRemote.markRead(articleId, read).let { read }.also {
+            articleRemote.markRead(articleId, read, source).let { read }.also {
+                localStore.updateArticleReadState(articleId, read)
                 // The detail is now authoritative; refresh the cached body.
                 invalidateArticleDetailCache(articleId)
                 runtime.invalidateByPrefix("stats")
@@ -529,9 +530,16 @@ class RssRepository @Inject constructor(
         }
     }
 
+    suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> =
+        markRead(articleId, read, source = "manual")
+
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall {
-        articleRemote.markAllRead(feedId, categoryId).also {
-            invalidateFeedAndArticleCaches()
+        articleRemote.markAllRead(feedId, categoryId).also { response ->
+            localStore.markArticlesReadByFeeds(response.feedIds)
+            runtime.invalidateByPrefix("feeds")
+            runtime.invalidateByPrefix("categories")
+            runtime.invalidateByPrefix("stats")
+            runtime.invalidateByPrefix("search")
         }
     }
 
@@ -663,7 +671,22 @@ class RssRepository @Inject constructor(
             runtime.invalidateByPrefix("article:$articleId")
             offlineReadStore.clearArticleDetail(articleId)
         }
-        invalidateFeedAndArticleCaches()
+        runtime.invalidateByPrefix("feeds")
+        runtime.invalidateByPrefix("categories")
+        runtime.invalidateByPrefix("stats")
+    }
+
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
+        val key = "article:$articleId"
+        runtime.getCached<ArticleDetail>(key)?.let { cached ->
+            runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = read))
+        }
+        localStore.updateArticleReadState(articleId, read)
+    }
+
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
+        localStore.markArticlesReadByFeeds(feedIds)
+        runtime.invalidateByPrefix("search")
     }
 
     private suspend fun clearCacheAndDatabase() {

@@ -17,6 +17,7 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.MarkReadResponse
 import com.selffeed.android.network.NetworkMonitor
@@ -183,6 +184,74 @@ class RssRepositoryTest {
         // Optimistic update followed by detail cache invalidation means the
         // server's truth is what we'll read on the next fetch.
         coVerify { api.markRead(articleId, MarkReadRequest(read = true)) }
+    }
+
+    @Test
+    fun `automatic markRead sends auto source to the API`() = runTest {
+        val articleId = "article-auto"
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery {
+            api.markRead(articleId, MarkReadRequest(read = true, source = "auto_open"))
+        } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.MarkReadResponse(success = true),
+        )
+
+        val result = repository.markRead(articleId, true, source = "auto_open")
+
+        assertTrue(result is AppResult.Success)
+        coVerify { api.markRead(articleId, MarkReadRequest(read = true, source = "auto_open")) }
+    }
+
+    @Test
+    fun `read state cache invalidation keeps retained article query rows`() = runTest {
+        val articleId = "article-retained"
+        val queryKey = ArticlePageQuery(unreadOnly = true).remoteKey()
+        localStore.writeArticleRemotePage(
+            queryKey = queryKey,
+            payload = ApiListResponse(data = listOf(sampleArticle(articleId)), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+
+        repository.updateCachedReadState(articleId, read = true)
+        repository.invalidateReadStateCaches(articleId)
+
+        val page = localStore.articlePagingSource(queryKey).load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertEquals(listOf(articleId), page.data.map { it.id })
+        assertTrue(page.data.first().isRead)
+    }
+
+    @Test
+    fun `markAllRead marks cached feed rows read without clearing the paging query`() = runTest {
+        val queryKey = ArticlePageQuery(feedId = "f-local", unreadOnly = true).remoteKey()
+        localStore.writeArticleRemotePage(
+            queryKey = queryKey,
+            payload = ApiListResponse(data = listOf(sampleArticle("article-bulk-read")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        coEvery {
+            api.markAllRead(com.selffeed.android.network.MarkAllReadRequest(feedId = "f-local"))
+        } returns com.selffeed.android.network.ApiEnvelope(
+            MarkAllReadResponse(markedCount = 1, feedIds = listOf("f-local")),
+        )
+
+        val result = repository.markAllRead(feedId = "f-local", categoryId = null)
+
+        assertTrue(result is AppResult.Success)
+        val page = localStore.articlePagingSource(queryKey).load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertEquals(listOf("article-bulk-read"), page.data.map { it.id })
+        assertTrue(page.data.first().isRead)
     }
 
     @Test

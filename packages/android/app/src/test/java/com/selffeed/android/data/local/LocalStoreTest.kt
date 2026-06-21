@@ -156,6 +156,64 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `read state update keeps article in existing paging query`() = runBlocking {
+        val payload = ApiListResponse(
+            data = listOf(sampleArticle("a-1")),
+            cursor = null,
+            hasMore = false,
+        )
+        store.writeArticleRemotePage(
+            queryKey = "query-retained-read",
+            payload = payload,
+            clearExisting = true,
+        )
+
+        store.updateArticleReadState("a-1", read = true)
+
+        val result = store.articlePagingSource("query-retained-read").load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
+        val page = result as PagingSource.LoadResult.Page
+        assertEquals(listOf("a-1"), page.data.map { it.id })
+        assertTrue(page.data.first().isRead)
+    }
+
+    @Test
+    fun `feed read state update keeps matching article rows in existing paging queries`() = runBlocking {
+        val payload = ApiListResponse(
+            data = listOf(
+                sampleArticle("a-1", feedId = "f-1"),
+                sampleArticle("a-2", feedId = "f-2"),
+            ),
+            cursor = null,
+            hasMore = false,
+        )
+        store.writeArticleRemotePage(
+            queryKey = "query-feed-read-state",
+            payload = payload,
+            clearExisting = true,
+        )
+
+        store.markArticlesReadByFeeds(setOf("f-1"))
+
+        val result = store.articlePagingSource("query-feed-read-state").load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
+        val page = result as PagingSource.LoadResult.Page
+        assertEquals(listOf("a-1", "a-2"), page.data.map { it.id })
+        assertEquals(true, page.data.first { it.id == "a-1" }.isRead)
+        assertEquals(false, page.data.first { it.id == "a-2" }.isRead)
+    }
+
+    @Test
     fun `clearing article cache preserves pending read state mutations`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),
@@ -234,9 +292,9 @@ class LocalStoreTest {
         unreadCount = 0,
     )
 
-    private fun sampleArticle(id: String): ArticleListItem = ArticleListItem(
+    private fun sampleArticle(id: String, feedId: String = "f-1"): ArticleListItem = ArticleListItem(
         id = id,
-        feedId = "f-1",
+        feedId = feedId,
         feedTitle = "F",
         title = "T",
         isRead = false,

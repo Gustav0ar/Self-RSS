@@ -1,6 +1,5 @@
 package com.selffeed.android.ui
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.cachedIn
@@ -12,6 +11,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.ui.articles.ArticleWarmingManager
 import com.selffeed.android.ui.articles.EnrichmentManager
+import com.selffeed.android.ui.articles.ReadStateChangeSource
 import com.selffeed.android.ui.articles.ReadStateManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -91,6 +91,7 @@ class ArticlesViewModel @Inject constructor(
         // Forward read state manager events to our events flow
         viewModelScope.launch {
             readStateManager.events.collect { event ->
+                applyReadStateEvent(event)
                 _events.emit(event)
             }
         }
@@ -165,6 +166,7 @@ class ArticlesViewModel @Inject constructor(
                         )
                     }
                     readStateManager.updateItems(itemsWithReadStates)
+                    publishReadStateOverrides()
                     repository.prefetchHeroImages(result.data.data.map { it.heroImageUrl })
                 }
                 is AppResult.Error -> {
@@ -185,28 +187,29 @@ class ArticlesViewModel @Inject constructor(
         val itemsWithReadStates = articles.withReadStates(knownArticleReadStates())
         _state.update { it.copy(items = itemsWithReadStates) }
         readStateManager.updateItems(itemsWithReadStates)
+        publishReadStateOverrides()
     }
 
     fun openArticle(id: String, forceRefresh: Boolean = false) {
         viewModelScope.launch {
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
+                    val article = result.data.withReadState(knownArticleReadStates()[id])
                     _state.update { current ->
                         current.copy(
-                            selectedArticle = result.data,
+                            selectedArticle = article,
                         )
                     }
-                    enrichmentManager.updateSelectedArticle(result.data)
-                    readStateManager.updateSelectedArticle(result.data)
+                    enrichmentManager.updateSelectedArticle(article)
+                    readStateManager.updateSelectedArticle(article)
 
-                    if (!result.data.isRead) {
-                        markRead(id, true)
+                    if (!article.isRead) {
+                        markReadAutomatically(id)
                     } else {
                         readStateManager.readStateStore.remember(id, true)
-                        // Immediately update read state overrides for instant list update
-                        _readStateOverrides.value = _readStateOverrides.value + (id to true)
+                        publishReadStateOverrides(id to true)
                     }
-                    enrichmentManager.maybeEnrichSelectedArticle(result.data)
+                    enrichmentManager.maybeEnrichSelectedArticle(article)
                     articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
@@ -233,13 +236,18 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun markRead(articleId: String, read: Boolean) {
-        val previousReadState = _state.value.articleReadState(articleId)
-        val previousArticle = _state.value.selectedArticle?.takeIf { it.id == articleId }
-        val feedId = _state.value.articleFeedId(articleId)
+        markReadInternal(articleId, read, ReadStateChangeSource.Manual)
+    }
 
+    private fun markReadAutomatically(articleId: String) {
+        markReadInternal(articleId, read = true, source = ReadStateChangeSource.AutoOpen)
+    }
+
+    private fun markReadInternal(articleId: String, read: Boolean, source: ReadStateChangeSource) {
         readStateManager.markRead(
             articleId = articleId,
             read = read,
+            source = source,
             onOptimisticUpdate = { id, fId, isRead ->
                 applyArticleReadStateOptimistic(id, isRead)
             },
@@ -251,6 +259,11 @@ class ArticlesViewModel @Inject constructor(
                         } ?: state.items,
                         selectedArticle = prevArticle ?: state.selectedArticle,
                     )
+                }
+                if (prevState != null) {
+                    publishReadStateOverrides(id to prevState)
+                } else {
+                    publishReadStateOverridesWithout(id)
                 }
                 // Emit error message
                 _state.update { it.copy(errorMessage = "Failed to update read state") }
@@ -267,40 +280,8 @@ class ArticlesViewModel @Inject constructor(
             selectedFeedId = snapshot.selectedFeedId,
             selectedCategoryId = snapshot.selectedCategoryId,
             onSuccess = { feedId, categoryId, affectedFeedIds, markedCount ->
-                // Build updated read state overrides immediately for instant list update
-                val updatedOverrides = _readStateOverrides.value.toMutableMap()
-                snapshot.items
-                    .filter { snapshot.articleMatchesAffectedFeeds(it, affectedFeedIds) }
-                    .forEach { updatedOverrides[it.id] = true }
-
-                _state.update { current ->
-                    current.items
-                        .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
-                        .forEach { readStateManager.readStateStore.remember(it.id, true) }
-                    current.selectedArticle
-                        ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
-                        ?.let { readStateManager.readStateStore.remember(it.id, true) }
-
-                    current.copy(
-                        items = current.items.map { article ->
-                            if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                                article.copy(isRead = true)
-                            } else {
-                                article
-                            }
-                        },
-                        selectedArticle = current.selectedArticle?.let { article ->
-                            if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                                article.copy(isRead = true)
-                            } else {
-                                article
-                            }
-                        },
-                        statusMessage = "Marked $markedCount articles as read",
-                    )
-                }
-                // Apply read state overrides immediately
-                _readStateOverrides.value = updatedOverrides
+                applyScopeReadState(affectedFeedIds)
+                _state.update { it.copy(statusMessage = "Marked $markedCount articles as read") }
                 _events.tryEmit(
                     ArticleFeatureEvent.ScopeMarkedRead(
                         feedId = feedId,
@@ -354,8 +335,7 @@ class ArticlesViewModel @Inject constructor(
                 },
             )
         }
-        // Immediately update the read state overrides so the list reflects changes instantly
-        _readStateOverrides.value = _readStateOverrides.value + (articleId to isRead)
+        publishReadStateOverrides(articleId to isRead)
     }
 
     private fun applyArticleReadStateConfirmed(
@@ -376,6 +356,53 @@ class ArticlesViewModel @Inject constructor(
         )
     }
 
+    private fun applyReadStateEvent(event: ArticleFeatureEvent) {
+        when (event) {
+            is ArticleFeatureEvent.ArticleReadStateChanged -> {
+                applyArticleReadStateOptimistic(event.articleId, event.read)
+            }
+            is ArticleFeatureEvent.ScopeMarkedRead -> {
+                applyScopeReadState(event.affectedFeedIds)
+            }
+        }
+    }
+
+    private fun applyScopeReadState(affectedFeedIds: Set<String>) {
+        val rememberedReadStates = mutableListOf<Pair<String, Boolean>>()
+        _state.update { current ->
+            current.items
+                .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
+                .forEach {
+                    readStateManager.readStateStore.remember(it.id, true)
+                    rememberedReadStates += it.id to true
+                }
+            current.selectedArticle
+                ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
+                ?.let {
+                    readStateManager.readStateStore.remember(it.id, true)
+                    rememberedReadStates += it.id to true
+                }
+
+            current.copy(
+                items = current.items.map { article ->
+                    if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
+                },
+                selectedArticle = current.selectedArticle?.let { article ->
+                    if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
+                },
+            )
+        }
+        publishReadStateOverrides(*rememberedReadStates.toTypedArray())
+    }
+
     private fun refreshArticlePager() {
         articlePagingGeneration += 1
         articlePagingQuery.value = _state.value.articleQuery().toArticlePageQuery(articlePagingGeneration)
@@ -390,20 +417,22 @@ class ArticlesViewModel @Inject constructor(
      */
     fun getReadStateOverrides(): Map<String, Boolean> = knownArticleReadStates()
 
-    private fun knownArticleReadStates(): Map<String, Boolean> {
-        val states = readStateManager.knownArticleReadStates()
-        _readStateOverrides.value = states
-        return states
+    private fun knownArticleReadStates(): Map<String, Boolean> =
+        readStateManager.knownArticleReadStates()
+
+    private fun publishReadStateOverrides(vararg changedStates: Pair<String, Boolean>) {
+        val snapshot = knownArticleReadStates().toMutableMap()
+        for ((articleId, isRead) in changedStates) {
+            snapshot[articleId] = isRead
+        }
+        _readStateOverrides.value = snapshot
     }
 
-    private fun ArticlesUiState.articleReadState(articleId: String): Boolean? =
-        selectedArticle?.takeIf { it.id == articleId }?.isRead
-            ?: items.firstOrNull { it.id == articleId }?.isRead
-            ?: knownArticleReadStates()[articleId]
-
-    private fun ArticlesUiState.articleFeedId(articleId: String): String? =
-        selectedArticle?.takeIf { it.id == articleId }?.feedId
-            ?: items.firstOrNull { it.id == articleId }?.feedId
+    private fun publishReadStateOverridesWithout(articleId: String) {
+        _readStateOverrides.value = knownArticleReadStates().toMutableMap().apply {
+            remove(articleId)
+        }
+    }
 
     private fun ArticlesUiState.articleMatchesAffectedFeeds(
         article: ArticleListItem,
@@ -439,6 +468,9 @@ class ArticlesViewModel @Inject constructor(
     private fun List<ArticleListItem>.withReadStates(readStates: Map<String, Boolean>): List<ArticleListItem> =
         map { article -> readStates[article.id]?.let { article.copy(isRead = it) } ?: article }
 
+    private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail =
+        isRead?.let { copy(isRead = it) } ?: this
+
     private fun readDelta(previousReadState: Boolean?, newReadState: Boolean): Pair<Int, Int> {
         val changed = previousReadState?.let { it != newReadState } ?: false
         if (!changed) return 0 to 0
@@ -453,7 +485,6 @@ class ArticlesViewModel @Inject constructor(
     )
 
     private companion object {
-        const val TAG = "ArticlesViewModel"
         const val ARTICLE_PAGE_SIZE = 30
     }
 }

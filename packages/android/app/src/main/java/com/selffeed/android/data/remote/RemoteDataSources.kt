@@ -84,8 +84,8 @@ class ArticleRemoteDataSource @Inject constructor(
 
     suspend fun article(articleId: String): ArticleDetail = api.article(articleId).data
     suspend fun enrichArticle(articleId: String): EnrichArticleResponse = api.enrichArticle(articleId).data
-    suspend fun markRead(articleId: String, read: Boolean): Boolean =
-        api.markRead(articleId, MarkReadRequest(read = read)).data.success
+    suspend fun markRead(articleId: String, read: Boolean, source: String = "manual"): Boolean =
+        api.markRead(articleId, MarkReadRequest(read = read, source = source)).data.success
 
     suspend fun markAllRead(feedId: String?, categoryId: String?) =
         api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data

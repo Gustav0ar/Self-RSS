@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.paging.PagingData
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.theme.SelfFeedTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Rule
 import org.junit.Test
@@ -53,6 +54,7 @@ class AuthFlowUiTest {
                         settings = SettingsUiState(),
                         isOnline = true,
                     ),
+                    readStateOverrides = MutableStateFlow(emptyMap()),
                     actions = noOpAppActions(),
                     articlePagingData = flowOf(PagingData.empty<ArticleListItem>()),
                 )
@@ -84,6 +86,7 @@ class AuthFlowUiTest {
                         settings = SettingsUiState(),
                         isOnline = true,
                     ),
+                    readStateOverrides = MutableStateFlow(emptyMap()),
                     actions = noOpAppActions(),
                     articlePagingData = flowOf(PagingData.empty<ArticleListItem>()),
                 )
@@ -245,6 +248,7 @@ class AuthFlowUiTest {
         onSortChanged = {},
         onDensityChanged = {},
         onTextSizeChanged = {},
+        onRevokeAuthSession = {},
         onClearMessages = {},
     )
 }
