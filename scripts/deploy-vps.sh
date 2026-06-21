@@ -161,23 +161,32 @@ curl_public_route() {
 	path="$2"
 	label="$3"
 	url="https://${domain}${path}"
+	attempts="${PUBLIC_ROUTE_RETRIES:-12}"
+	delay_seconds="${PUBLIC_ROUTE_RETRY_DELAY_SECONDS:-5}"
 
-	if curl --fail --silent --max-time 15 \
-		--resolve "${domain}:443:127.0.0.1" \
-		-o /dev/null \
-		"${url}"; then
-		echo "${label} public route responded through local Traefik"
-		return 0
-	fi
+	for attempt in $(seq 1 "${attempts}"); do
+		if curl --fail --silent --max-time 15 \
+			--resolve "${domain}:443:127.0.0.1" \
+			-o /dev/null \
+			"${url}"; then
+			echo "${label} public route responded through local Traefik"
+			return 0
+		fi
 
-	if curl --fail --silent --max-time 15 \
-		-o /dev/null \
-		"${url}"; then
-		echo "${label} public route responded through DNS"
-		return 0
-	fi
+		if curl --fail --silent --max-time 15 \
+			-o /dev/null \
+			"${url}"; then
+			echo "${label} public route responded through DNS"
+			return 0
+		fi
 
-	echo "${label} public route did not respond"
+		if [ "${attempt}" -lt "${attempts}" ]; then
+			echo "${label} public route not ready yet; retrying in ${delay_seconds}s (${attempt}/${attempts})"
+			sleep "${delay_seconds}"
+		fi
+	done
+
+	echo "${label} public route did not respond after ${attempts} attempts"
 	return 1
 }
 
