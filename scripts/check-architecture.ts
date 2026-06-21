@@ -57,6 +57,25 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 		reason:
 			'Article cache model helpers should stay limited to DTOs, cache limit policy, and row mapping.',
 	},
+	'packages/web/src/hooks/queries/cache-utils.ts': {
+		maxLines: 120,
+		reason:
+			'Cache utils should only orchestrate read-state sync and re-export domain-specific cache helpers.',
+	},
+	'packages/web/src/hooks/queries/cache-query-helpers.ts': {
+		maxLines: 90,
+		reason: 'Query key and URL search param helpers should stay small and framework-agnostic.',
+	},
+	'packages/web/src/hooks/queries/article-cache-updates.ts': {
+		maxLines: 230,
+		reason:
+			'Article cache mutation helpers should stay focused on article detail/list/search read-state updates.',
+	},
+	'packages/web/src/hooks/queries/unread-count-cache.ts': {
+		maxLines: 300,
+		reason:
+			'Unread count cache helpers should stay focused on feed, category tree, and stats count updates.',
+	},
 	'packages/web/src/components/articles/reader-pane.tsx': {
 		maxLines: 500,
 		reason:
