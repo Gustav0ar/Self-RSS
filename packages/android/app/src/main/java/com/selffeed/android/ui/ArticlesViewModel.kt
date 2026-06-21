@@ -69,6 +69,10 @@ class ArticlesViewModel @Inject constructor(
     private val _events = MutableSharedFlow<ArticleFeatureEvent>(extraBufferCapacity = 32)
     val events: SharedFlow<ArticleFeatureEvent> = _events.asSharedFlow()
 
+    // Exposes current read state overrides for sync with ArticleReaderPane
+    private val _readStateOverrides = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val readStateOverrides: StateFlow<Map<String, Boolean>> = _readStateOverrides.asStateFlow()
+
     private val articlePagingQuery = MutableStateFlow(ArticlePageQuery())
     @OptIn(ExperimentalCoroutinesApi::class)
     val articlePagingData = articlePagingQuery
@@ -199,6 +203,8 @@ class ArticlesViewModel @Inject constructor(
                         markRead(id, true)
                     } else {
                         readStateManager.readStateStore.remember(id, true)
+                        // Immediately update read state overrides for instant list update
+                        _readStateOverrides.value = _readStateOverrides.value + (id to true)
                     }
                     enrichmentManager.maybeEnrichSelectedArticle(result.data)
                     articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
@@ -261,6 +267,12 @@ class ArticlesViewModel @Inject constructor(
             selectedFeedId = snapshot.selectedFeedId,
             selectedCategoryId = snapshot.selectedCategoryId,
             onSuccess = { feedId, categoryId, affectedFeedIds, markedCount ->
+                // Build updated read state overrides immediately for instant list update
+                val updatedOverrides = _readStateOverrides.value.toMutableMap()
+                snapshot.items
+                    .filter { snapshot.articleMatchesAffectedFeeds(it, affectedFeedIds) }
+                    .forEach { updatedOverrides[it.id] = true }
+
                 _state.update { current ->
                     current.items
                         .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
@@ -287,6 +299,8 @@ class ArticlesViewModel @Inject constructor(
                         statusMessage = "Marked $markedCount articles as read",
                     )
                 }
+                // Apply read state overrides immediately
+                _readStateOverrides.value = updatedOverrides
                 _events.tryEmit(
                     ArticleFeatureEvent.ScopeMarkedRead(
                         feedId = feedId,
@@ -340,6 +354,8 @@ class ArticlesViewModel @Inject constructor(
                 },
             )
         }
+        // Immediately update the read state overrides so the list reflects changes instantly
+        _readStateOverrides.value = _readStateOverrides.value + (articleId to isRead)
     }
 
     private fun applyArticleReadStateConfirmed(
@@ -368,8 +384,17 @@ class ArticlesViewModel @Inject constructor(
     private fun isCurrentArticleRequest(requestId: Long): Boolean =
         requestId == requestSequence.get()
 
-    private fun knownArticleReadStates(): Map<String, Boolean> =
-        readStateManager.knownArticleReadStates()
+    /**
+     * Returns the current read state overrides for articles.
+     * Used by ArticleReaderPane to sync read state when navigating between articles.
+     */
+    fun getReadStateOverrides(): Map<String, Boolean> = knownArticleReadStates()
+
+    private fun knownArticleReadStates(): Map<String, Boolean> {
+        val states = readStateManager.knownArticleReadStates()
+        _readStateOverrides.value = states
+        return states
+    }
 
     private fun ArticlesUiState.articleReadState(articleId: String): Boolean? =
         selectedArticle?.takeIf { it.id == articleId }?.isRead

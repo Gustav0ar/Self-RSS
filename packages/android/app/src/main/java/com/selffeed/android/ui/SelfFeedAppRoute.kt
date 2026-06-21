@@ -138,6 +138,7 @@ fun SelfFeedAppRoute(
                 settings = settingsState,
                 isOnline = isOnline,
             ),
+            readStateOverrides = articlesViewModel.readStateOverrides,
             actions = SelfFeedAppActions(
                 onAuthModeChange = authViewModel::setAuthMode,
                 onLogin = authViewModel::login,

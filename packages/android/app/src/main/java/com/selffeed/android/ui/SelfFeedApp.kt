@@ -90,7 +90,9 @@ import com.selffeed.android.ui.screens.SettingsTabActions
 import com.selffeed.android.ui.screens.SettingsTabState
 import com.selffeed.android.ui.screens.SettingsTab
 import com.selffeed.android.ui.screens.StatsTab
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 data class SelfFeedAppState(
@@ -136,6 +138,7 @@ data class SelfFeedAppActions(
 @Composable
 fun SelfFeedApp(
     state: SelfFeedAppState,
+    readStateOverrides: StateFlow<Map<String, Boolean>>,
     actions: SelfFeedAppActions,
     articlePagingData: Flow<PagingData<ArticleListItem>>,
 ) {
@@ -147,6 +150,7 @@ fun SelfFeedApp(
     val selectedArticle = state.articles.selectedArticle
     val selectedFeedId = state.articles.selectedFeedId
     val selectedCategoryId = state.articles.selectedCategoryId
+    val readStateOverrides by readStateOverrides.collectAsStateWithLifecycle()
     val topBarLabel = remember(
         activeTab,
         selectedArticle,
@@ -209,9 +213,16 @@ fun SelfFeedApp(
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
-    val articleQueue = articlePagingItems.itemSnapshotList.items
+    // Use paging items if available, otherwise fall back to state items
+    val rawArticleQueue = articlePagingItems.itemSnapshotList.items
         .takeIf { it.isNotEmpty() }
         ?: state.articles.items
+    // Apply read state overrides to show articles as read without filtering them out
+    val articleQueue = remember(rawArticleQueue, readStateOverrides) {
+        rawArticleQueue.map { article ->
+            readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
+        }
+    }
     val feedTabState = remember(
         state.feeds.categories,
         state.feeds.feeds,

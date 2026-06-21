@@ -130,6 +130,7 @@ fun ArticleReaderPane(
                 onOpenOriginal = { onOpenOriginal(selectedArticle) },
             )
         } else {
+            // articleItem already has read state applied from the queue
             ArticlePlaceholderView(article = articleItem)
         }
     }

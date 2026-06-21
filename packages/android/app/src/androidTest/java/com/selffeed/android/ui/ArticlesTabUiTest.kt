@@ -15,9 +15,13 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.screens.ArticleTabActions
 import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
+import com.selffeed.android.ui.screens.SearchTab
+import com.selffeed.android.ui.screens.SearchTabActions
+import com.selffeed.android.ui.screens.SearchTabState
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
@@ -61,6 +65,41 @@ class ArticlesTabUiTest {
         composeRule.onNodeWithText("Load more").assertIsDisplayed().performClick()
         composeRule.runOnIdle {
             assertTrue(loadMoreCount > loadMoreCountBeforeClick)
+        }
+    }
+
+    @Test
+    fun articlesTab_openingArticleClearsPreviousSelection() {
+        var openedArticleId: String? = null
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTab(
+                    state = ArticleTabState(
+                        articles = listOf(
+                            sampleArticle("article-1", "First Article"),
+                            sampleArticle("article-2", "Second Article"),
+                        ),
+                        selectedArticleId = "article-1",
+                        hasMoreArticles = false,
+                        loadingMoreArticles = false,
+                        isSyncingFeeds = false,
+                    ),
+                    actions = ArticleTabActions(
+                        onRefresh = {},
+                        onLoadMore = {},
+                        onOpenArticle = { openedArticleId = it },
+                        onToggleRead = { _, _ -> },
+                        onArticleSnapshot = {},
+                    ),
+                )
+            }
+        }
+
+        // Click on the second article
+        composeRule.onNodeWithText("Second Article").assertIsDisplayed().performClick()
+        composeRule.runOnIdle {
+            assertEquals("article-2", openedArticleId)
         }
     }
 
@@ -168,4 +207,87 @@ class ArticlesTabUiTest {
         excerpt = "Excerpt",
         isRead = false,
     )
+}
+
+class SearchTabUiTest {
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun searchTab_opensArticleOnClick() {
+        var openedArticleId: String? = null
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                SearchTab(
+                    state = SearchTabState(
+                        query = "test",
+                        results = listOf(
+                            ArticleListItem(
+                                id = "search-article-1",
+                                feedId = "feed-1",
+                                feedTitle = "Test Feed",
+                                title = "Search Result Article",
+                                excerpt = "Found this",
+                                isRead = false,
+                            ),
+                        ),
+                        selectedArticleId = null,
+                        hasMoreResults = false,
+                        loadingResults = false,
+                        loadingMoreResults = false,
+                        currentCategoryAvailable = false,
+                        currentCategoryOnly = false,
+                        resultLimitReached = false,
+                    ),
+                    actions = SearchTabActions(
+                        onQueryChanged = {},
+                        onSearchRequested = {},
+                        onOpenArticle = { openedArticleId = it },
+                        onLoadMore = {},
+                        onCurrentCategoryOnlyChanged = {},
+                    ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Search Result Article").assertIsDisplayed().performClick()
+        composeRule.runOnIdle {
+            assertEquals("search-article-1", openedArticleId)
+        }
+    }
+
+    @Test
+    fun searchTab_doesNotOpenArticleWhenNoResults() {
+        var openedArticleId: String? = "initial-value"
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                SearchTab(
+                    state = SearchTabState(
+                        query = "nonexistent",
+                        results = emptyList(),
+                        selectedArticleId = null,
+                        hasMoreResults = false,
+                        loadingResults = false,
+                        loadingMoreResults = false,
+                        currentCategoryAvailable = false,
+                        currentCategoryOnly = false,
+                        resultLimitReached = false,
+                    ),
+                    actions = SearchTabActions(
+                        onQueryChanged = {},
+                        onSearchRequested = {},
+                        onOpenArticle = { openedArticleId = it },
+                        onLoadMore = {},
+                        onCurrentCategoryOnlyChanged = {},
+                    ),
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        // No article to click, the callback should never have been called
+        assertNull("No article should be opened when results are empty", openedArticleId)
+    }
 }

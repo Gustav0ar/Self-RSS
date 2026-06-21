@@ -780,11 +780,11 @@ private fun ArticleListRow(
             }
         },
     ) {
-        Column {
+        Column(modifier = Modifier.clickable(onClick = onClick)) {
             ArticleCard(
                 article = article,
                 selected = selected,
-                onClick = onClick,
+                onClick = {}, // click handled by parent Column
                 isReadOverride = effectiveIsRead,
             )
             HorizontalDivider(
@@ -856,9 +856,7 @@ private fun ArticleCard(
 ) {
     val isRead = isReadOverride ?: article.isRead
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.background,
     ) {
         Row(
@@ -1026,11 +1024,13 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
             key = { it.id },
             contentType = { "search-result-row" },
         ) { article ->
-            ArticleCard(
-                article = article,
-                selected = state.selectedArticleId == article.id,
-                onClick = { actions.onOpenArticle(article.id) },
-            )
+            Column(modifier = Modifier.clickable { actions.onOpenArticle(article.id) }) {
+                ArticleCard(
+                    article = article,
+                    selected = state.selectedArticleId == article.id,
+                    onClick = {},
+                )
+            }
         }
 
         if (state.resultLimitReached) {
