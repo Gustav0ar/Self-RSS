@@ -48,17 +48,6 @@ function createTestApp(
 	return app;
 }
 
-function _makeRequestOptions(body?: unknown) {
-	return {
-		headers: {
-			Authorization: AUTH_HEADER,
-			'Content-Type': 'application/json',
-			...(body ? {} : {}),
-		},
-		...(body ? { body: JSON.stringify(body) } : {}),
-	};
-}
-
 // ---------------------------------------------------------------------------
 // Route handler integration tests
 // ---------------------------------------------------------------------------

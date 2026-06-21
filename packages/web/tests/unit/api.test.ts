@@ -349,7 +349,7 @@ describe('api module', () => {
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const promise1 = refreshAccessToken();
-			const _promise2 = refreshAccessToken();
+			const promise2 = refreshAccessToken();
 
 			// Give a tick for the second call to resolve
 			await new Promise((r) => setTimeout(r, 0));
@@ -358,7 +358,7 @@ describe('api module', () => {
 			expect(callCount).toBe(1);
 
 			resolveRefresh!(new Response('', { status: 401 }));
-			await promise1;
+			await Promise.all([promise1, promise2]);
 		});
 	});
 

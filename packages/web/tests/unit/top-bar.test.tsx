@@ -4,7 +4,6 @@ import { TopBar } from '../../src/components/layout/top-bar';
 
 const setThemeMock = vi.fn();
 const mutateMock = vi.fn();
-const _navigateMock = vi.fn();
 
 vi.mock('@tanstack/react-router', () => ({
 	Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string }) => (

@@ -638,7 +638,6 @@ function normalizeLazyMedia(root: Element) {
 	for (const element of root.querySelectorAll(
 		'div[class*="videopress"], figure[class*="videopress"], div[data-block-name="core/video"], div[class*="video_widget"], div[id$="-iframe"]',
 	)) {
-		const iframePlaceholder = element.querySelector('[id$="-iframe"]');
 		const candidate =
 			element.getAttribute('data-src')?.trim() ??
 			element.getAttribute('data-url')?.trim() ??
@@ -647,16 +646,6 @@ function normalizeLazyMedia(root: Element) {
 			element.querySelector('video source')?.getAttribute('src')?.trim() ??
 			element.querySelector('video')?.getAttribute('src')?.trim() ??
 			extractEmbedUrlFromInlineScript(element.innerHTML);
-		const _width =
-			element.getAttribute('width') ??
-			iframePlaceholder?.getAttribute('width') ??
-			element.querySelector('iframe')?.getAttribute('width') ??
-			element.querySelector('video')?.getAttribute('width');
-		const _height =
-			element.getAttribute('height') ??
-			iframePlaceholder?.getAttribute('height') ??
-			element.querySelector('iframe')?.getAttribute('height') ??
-			element.querySelector('video')?.getAttribute('height');
 		if (!candidate) continue;
 
 		const embedded = toEmbedUrl(candidate);

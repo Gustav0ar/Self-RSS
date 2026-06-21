@@ -13,7 +13,7 @@
 		"declarationMap": true,
 		"sourceMap": true,
 		"noUncheckedIndexedAccess": true,
-		"noUnusedLocals": false,
+		"noUnusedLocals": true,
 		"noUnusedParameters": false
 	}
 }

@@ -21,11 +21,9 @@ const BASE_URL = 'https://www.naointendo.com.br';
  */
 export class NaointendidoContentExtractor implements ContentExtractor {
 	private readonly fetch: typeof globalThis.fetch;
-	private readonly allowPrivateHosts: boolean;
 
-	constructor(options?: { fetch?: typeof globalThis.fetch; allowPrivateHosts?: boolean }) {
+	constructor(options?: { fetch?: typeof globalThis.fetch }) {
 		this.fetch = options?.fetch ?? globalThis.fetch;
-		this.allowPrivateHosts = options?.allowPrivateHosts ?? false;
 	}
 
 	/**

@@ -7,7 +7,8 @@
 		"packages/web"
 	],
 	"scripts": {
-		"lint": "biome check .",
+		"lint": "biome check . && bun run lint:architecture",
+		"lint:architecture": "bun scripts/check-architecture.ts",
 		"lint:fix": "biome check --write .",
 		"typecheck": "bun run --filter '*' typecheck",
 		"test": "bun run --filter '*' test",
