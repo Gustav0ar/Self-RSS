@@ -6,7 +6,7 @@ import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { closeRedis, getRedis } from '../../src/db/redis.js';
-import { auditLogs, users } from '../../src/db/schema.js';
+import { auditLogs, authSessions, users } from '../../src/db/schema.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
@@ -283,6 +283,20 @@ describe('API integration', () => {
 		expect(sessions.body.data.sessions).toHaveLength(1);
 		expect(sessions.body.data.sessions[0].current).toBe(true);
 
+		const [storedSession] = await db.select().from(authSessions);
+		expect(storedSession).toBeTruthy();
+		const unchangedHash = storedSession!.refreshTokenHash;
+		const staleRotate = await deps.repos.authSession.rotate(
+			storedSession!.id,
+			'stale-refresh-token-hash',
+			'next-refresh-token-hash',
+			{ deviceName: 'Stale rotation' },
+		);
+		expect(staleRotate).toBeUndefined();
+		const [unchangedSession] = await db.select().from(authSessions);
+		expect(unchangedSession!.refreshTokenHash).toBe(unchangedHash);
+		expect(unchangedSession!.deviceName).not.toBe('Stale rotation');
+
 		const androidLogin = await jsonRequest('/api/v1/auth/login', {
 			method: 'POST',
 			headers: {
@@ -405,6 +419,28 @@ describe('API integration', () => {
 				(session: { deviceName: string }) => session.deviceName === 'Trusted browser',
 			);
 			expect(trustedSession?.ipAddress).toBe('203.0.113.25');
+
+			const fallbackLogin = await jsonRequest('/api/v1/auth/login', {
+				method: 'POST',
+				headers: {
+					...JSON_HEADERS,
+					'X-Forwarded-For': 'not an ip',
+					'X-Real-Ip': 'also not an ip',
+					'CF-Connecting-IP': '198.51.100.77',
+					'X-Self-Feed-Device-Name': 'Fallback proxy browser',
+				},
+				body: JSON.stringify({ email: 'proxy-user@example.com', password: 'password123' }),
+			});
+			expect(fallbackLogin.response.status).toBe(200);
+
+			const fallbackSessions = await authedRequest(
+				'/api/v1/auth/sessions',
+				fallbackLogin.body.data.tokens.accessToken,
+			);
+			const fallbackSession = fallbackSessions.body.data.sessions.find(
+				(session: { deviceName: string }) => session.deviceName === 'Fallback proxy browser',
+			);
+			expect(fallbackSession?.ipAddress).toBe('198.51.100.77');
 		} finally {
 			if (previousTrustProxy === undefined) {
 				delete process.env.TRUST_PROXY;
@@ -413,6 +449,33 @@ describe('API integration', () => {
 			}
 			clearEnvCache();
 		}
+	});
+
+	it('bounds stored session metadata from request headers', async () => {
+		const longDeviceName = 'D'.repeat(180);
+		const longClientId = 'C'.repeat(220);
+		const longUserAgent = 'U'.repeat(700);
+		const registered = await jsonRequest('/api/v1/auth/register', {
+			method: 'POST',
+			headers: {
+				...JSON_HEADERS,
+				'User-Agent': longUserAgent,
+				'X-Self-Feed-Client-Id': ` ${longClientId} `,
+				'X-Self-Feed-Device-Name': ` ${longDeviceName} `,
+			},
+			body: JSON.stringify({ email: 'metadata-user@example.com', password: 'password123' }),
+		});
+		expect(registered.response.status).toBe(201);
+
+		const sessions = await authedRequest(
+			'/api/v1/auth/sessions',
+			registered.body.data.tokens.accessToken,
+		);
+		expect(sessions.response.status).toBe(200);
+		const [session] = sessions.body.data.sessions;
+		expect(session.deviceName).toBe('D'.repeat(120));
+		expect(session.clientId).toBe('C'.repeat(160));
+		expect(session.userAgent).toBe('U'.repeat(512));
 	});
 
 	it('rejects local feed URLs when private hosts are not allowed', async () => {

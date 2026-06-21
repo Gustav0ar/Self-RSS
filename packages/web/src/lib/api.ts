@@ -79,7 +79,11 @@ export async function refreshAccessToken(): Promise<boolean> {
 		try {
 			const res = await fetch(`${API_BASE}/auth/refresh`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Self-Feed-Client-Id': clientId,
+					'X-Self-Feed-Device-Name': getDeviceName(),
+				},
 				credentials: 'include',
 			});
 			if (!res.ok) {

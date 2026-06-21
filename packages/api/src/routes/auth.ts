@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { loginSchema, registerSchema } from '@self-feed/shared';
 import type { Context, MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
@@ -30,23 +31,33 @@ function deriveDeviceName(userAgent?: string | null) {
 	return 'Web browser';
 }
 
+function sanitizeHeaderValue(value: string | undefined | null, maxLength: number) {
+	const trimmed = value?.trim();
+	return trimmed ? trimmed.slice(0, maxLength) : null;
+}
+
+function normalizeTrustedIp(value: string | undefined | null) {
+	const trimmed = sanitizeHeaderValue(value, 128);
+	return trimmed && isIP(trimmed) ? trimmed : null;
+}
+
 function getClientIp(c: Context) {
 	if (!getEnv().TRUST_PROXY) {
 		return null;
 	}
 
-	const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+	const forwarded = normalizeTrustedIp(c.req.header('x-forwarded-for')?.split(',')[0]);
 	if (forwarded) return forwarded;
-	const realIp = c.req.header('x-real-ip')?.trim();
+	const realIp = normalizeTrustedIp(c.req.header('x-real-ip'));
 	if (realIp) return realIp;
-	return c.req.header('cf-connecting-ip')?.trim() ?? null;
+	return normalizeTrustedIp(c.req.header('cf-connecting-ip'));
 }
 
 function getSessionMetadata(c: Context) {
-	const userAgent = c.req.header('user-agent') ?? null;
-	const explicitName = c.req.header('x-self-feed-device-name')?.trim();
+	const userAgent = sanitizeHeaderValue(c.req.header('user-agent'), 512);
+	const explicitName = sanitizeHeaderValue(c.req.header('x-self-feed-device-name'), 120);
 	return {
-		clientId: c.req.header('x-self-feed-client-id') ?? null,
+		clientId: sanitizeHeaderValue(c.req.header('x-self-feed-client-id'), 160),
 		deviceName: explicitName || deriveDeviceName(userAgent),
 		userAgent,
 		ipAddress: getClientIp(c),

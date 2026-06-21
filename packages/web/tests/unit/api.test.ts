@@ -72,6 +72,23 @@ describe('api module', () => {
 			expect(headers['X-Self-Feed-Client-Id']).toBeTruthy();
 		});
 
+		it('includes device metadata headers on refresh requests', async () => {
+			const fetchMock = vi.fn(
+				async () =>
+					new Response('{"data":{"tokens":{"accessToken":"new-token"}}}', { status: 200 }),
+			);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const refreshed = await refreshAccessToken();
+
+			expect(refreshed).toBe(true);
+			const calls = fetchMock.mock.calls as unknown[][];
+			const requestInit = calls[0]?.[1] as RequestInit | undefined;
+			const headers = (requestInit?.headers ?? {}) as Record<string, string>;
+			expect(headers['X-Self-Feed-Client-Id']).toBeTruthy();
+			expect(headers['X-Self-Feed-Device-Name']).toMatch(/^Web browser/);
+		});
+
 		it('does not include Authorization header when no token is set', async () => {
 			const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);

@@ -60,12 +60,17 @@ export class AuthSessionRepository {
 			.orderBy(desc(authSessions.lastSeenAt), desc(authSessions.createdAt));
 	}
 
-	async rotate(id: string, refreshTokenHash: string, metadata: AuthSessionMetadataInput) {
+	async rotate(
+		id: string,
+		currentRefreshTokenHash: string,
+		nextRefreshTokenHash: string,
+		metadata: AuthSessionMetadataInput,
+	) {
 		const now = new Date();
 		const [session] = await this.db
 			.update(authSessions)
 			.set({
-				refreshTokenHash,
+				refreshTokenHash: nextRefreshTokenHash,
 				clientId: metadata.clientId ?? undefined,
 				deviceName: metadata.deviceName ?? undefined,
 				userAgent: metadata.userAgent ?? undefined,
@@ -73,7 +78,13 @@ export class AuthSessionRepository {
 				lastSeenAt: now,
 				rotatedAt: now,
 			})
-			.where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
+			.where(
+				and(
+					eq(authSessions.id, id),
+					eq(authSessions.refreshTokenHash, currentRefreshTokenHash),
+					isNull(authSessions.revokedAt),
+				),
+			)
 			.returning();
 		return session;
 	}

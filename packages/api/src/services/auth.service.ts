@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type Redis from 'ioredis';
 import { getEnv } from '../config/index.js';
 import { CacheKeys } from '../db/redis.js';
@@ -22,7 +22,7 @@ function getRevocationTtlSeconds(payload: TokenPayload) {
 
 const AUTH_LOST_MESSAGE = 'Authentication was lost. Please sign in again.';
 
-function createRefreshToken(sessionId: string = crypto.randomUUID()) {
+function createRefreshToken(sessionId: string = randomUUID()) {
 	return `${sessionId}.${randomBytes(32).toString('base64url')}`;
 }
 
@@ -116,8 +116,9 @@ export class AuthService {
 			return this.refreshLegacyJwt(refreshToken, metadata);
 		}
 
+		const currentRefreshTokenHash = hashRefreshToken(refreshToken);
 		const session = await this.sessionRepo.findActiveById(parsed.sessionId);
-		if (!session || !constantTimeEqual(session.refreshTokenHash, hashRefreshToken(refreshToken))) {
+		if (!session || !constantTimeEqual(session.refreshTokenHash, currentRefreshTokenHash)) {
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
 
@@ -127,7 +128,13 @@ export class AuthService {
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
 
-		const tokens = await this.rotateSessionTokens(user.id, user.role, session.id, metadata);
+		const tokens = await this.rotateSessionTokens(
+			user.id,
+			user.role,
+			session.id,
+			currentRefreshTokenHash,
+			metadata,
+		);
 		return { user: this.sanitizeUser(user), tokens };
 	}
 
@@ -221,13 +228,19 @@ export class AuthService {
 		userId: string,
 		role: string,
 		sessionId: string,
+		currentRefreshTokenHash: string,
 		metadata: AuthSessionMetadataInput,
 	) {
 		const refreshToken = createRefreshToken(sessionId);
-		const session = await this.sessionRepo.rotate(sessionId, hashRefreshToken(refreshToken), {
-			...metadata,
-			deviceName: sanitizeDeviceName(metadata.deviceName),
-		});
+		const session = await this.sessionRepo.rotate(
+			sessionId,
+			currentRefreshTokenHash,
+			hashRefreshToken(refreshToken),
+			{
+				...metadata,
+				deviceName: sanitizeDeviceName(metadata.deviceName),
+			},
+		);
 		if (!session) {
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
