@@ -1,61 +1,8 @@
 import { describe, expect, it } from 'vitest';
-
-/**
- * UUID v4 validation regex pattern - must match the one in article.repository.ts
- */
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-	return UUID_REGEX.test(value);
-}
-
-// Maximum reasonable timestamp: year 2100
-const MAX_REASONABLE_TIMESTAMP = 4102444800;
-
-// Re-implement decodeCursor to test validation logic
-// (The actual function is not exported, so we test the validation pattern)
-
-function decodeCursor(
-	cursor: string | undefined,
-	sort: string | undefined,
-): { id: string; seconds: number; direction: 'a' | 'd'; ftsRank?: number } | null {
-	if (!cursor) return null;
-	const parts = cursor.split(':');
-	if (parts.length < 3) return null;
-
-	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
-
-	if (parts.length === 4) {
-		const [rankIntRaw, secondsRaw, id, direction] = parts;
-		if (!rankIntRaw || !secondsRaw || !id || !direction) return null;
-		// UUID validation
-		if (!isValidUuid(id)) return null;
-		if (direction !== 'a' && direction !== 'd') return null;
-		if (direction !== expectedDirection) return null;
-		const OFFSET = 1000000000;
-		const SCALE = 10000;
-		const rawRank = Number(rankIntRaw);
-		if (!Number.isFinite(rawRank)) return null;
-		const ftsRank = rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
-		const seconds = Number.parseInt(secondsRaw, 10);
-		if (!Number.isFinite(seconds) || seconds < 0) return null;
-		// Validate timestamp bounds
-		if (seconds > MAX_REASONABLE_TIMESTAMP) return null;
-		return { id, seconds, direction, ftsRank };
-	}
-
-	const [id, secondsRaw, direction] = parts;
-	if (!id || !secondsRaw || !direction) return null;
-	// UUID validation
-	if (!isValidUuid(id)) return null;
-	if (direction !== 'a' && direction !== 'd') return null;
-	if (direction !== expectedDirection) return null;
-	const seconds = Number.parseInt(secondsRaw, 10);
-	if (!Number.isFinite(seconds) || seconds < 0) return null;
-	// Validate timestamp bounds
-	if (seconds > MAX_REASONABLE_TIMESTAMP) return null;
-	return { id, seconds, direction };
-}
+import {
+	decodeArticleCursor as decodeCursor,
+	isValidArticleCursorId as isValidUuid,
+} from '../../src/utils/article-cursor.js';
 
 describe('UUID validation', () => {
 	it('accepts valid lowercase UUID', () => {
@@ -219,6 +166,13 @@ describe('decodeCursor - malformed/invalid cursors', () => {
 	it('returns null for cursor with non-numeric seconds', () => {
 		const validUuid = '550e8400-e29b-41d4-a716-446655440000';
 		expect(decodeCursor(`${validUuid}:NaN:d`, 'latest')).toBeNull();
+	});
+
+	it('returns null for cursor with partial or fractional seconds', () => {
+		const validUuid = '550e8400-e29b-41d4-a716-446655440000';
+		expect(decodeCursor(`${validUuid}:1704067200abc:d`, 'latest')).toBeNull();
+		expect(decodeCursor(`${validUuid}:1704067200.5:d`, 'latest')).toBeNull();
+		expect(decodeCursor(`1000001234:1704067200abc:${validUuid}:d`, 'latest')).toBeNull();
 	});
 
 	it('returns null for cursor with special characters in id', () => {

@@ -6,6 +6,12 @@ interface FileLineBudget {
 	reason: string;
 }
 
+interface ForbiddenPattern {
+	pattern: RegExp;
+	reason: string;
+	allowedPaths?: Set<string>;
+}
+
 const ROOT = resolve(import.meta.dirname, '..');
 const SOURCE_ROOTS = ['packages/api/src', 'packages/web/src', 'packages/shared/src', 'scripts'];
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.sh']);
@@ -22,8 +28,19 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 			'HTML sanitization rules are centralized; extract policy tables before adding new behavior.',
 	},
 	'packages/api/src/repositories/article.repository.ts': {
-		maxLines: 850,
-		reason: 'Article query surface is broad; extract query builders before adding new read paths.',
+		maxLines: 650,
+		reason:
+			'Article persistence should stay focused; keep cursor, search mapping, and scope SQL in article-query helpers.',
+	},
+	'packages/api/src/repositories/article-query.helpers.ts': {
+		maxLines: 180,
+		reason:
+			'Article query helpers should remain focused on search row mapping, FTS query shaping, and scope SQL.',
+	},
+	'packages/api/src/utils/article-cursor.ts': {
+		maxLines: 140,
+		reason:
+			'Article cursor encoding and decoding must stay centralized and easy to audit for pagination safety.',
 	},
 	'packages/api/src/openapi/spec.ts': {
 		maxLines: 830,
@@ -31,9 +48,14 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 			'OpenAPI spec is declarative; prefer domain-specific spec fragments for new large endpoint groups.',
 	},
 	'packages/api/src/services/article-cache.service.ts': {
-		maxLines: 700,
+		maxLines: 600,
 		reason:
-			'Cache key and cursor behavior is coupled; extract policies before adding new cache modes.',
+			'Article cache orchestration should stay focused; keep cached DTOs and row mapping in article-cache.model.ts.',
+	},
+	'packages/api/src/services/article-cache.model.ts': {
+		maxLines: 120,
+		reason:
+			'Article cache model helpers should stay limited to DTOs, cache limit policy, and row mapping.',
 	},
 	'packages/web/src/components/articles/reader-pane.tsx': {
 		maxLines: 500,
@@ -46,6 +68,15 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 			'Sidebar should orchestrate dialogs and state; keep tree, body, storage, and reorder logic split out.',
 	},
 };
+
+const FORBIDDEN_PATTERNS: ForbiddenPattern[] = [
+	{
+		pattern: /\bfunction\s+decodeCursor\s*\(/,
+		allowedPaths: new Set(['packages/api/src/utils/article-cursor.ts']),
+		reason:
+			'Do not reimplement article cursor decoding. Import decodeArticleCursor from packages/api/src/utils/article-cursor.ts.',
+	},
+];
 
 const IGNORED_SEGMENTS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.vite']);
 
@@ -72,10 +103,8 @@ function getExtension(fileName: string): string {
 	return dotIndex >= 0 ? fileName.slice(dotIndex) : '';
 }
 
-function lineCount(path: string): number {
-	const content = readFileSync(path, 'utf8');
-	if (content.length === 0) return 0;
-	return content.split(/\r?\n/).length;
+function lineNumberForIndex(content: string, index: number): number {
+	return content.slice(0, index).split(/\r?\n/).length;
 }
 
 const failures: string[] = [];
@@ -84,7 +113,8 @@ for (const sourceRoot of SOURCE_ROOTS) {
 	const absoluteRoot = resolve(ROOT, sourceRoot);
 	for (const file of walk(absoluteRoot)) {
 		const relativePath = relative(ROOT, file);
-		const lines = lineCount(file);
+		const content = readFileSync(file, 'utf8');
+		const lines = content.length === 0 ? 0 : content.split(/\r?\n/).length;
 		const budget = FILE_LINE_BUDGETS[relativePath];
 		const maxLines = budget?.maxLines ?? DEFAULT_MAX_LINES;
 
@@ -94,6 +124,16 @@ for (const sourceRoot of SOURCE_ROOTS) {
 					? `${relativePath} has ${lines} lines, over its ${maxLines}-line allowlist budget. ${budget.reason}`
 					: `${relativePath} has ${lines} lines, over the ${DEFAULT_MAX_LINES}-line source budget. Split by domain or add a documented allowlist entry with a bounded maxLines value.`,
 			);
+		}
+
+		for (const forbidden of FORBIDDEN_PATTERNS) {
+			if (forbidden.allowedPaths?.has(relativePath)) continue;
+			const match = forbidden.pattern.exec(content);
+			if (match?.index != null) {
+				failures.push(
+					`${relativePath}:${lineNumberForIndex(content, match.index)} matches a forbidden architecture pattern. ${forbidden.reason}`,
+				);
+			}
 		}
 	}
 }

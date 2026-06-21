@@ -1,45 +1,55 @@
-export interface Cursor {
+export interface ArticleCursor {
 	id: string;
 	seconds: number;
-	direction: 'asc' | 'desc';
+	direction: 'a' | 'd';
 	ftsRank?: number;
 }
 
 // Maximum reasonable timestamp: year 2100
 const MAX_REASONABLE_TIMESTAMP = 4102444800;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function decodeCursor(encoded: string): Cursor | null {
-	const parts = encoded.split(':');
+export function isValidArticleCursorId(value: string): boolean {
+	return UUID_REGEX.test(value);
+}
+
+export function decodeArticleCursor(
+	cursor: string | undefined,
+	sort: string | undefined,
+): ArticleCursor | null {
+	if (!cursor) return null;
+	const parts = cursor.split(':');
 	if (parts.length < 3) return null;
 
-	const [first, second, third, ...rest] = parts;
+	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
 
-	// Handle FTS-ranked cursor: ftsRank:seconds:id:direction
-	if (!Number.isNaN(Number(first)) && parts.length >= 4) {
-		const ftsRank = Number(first);
-		const seconds = Number(second);
-		const direction = third === 'a' ? 'asc' : 'desc';
-		const id = rest.join(':');
+	if (parts.length === 4) {
+		const [rankRaw, secondsRaw, id, direction] = parts;
+		if (!rankRaw || !secondsRaw || !id || !direction) return null;
+		if (!isValidArticleCursorId(id)) return null;
+		if (direction !== 'a' && direction !== 'd') return null;
+		if (direction !== expectedDirection) return null;
 
-		// Validate timestamp bounds
-		if (seconds < 0 || seconds > MAX_REASONABLE_TIMESTAMP) {
-			return null;
-		}
+		const rawRank = Number(rankRaw);
+		if (!Number.isFinite(rawRank)) return null;
 
+		const seconds = parseCursorSeconds(secondsRaw);
+		if (seconds == null) return null;
+		const ftsRank = normalizeFtsRank(rawRank);
 		return { id, seconds, direction, ftsRank };
 	}
 
-	// Handle regular cursor: id:seconds:direction
-	const id = first;
-	const seconds = Number(second);
-	const direction = third === 'a' ? 'asc' : 'desc';
+	if (parts.length !== 3) return null;
 
-	// Validate timestamp bounds
-	if (seconds < 0 || seconds > MAX_REASONABLE_TIMESTAMP) {
-		return null;
-	}
+	const [id, secondsRaw, direction] = parts;
+	if (!id || !secondsRaw || !direction) return null;
+	if (!isValidArticleCursorId(id)) return null;
+	if (direction !== 'a' && direction !== 'd') return null;
+	if (direction !== expectedDirection) return null;
 
-	return { id: id!, seconds, direction };
+	const seconds = parseCursorSeconds(secondsRaw);
+	if (seconds == null) return null;
+	return { id, seconds, direction };
 }
 
 export interface ArticleCursorItem {
@@ -90,4 +100,18 @@ function encodeArticleCursorFromTimestamp(
 		return `${ftsRank}:${seconds}:${id}:${direction}`;
 	}
 	return `${id}:${seconds}:${direction}`;
+}
+
+function normalizeFtsRank(rawRank: number): number {
+	const OFFSET = 1000000000;
+	const SCALE = 10000;
+	return rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
+}
+
+function parseCursorSeconds(value: string): number | null {
+	const seconds = Number(value);
+	if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_REASONABLE_TIMESTAMP) {
+		return null;
+	}
+	return seconds;
 }

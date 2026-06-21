@@ -2,14 +2,19 @@ import type Redis from 'ioredis';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
-import { encodeArticleCursor, encodeCachedArticleCursor } from '../utils/article-cursor.js';
+import { encodeCachedArticleCursor } from '../utils/article-cursor.js';
 import { createLogger } from '../utils/logger.js';
-import type { MetricsService } from './metrics.service.js';
+import {
+	type ArticleListCacheMeta,
+	CACHED_ARTICLE_LIMIT,
+	type CachedArticleList,
+	type CacheMetrics,
+	cacheableArticleRows,
+	cacheMetricType,
+	isArticleListCacheKey,
+} from './article-cache.model.js';
 
 const logger = createLogger();
-
-// Limit cached articles - users see recent articles first, no need to cache old ones
-const CACHED_ARTICLE_LIMIT = 100;
 
 // Warming lock TTL - prevents duplicate warming within this window
 const WARMING_LOCK_TTL = 30; // seconds
@@ -35,79 +40,6 @@ async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
 		cursor = nextCursor;
 	} while (cursor !== '0');
 	return matched;
-}
-
-function isArticleListCacheKey(userId: string, key: string): boolean {
-	return key === CacheKeys.articleListCache(userId) || key.startsWith(`articles:list:${userId}:`);
-}
-
-function cacheableArticleRows(result: Awaited<ReturnType<ArticleRepository['findByFeeds']>>): {
-	articles: CachedArticle[];
-	cursor: string | null;
-	hasMore: boolean;
-	rows: typeof result;
-} {
-	const hasMore = result.length > CACHED_ARTICLE_LIMIT;
-	const rows = result.slice(0, CACHED_ARTICLE_LIMIT);
-	return {
-		rows,
-		articles: rows.map((a) => ({
-			id: a.id,
-			feedId: a.feedId,
-			feedTitle: a.feedTitle,
-			feedFaviconUrl: a.feedFaviconUrl,
-			title: a.title,
-			author: a.author,
-			excerpt: a.excerpt,
-			heroImageUrl: a.heroImageUrl,
-			publishedAt: a.publishedAt?.toISOString() ?? null,
-			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-			isRead: a.isRead,
-		})),
-		cursor: hasMore ? encodeArticleCursor(rows[rows.length - 1] ?? null, 'latest') : null,
-		hasMore,
-	};
-}
-
-export interface CachedArticleList {
-	articles: CachedArticle[];
-	cursor: string | null;
-	hasMore: boolean;
-	meta: {
-		syncedAt: string;
-		newArticlesCount: number;
-		scope?: string; // 'all' | 'feed:{id}' | 'category:{id}'
-		generation: number; // Cache generation for race condition handling
-	};
-}
-
-export interface CachedArticle {
-	id: string;
-	feedId: string;
-	feedTitle: string;
-	feedFaviconUrl: string | null;
-	title: string;
-	author: string | null;
-	excerpt: string | null;
-	heroImageUrl: string | null;
-	publishedAt: string | null;
-	displayedAt: string;
-	isRead: boolean;
-}
-
-interface ArticleListCacheMeta {
-	syncedAt: string;
-	newArticlesCount: number;
-	scope?: string;
-	generation: number;
-}
-
-type CacheMetrics = Pick<MetricsService, 'recordCacheHit' | 'recordCacheMiss'>;
-
-function cacheMetricType(options: { feedId?: string; categoryId?: string }): string {
-	if (options.feedId) return 'article_list_feed';
-	if (options.categoryId) return 'article_list_category';
-	return 'article_list';
 }
 
 export class ArticleCacheService {

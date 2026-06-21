@@ -2,190 +2,18 @@ import type { Database as BunDatabase } from 'bun:sqlite';
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { getRawDb } from '../db/client.js';
-import { articleMedia, articleReads, articles, categories, feeds } from '../db/schema.js';
+import { articleMedia, articleReads, articles, feeds } from '../db/schema.js';
+import { decodeArticleCursor } from '../utils/article-cursor.js';
+import {
+	type ArticleScope,
+	mapSearchRow,
+	type RawSearchRow,
+	type SearchRow,
+	scopeConditions,
+	toFtsQuery,
+} from './article-query.helpers.js';
 
-export interface ArticleScope {
-	userId: string;
-	feedId?: string;
-	categoryId?: string;
-}
-
-function toFtsQuery(query: string): string | null {
-	const terms = query
-		.trim()
-		.split(/[^\p{L}\p{N}_]+/u)
-		.map((term) => term.trim())
-		.filter(Boolean)
-		.slice(0, 16);
-
-	if (terms.length === 0) {
-		return null;
-	}
-
-	// Sanitize each term: remove any FTS5 special operators and control characters
-	// that could manipulate the query. Only allow alphanumeric characters, underscores,
-	// and basic accented letters (Unicode alphanumerics). This prevents injection of
-	// operators like *, ^, (, ), AND, OR, NOT, NEAR, :, ", ', etc.
-	const sanitizeForFts = (term: string): string => term.replace(/[^\p{L}\p{N}_]/gu, '');
-
-	return terms
-		.map((term) => {
-			const sanitized = sanitizeForFts(term);
-			// Skip empty terms after sanitization
-			if (!sanitized) return null;
-			return `"${sanitized}"*`;
-		})
-		.filter(Boolean)
-		.join(' ');
-}
-
-interface RawSearchRow {
-	id: string;
-	feedId: string;
-	title: string | null;
-	author: string | null;
-	excerpt: string | null;
-	heroImageUrl: string | null;
-	publishedAt: Date | number | string | null;
-	fetchedAt: Date | number | string;
-	feedTitle: string;
-	feedFaviconUrl: string | null;
-	isRead: number | boolean;
-	ftsRank: number;
-}
-
-interface SearchRow {
-	id: string;
-	feedId: string;
-	title: string | null;
-	author: string | null;
-	excerpt: string | null;
-	heroImageUrl: string | null;
-	publishedAt: Date | null;
-	fetchedAt: Date;
-	feedTitle: string;
-	feedFaviconUrl: string | null;
-	isRead: boolean;
-	ftsRank: number;
-}
-
-function sqliteTimestampToDate(value: Date | number | string | null): Date | null {
-	if (value == null) {
-		return null;
-	}
-	if (value instanceof Date) {
-		return value;
-	}
-
-	const numericValue = typeof value === 'number' ? value : Number(value);
-	if (Number.isFinite(numericValue)) {
-		return new Date(numericValue > 1_000_000_000_000 ? numericValue : numericValue * 1000);
-	}
-
-	const parsed = new Date(value);
-	return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function mapSearchRow(row: RawSearchRow): SearchRow {
-	const fetchedAt = sqliteTimestampToDate(row.fetchedAt);
-	if (!fetchedAt) {
-		throw new Error(`Invalid fetched_at timestamp for article ${row.id}`);
-	}
-
-	return {
-		...row,
-		publishedAt: sqliteTimestampToDate(row.publishedAt),
-		fetchedAt,
-		isRead: Boolean(row.isRead),
-	};
-}
-
-// UUID v4 validation regex pattern
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-	return UUID_REGEX.test(value);
-}
-
-/**
- * Decode the opaque pagination cursor emitted by `encodeCursor` in the
- * service. The format for search results is `<ftsRank>:<unixSeconds>:<id>:<direction>`.
- * For non-search results it is `<id>:<unixSeconds>:<direction>`.
- * If the input doesn't match the expected shape, the decoder returns null
- * and the caller falls back to no cursor — the request simply returns the
- * first page, which is the safe behavior for a malformed cursor.
- */
-function decodeCursor(
-	cursor: string | undefined,
-	sort: string | undefined,
-): { id: string; seconds: number; direction: 'a' | 'd'; ftsRank?: number } | null {
-	if (!cursor) return null;
-	const parts = cursor.split(':');
-	if (parts.length < 3) return null;
-
-	const expectedDirection = sort === 'oldest' ? 'a' : 'd';
-
-	// Search cursor format: <ftsRank>:<unixSeconds>:<id>:<direction>.
-	// Older local builds emitted <ftsRankInt> with OFFSET + round(bm25 * SCALE);
-	// continue to accept that form so stale cursors safely degrade to the same page.
-	// Non-search cursor format: <id>:<unixSeconds>:<direction>
-	if (parts.length === 4) {
-		// Search cursor
-		const [rankIntRaw, secondsRaw, id, direction] = parts;
-		if (!rankIntRaw || !secondsRaw || !id || !direction) return null;
-		// Validate that id is a valid UUID to prevent SQL injection
-		if (!isValidUuid(id)) return null;
-		if (direction !== 'a' && direction !== 'd') return null;
-		if (direction !== expectedDirection) return null;
-		const OFFSET = 1000000000;
-		const SCALE = 10000;
-		const rawRank = Number(rankIntRaw);
-		if (!Number.isFinite(rawRank)) return null;
-		const ftsRank = rawRank > OFFSET / 2 ? (rawRank - OFFSET) / SCALE : rawRank;
-		const seconds = Number.parseInt(secondsRaw, 10);
-		if (!Number.isFinite(seconds) || seconds < 0) return null;
-		return { id, seconds, direction, ftsRank };
-	}
-
-	// Non-search cursor (legacy/regular cursor)
-	const [id, secondsRaw, direction] = parts;
-	if (!id || !secondsRaw || !direction) return null;
-	// Validate that id is a valid UUID to prevent SQL injection
-	if (!isValidUuid(id)) return null;
-	if (direction !== 'a' && direction !== 'd') return null;
-	if (direction !== expectedDirection) return null;
-	const seconds = Number.parseInt(secondsRaw, 10);
-	if (!Number.isFinite(seconds) || seconds < 0) return null;
-	return { id, seconds, direction };
-}
-
-function categoryScopeSql(scope: ArticleScope) {
-	return sql`${feeds.categoryId} IN (
-		WITH RECURSIVE category_scope(id) AS (
-			SELECT ${categories.id}
-			FROM ${categories}
-			WHERE ${categories.id} = ${scope.categoryId}
-				AND ${categories.userId} = ${scope.userId}
-			UNION ALL
-			SELECT child.id
-			FROM categories AS child
-			INNER JOIN category_scope AS parent ON child.parent_category_id = parent.id
-			WHERE child.user_id = ${scope.userId}
-		)
-		SELECT id FROM category_scope
-	)`;
-}
-
-function scopeConditions(scope: ArticleScope): SQL[] {
-	const conditions: SQL[] = [eq(feeds.userId, scope.userId)];
-	if (scope.feedId) {
-		conditions.push(eq(feeds.id, scope.feedId));
-	}
-	if (scope.categoryId) {
-		conditions.push(categoryScopeSql(scope));
-	}
-	return conditions;
-}
+export type { ArticleScope } from './article-query.helpers.js';
 
 export class ArticleRepository {
 	constructor(
@@ -210,7 +38,7 @@ export class ArticleRepository {
 		// to look the row up by id. Falls back to the id-only shape
 		// for legacy cursors (which the service no longer emits, but
 		// in-flight pagination may still have one cached).
-		const decodedCursor = decodeCursor(options.cursor, options.sort);
+		const decodedCursor = decodeArticleCursor(options.cursor, options.sort);
 		if (decodedCursor) {
 			conditions.push(
 				options.sort === 'oldest'
@@ -259,7 +87,7 @@ export class ArticleRepository {
 	) {
 		const conditions: SQL[] = scopeConditions(scope);
 		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
-		const decodedCursor = decodeCursor(options.cursor, options.sort);
+		const decodedCursor = decodeArticleCursor(options.cursor, options.sort);
 		if (decodedCursor) {
 			conditions.push(
 				options.sort === 'oldest'
@@ -547,7 +375,7 @@ export class ArticleRepository {
 			return [];
 		}
 
-		const decodedCursor = decodeCursor(cursor, 'latest');
+		const decodedCursor = decodeArticleCursor(cursor, 'latest');
 
 		// Use parameterized query to prevent SQL injection
 		// All user input (feedIds, _userId, cursor values) are passed as bound parameters
@@ -600,7 +428,7 @@ export class ArticleRepository {
 			return [];
 		}
 
-		const decodedCursor = decodeCursor(cursor, 'latest');
+		const decodedCursor = decodeArticleCursor(cursor, 'latest');
 
 		// Use parameterized query to prevent SQL injection
 		// All user input (scope.userId, scope.feedId, scope.categoryId, cursor values) are passed as bound parameters
