@@ -36,15 +36,44 @@ class AuthViewModel @Inject constructor(
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            repository.authEvents().collect { message ->
+                val enabled = loadRegistrationEnabled()
+                _state.value = AuthUiState(
+                    loading = false,
+                    isAuthenticated = false,
+                    apiBaseUrl = repository.getApiBaseUrl(),
+                    registrationEnabled = enabled,
+                    errorMessage = message,
+                )
+            }
+        }
+    }
+
     fun bootstrap() {
         viewModelScope.launch {
             val apiBaseUrl = repository.getApiBaseUrl()
             if (repository.isLoggedIn()) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    isAuthenticated = true,
-                    apiBaseUrl = apiBaseUrl,
-                )
+                when (val result = repository.restoreSession()) {
+                    is AppResult.Success -> _state.value = _state.value.copy(
+                        loading = false,
+                        isAuthenticated = true,
+                        apiBaseUrl = apiBaseUrl,
+                        errorMessage = null,
+                    )
+                    is AppResult.Error -> {
+                        val enabled = loadRegistrationEnabled()
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            isAuthenticated = false,
+                            authMode = AuthMode.LOGIN,
+                            apiBaseUrl = apiBaseUrl,
+                            registrationEnabled = enabled,
+                            errorMessage = result.message.takeIf { it == AUTH_LOST_MESSAGE },
+                        )
+                    }
+                }
             } else {
                 val enabled = loadRegistrationEnabled()
                 _state.value = _state.value.copy(
@@ -149,4 +178,8 @@ class AuthViewModel @Inject constructor(
                 null
             }
         }
+
+    private companion object {
+        const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
+    }
 }

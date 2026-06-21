@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@self-feed/shared';
+import type { ApiResponse, AuthSession, AuthSessionsResponse } from '@self-feed/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 
@@ -51,3 +51,28 @@ export function useUpdatePreferences() {
 		},
 	});
 }
+
+export function useAuthSessions() {
+	return useQuery({
+		queryKey: ['auth-sessions'],
+		queryFn: ({ signal }) =>
+			apiFetch<ApiResponse<AuthSessionsResponse>>('/auth/sessions', { signal }).then(
+				(r) => r.data.sessions,
+			),
+	});
+}
+
+export function useRevokeAuthSession() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (sessionId: string) =>
+			apiFetch<ApiResponse<{ success: boolean }>>(`/auth/sessions/${sessionId}`, {
+				method: 'DELETE',
+			}),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ['auth-sessions'] });
+		},
+	});
+}
+
+export type { AuthSession };

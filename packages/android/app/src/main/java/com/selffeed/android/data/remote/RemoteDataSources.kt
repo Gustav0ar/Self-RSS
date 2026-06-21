@@ -5,6 +5,7 @@ import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthResponse
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
@@ -16,6 +17,7 @@ import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.RegisterRequest
 import com.selffeed.android.network.RegistrationStatusResponse
+import com.selffeed.android.network.RefreshData
 import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.SyncResponse
@@ -36,6 +38,7 @@ class AuthRemoteDataSource @Inject constructor(
     suspend fun registrationStatus(): RegistrationStatusResponse = api.registrationStatus().data
     suspend fun login(email: String, password: String): AuthResponse = api.login(LoginRequest(email, password)).data
     suspend fun register(email: String, password: String): AuthResponse = api.register(RegisterRequest(email, password)).data
+    suspend fun refresh(): RefreshData = api.refresh().data
     suspend fun logout(): Boolean = api.logout().data.success
     suspend fun me(): User = api.me().data
 }
@@ -106,6 +109,8 @@ class SettingsRemoteDataSource @Inject constructor(
     suspend fun preferences(): UserPreferences = api.preferences().data
     suspend fun updatePreferences(request: UpdatePreferencesRequest): UserPreferences = api.updatePreferences(request).data
     suspend fun stats(): StatsResponse = api.stats().data
+    suspend fun authSessions(): List<AuthSession> = api.authSessions().data.sessions
+    suspend fun revokeAuthSession(id: String): Boolean = api.revokeAuthSession(id).data.success
     suspend fun adminSettings(): AppSettingsResponse = api.adminSettings().data
     suspend fun updateAdminSettings(registrationLocked: Boolean): AppSettingsResponse =
         api.updateAdminSettings(UpdateAppSettingsRequest(registrationLocked)).data

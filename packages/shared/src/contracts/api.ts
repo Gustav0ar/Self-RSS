@@ -32,8 +32,8 @@ export interface ApiErrorResponse {
 // Auth
 export interface AuthTokens {
 	accessToken: string;
-	refreshToken: string;
-	expiresIn: number;
+	refreshToken?: string;
+	expiresIn?: number;
 }
 
 export interface LoginResponse {
@@ -44,6 +44,21 @@ export interface LoginResponse {
 export interface RegisterResponse {
 	user: User;
 	tokens: AuthTokens;
+}
+
+export interface AuthSession {
+	id: string;
+	deviceName: string;
+	clientId: string | null;
+	ipAddress: string | null;
+	userAgent: string | null;
+	createdAt: string;
+	lastSeenAt: string;
+	current: boolean;
+}
+
+export interface AuthSessionsResponse {
+	sessions: AuthSession[];
 }
 
 // Categories

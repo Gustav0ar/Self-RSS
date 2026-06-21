@@ -43,6 +43,7 @@ async function resetDatabase() {
 	db.run(sql.raw('PRAGMA foreign_keys = OFF;'));
 	const tables = [
 		'audit_logs',
+		'auth_sessions',
 		'sync_runs',
 		'article_media',
 		'article_reads',
@@ -275,23 +276,47 @@ describe('API integration', () => {
 		});
 		expect(reusedRefresh.response.status).toBe(401);
 
-		const logout = await jsonRequest('/api/v1/auth/logout', {
+		const adminToken = refreshed.body.data.tokens.accessToken;
+
+		const sessions = await authedRequest('/api/v1/auth/sessions', adminToken);
+		expect(sessions.response.status).toBe(200);
+		expect(sessions.body.data.sessions).toHaveLength(1);
+		expect(sessions.body.data.sessions[0].current).toBe(true);
+
+		const androidLogin = await jsonRequest('/api/v1/auth/login', {
 			method: 'POST',
 			headers: {
-				Cookie: rotatedRefreshCookie!,
+				...JSON_HEADERS,
+				'X-Self-Feed-Client-Id': 'android-client',
+				'X-Self-Feed-Device-Name': 'Android app on Pixel 8',
+				'X-Forwarded-For': '203.0.113.10',
 			},
+			body: JSON.stringify({ email: 'user@example.com', password: 'password123' }),
 		});
-		expect(logout.response.status).toBe(200);
+		expect(androidLogin.response.status).toBe(200);
 
-		const revokedRefresh = await jsonRequest('/api/v1/auth/refresh', {
-			method: 'POST',
-			headers: {
-				Cookie: rotatedRefreshCookie!,
-			},
-		});
-		expect(revokedRefresh.response.status).toBe(401);
+		const sessionsWithAndroid = await authedRequest('/api/v1/auth/sessions', adminToken);
+		expect(sessionsWithAndroid.response.status).toBe(200);
+		expect(sessionsWithAndroid.body.data.sessions).toHaveLength(2);
+		const androidSession = sessionsWithAndroid.body.data.sessions.find(
+			(session: { deviceName: string }) => session.deviceName === 'Android app on Pixel 8',
+		);
+		if (!androidSession) {
+			throw new Error('Expected Android session to be listed');
+		}
 
-		const adminToken = registered.body.data.tokens.accessToken;
+		const revokedAndroid = await authedRequest(
+			`/api/v1/auth/sessions/${androidSession.id}`,
+			adminToken,
+			{ method: 'DELETE' },
+		);
+		expect(revokedAndroid.response.status).toBe(200);
+
+		const revokedAndroidMe = await authedRequest(
+			'/api/v1/auth/me',
+			androidLogin.body.data.tokens.accessToken,
+		);
+		expect(revokedAndroidMe.response.status).toBe(401);
 
 		const lockRegistration = await authedRequest('/api/v1/admin/settings', adminToken, {
 			method: 'PATCH',
@@ -313,6 +338,81 @@ describe('API integration', () => {
 
 		const auditLogCounts = await db.select({ count: sql<number>`count(*)` }).from(auditLogs);
 		expect(auditLogCounts[0]?.count).toBe(2);
+
+		const logout = await jsonRequest('/api/v1/auth/logout', {
+			method: 'POST',
+			headers: {
+				Cookie: rotatedRefreshCookie!,
+			},
+		});
+		expect(logout.response.status).toBe(200);
+
+		const revokedRefresh = await jsonRequest('/api/v1/auth/refresh', {
+			method: 'POST',
+			headers: {
+				Cookie: rotatedRefreshCookie!,
+			},
+		});
+		expect(revokedRefresh.response.status).toBe(401);
+
+		const loggedOutAccess = await authedRequest('/api/v1/auth/me', adminToken);
+		expect(loggedOutAccess.response.status).toBe(401);
+	});
+
+	it('only records session IPs from proxy headers when proxy trust is enabled', async () => {
+		const previousTrustProxy = process.env.TRUST_PROXY;
+		process.env.TRUST_PROXY = 'false';
+		clearEnvCache();
+
+		try {
+			const registered = await jsonRequest('/api/v1/auth/register', {
+				method: 'POST',
+				headers: {
+					...JSON_HEADERS,
+					'X-Forwarded-For': '198.51.100.1',
+					'X-Self-Feed-Device-Name': 'Untrusted browser',
+				},
+				body: JSON.stringify({ email: 'proxy-user@example.com', password: 'password123' }),
+			});
+			expect(registered.response.status).toBe(201);
+
+			const untrustedSessions = await authedRequest(
+				'/api/v1/auth/sessions',
+				registered.body.data.tokens.accessToken,
+			);
+			expect(untrustedSessions.response.status).toBe(200);
+			expect(untrustedSessions.body.data.sessions[0].ipAddress).toBeNull();
+
+			process.env.TRUST_PROXY = 'true';
+			clearEnvCache();
+
+			const trustedLogin = await jsonRequest('/api/v1/auth/login', {
+				method: 'POST',
+				headers: {
+					...JSON_HEADERS,
+					'X-Forwarded-For': '203.0.113.25',
+					'X-Self-Feed-Device-Name': 'Trusted browser',
+				},
+				body: JSON.stringify({ email: 'proxy-user@example.com', password: 'password123' }),
+			});
+			expect(trustedLogin.response.status).toBe(200);
+
+			const trustedSessions = await authedRequest(
+				'/api/v1/auth/sessions',
+				trustedLogin.body.data.tokens.accessToken,
+			);
+			const trustedSession = trustedSessions.body.data.sessions.find(
+				(session: { deviceName: string }) => session.deviceName === 'Trusted browser',
+			);
+			expect(trustedSession?.ipAddress).toBe('203.0.113.25');
+		} finally {
+			if (previousTrustProxy === undefined) {
+				delete process.env.TRUST_PROXY;
+			} else {
+				process.env.TRUST_PROXY = previousTrustProxy;
+			}
+			clearEnvCache();
+		}
 	});
 
 	it('rejects local feed URLs when private hosts are not allowed', async () => {

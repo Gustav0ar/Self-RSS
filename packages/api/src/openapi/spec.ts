@@ -1,46 +1,5 @@
-const bearerSecurity = [{ bearerAuth: [] }];
-
-function json(content: Record<string, unknown>) {
-	return {
-		content: {
-			'application/json': {
-				schema: content,
-			},
-		},
-	};
-}
-
-function apiDataRef(ref: string) {
-	return {
-		type: 'object',
-		required: ['data'],
-		properties: {
-			data: { $ref: ref },
-		},
-	};
-}
-
-function apiDataArrayRef(ref: string) {
-	return {
-		type: 'object',
-		required: ['data'],
-		properties: {
-			data: { type: 'array', items: { $ref: ref } },
-		},
-	};
-}
-
-function listResponse(ref: string) {
-	return {
-		type: 'object',
-		required: ['data', 'cursor', 'hasMore'],
-		properties: {
-			data: { type: 'array', items: { $ref: ref } },
-			cursor: { type: ['string', 'null'] },
-			hasMore: { type: 'boolean' },
-		},
-	};
-}
+import { authPaths, authSchemas } from './auth.spec';
+import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
 
 export const openApiSpec = {
 	openapi: '3.1.0',
@@ -108,6 +67,7 @@ export const openApiSpec = {
 					tokens: { $ref: '#/components/schemas/AccessToken' },
 				},
 			},
+			...authSchemas,
 			AppSettings: {
 				type: 'object',
 				required: ['registrationLocked'],
@@ -369,77 +329,7 @@ export const openApiSpec = {
 		},
 	},
 	paths: {
-		'/auth/registration-status': {
-			get: {
-				tags: ['Auth'],
-				responses: {
-					'200': json(apiDataRef('#/components/schemas/RegistrationStatus')),
-				},
-			},
-		},
-		'/auth/register': {
-			post: {
-				tags: ['Auth'],
-				requestBody: json({
-					type: 'object',
-					required: ['email', 'password'],
-					properties: {
-						email: { type: 'string', format: 'email' },
-						password: { type: 'string', minLength: 8 },
-					},
-				}),
-				responses: {
-					'201': json(apiDataRef('#/components/schemas/AuthResponse')),
-					'400': json({ $ref: '#/components/schemas/ApiError' }),
-				},
-			},
-		},
-		'/auth/login': {
-			post: {
-				tags: ['Auth'],
-				requestBody: json({
-					type: 'object',
-					required: ['email', 'password'],
-					properties: {
-						email: { type: 'string', format: 'email' },
-						password: { type: 'string' },
-					},
-				}),
-				responses: {
-					'200': json(apiDataRef('#/components/schemas/AuthResponse')),
-					'401': json({ $ref: '#/components/schemas/ApiError' }),
-				},
-			},
-		},
-		'/auth/logout': {
-			post: {
-				tags: ['Auth'],
-				responses: {
-					'200': json({
-						type: 'object',
-						properties: { data: { type: 'object', properties: { success: { type: 'boolean' } } } },
-					}),
-				},
-			},
-		},
-		'/auth/refresh': {
-			post: {
-				tags: ['Auth'],
-				responses: {
-					'200': json(apiDataRef('#/components/schemas/RefreshResponse')),
-					'401': json({ $ref: '#/components/schemas/ApiError' }),
-				},
-			},
-		},
-		'/auth/me': {
-			get: {
-				tags: ['Auth'],
-				security: bearerSecurity,
-				responses: {
-					'200': json(apiDataRef('#/components/schemas/User')),
-				},
-			},
-		},
+		...authPaths,
 		'/categories': {
 			get: {
 				tags: ['Categories'],

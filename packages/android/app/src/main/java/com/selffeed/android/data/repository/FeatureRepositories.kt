@@ -5,6 +5,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
@@ -30,9 +31,11 @@ class AuthRepositoryImpl @Inject constructor(
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> = source.registrationStatus()
     override suspend fun login(email: String, password: String): AppResult<User> = source.login(email, password)
     override suspend fun register(email: String, password: String): AppResult<User> = source.register(email, password)
+    override suspend fun restoreSession(): AppResult<User> = source.restoreSession()
     override suspend fun logout(): AppResult<Boolean> = source.logout()
     override suspend fun me(): AppResult<User> = source.me()
     override fun isLoggedIn(): Boolean = source.isLoggedIn()
+    override fun authEvents(): Flow<String> = source.authEvents()
 }
 
 class FeedRepositoryImpl @Inject constructor(
@@ -128,6 +131,8 @@ class SettingsRepositoryImpl @Inject constructor(
         source.updatePreferences(request)
 
     override suspend fun stats(): AppResult<StatsResponse> = source.stats()
+    override suspend fun authSessions(): AppResult<List<AuthSession>> = source.authSessions()
+    override suspend fun revokeAuthSession(id: String): AppResult<Boolean> = source.revokeAuthSession(id)
     override suspend fun adminSettings(): AppResult<AppSettingsResponse> = source.adminSettings()
     override suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse> =
         source.updateAdminSettings(registrationLocked)

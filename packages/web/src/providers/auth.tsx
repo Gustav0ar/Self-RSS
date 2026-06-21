@@ -7,6 +7,7 @@ import {
 	getAccessToken,
 	loadTokens,
 	refreshAccessToken,
+	setAuthLostHandler,
 	setTokens,
 } from '../lib/api';
 
@@ -14,9 +15,11 @@ interface AuthState {
 	isAuthenticated: boolean;
 	isLoading: boolean;
 	username: string | null;
+	authLostMessage: string | null;
 	login: (username: string, password: string) => Promise<void>;
 	register: (username: string, email: string, password: string) => Promise<void>;
 	logout: () => void;
+	clearAuthLostMessage: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -26,6 +29,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 	const [isLoading, setIsLoading] = useState(true);
 	const [username, setUsername] = useState<string | null>(null);
+	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
+
+	useEffect(() => {
+		setAuthLostHandler((message) => {
+			clearTokens();
+			queryClient.clear();
+			setIsAuthenticated(false);
+			setUsername(null);
+			setAuthLostMessage(message);
+			setIsLoading(false);
+		});
+
+		return () => setAuthLostHandler(null);
+	}, [queryClient]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -81,6 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
+			setAuthLostMessage(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setIsAuthenticated(true);
@@ -95,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
+			setAuthLostMessage(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setIsAuthenticated(true);
@@ -112,10 +131,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		queryClient.clear();
 		setIsAuthenticated(false);
 		setUsername(null);
+		setAuthLostMessage(null);
 	}, [queryClient]);
 
+	const clearAuthLostMessage = useCallback(() => {
+		setAuthLostMessage(null);
+	}, []);
+
 	return (
-		<AuthContext.Provider value={{ isAuthenticated, isLoading, username, login, register, logout }}>
+		<AuthContext.Provider
+			value={{
+				isAuthenticated,
+				isLoading,
+				username,
+				authLostMessage,
+				login,
+				register,
+				logout,
+				clearAuthLostMessage,
+			}}
+		>
 			{children}
 		</AuthContext.Provider>
 	);

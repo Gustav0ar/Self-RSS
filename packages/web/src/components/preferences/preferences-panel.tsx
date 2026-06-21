@@ -1,8 +1,14 @@
-import { Monitor, Moon, Settings, Sun } from 'lucide-react';
+import { Monitor, MonitorSmartphone, Moon, Settings, ShieldX, Sun } from 'lucide-react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@/components/ui/dialog';
-import { type Preferences, usePreferences, useUpdatePreferences } from '@/hooks/queries';
+import {
+	type Preferences,
+	useAuthSessions,
+	usePreferences,
+	useRevokeAuthSession,
+	useUpdatePreferences,
+} from '@/hooks/queries';
 import { ACCENT_COLOR_OPTIONS, FONT_FAMILY_OPTIONS, normalizeAccentColor } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/providers/theme';
@@ -20,7 +26,9 @@ function normalizePreferences(prefs: Preferences): Preferences {
 
 export function PreferencesPanel() {
 	const { data: prefs, isLoading } = usePreferences();
+	const { data: sessions = [], isLoading: sessionsLoading } = useAuthSessions();
 	const updatePrefs = useUpdatePreferences();
+	const revokeSession = useRevokeAuthSession();
 	const { setTheme } = useTheme();
 	const [isOpen, setIsOpen] = useState(false);
 	const [draftPrefs, setDraftPrefs] = useState<Preferences | null>(null);
@@ -328,10 +336,72 @@ export function PreferencesPanel() {
 						<option value="on_open">On Open</option>
 					</select>
 				</section>
+
+				<section className="surface-muted rounded-[1.5rem] p-5 md:col-span-2">
+					<div className="flex items-start justify-between gap-4">
+						<div>
+							<h3 className="text-sm font-medium">Authenticated devices</h3>
+							<p className="mt-1 text-xs leading-5 text-muted-foreground">
+								Review active browser and app sessions, then revoke any device you no longer use.
+							</p>
+						</div>
+						<MonitorSmartphone className="mt-1 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+					</div>
+
+					<div className="mt-4 space-y-3">
+						{sessionsLoading ? (
+							<p className="text-sm text-muted-foreground">Loading devices...</p>
+						) : sessions.length === 0 ? (
+							<p className="text-sm text-muted-foreground">No active sessions found.</p>
+						) : (
+							sessions.map((session) => (
+								<div
+									key={session.id}
+									className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/60 p-4 sm:flex-row sm:items-center sm:justify-between"
+								>
+									<div className="min-w-0">
+										<div className="flex flex-wrap items-center gap-2">
+											<p className="truncate text-sm font-medium">{session.deviceName}</p>
+											{session.current ? (
+												<span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+													This device
+												</span>
+											) : null}
+										</div>
+										<p className="mt-1 text-xs text-muted-foreground">
+											{session.ipAddress ?? 'Unknown IP'} - Last seen{' '}
+											{formatSessionDate(session.lastSeenAt)}
+										</p>
+									</div>
+									<button
+										type="button"
+										onClick={() => revokeSession.mutate(session.id)}
+										disabled={revokeSession.isPending}
+										className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-2xl border border-red-500/25 px-3 text-xs font-medium text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+									>
+										<ShieldX className="h-3.5 w-3.5" aria-hidden="true" />
+										Revoke
+									</button>
+								</div>
+							))
+						)}
+					</div>
+				</section>
 			</div>
 		</Dialog>,
 		document.body,
 	);
+}
+
+function formatSessionDate(value: string) {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return 'unknown';
+	return new Intl.DateTimeFormat(undefined, {
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+	}).format(date);
 }
 
 function ThemeChoice({

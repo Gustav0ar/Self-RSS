@@ -42,10 +42,47 @@ export const usersRelations = relations(users, ({ one, many }) => ({
 		fields: [users.id],
 		references: [userPreferences.userId],
 	}),
+	authSessions: many(authSessions),
 	categories: many(categories),
 	feeds: many(feeds),
 	articleReads: many(articleReads),
 	auditLogs: many(auditLogs),
+}));
+
+// ─── Auth Sessions ───
+
+export const authSessions = sqliteTable(
+	'auth_sessions',
+	{
+		id: uuidPrimaryKey('id'),
+		userId: uuid('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		refreshTokenHash: text('refresh_token_hash').notNull(),
+		clientId: text('client_id'),
+		deviceName: text('device_name').notNull().default('Unknown device'),
+		userAgent: text('user_agent'),
+		ipAddress: text('ip_address'),
+		createdAt: timestamp('created_at')
+			.notNull()
+			.$defaultFn(() => new Date()),
+		lastSeenAt: timestamp('last_seen_at')
+			.notNull()
+			.$defaultFn(() => new Date()),
+		rotatedAt: timestamp('rotated_at')
+			.notNull()
+			.$defaultFn(() => new Date()),
+		revokedAt: timestamp('revoked_at'),
+	},
+	(t) => [
+		index('auth_sessions_user_id_idx').on(t.userId),
+		index('auth_sessions_user_revoked_idx').on(t.userId, t.revokedAt),
+		uniqueIndex('auth_sessions_refresh_token_hash_idx').on(t.refreshTokenHash),
+	],
+);
+
+export const authSessionsRelations = relations(authSessions, ({ one }) => ({
+	user: one(users, { fields: [authSessions.userId], references: [users.id] }),
 }));
 
 // ─── App Settings ───

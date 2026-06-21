@@ -33,6 +33,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
@@ -82,6 +84,7 @@ class RssRepository @Inject constructor(
     // scope tied to the repository means background work survives
     // individual failures and is cleaned up when the process dies.
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val authLostEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
 
     override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
 
@@ -94,22 +97,44 @@ class RssRepository @Inject constructor(
         nextBaseUrl
     }
 
-    override suspend fun registrationStatus() = safeReadCall {
+    override suspend fun registrationStatus() = safePublicCall {
         authRemote.registrationStatus()
     }
 
-    override suspend fun login(email: String, password: String) = safeCall {
+    override suspend fun login(email: String, password: String) = safePublicCall {
         val response = authRemote.login(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
         response.user
     }
 
-    override suspend fun register(email: String, password: String) = safeCall {
+    override suspend fun register(email: String, password: String) = safePublicCall {
         val response = authRemote.register(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
         response.user
+    }
+
+    override suspend fun restoreSession() = safeCall {
+        val hasRefreshCookie = !sessionStore.getRefreshCookie().isNullOrBlank()
+        val hasAccessToken = !sessionStore.getAccessToken().isNullOrBlank()
+        if (!hasRefreshCookie && !hasAccessToken) {
+            throw IllegalStateException("No saved session")
+        }
+
+        if (hasRefreshCookie) {
+            try {
+                val refreshed = authRemote.refresh()
+                sessionStore.setAccessToken(refreshed.tokens.accessToken)
+            } catch (e: HttpException) {
+                if (e.code() == 401) throw e
+            } catch (_: Exception) {
+                // Network-only refresh failures should not log the user out
+                // while a still-valid access token can confirm the session.
+            }
+        }
+
+        runtime.withRetry { authRemote.me() }
     }
 
     override suspend fun logout() = safeCall {
@@ -546,6 +571,18 @@ class RssRepository @Inject constructor(
         runtime.cachedGet(key = "stats", ttlMs = STATS_TTL_MS) { runtime.withRetry { settingsRemote.stats() } }
     }
 
+    override suspend fun authSessions() = safeReadCall {
+        runtime.cachedGet(key = "auth:sessions", ttlMs = AUTH_SESSIONS_TTL_MS) {
+            runtime.withRetry { settingsRemote.authSessions() }
+        }
+    }
+
+    override suspend fun revokeAuthSession(id: String) = safeCall {
+        settingsRemote.revokeAuthSession(id).also {
+            runtime.invalidateByPrefix("auth:sessions")
+        }
+    }
+
     override suspend fun adminSettings() = safeReadCall {
         runtime.cachedGet(key = "admin:settings", ttlMs = ADMIN_SETTINGS_TTL_MS) { runtime.withRetry { settingsRemote.adminSettings() } }
     }
@@ -556,7 +593,10 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override fun isLoggedIn(): Boolean = !sessionStore.getAccessToken().isNullOrBlank()
+    override fun isLoggedIn(): Boolean =
+        !sessionStore.getRefreshCookie().isNullOrBlank() || !sessionStore.getAccessToken().isNullOrBlank()
+
+    override fun authEvents(): Flow<String> = authLostEvents.asSharedFlow()
 
     override fun isOnline(): Boolean = networkMonitor.online.value
 
@@ -572,9 +612,24 @@ class RssRepository @Inject constructor(
      */
     override fun trimMemoryCaches() = runtime.trimMemoryCaches()
 
-    private suspend fun <T> safeReadCall(block: suspend () -> T): AppResult<T> = runtime.safeCall { block() }
+    private suspend fun <T> safeReadCall(block: suspend () -> T): AppResult<T> = safeCall(block)
 
-    private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> = runtime.safeCall(block)
+    private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> {
+        val result = runtime.safeCall(block)
+        if (result is AppResult.Error && result.cause is HttpException && result.cause.code() == 401) {
+            handleAuthenticationLost()
+            return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
+        }
+        return result
+    }
+
+    private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> = runtime.safeCall(block)
+
+    private suspend fun handleAuthenticationLost() {
+        sessionStore.clear()
+        clearCacheAndDatabase()
+        authLostEvents.tryEmit(AUTH_LOST_MESSAGE)
+    }
 
     suspend fun invalidateArticleCaches(articleId: String) {
         // Targeted invalidation for a single markRead. The SSE read-state
@@ -648,11 +703,13 @@ class RssRepository @Inject constructor(
         const val SEARCH_TTL_MS = 30_000L
         const val PREFERENCES_TTL_MS = 60_000L
         const val STATS_TTL_MS = 30_000L
+        const val AUTH_SESSIONS_TTL_MS = 15_000L
         const val ADMIN_SETTINGS_TTL_MS = 60_000L
         const val OPML_EXPORT_TTL_MS = 30_000L
         const val ARTICLE_IMAGE_PREFETCH_LIMIT = 5
         const val MAX_MEMORY_CACHE_ENTRIES = 160
         const val ARTICLE_PAGE_SIZE = 30
         const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
+        const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
     }
 }

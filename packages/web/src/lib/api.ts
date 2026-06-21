@@ -2,10 +2,13 @@ const API_BASE = '/api/v1';
 const RETRY_INITIAL_DELAY_MS = 300;
 const RETRY_MAX_DELAY_MS = 2000;
 const RETRY_MAX_ATTEMPTS = 3;
+const CLIENT_ID_STORAGE_KEY = 'self-feed-client-id';
+const AUTH_LOST_MESSAGE = 'Authentication was lost. Please sign in again.';
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
-const clientId = crypto.randomUUID();
+let authLostHandler: ((message: string) => void) | null = null;
+const clientId = getOrCreateClientId();
 
 // The refresh token is now handled securely via HttpOnly cookies.
 // We only keep the short-lived access token in memory.
@@ -28,6 +31,43 @@ export function getAccessToken() {
 
 export function getClientId() {
 	return clientId;
+}
+
+export function setAuthLostHandler(handler: ((message: string) => void) | null) {
+	authLostHandler = handler;
+}
+
+function getOrCreateClientId() {
+	try {
+		const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+		if (existing) return existing;
+		const next = crypto.randomUUID();
+		localStorage.setItem(CLIENT_ID_STORAGE_KEY, next);
+		return next;
+	} catch {
+		return crypto.randomUUID();
+	}
+}
+
+function getDeviceName() {
+	const platform = navigator.platform?.trim();
+	if (platform) return `Web browser on ${platform}`;
+	return 'Web browser';
+}
+
+function shouldNotifyAuthLost(path: string) {
+	return !(
+		path.startsWith('/auth/login') ||
+		path.startsWith('/auth/register') ||
+		path.startsWith('/auth/registration-status') ||
+		path.startsWith('/auth/refresh')
+	);
+}
+
+function notifyAuthLost(path: string) {
+	if (!shouldNotifyAuthLost(path)) return;
+	clearTokens();
+	authLostHandler?.(AUTH_LOST_MESSAGE);
 }
 
 export async function refreshAccessToken(): Promise<boolean> {
@@ -75,6 +115,7 @@ function buildRequestHeaders(options: RequestInit) {
 		headers.Authorization = `Bearer ${accessToken}`;
 	}
 	headers['X-Self-Feed-Client-Id'] = clientId;
+	headers['X-Self-Feed-Device-Name'] = getDeviceName();
 
 	return headers;
 }
@@ -103,7 +144,13 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 		if (refreshed) {
 			headers.Authorization = `Bearer ${accessToken}`;
 			res = await doFetch();
+		} else {
+			notifyAuthLost(path);
 		}
+	}
+
+	if (res.status === 401) {
+		notifyAuthLost(path);
 	}
 
 	return res;

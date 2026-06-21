@@ -6,6 +6,7 @@ import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
@@ -65,12 +66,16 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(fakeUser)
     }
 
+    override suspend fun restoreSession(): AppResult<User> =
+        if (authenticated) AppResult.Success(fakeUser) else AppResult.Error("No saved session")
+
     override suspend fun logout(): AppResult<Boolean> {
         authenticated = false
         return AppResult.Success(true)
     }
     override suspend fun me(): AppResult<User> = AppResult.Success(fakeUser)
     override fun isLoggedIn(): Boolean = authenticated
+    override fun authEvents(): Flow<String> = emptyFlow()
 
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> = AppResult.Success(
         listOf(
@@ -175,6 +180,10 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun stats(): AppResult<StatsResponse> =
         AppResult.Success(StatsResponse(totalUnread = 1, totalRead = 0, totalFeeds = 1, totalCategories = 1))
 
+    override suspend fun authSessions(): AppResult<List<AuthSession>> = AppResult.Success(listOf(fakeSession))
+
+    override suspend fun revokeAuthSession(id: String): AppResult<Boolean> = AppResult.Success(true)
+
     override suspend fun adminSettings(): AppResult<AppSettingsResponse> =
         AppResult.Success(AppSettingsResponse(registrationLocked = false))
 
@@ -203,6 +212,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     private companion object {
         val fakeUser = User(id = "user-1", email = "reader@example.com", role = "user", isActive = true)
+        val fakeSession = AuthSession(
+            id = "session-1",
+            deviceName = "Android test device",
+            ipAddress = "127.0.0.1",
+            createdAt = "2026-06-21T00:00:00.000Z",
+            lastSeenAt = "2026-06-21T00:00:00.000Z",
+            current = true,
+        )
         val fakePreferences = UserPreferences(
             theme = "system",
             fontFamily = "system",

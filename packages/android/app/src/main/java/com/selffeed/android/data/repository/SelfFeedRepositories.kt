@@ -5,6 +5,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
@@ -27,9 +28,11 @@ interface AuthRepository {
     suspend fun registrationStatus(): AppResult<RegistrationStatusResponse>
     suspend fun login(email: String, password: String): AppResult<User>
     suspend fun register(email: String, password: String): AppResult<User>
+    suspend fun restoreSession(): AppResult<User>
     suspend fun logout(): AppResult<Boolean>
     suspend fun me(): AppResult<User>
     fun isLoggedIn(): Boolean
+    fun authEvents(): Flow<String>
 }
 
 interface FeedRepository {
@@ -92,6 +95,8 @@ interface SettingsRepository {
     suspend fun preferences(): AppResult<UserPreferences>
     suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences>
     suspend fun stats(): AppResult<StatsResponse>
+    suspend fun authSessions(): AppResult<List<AuthSession>>
+    suspend fun revokeAuthSession(id: String): AppResult<Boolean>
     suspend fun adminSettings(): AppResult<AppSettingsResponse>
     suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse>
     fun getDebugResilienceSnapshot(): Map<String, Long>

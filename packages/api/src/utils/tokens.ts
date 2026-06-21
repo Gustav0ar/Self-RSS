@@ -4,6 +4,7 @@ export interface TokenPayload extends JWTPayload {
 	sub: string;
 	role: string;
 	type: 'access' | 'refresh';
+	sid?: string;
 }
 
 function parseExpiry(exp: string): number {
@@ -27,8 +28,13 @@ export function createTokenUtils(
 	const refreshSeconds = parseExpiry(refreshExpiry);
 
 	return {
-		async signAccessToken(userId: string, role: string): Promise<string> {
-			return new SignJWT({ sub: userId, role, type: 'access' })
+		async signAccessToken(userId: string, role: string, sessionId?: string): Promise<string> {
+			return new SignJWT({
+				sub: userId,
+				role,
+				type: 'access',
+				...(sessionId ? { sid: sessionId } : {}),
+			})
 				.setProtectedHeader({ alg: 'HS256' })
 				.setJti(crypto.randomUUID())
 				.setIssuedAt()

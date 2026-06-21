@@ -5,6 +5,10 @@ import { LoginPage } from '../../src/components/auth/login-page';
 const apiFetchMock = vi.fn();
 const loginMock = vi.fn();
 const registerMock = vi.fn();
+let authLostMessageMock: string | null = null;
+const clearAuthLostMessageMock = vi.fn(() => {
+	authLostMessageMock = null;
+});
 
 vi.mock('@/lib/api', () => ({
 	apiFetch: (...args: unknown[]) => apiFetchMock(...args),
@@ -12,6 +16,8 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/providers/auth', () => ({
 	useAuth: () => ({
+		authLostMessage: authLostMessageMock,
+		clearAuthLostMessage: clearAuthLostMessageMock,
 		login: loginMock,
 		register: registerMock,
 	}),
@@ -20,6 +26,7 @@ vi.mock('@/providers/auth', () => ({
 describe('LoginPage registration availability', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		authLostMessageMock = null;
 	});
 
 	it('does not expose registration when the API reports it disabled', async () => {
@@ -67,6 +74,28 @@ describe('LoginPage registration availability', () => {
 
 		await waitFor(() => {
 			expect(registerMock).toHaveBeenCalledWith('', 'new@example.com', 'password123');
+		});
+	});
+
+	it('shows and clears the authentication lost message on submit', async () => {
+		apiFetchMock.mockResolvedValue({ data: { registrationEnabled: false } });
+		authLostMessageMock = 'Authentication was lost. Please sign in again.';
+		loginMock.mockResolvedValue(undefined);
+
+		render(<LoginPage />);
+
+		expect(screen.getByText('Authentication was lost. Please sign in again.')).toBeTruthy();
+
+		fireEvent.change(screen.getByLabelText('Email'), {
+			target: { value: 'user@example.com' },
+		});
+		fireEvent.change(screen.getByLabelText('Password'), {
+			target: { value: 'password123' },
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Sign In' }));
+
+		await waitFor(() => {
+			expect(clearAuthLostMessageMock).toHaveBeenCalled();
 		});
 	});
 });

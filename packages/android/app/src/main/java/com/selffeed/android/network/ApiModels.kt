@@ -42,6 +42,23 @@ data class RefreshData(
 )
 
 @JsonClass(generateAdapter = true)
+data class AuthSession(
+    val id: String,
+    val deviceName: String,
+    val clientId: String? = null,
+    val ipAddress: String? = null,
+    val userAgent: String? = null,
+    val createdAt: String,
+    val lastSeenAt: String,
+    val current: Boolean,
+)
+
+@JsonClass(generateAdapter = true)
+data class AuthSessionsResponse(
+    val sessions: List<AuthSession>,
+)
+
+@JsonClass(generateAdapter = true)
 data class RegistrationStatusResponse(
     val registrationEnabled: Boolean,
 )

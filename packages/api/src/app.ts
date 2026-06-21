@@ -70,7 +70,12 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 				return allowedOrigins.has(origin) ? origin : undefined;
 			},
 			allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-			allowHeaders: ['Content-Type', 'Authorization', 'X-Self-Feed-Client-Id'],
+			allowHeaders: [
+				'Content-Type',
+				'Authorization',
+				'X-Self-Feed-Client-Id',
+				'X-Self-Feed-Device-Name',
+			],
 			exposeHeaders: ['X-Request-Id'],
 			maxAge: 86400,
 			credentials: true,
@@ -88,7 +93,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 	// API v1 routes (only mounted when deps are available)
 	if (deps && tokenUtils) {
 		const v1 = new Hono();
-		const authMiddleware = createAuthMiddleware(tokenUtils);
+		const authMiddleware = createAuthMiddleware(tokenUtils, deps.services.auth);
 
 		v1.route('/auth', createAuthRoutes(deps.services.auth, authMiddleware, deps.rateLimiter));
 

@@ -6,6 +6,7 @@ import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UpdateAppSettingsRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
@@ -20,6 +21,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val preferences: UserPreferences? = null,
     val stats: StatsResponse? = null,
+    val authSessions: List<AuthSession> = emptyList(),
     val adminRegistrationLocked: Boolean? = null,
     val debugSnapshot: Map<String, Long> = emptyMap(),
     val loading: Boolean = false,
@@ -84,6 +86,32 @@ class SettingsViewModel @Inject constructor(
                 is AppResult.Success -> {
                     _state.update { it.copy(stats = result.data) }
                     loadDebugSnapshot()
+                }
+                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+            }
+        }
+    }
+
+    fun loadAuthSessions() {
+        viewModelScope.launch {
+            when (val result = repository.authSessions()) {
+                is AppResult.Success -> _state.update { it.copy(authSessions = result.data) }
+                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+            }
+        }
+    }
+
+    fun revokeAuthSession(id: String) {
+        viewModelScope.launch {
+            when (val result = repository.revokeAuthSession(id)) {
+                is AppResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            authSessions = it.authSessions.filterNot { session -> session.id == id },
+                            statusMessage = "Session revoked",
+                        )
+                    }
+                    loadAuthSessions()
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
             }

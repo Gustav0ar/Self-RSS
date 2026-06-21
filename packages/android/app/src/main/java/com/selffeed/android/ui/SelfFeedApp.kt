@@ -128,6 +128,7 @@ data class SelfFeedAppActions(
     val onSortChanged: (ArticleSortPreference) -> Unit,
     val onDensityChanged: (DensityPreference) -> Unit,
     val onTextSizeChanged: (Int) -> Unit,
+    val onRevokeAuthSession: (String) -> Unit,
     val onClearMessages: () -> Unit,
 )
 
@@ -266,10 +267,15 @@ fun SelfFeedApp(
             resultLimitReached = state.search.resultLimitReached,
         )
     }
-    val settingsTabState = remember(state.settings.preferences, state.settings.stats) {
+    val settingsTabState = remember(
+        state.settings.preferences,
+        state.settings.stats,
+        state.settings.authSessions,
+    ) {
         SettingsTabState(
             preferences = state.settings.preferences,
             stats = state.settings.stats,
+            authSessions = state.settings.authSessions,
         )
     }
     val feedActions = remember(actions) {
@@ -304,6 +310,7 @@ fun SelfFeedApp(
             onSortChanged = actions.onSortChanged,
             onDensityChanged = actions.onDensityChanged,
             onTextSizeChanged = actions.onTextSizeChanged,
+            onRevokeAuthSession = actions.onRevokeAuthSession,
             onLogout = actions.onLogout,
         )
     }

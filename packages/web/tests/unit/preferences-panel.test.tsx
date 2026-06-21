@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreferencesPanel } from '../../src/components/preferences/preferences-panel';
 
 const mutateMock = vi.fn();
+const revokeSessionMock = vi.fn();
 const resetMock = vi.fn();
 const setThemeMock = vi.fn();
 
@@ -21,6 +22,25 @@ let preferencesMock = { ...defaultPreferences };
 
 vi.mock('../../src/hooks/queries', () => ({
 	usePreferences: () => ({ data: preferencesMock, isLoading: false }),
+	useAuthSessions: () => ({
+		data: [
+			{
+				id: 'session-1',
+				deviceName: 'Web browser on Linux',
+				clientId: 'client-1',
+				ipAddress: '127.0.0.1',
+				userAgent: 'Test browser',
+				createdAt: '2026-06-21T00:00:00.000Z',
+				lastSeenAt: '2026-06-21T00:00:00.000Z',
+				current: true,
+			},
+		],
+		isLoading: false,
+	}),
+	useRevokeAuthSession: () => ({
+		mutate: revokeSessionMock,
+		isPending: false,
+	}),
 	useUpdatePreferences: () => ({
 		mutate: mutateMock,
 		isPending: false,
@@ -37,6 +57,7 @@ describe('PreferencesPanel', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		mutateMock.mockClear();
+		revokeSessionMock.mockClear();
 		resetMock.mockClear();
 		setThemeMock.mockClear();
 		preferencesMock = { ...defaultPreferences };
@@ -99,5 +120,16 @@ describe('PreferencesPanel', () => {
 		expect(
 			(screen.getByRole('checkbox', { name: 'Hide read articles' }) as HTMLInputElement).checked,
 		).toBe(true);
+	});
+
+	it('lists active sessions and revokes the selected device', () => {
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+
+		expect(screen.getByText('Authenticated devices')).toBeTruthy();
+		expect(screen.getByText('Web browser on Linux')).toBeTruthy();
+		fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+
+		expect(revokeSessionMock).toHaveBeenCalledWith('session-1');
 	});
 });

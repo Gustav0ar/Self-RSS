@@ -35,9 +35,10 @@ describe('AuthService - getRegistrationStatus', () => {
 
 		const service = new AuthService(
 			userRepo as unknown as AuthServiceDeps[0],
-			settingsRepo as unknown as AuthServiceDeps[1],
-			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[1],
+			settingsRepo as unknown as AuthServiceDeps[2],
 			{} as AuthServiceDeps[3],
+			{} as AuthServiceDeps[4],
 		);
 
 		const result = await service.getRegistrationStatus();
@@ -57,9 +58,10 @@ describe('AuthService - getRegistrationStatus', () => {
 
 		const service = new AuthService(
 			userRepo as unknown as AuthServiceDeps[0],
-			settingsRepo as unknown as AuthServiceDeps[1],
-			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[1],
+			settingsRepo as unknown as AuthServiceDeps[2],
 			{} as AuthServiceDeps[3],
+			{} as AuthServiceDeps[4],
 		);
 
 		const result = await service.getRegistrationStatus();
@@ -80,9 +82,10 @@ describe('AuthService - getRegistrationStatus', () => {
 
 		const service = new AuthService(
 			userRepo as unknown as AuthServiceDeps[0],
-			settingsRepo as unknown as AuthServiceDeps[1],
-			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[1],
+			settingsRepo as unknown as AuthServiceDeps[2],
 			{} as AuthServiceDeps[3],
+			{} as AuthServiceDeps[4],
 		);
 
 		const result = await service.getRegistrationStatus();
@@ -103,9 +106,10 @@ describe('AuthService - getRegistrationStatus', () => {
 
 		const service = new AuthService(
 			userRepo as unknown as AuthServiceDeps[0],
-			settingsRepo as unknown as AuthServiceDeps[1],
-			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[1],
+			settingsRepo as unknown as AuthServiceDeps[2],
 			{} as AuthServiceDeps[3],
+			{} as AuthServiceDeps[4],
 		);
 
 		const result = await service.getRegistrationStatus();
@@ -128,9 +132,10 @@ describe('AuthService - register', () => {
 
 		const service = new AuthService(
 			userRepo as unknown as AuthServiceDeps[0],
-			settingsRepo as unknown as AuthServiceDeps[1],
-			{} as AuthServiceDeps[2],
+			{} as AuthServiceDeps[1],
+			settingsRepo as unknown as AuthServiceDeps[2],
 			{} as AuthServiceDeps[3],
+			{} as AuthServiceDeps[4],
 		);
 
 		await expect(service.register('new@example.com', 'password123')).rejects.toMatchObject({

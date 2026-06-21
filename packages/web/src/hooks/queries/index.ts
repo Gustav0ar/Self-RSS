@@ -68,8 +68,11 @@ export {
 
 // Re-export preferences hooks
 export {
+	type AuthSession,
 	type Preferences,
+	useAuthSessions,
 	usePreferences,
+	useRevokeAuthSession,
 	useUpdatePreferences,
 } from './preferences-hooks';
 // Re-export stats hooks

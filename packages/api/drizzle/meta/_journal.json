@@ -85,6 +85,13 @@
       "when": 1781987250576,
       "tag": "0011_safe_viper",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1782041699976,
+      "tag": "0012_shallow_thunderbird",
+      "breakpoints": true
     }
   ]
 }

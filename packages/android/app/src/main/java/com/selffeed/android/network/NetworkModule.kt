@@ -1,6 +1,7 @@
 package com.selffeed.android.network
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
@@ -104,9 +105,9 @@ class TokenAuthenticator(
 
             val refreshedToken = refreshAccessToken(response.request.url) ?: run {
                 // Refresh failed (e.g. revoked/expired refresh cookie). Clear the local
-                // access token so the next call goes unauthenticated and the UI can
+                // session so the next call goes unauthenticated and the UI can
                 // route to the login screen.
-                sessionStore.setAccessToken(null)
+                sessionStore.clear()
                 return null
             }
             sessionStore.setAccessToken(refreshedToken)
@@ -127,6 +128,9 @@ class TokenAuthenticator(
         val request = Request.Builder()
             .url(baseUrl)
             .post("{}".toRequestBody("application/json".toMediaType()))
+            .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
+            .header("X-Self-Feed-Device-Name", androidDeviceName())
+            .header("User-Agent", androidUserAgent())
             .build()
 
         val client = OkHttpClient.Builder()
@@ -290,6 +294,8 @@ object NetworkModule {
                 }
 
                 requestBuilder.header("X-Self-Feed-Client-Id", sessionStore.getClientId())
+                requestBuilder.header("X-Self-Feed-Device-Name", androidDeviceName())
+                requestBuilder.header("User-Agent", androidUserAgent())
 
                 if (request.body != null && request.header("Content-Type") == null) {
                     requestBuilder.header("Content-Type", "application/json")
@@ -327,6 +333,20 @@ object NetworkModule {
     private const val PING_INTERVAL_SECONDS = 30L
     private const val TAG = "NetworkModule"
 }
+
+private fun androidDeviceName(): String {
+    val manufacturer = Build.MANUFACTURER.orEmpty().replaceFirstChar { it.titlecase() }
+    val model = Build.MODEL.orEmpty()
+    val name = listOf(manufacturer, model)
+        .filter { it.isNotBlank() }
+        .distinct()
+        .joinToString(" ")
+        .trim()
+    return if (name.isBlank()) "Android app" else "Android app on $name"
+}
+
+private fun androidUserAgent(): String =
+    "SelfFeed Android/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE}; ${Build.MODEL})"
 
 private object Types {
     val apiEnvelopeRefreshType = com.squareup.moshi.Types.newParameterizedType(

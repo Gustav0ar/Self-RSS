@@ -49,6 +49,7 @@ fun SelfFeedAppRoute(
                 feedsViewModel.loadFeeds()
                 settingsViewModel.loadPreferences()
                 settingsViewModel.loadStats()
+                settingsViewModel.loadAuthSessions()
                 settingsViewModel.loadAdminSettings()
                 articlesViewModel.refreshArticles()
                 articlesViewModel.startReadStateSync()
@@ -187,6 +188,7 @@ fun SelfFeedAppRoute(
                 },
                 onDensityChanged = { settingsViewModel.updateDensity(it.apiValue) },
                 onTextSizeChanged = settingsViewModel::updateTextSize,
+                onRevokeAuthSession = settingsViewModel::revokeAuthSession,
                 onClearMessages = {
                     authViewModel.clearMessages()
                     feedsViewModel.clearMessages()

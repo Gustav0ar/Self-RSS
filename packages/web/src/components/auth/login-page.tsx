@@ -6,7 +6,7 @@ import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/providers/auth';
 
 function LoginPageContent() {
-	const { login, register } = useAuth();
+	const { authLostMessage, clearAuthLostMessage, login, register } = useAuth();
 	const [mode, setMode] = useState<'login' | 'register'>('login');
 	const [email, setEmail] = useState('');
 	const [password, setPassword] = useState('');
@@ -46,6 +46,7 @@ function LoginPageContent() {
 	async function handleSubmit(e: React.FormEvent) {
 		e.preventDefault();
 		setError(null);
+		clearAuthLostMessage();
 		setLoading(true);
 		try {
 			if (mode === 'login') {
@@ -129,6 +130,12 @@ function LoginPageContent() {
 								</p>
 							) : null}
 						</div>
+
+						{authLostMessage ? (
+							<div className="mt-6 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-600 dark:text-amber-300">
+								{authLostMessage}
+							</div>
+						) : null}
 
 						{error ? (
 							<div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">

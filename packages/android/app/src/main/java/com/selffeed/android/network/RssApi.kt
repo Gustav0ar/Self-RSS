@@ -32,6 +32,12 @@ interface RssApi {
     @GET("auth/me")
     suspend fun me(): ApiEnvelope<User>
 
+    @GET("auth/sessions")
+    suspend fun authSessions(): ApiEnvelope<AuthSessionsResponse>
+
+    @DELETE("auth/sessions/{id}")
+    suspend fun revokeAuthSession(@Path("id") id: String): ApiEnvelope<SuccessResponse>
+
     @GET("categories")
     suspend fun categories(): ApiEnvelope<CategoryTreeResponse>
 

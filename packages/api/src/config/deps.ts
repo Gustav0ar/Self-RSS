@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
 import { ArticleRepository } from '../repositories/article.repository.js';
+import { AuthSessionRepository } from '../repositories/auth-session.repository.js';
 import { CategoryRepository } from '../repositories/category.repository.js';
 import { FeedRepository } from '../repositories/feed.repository.js';
 import { PreferencesRepository } from '../repositories/preferences.repository.js';
@@ -31,6 +32,7 @@ export interface AppDeps {
 	redis: Redis;
 	repos: {
 		user: UserRepository;
+		authSession: AuthSessionRepository;
 		category: CategoryRepository;
 		feed: FeedRepository;
 		article: ArticleRepository;
@@ -70,6 +72,7 @@ export function createDeps(
 ): AppDeps {
 	const repos = {
 		user: new UserRepository(db),
+		authSession: new AuthSessionRepository(db),
 		category: new CategoryRepository(db),
 		feed: new FeedRepository(db),
 		article: new ArticleRepository(db),
@@ -109,7 +112,7 @@ export function createDeps(
 	});
 
 	const services: AppDeps['services'] = {
-		auth: new AuthService(repos.user, repos.settings, tokenUtils, redis),
+		auth: new AuthService(repos.user, repos.authSession, repos.settings, tokenUtils, redis),
 		category: new CategoryService(repos.category, repos.feed, repos.article),
 		feed: new FeedService(repos.feed, repos.category, repos.article, resolvedSyncConfig),
 		opmlExport: new OpmlExportService(repos.category, repos.feed),

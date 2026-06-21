@@ -5,5 +5,6 @@ declare module 'hono' {
 		requestId: string;
 		userId: string;
 		userRole: string;
+		sessionId: string | null;
 	}
 }

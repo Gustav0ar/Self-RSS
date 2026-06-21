@@ -5,6 +5,7 @@ import { LoginPage } from '../../src/components/auth/login-page';
 const apiFetchMock = vi.fn();
 const loginMock = vi.fn();
 const registerMock = vi.fn();
+const clearAuthLostMessageMock = vi.fn();
 
 vi.mock('@/lib/api', () => ({
 	apiFetch: (...args: unknown[]) => apiFetchMock(...args),
@@ -12,6 +13,8 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/providers/auth', () => ({
 	useAuth: () => ({
+		authLostMessage: null,
+		clearAuthLostMessage: clearAuthLostMessageMock,
 		login: loginMock,
 		register: registerMock,
 	}),

@@ -81,6 +81,7 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.StatsResponse
@@ -125,6 +126,7 @@ data class SearchTabState(
 data class SettingsTabState(
     val preferences: UserPreferences?,
     val stats: StatsResponse?,
+    val authSessions: List<AuthSession>,
 )
 
 data class FeedTabActions(
@@ -197,6 +199,7 @@ data class SettingsTabActions(
     val onSortChanged: (ArticleSortPreference) -> Unit,
     val onDensityChanged: (DensityPreference) -> Unit,
     val onTextSizeChanged: (Int) -> Unit,
+    val onRevokeAuthSession: (String) -> Unit,
     val onLogout: () -> Unit,
 )
 
@@ -317,7 +320,7 @@ fun FeedsTab(
 }
 
 @Composable
-private fun FeedSurfaceCard(
+fun FeedSurfaceCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -1156,6 +1159,13 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     StatCard("Categories", (state.stats?.totalCategories ?: 0).toString(), Modifier.weight(1f))
                 }
             }
+        }
+
+        item {
+            AuthenticatedDevicesSection(
+                sessions = state.authSessions,
+                onRevokeSession = actions.onRevokeAuthSession,
+            )
         }
 
         item {

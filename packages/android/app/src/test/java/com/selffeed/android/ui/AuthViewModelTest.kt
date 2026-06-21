@@ -11,6 +11,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -34,6 +35,7 @@ class AuthViewModelTest {
         repository = mockk()
         every { repository.getApiBaseUrl() } returns DEFAULT_API_BASE_URL
         every { repository.isLoggedIn() } returns false
+        every { repository.authEvents() } returns emptyFlow()
         coEvery { repository.setApiBaseUrl(any()) } answers {
             AppResult.Success(normalizeApiServerHost(firstArg()))
         }
@@ -42,6 +44,7 @@ class AuthViewModelTest {
         )
         coEvery { repository.login(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.register(any(), any()) } returns AppResult.Success(sampleUser())
+        coEvery { repository.restoreSession() } returns AppResult.Success(sampleUser())
         coEvery { repository.logout() } returns AppResult.Success(true)
     }
 
@@ -71,6 +74,20 @@ class AuthViewModelTest {
         assertFalse(state.loading)
         assertTrue(state.isAuthenticated)
         assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
+        coVerify { repository.restoreSession() }
+    }
+
+    @Test
+    fun `bootstrap with revoked saved session redirects to login with message`() = runTest {
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.restoreSession() } returns AppResult.Error("Authentication was lost. Please sign in again.")
+        val viewModel = AuthViewModel(repository)
+        viewModel.bootstrap()
+        val state = viewModel.state.value
+        assertFalse(state.loading)
+        assertFalse(state.isAuthenticated)
+        assertEquals("Authentication was lost. Please sign in again.", state.errorMessage)
+        assertTrue(state.registrationEnabled)
     }
 
     @Test
