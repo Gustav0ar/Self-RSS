@@ -12,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.runBlocking
 
 /**
  * Robolectric tests for [SessionStore]. The store uses
@@ -61,6 +62,51 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `api server host is persisted across store instances`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val writer = SessionStore(context)
+
+        val normalized = writer.setApiBaseUrl("rss.example.com")
+        val reader = SessionStore(context)
+
+        assertEquals("rss.example.com", normalized)
+        assertEquals(normalized, reader.getApiBaseUrl())
+    }
+
+    @Test
+    fun `clear preserves api server host`() {
+        val normalized = store.setApiBaseUrl("10.0.22.22:3000")
+
+        store.clear()
+
+        assertEquals("10.0.22.22:3000", normalized)
+        assertEquals(normalized, store.getApiBaseUrl())
+    }
+
+    @Test
+    fun `changing api base url clears tokens from the previous server`() {
+        store.setApiBaseUrl("https://old.example.com")
+        val ok = runCatching {
+            store.setAccessToken("token")
+            store.setRefreshCookie("rss_refresh_token=cookie; Domain=old.example.com")
+        }.isSuccess
+        if (!ok) return
+
+        store.setApiBaseUrl("https://new.example.com")
+
+        assertNull(store.getAccessToken())
+        assertNull(store.getRefreshCookie())
+    }
+
+    @Test
+    fun `full api url stored by older versions is displayed as server host`() {
+        val normalized = store.setApiBaseUrl("http://10.0.22.22:3000/api/rss")
+
+        assertEquals("10.0.22.22:3000", normalized)
+        assertEquals(normalized, store.getApiBaseUrl())
+    }
+
+    @Test
     fun `set and get refresh cookie round-trips when the key store is available`() {
         // Skip if the AndroidKeyStore shim doesn't support AES/GCM.
         val ok = runCatching { store.setRefreshCookie("rss_refresh_token=abc; Domain=example.com") }.isSuccess
@@ -75,6 +121,46 @@ class SessionStoreTest {
         if (!ok) return
         val read = store.getAccessToken()
         assertEquals("token-1", read)
+    }
+
+    @Test
+    fun `access token is lazy loaded when preload has not run`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val writer = SessionStore(context)
+        val ok = runCatching {
+            writer.clear()
+            writer.setAccessToken("lazy-token")
+        }.isSuccess
+        if (!ok) return
+
+        val reader = SessionStore(context)
+
+        assertEquals("lazy-token", reader.getAccessToken())
+    }
+
+    @Test
+    fun `refresh cookie is lazy loaded when preload has not run`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val writer = SessionStore(context)
+        val ok = runCatching {
+            writer.clear()
+            writer.setRefreshCookie("rss_refresh_token=lazy-cookie; Domain=example.com")
+        }.isSuccess
+        if (!ok) return
+
+        val reader = SessionStore(context)
+
+        assertEquals("rss_refresh_token=lazy-cookie; Domain=example.com", reader.getRefreshCookie())
+    }
+
+    @Test
+    fun `preload does not overwrite a token written before it runs`() = runBlocking {
+        val ok = runCatching { store.setAccessToken("fresh-token") }.isSuccess
+        if (!ok) return@runBlocking
+
+        store.preload()
+
+        assertEquals("fresh-token", store.getAccessToken())
     }
 
     @Test

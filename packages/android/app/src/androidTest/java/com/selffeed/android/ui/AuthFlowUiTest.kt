@@ -66,27 +66,55 @@ class AuthFlowUiTest {
     }
 
     @Test
+    fun authScreen_showsInlineErrorMessage() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                SelfFeedApp(
+                    state = SelfFeedAppState(
+                        auth = AuthUiState(
+                            loading = false,
+                            isAuthenticated = false,
+                            apiBaseUrl = "rss.example.test",
+                            errorMessage = "Unable to reach the selected server",
+                        ),
+                        chrome = AppChromeState(),
+                        feeds = FeedsUiState(),
+                        articles = ArticlesUiState(),
+                        search = SearchUiState(),
+                        settings = SettingsUiState(),
+                        isOnline = true,
+                    ),
+                    actions = noOpAppActions(),
+                    articlePagingData = flowOf(PagingData.empty<ArticleListItem>()),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Unable to reach the selected server").assertIsDisplayed()
+    }
+
+    @Test
     fun passwordField_clearedAfterSubmit() {
         val capturedPasswords = mutableListOf<String>()
 
         composeRule.setContent {
             SelfFeedTheme {
                 var mode by remember { mutableStateOf(AuthMode.LOGIN) }
-                var localPassword by remember { mutableStateOf("") }
 
                 // Capture what password is submitted
-                val onLogin = { _: String, pwd: String ->
+                val onLogin = { _: String, pwd: String, _: String ->
                     capturedPasswords.add(pwd)
-                    // After successful login, password is cleared (handled inside AuthScreen)
+                    Unit
                 }
 
                 AuthScreen(
                     mode = mode,
+                    apiBaseUrl = "10.0.2.2:3000",
                     registrationEnabled = true,
                     errorMessage = null,
                     onModeChange = { mode = it },
                     onLogin = onLogin,
-                    onRegister = { _, _ -> },
+                    onRegister = { _, _, _ -> },
                 )
 
                 // Verify password is volatile (remember not rememberSaveable)
@@ -102,6 +130,61 @@ class AuthFlowUiTest {
         // Verify password was captured before clearing
         assert(capturedPasswords.isNotEmpty()) { "Login callback should have been invoked" }
         assert(capturedPasswords.last() == "mypassword123") { "Submitted password should match input" }
+    }
+
+    @Test
+    fun serverField_isSubmittedWithLogin() {
+        val capturedServers = mutableListOf<String>()
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                var mode by remember { mutableStateOf(AuthMode.LOGIN) }
+                AuthScreen(
+                    mode = mode,
+                    apiBaseUrl = "10.0.2.2:3000",
+                    registrationEnabled = true,
+                    errorMessage = null,
+                    onModeChange = { mode = it },
+                    onLogin = { _, _, server -> capturedServers.add(server) },
+                    onRegister = { _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Server").performTextClearance()
+        composeRule.onNodeWithText("Server").performTextInput("rss.example.com")
+        composeRule.onNodeWithText("Email").performTextInput("user@test.com")
+        composeRule.onNodeWithText("Password").performTextInput("mypassword123")
+        composeRule.onNodeWithText("Continue").performClick()
+
+        assert(capturedServers.last() == "rss.example.com") { "Submitted server should match input" }
+    }
+
+    @Test
+    fun serverField_usesConfiguredServerAsPlaceholderAndSubmitFallback() {
+        val capturedServers = mutableListOf<String>()
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                var mode by remember { mutableStateOf(AuthMode.LOGIN) }
+                AuthScreen(
+                    mode = mode,
+                    apiBaseUrl = "rss.example.test",
+                    registrationEnabled = true,
+                    errorMessage = null,
+                    onModeChange = { mode = it },
+                    onLogin = { _, _, server -> capturedServers.add(server) },
+                    onRegister = { _, _, _ -> },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("rss.example.test").assertIsDisplayed()
+        composeRule.onNodeWithText("Email").performTextInput("user@test.com")
+        composeRule.onNodeWithText("Password").performTextInput("mypassword123")
+        composeRule.onNodeWithText("Continue").performClick()
+
+        assert(capturedServers.last() == "rss.example.test") { "Blank server field should submit configured server" }
     }
 
     @Test
@@ -126,11 +209,12 @@ class AuthFlowUiTest {
                 var mode by remember { mutableStateOf(AuthMode.LOGIN) }
                 AuthScreen(
                     mode = mode,
+                    apiBaseUrl = "10.0.2.2:3000",
                     registrationEnabled = true,
                     errorMessage = null,
                     onModeChange = { mode = it },
-                    onLogin = { _, _ -> },
-                    onRegister = { _, _ -> },
+                    onLogin = { _, _, _ -> },
+                    onRegister = { _, _, _ -> },
                 )
             }
         }
@@ -138,8 +222,8 @@ class AuthFlowUiTest {
 
     private fun noOpAppActions(): SelfFeedAppActions = SelfFeedAppActions(
         onAuthModeChange = {},
-        onLogin = { _, _ -> },
-        onRegister = { _, _ -> },
+        onLogin = { _, _, _ -> },
+        onRegister = { _, _, _ -> },
         onLogout = {},
         onTabSelected = {},
         onRefreshVisibleData = {},
@@ -156,6 +240,7 @@ class AuthFlowUiTest {
         onSearchQueryChanged = {},
         onSearchRequested = {},
         onLoadMoreSearch = {},
+        onSearchCurrentCategoryOnlyChanged = {},
         onThemeChanged = {},
         onSortChanged = {},
         onDensityChanged = {},

@@ -15,10 +15,12 @@ import okhttp3.CertificatePinner
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -59,6 +61,21 @@ class PersistedRefreshCookieJar(
         private fun logCookieJarError(message: String, throwable: Throwable) {
             runCatching { Log.e(TAG, message, throwable) }
         }
+    }
+}
+
+class ApiBaseUrlInterceptor(
+    private val sessionStore: SessionStore,
+) : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val original = chain.request()
+        val configuredBaseUrl = runCatching { sessionStore.getApiBaseUrl() }
+            .getOrDefault(BuildConfig.API_BASE_URL)
+        val rewrittenUrl = rewriteApiRequestUrl(
+            original = original.url,
+            configuredBaseUrl = configuredBaseUrl,
+        )
+        return chain.proceed(original.newBuilder().url(rewrittenUrl).build())
     }
 }
 
@@ -262,6 +279,7 @@ object NetworkModule {
                     throw e
                 }
             }
+            .addInterceptor(ApiBaseUrlInterceptor(sessionStore))
             .addInterceptor { chain ->
                 val request = chain.request()
                 val accessToken = sessionStore.getAccessToken()

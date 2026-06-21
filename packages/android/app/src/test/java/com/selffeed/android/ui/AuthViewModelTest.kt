@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
+import com.selffeed.android.network.normalizeApiServerHost
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.User
 import io.mockk.coEvery
@@ -31,7 +32,11 @@ class AuthViewModelTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
+        every { repository.getApiBaseUrl() } returns DEFAULT_API_BASE_URL
         every { repository.isLoggedIn() } returns false
+        coEvery { repository.setApiBaseUrl(any()) } answers {
+            AppResult.Success(normalizeApiServerHost(firstArg()))
+        }
         coEvery { repository.registrationStatus() } returns AppResult.Success(
             RegistrationStatusResponse(registrationEnabled = true),
         )
@@ -54,6 +59,7 @@ class AuthViewModelTest {
         assertFalse(state.isAuthenticated)
         assertTrue(state.registrationEnabled)
         assertEquals(AuthMode.LOGIN, state.authMode)
+        assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
     }
 
     @Test
@@ -64,6 +70,7 @@ class AuthViewModelTest {
         val state = viewModel.state.value
         assertFalse(state.loading)
         assertTrue(state.isAuthenticated)
+        assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
     }
 
     @Test
@@ -79,11 +86,13 @@ class AuthViewModelTest {
     fun `login success transitions to authenticated with status message`() = runTest {
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
-        viewModel.login("reader@example.com", "password123")
+        viewModel.login("reader@example.com", "password123", "10.0.22.22:3000")
         val state = viewModel.state.value
         assertTrue(state.isAuthenticated)
         assertEquals("Welcome back", state.statusMessage)
         assertNull(state.errorMessage)
+        assertEquals("10.0.22.22:3000", state.apiBaseUrl)
+        coVerify { repository.setApiBaseUrl("10.0.22.22:3000") }
         coVerify { repository.login("reader@example.com", "password123") }
     }
 
@@ -92,10 +101,26 @@ class AuthViewModelTest {
         coEvery { repository.login(any(), any()) } returns AppResult.Error("Bad credentials")
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
-        viewModel.login("reader@example.com", "wrong")
+        viewModel.login("reader@example.com", "wrong", DEFAULT_API_BASE_URL)
         val state = viewModel.state.value
         assertFalse(state.isAuthenticated)
         assertEquals("Bad credentials", state.errorMessage)
+    }
+
+    @Test
+    fun `login stops before network call when server host is invalid`() = runTest {
+        coEvery { repository.setApiBaseUrl(any()) } returns AppResult.Error("Enter a valid server URL.")
+        val viewModel = AuthViewModel(repository)
+        viewModel.bootstrap()
+
+        viewModel.login("reader@example.com", "password123", "not a url")
+
+        val state = viewModel.state.value
+        assertFalse(state.loading)
+        assertFalse(state.isAuthenticated)
+        assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
+        assertEquals("Enter a valid server URL.", state.errorMessage)
+        coVerify(exactly = 0) { repository.login(any(), any()) }
     }
 
     @Test
@@ -105,7 +130,7 @@ class AuthViewModelTest {
         )
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
-        viewModel.register("new@example.com", "password")
+        viewModel.register("new@example.com", "password", DEFAULT_API_BASE_URL)
         val state = viewModel.state.value
         assertFalse(state.isAuthenticated)
         assertEquals("Registration is currently closed", state.errorMessage)
@@ -116,7 +141,7 @@ class AuthViewModelTest {
     fun `register success transitions to authenticated`() = runTest {
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
-        viewModel.register("new@example.com", "password")
+        viewModel.register("new@example.com", "password", DEFAULT_API_BASE_URL)
         val state = viewModel.state.value
         assertTrue(state.isAuthenticated)
         assertEquals("Account created", state.statusMessage)
@@ -160,7 +185,7 @@ class AuthViewModelTest {
     fun `clearMessages wipes both error and status`() = runTest {
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
-        viewModel.login("x@x.com", "x")
+        viewModel.login("x@x.com", "x", DEFAULT_API_BASE_URL)
         assertTrue(viewModel.state.value.isAuthenticated)
         viewModel.clearMessages()
         val state = viewModel.state.value
@@ -174,4 +199,8 @@ class AuthViewModelTest {
         role = "reader",
         isActive = true,
     )
+
+    private companion object {
+        const val DEFAULT_API_BASE_URL = "10.0.2.2:3000"
+    }
 }

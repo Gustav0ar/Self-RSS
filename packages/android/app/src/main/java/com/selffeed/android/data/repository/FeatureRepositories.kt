@@ -25,6 +25,8 @@ import javax.inject.Inject
 class AuthRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AuthRepository {
+    override fun getApiBaseUrl(): String = source.getApiBaseUrl()
+    override suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String> = source.setApiBaseUrl(rawBaseUrl)
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> = source.registrationStatus()
     override suspend fun login(email: String, password: String): AppResult<User> = source.login(email, password)
     override suspend fun register(email: String, password: String): AppResult<User> = source.register(email, password)

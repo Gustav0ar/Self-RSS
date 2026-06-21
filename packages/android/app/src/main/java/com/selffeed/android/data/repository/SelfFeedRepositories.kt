@@ -22,6 +22,8 @@ import com.selffeed.android.network.UserPreferences
 import kotlinx.coroutines.flow.Flow
 
 interface AuthRepository {
+    fun getApiBaseUrl(): String
+    suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String>
     suspend fun registrationStatus(): AppResult<RegistrationStatusResponse>
     suspend fun login(email: String, password: String): AppResult<User>
     suspend fun register(email: String, password: String): AppResult<User>

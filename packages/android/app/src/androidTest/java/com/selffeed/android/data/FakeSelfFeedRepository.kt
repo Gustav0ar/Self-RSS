@@ -17,6 +17,7 @@ import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
+import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -27,6 +28,8 @@ import javax.inject.Singleton
 @Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private val online = MutableStateFlow(true)
+    private var apiBaseUrl = "10.0.2.2:3000"
+    private var authenticated = true
     private val fakeArticles = listOf(
         ArticleListItem(
             id = "article-1",
@@ -41,11 +44,33 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> =
         AppResult.Success(RegistrationStatusResponse(registrationEnabled = true))
 
-    override suspend fun login(email: String, password: String): AppResult<User> = AppResult.Success(fakeUser)
-    override suspend fun register(email: String, password: String): AppResult<User> = AppResult.Success(fakeUser)
-    override suspend fun logout(): AppResult<Boolean> = AppResult.Success(true)
+    override fun getApiBaseUrl(): String = apiBaseUrl
+    override suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String> {
+        apiBaseUrl = normalizeApiServerHost(rawBaseUrl)
+        return AppResult.Success(apiBaseUrl)
+    }
+
+    fun reset(authenticated: Boolean = true) {
+        this.authenticated = authenticated
+        apiBaseUrl = "10.0.2.2:3000"
+    }
+
+    override suspend fun login(email: String, password: String): AppResult<User> {
+        authenticated = true
+        return AppResult.Success(fakeUser)
+    }
+
+    override suspend fun register(email: String, password: String): AppResult<User> {
+        authenticated = true
+        return AppResult.Success(fakeUser)
+    }
+
+    override suspend fun logout(): AppResult<Boolean> {
+        authenticated = false
+        return AppResult.Success(true)
+    }
     override suspend fun me(): AppResult<User> = AppResult.Success(fakeUser)
-    override fun isLoggedIn(): Boolean = true
+    override fun isLoggedIn(): Boolean = authenticated
 
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> = AppResult.Success(
         listOf(

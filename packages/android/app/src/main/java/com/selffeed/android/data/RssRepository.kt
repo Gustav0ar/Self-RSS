@@ -64,14 +64,35 @@ class RssRepository @Inject constructor(
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
 ) : SelfFeedRepository {
-    private val runtime = RepositoryRuntime(moshi, MAX_MEMORY_CACHE_ENTRIES, "RssRepository")
-    private val readStateStreamClient = ReadStateStreamClient(okHttpClient, moshi, runtime)
+    private val runtime = RepositoryRuntime(
+        moshi = moshi,
+        maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
+        logTag = "RssRepository",
+        apiBaseUrl = sessionStore::getApiBaseUrl,
+    )
+    private val readStateStreamClient = ReadStateStreamClient(
+        okHttpClient = okHttpClient,
+        moshi = moshi,
+        runtime = runtime,
+        apiBaseUrl = sessionStore::getApiBaseUrl,
+    )
 
     // Detached scope for fire-and-forget background refreshes (e.g. the
     // stale-while-revalidate path in `article()`). Using a supervisor
     // scope tied to the repository means background work survives
     // individual failures and is cleaned up when the process dies.
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
+
+    override suspend fun setApiBaseUrl(rawBaseUrl: String) = safeCall {
+        val previousBaseUrl = sessionStore.getApiBaseUrl()
+        val nextBaseUrl = sessionStore.setApiBaseUrl(rawBaseUrl)
+        if (nextBaseUrl != previousBaseUrl) {
+            clearCacheAndDatabase()
+        }
+        nextBaseUrl
+    }
 
     override suspend fun registrationStatus() = safeReadCall {
         authRemote.registrationStatus()

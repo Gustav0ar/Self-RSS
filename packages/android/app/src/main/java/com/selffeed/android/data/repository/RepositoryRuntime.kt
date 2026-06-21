@@ -19,6 +19,7 @@ class RepositoryRuntime(
     moshi: Moshi,
     maxMemoryCacheEntries: Int,
     private val logTag: String,
+    private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
 ) {
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
@@ -45,7 +46,7 @@ class RepositoryRuntime(
         } catch (e: SocketTimeoutException) {
             AppResult.Error(
                 if (BuildConfig.DEBUG) {
-                    "Connection timed out. Please check if the API server is running at ${BuildConfig.API_BASE_URL}"
+                    "Connection timed out. Please check if the API server is running at ${apiBaseUrl()}"
                 } else {
                     "Connection timed out. Please try again."
                 },

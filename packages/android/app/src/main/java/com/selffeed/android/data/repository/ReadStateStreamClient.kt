@@ -1,6 +1,7 @@
 package com.selffeed.android.data.repository
 
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.network.apiEndpointUrl
 import com.selffeed.android.network.ReadStateEventPayload
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.SseEventParser
@@ -33,6 +34,7 @@ class ReadStateStreamClient(
     okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val runtime: RepositoryRuntime,
+    private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
 ) {
     private val sseLastEventId = AtomicLong(0)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
@@ -95,7 +97,7 @@ class ReadStateStreamClient(
         lastEventTimestampMs = System.currentTimeMillis()
 
         val request = Request.Builder()
-            .url("${BuildConfig.API_BASE_URL.trimEnd('/')}/events/read-state")
+            .url(apiEndpointUrl(apiBaseUrl(), "events/read-state"))
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
             .build()

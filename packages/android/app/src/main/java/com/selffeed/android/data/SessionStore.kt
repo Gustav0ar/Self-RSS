@@ -15,6 +15,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.selffeed.android.BuildConfig
+import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
@@ -25,7 +27,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Persists the user's session (access token, refresh cookie, install-scoped
- * client id) on disk.
+ * client id, API server host) on disk.
  *
  * Implementation: [DataStore]<[Preferences]> (the modern, non-deprecated
  * storage primitive) with per-value AES256/GCM encryption backed by an
@@ -36,6 +38,8 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Encryption model:
  * - The `client_id` is a UUID with no security boundary; stored
+ *   plaintext.
+ * - The `api_base_url` is user-visible server host configuration; stored
  *   plaintext.
  * - The `access_token` and `refresh_cookie` are encrypted
  *   value-by-value with AES256/GCM. The 12-byte IV is prepended to
@@ -50,10 +54,10 @@ import javax.crypto.spec.GCMParameterSpec
  * new DataStore. The legacy file is left in place (the system
  * owns it) but is no longer read.
  *
- * The public API (getAccessToken / setAccessToken / getRefreshCookie /
- * setRefreshCookie / getClientId / clear) is unchanged from the
- * EncryptedSharedPreferences version, so all callers continue to
- * work without modification.
+ * The token, cookie, client id, and clear APIs remain compatible with
+ * the EncryptedSharedPreferences version. The API server base URL is
+ * persisted alongside the session so every network call can target the
+ * user-selected SelfFeed instance.
  */
 class SessionStore internal constructor(
     context: Context,
@@ -62,10 +66,18 @@ class SessionStore internal constructor(
     private val appContext = context.applicationContext
     private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
 
-    // Cached session values loaded by preload()
+    private val cacheLock = Any()
+
+    // Cached session values. `preload()` warms them, but getters still
+    // lazily load from DataStore so session correctness never depends on
+    // AppViewModel startup ordering.
     @Volatile private var cachedAccessToken: String? = null
     @Volatile private var cachedRefreshCookie: String? = null
     @Volatile private var cachedClientId: String? = null
+    @Volatile private var cachedApiBaseUrl: String? = null
+    @Volatile private var accessTokenLoaded = false
+    @Volatile private var refreshCookieLoaded = false
+    @Volatile private var apiBaseUrlLoaded = false
     @Volatile private var preloaded = false
 
     private val masterKey: MasterKey by lazy {
@@ -86,35 +98,79 @@ class SessionStore internal constructor(
      * All getter methods return cached values after this is called.
      */
     suspend fun preload() {
-        if (preloaded) return
+        if (preloaded && accessTokenLoaded && refreshCookieLoaded && apiBaseUrlLoaded) return
         val prefs = dataStore.data.first()
-        cachedAccessToken = decrypt(prefs[KEY_ACCESS_TOKEN])
-        cachedRefreshCookie = decrypt(prefs[KEY_REFRESH_COOKIE])
-        cachedClientId = prefs[KEY_CLIENT_ID]
-        preloaded = true
+        val accessToken = decrypt(prefs[KEY_ACCESS_TOKEN])
+        val refreshCookie = decrypt(prefs[KEY_REFRESH_COOKIE])
+        val clientId = prefs[KEY_CLIENT_ID]
+        val apiBaseUrl = normalizeStoredApiBaseUrl(prefs[KEY_API_BASE_URL])
+        synchronized(cacheLock) {
+            if (!accessTokenLoaded) {
+                cachedAccessToken = accessToken
+                accessTokenLoaded = true
+            }
+            if (!refreshCookieLoaded) {
+                cachedRefreshCookie = refreshCookie
+                refreshCookieLoaded = true
+            }
+            if (cachedClientId == null) {
+                cachedClientId = clientId
+            }
+            if (!apiBaseUrlLoaded) {
+                cachedApiBaseUrl = apiBaseUrl
+                apiBaseUrlLoaded = true
+            }
+            preloaded = true
+        }
     }
 
-    fun getAccessToken(): String? = cachedAccessToken
+    fun getAccessToken(): String? {
+        if (accessTokenLoaded) return cachedAccessToken
+        val token = runBlocking { decrypt(dataStore.data.first()[KEY_ACCESS_TOKEN]) }
+        synchronized(cacheLock) {
+            if (!accessTokenLoaded) {
+                cachedAccessToken = token
+                accessTokenLoaded = true
+            }
+            return cachedAccessToken
+        }
+    }
 
     fun setAccessToken(token: String?) {
-        cachedAccessToken = token
         runBlocking {
             val encrypted = token?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_ACCESS_TOKEN) else prefs[KEY_ACCESS_TOKEN] = encrypted
             }
         }
+        synchronized(cacheLock) {
+            cachedAccessToken = token
+            accessTokenLoaded = true
+        }
     }
 
-    fun getRefreshCookie(): String? = cachedRefreshCookie
+    fun getRefreshCookie(): String? {
+        if (refreshCookieLoaded) return cachedRefreshCookie
+        val cookie = runBlocking { decrypt(dataStore.data.first()[KEY_REFRESH_COOKIE]) }
+        synchronized(cacheLock) {
+            if (!refreshCookieLoaded) {
+                cachedRefreshCookie = cookie
+                refreshCookieLoaded = true
+            }
+            return cachedRefreshCookie
+        }
+    }
 
     fun setRefreshCookie(rawCookie: String?) {
-        cachedRefreshCookie = rawCookie
         runBlocking {
             val encrypted = rawCookie?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_REFRESH_COOKIE) else prefs[KEY_REFRESH_COOKIE] = encrypted
             }
+        }
+        synchronized(cacheLock) {
+            cachedRefreshCookie = rawCookie
+            refreshCookieLoaded = true
         }
     }
 
@@ -130,21 +186,67 @@ class SessionStore internal constructor(
         }.also { cachedClientId = it }
     }
 
-    fun clear() {
+    fun getApiBaseUrl(): String {
+        if (apiBaseUrlLoaded) return cachedApiBaseUrl ?: defaultApiBaseUrl()
+        val apiBaseUrl = runBlocking { normalizeStoredApiBaseUrl(dataStore.data.first()[KEY_API_BASE_URL]) }
+        synchronized(cacheLock) {
+            if (!apiBaseUrlLoaded) {
+                cachedApiBaseUrl = apiBaseUrl
+                apiBaseUrlLoaded = true
+            }
+            return cachedApiBaseUrl ?: defaultApiBaseUrl()
+        }
+    }
+
+    fun setApiBaseUrl(rawBaseUrl: String): String {
+        val normalized = normalizeApiServerHost(rawBaseUrl)
+        val previous = getApiBaseUrl()
+        val changed = previous != normalized
         runBlocking {
-            val clientId = cachedClientId ?: getClientId()
+            dataStore.edit { prefs ->
+                prefs[KEY_API_BASE_URL] = normalized
+                if (changed) {
+                    prefs.remove(KEY_ACCESS_TOKEN)
+                    prefs.remove(KEY_REFRESH_COOKIE)
+                }
+            }
+        }
+        synchronized(cacheLock) {
+            cachedApiBaseUrl = normalized
+            apiBaseUrlLoaded = true
+            if (changed) {
+                cachedAccessToken = null
+                cachedRefreshCookie = null
+                accessTokenLoaded = true
+                refreshCookieLoaded = true
+            }
+        }
+        return normalized
+    }
+
+    fun clear() {
+        val clientId = cachedClientId ?: getClientId()
+        val apiBaseUrl = getApiBaseUrl()
+        runBlocking {
             val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
             dataStore.edit { prefs ->
                 prefs.clear()
                 prefs[KEY_CLIENT_ID] = clientId
+                prefs[KEY_API_BASE_URL] = apiBaseUrl
                 if (legacyMigrationMarker != null) {
                     prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
                 }
             }
-            cachedAccessToken = null
-            cachedRefreshCookie = null
-            cachedClientId = clientId
-            preloaded = true
+            synchronized(cacheLock) {
+                cachedAccessToken = null
+                cachedRefreshCookie = null
+                cachedClientId = clientId
+                cachedApiBaseUrl = apiBaseUrl
+                accessTokenLoaded = true
+                refreshCookieLoaded = true
+                apiBaseUrlLoaded = true
+                preloaded = true
+            }
         }
     }
 
@@ -269,12 +371,24 @@ class SessionStore internal constructor(
                 if (clientId != null) prefs[KEY_CLIENT_ID] = clientId
                 prefs[KEY_LEGACY_SESSION_MIGRATED] = "true"
             }
-            cachedAccessToken = accessToken
-            cachedRefreshCookie = refreshCookie
-            cachedClientId = clientId
+            synchronized(cacheLock) {
+                cachedAccessToken = accessToken
+                cachedRefreshCookie = refreshCookie
+                cachedClientId = clientId
+                accessTokenLoaded = true
+                refreshCookieLoaded = true
+                preloaded = true
+            }
         }
         legacy.edit().clear().apply()
     }
+
+    private fun normalizeStoredApiBaseUrl(rawBaseUrl: String?): String =
+        rawBaseUrl
+            ?.let { runCatching { normalizeApiServerHost(it) }.getOrNull() }
+            ?: defaultApiBaseUrl()
+
+    private fun defaultApiBaseUrl(): String = normalizeApiServerHost(BuildConfig.API_BASE_URL)
 
     companion object {
         private const val TAG = "SessionStore"
@@ -287,6 +401,7 @@ class SessionStore internal constructor(
         private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         private val KEY_REFRESH_COOKIE = stringPreferencesKey("refresh_cookie")
         private val KEY_CLIENT_ID = stringPreferencesKey("client_id")
+        private val KEY_API_BASE_URL = stringPreferencesKey("api_base_url")
         private val KEY_LEGACY_SESSION_MIGRATED = stringPreferencesKey("legacy_session_migrated")
     }
 }

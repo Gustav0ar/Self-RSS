@@ -105,8 +105,8 @@ data class SelfFeedAppState(
 
 data class SelfFeedAppActions(
     val onAuthModeChange: (AuthMode) -> Unit,
-    val onLogin: (String, String) -> Unit,
-    val onRegister: (String, String) -> Unit,
+    val onLogin: (String, String, String) -> Unit,
+    val onRegister: (String, String, String) -> Unit,
     val onLogout: () -> Unit,
     val onTabSelected: (HomeTab) -> Unit,
     val onRefreshVisibleData: () -> Unit,
@@ -164,7 +164,7 @@ fun SelfFeedApp(
         )
     }
 
-    val errorMessage = state.auth.errorMessage
+    val errorMessage = (if (state.auth.isAuthenticated) state.auth.errorMessage else null)
         ?: state.feeds.errorMessage
         ?: state.articles.errorMessage
         ?: state.search.errorMessage
@@ -197,6 +197,7 @@ fun SelfFeedApp(
     if (!state.auth.isAuthenticated) {
         AuthScreen(
             mode = state.auth.authMode,
+            apiBaseUrl = state.auth.apiBaseUrl,
             registrationEnabled = state.auth.registrationEnabled,
             errorMessage = state.auth.errorMessage,
             onModeChange = actions.onAuthModeChange,
@@ -563,14 +564,18 @@ private fun topBarLabel(
 @Composable
 internal fun AuthScreen(
     mode: AuthMode,
+    apiBaseUrl: String,
     registrationEnabled: Boolean,
     errorMessage: String?,
     onModeChange: (AuthMode) -> Unit,
-    onLogin: (String, String) -> Unit,
-    onRegister: (String, String) -> Unit,
+    onLogin: (String, String, String) -> Unit,
+    onRegister: (String, String, String) -> Unit,
 ) {
+    var serverUrl by rememberSaveable(apiBaseUrl) { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    val configuredServer = apiBaseUrl.trim()
+    val serverPlaceholder = configuredServer.ifEmpty { "10.0.22.22:3000" }
 
     Box(
         modifier = Modifier
@@ -638,6 +643,16 @@ internal fun AuthScreen(
                 }
 
                 OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it },
+                    label = { Text("Server") },
+                    placeholder = { Text(serverPlaceholder) },
+                    leadingIcon = { Icon(Icons.Default.RssFeed, contentDescription = "Server address") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(20.dp),
+                )
+                OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },
                     label = { Text("Email") },
@@ -658,7 +673,12 @@ internal fun AuthScreen(
                 )
                 Button(
                     onClick = {
-                        if (mode == AuthMode.LOGIN) onLogin(email, password) else onRegister(email, password)
+                        val submittedServer = serverUrl.trim().ifEmpty { configuredServer }
+                        if (mode == AuthMode.LOGIN) {
+                            onLogin(email, password, submittedServer)
+                        } else {
+                            onRegister(email, password, submittedServer)
+                        }
                         password = ""
                     },
                     modifier = Modifier.fillMaxWidth(),

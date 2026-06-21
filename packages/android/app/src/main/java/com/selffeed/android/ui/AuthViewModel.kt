@@ -18,6 +18,7 @@ data class AuthUiState(
     val loading: Boolean = true,
     val isAuthenticated: Boolean = false,
     val authMode: AuthMode = AuthMode.LOGIN,
+    val apiBaseUrl: String = "",
     val registrationEnabled: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
@@ -37,14 +38,20 @@ class AuthViewModel @Inject constructor(
 
     fun bootstrap() {
         viewModelScope.launch {
+            val apiBaseUrl = repository.getApiBaseUrl()
             if (repository.isLoggedIn()) {
-                _state.value = _state.value.copy(loading = false, isAuthenticated = true)
+                _state.value = _state.value.copy(
+                    loading = false,
+                    isAuthenticated = true,
+                    apiBaseUrl = apiBaseUrl,
+                )
             } else {
                 val enabled = loadRegistrationEnabled()
                 _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = false,
                     authMode = if (enabled) _state.value.authMode else AuthMode.LOGIN,
+                    apiBaseUrl = apiBaseUrl,
                     registrationEnabled = enabled,
                 )
             }
@@ -59,13 +66,19 @@ class AuthViewModel @Inject constructor(
         _state.value = _state.value.copy(authMode = mode, errorMessage = null)
     }
 
-    fun login(email: String, password: String) {
+    fun login(email: String, password: String, apiBaseUrl: String) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, errorMessage = null, statusMessage = null)
+            _state.value = _state.value.copy(
+                loading = true,
+                errorMessage = null,
+                statusMessage = null,
+            )
+            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launch
             when (val result = repository.login(email.trim(), password)) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
+                    apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = "Welcome back",
                 )
                 is AppResult.Error -> _state.value = _state.value.copy(loading = false, errorMessage = result.message)
@@ -73,7 +86,7 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    fun register(email: String, password: String) {
+    fun register(email: String, password: String, apiBaseUrl: String) {
         if (!_state.value.registrationEnabled) {
             _state.value = _state.value.copy(
                 loading = false,
@@ -83,11 +96,17 @@ class AuthViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, errorMessage = null, statusMessage = null)
+            _state.value = _state.value.copy(
+                loading = true,
+                errorMessage = null,
+                statusMessage = null,
+            )
+            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launch
             when (val result = repository.register(email.trim(), password)) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
+                    apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = "Account created",
                 )
                 is AppResult.Error -> _state.value = _state.value.copy(loading = false, errorMessage = result.message)
@@ -99,7 +118,11 @@ class AuthViewModel @Inject constructor(
         viewModelScope.launch {
             repository.logout()
             val enabled = loadRegistrationEnabled()
-            _state.value = AuthUiState(loading = false, registrationEnabled = enabled)
+            _state.value = AuthUiState(
+                loading = false,
+                apiBaseUrl = repository.getApiBaseUrl(),
+                registrationEnabled = enabled,
+            )
         }
     }
 
@@ -111,5 +134,19 @@ class AuthViewModel @Inject constructor(
         when (val result = repository.registrationStatus()) {
             is AppResult.Success -> result.data.registrationEnabled
             is AppResult.Error -> false
+        }
+
+    private suspend fun saveApiBaseUrlOrStop(rawApiBaseUrl: String): String? =
+        when (val result = repository.setApiBaseUrl(rawApiBaseUrl)) {
+            is AppResult.Success -> result.data.also { normalized ->
+                _state.value = _state.value.copy(apiBaseUrl = normalized)
+            }
+            is AppResult.Error -> {
+                _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = result.message,
+                )
+                null
+            }
         }
 }
