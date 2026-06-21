@@ -26,6 +26,13 @@ import {
 	parseNaointendidoPost,
 	reconstructNaointendidoPostHtml,
 } from './content-extractors/naointendido-post.js';
+import {
+	acquireManualSyncAllFeedsLock,
+	getManualSyncAllFeedsStatus,
+	queueManualSyncAllFeeds,
+	releaseManualSyncAllFeedsState,
+	startManualSyncAllFeedsHeartbeat,
+} from './feed-sync-status.js';
 
 const logger = createLogger();
 
@@ -59,17 +66,7 @@ type FeedItemRecord = Record<string, unknown>;
 
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
-const MANUAL_SYNC_DEDUPE_TTL_SECONDS = 60 * 30;
-const MANUAL_SYNC_LOCK_TTL_SECONDS = 60 * 30;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
-const QUEUE_SYNC_ALL_FEEDS_SCRIPT = `
-if redis.call("EXISTS", KEYS[1]) == 1 then
-	return 0
-end
-redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
-redis.call("RPUSH", KEYS[2], ARGV[3])
-return 1
-`;
 
 interface SyncErrorDetails {
 	error: string;
@@ -593,19 +590,8 @@ export class FeedSyncService {
 	}
 
 	async queueSyncAllFeeds(userId: string) {
-		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
-		const queueKey = CacheKeys.feedSyncAllQueue();
-		const didQueue = await this.redis.eval(
-			QUEUE_SYNC_ALL_FEEDS_SCRIPT,
-			2,
-			queuedKey,
-			queueKey,
-			'1',
-			String(MANUAL_SYNC_DEDUPE_TTL_SECONDS),
-			userId,
-		);
-
-		if (Number(didQueue) !== 1) {
+		const didQueue = await queueManualSyncAllFeeds(this.redis, userId);
+		if (!didQueue) {
 			return { accepted: true, alreadyQueued: true };
 		}
 
@@ -614,20 +600,7 @@ export class FeedSyncService {
 	}
 
 	async getSyncAllFeedsStatus(userId: string) {
-		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
-		const lockKey = CacheKeys.feedSyncAllLock(userId);
-		const [queuedCount, runningCount] = await Promise.all([
-			this.redis.exists(queuedKey),
-			this.redis.exists(lockKey),
-		]);
-		const running = runningCount > 0;
-		const queued = queuedCount > 0 && !running;
-
-		return {
-			queued,
-			running,
-			active: queued || running,
-		};
+		return getManualSyncAllFeedsStatus(this.redis, userId);
 	}
 
 	async processNextQueuedSyncAllFeeds() {
@@ -636,13 +609,13 @@ export class FeedSyncService {
 			return null;
 		}
 
-		const lockKey = CacheKeys.feedSyncAllLock(userId);
-		const queuedKey = CacheKeys.feedSyncAllQueued(userId);
-		const didLock = await this.redis.set(lockKey, '1', 'EX', MANUAL_SYNC_LOCK_TTL_SECONDS, 'NX');
-		if (didLock !== 'OK') {
+		const didLock = await acquireManualSyncAllFeedsLock(this.redis, userId);
+		if (!didLock) {
 			logger.warn('Skipping queued bulk feed sync because one is already running', { userId });
 			return { userId, skipped: true as const };
 		}
+
+		const stopHeartbeat = startManualSyncAllFeedsHeartbeat(this.redis, userId);
 
 		try {
 			logger.info('Starting queued bulk feed sync', { userId });
@@ -650,7 +623,8 @@ export class FeedSyncService {
 			logger.info('Queued bulk feed sync complete', { userId, ...result });
 			return { userId, skipped: false as const, result };
 		} finally {
-			await this.redis.del(lockKey, queuedKey);
+			stopHeartbeat();
+			await releaseManualSyncAllFeedsState(this.redis, userId);
 		}
 	}
 

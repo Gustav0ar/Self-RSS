@@ -50,6 +50,53 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 
 test.describe.configure({ mode: 'serial' });
 
+test('all-feeds refresh banner clears after sync status settles', async ({ page }) => {
+	let syncRequested = false;
+	let statusPollsAfterRefresh = 0;
+
+	await page.route('**/api/v1/feeds/sync', async (route) => {
+		if (route.request().method() !== 'POST') {
+			await route.continue();
+			return;
+		}
+
+		syncRequested = true;
+		statusPollsAfterRefresh = 0;
+		await route.fulfill({
+			status: 202,
+			contentType: 'application/json',
+			body: JSON.stringify({ data: { accepted: true, alreadyQueued: false } }),
+		});
+	});
+
+	await page.route('**/api/v1/feeds/sync/status', async (route) => {
+		const shouldReportActive = syncRequested && statusPollsAfterRefresh === 0;
+		if (syncRequested) {
+			statusPollsAfterRefresh += 1;
+		}
+
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				data: shouldReportActive
+					? { queued: false, running: true, active: true }
+					: { queued: false, running: false, active: false },
+			}),
+		});
+	});
+
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+	await expect(page.getByText('Loading new articles')).toHaveCount(0);
+
+	const refreshButton = page.getByRole('button', { name: 'Refresh' });
+	await refreshButton.click();
+
+	await expect(page.getByText('Loading new articles')).toBeVisible();
+	await expect(page.getByText('Loading new articles')).toHaveCount(0, { timeout: 6_000 });
+	await expect(refreshButton).toBeEnabled();
+});
+
 test('reader can toggle a read article back to unread', async ({ page }) => {
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 
