@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createExtractorRegistry,
 	DefaultContentExtractor,
@@ -69,6 +69,10 @@ describe('NaointendidoContentExtractor', () => {
 	// biome-ignore format: need intersection for mock + fetch
 	const mockFetch = vi.fn() as typeof globalThis.fetch & ReturnType<typeof vi.fn>;
 
+	beforeEach(() => {
+		mockFetch.mockReset();
+	});
+
 	describe('canHandle', () => {
 		const extractor = new NaointendidoContentExtractor();
 
@@ -82,6 +86,8 @@ describe('NaointendidoContentExtractor', () => {
 
 		it('should return false for other URLs', () => {
 			expect(extractor.canHandle('https://example.com')).toBe(false);
+			expect(extractor.canHandle('https://example.com/posts/some-slug')).toBe(false);
+			expect(extractor.canHandle('https://evil-naointendido.com.br/posts/some-slug')).toBe(false);
 			expect(extractor.canHandle('https://naointendido.com.br/')).toBe(false);
 			expect(extractor.canHandle('https://naointendido.com.br/about')).toBe(false);
 		});
@@ -91,6 +97,16 @@ describe('NaointendidoContentExtractor', () => {
 		it('should return null for non-post URLs', async () => {
 			const extractor = new NaointendidoContentExtractor({ fetch: mockFetch });
 			const result = await extractor.extract('<html></html>', 'https://example.com');
+			expect(result).toBeNull();
+			expect(mockFetch).not.toHaveBeenCalled();
+		});
+
+		it('should not fetch API content for unrelated post URLs', async () => {
+			const extractor = new NaointendidoContentExtractor({ fetch: mockFetch });
+			const result = await extractor.extract(
+				'<html></html>',
+				'https://example.com/posts/test-slug',
+			);
 			expect(result).toBeNull();
 			expect(mockFetch).not.toHaveBeenCalled();
 		});
@@ -190,6 +206,36 @@ describe('NaointendidoContentExtractor', () => {
 
 			expect(result).not.toBeNull();
 			expect(result?.content).toContain('<blockquote>Custom HTML block</blockquote>');
+		});
+
+		it('should sanitize HTML content and escape generated media attributes', async () => {
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({
+					post: {
+						media: {
+							type: 'image',
+							content: 'https://example.com/image.jpg" onerror="alert(1)',
+						},
+						description: '<p onclick="alert(1)">Safe description</p><script>alert(1)</script>',
+					},
+				}),
+			});
+
+			const extractor = new NaointendidoContentExtractor({ fetch: mockFetch });
+			const result = await extractor.extract(
+				'<html></html>',
+				'https://www.naointendido.com.br/posts/unsafe-post',
+			);
+
+			expect(result).not.toBeNull();
+			expect(result?.content).toContain(
+				'<img src="https://example.com/image.jpg&quot; onerror=&quot;alert(1)" />',
+			);
+			expect(result?.content).toContain('<p>Safe description</p>');
+			expect(result?.content).not.toContain('onclick');
+			expect(result?.content).not.toContain('<script');
+			expect(result?.content).not.toContain('onerror="');
 		});
 
 		it('should return null when API returns non-ok response', async () => {

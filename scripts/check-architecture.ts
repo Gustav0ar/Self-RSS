@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-interface LargeFileBudget {
+interface FileLineBudget {
 	maxLines: number;
 	reason: string;
 }
@@ -10,9 +10,9 @@ const ROOT = resolve(import.meta.dirname, '..');
 const SOURCE_ROOTS = ['packages/api/src', 'packages/web/src', 'packages/shared/src', 'scripts'];
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.sh']);
 const DEFAULT_MAX_LINES = 650;
-const LARGE_FILE_BUDGETS: Record<string, LargeFileBudget> = {
+const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 	'packages/api/src/services/feed-sync.service.ts': {
-		maxLines: 1150,
+		maxLines: 1100,
 		reason:
 			'Legacy feed sync orchestration; split parser, persistence, and scheduling helpers before expanding.',
 	},
@@ -34,6 +34,16 @@ const LARGE_FILE_BUDGETS: Record<string, LargeFileBudget> = {
 		maxLines: 700,
 		reason:
 			'Cache key and cursor behavior is coupled; extract policies before adding new cache modes.',
+	},
+	'packages/web/src/components/articles/reader-pane.tsx': {
+		maxLines: 500,
+		reason:
+			'Reader pane should orchestrate state; keep effects and media rendering in reader-domain modules.',
+	},
+	'packages/web/src/components/layout/sidebar.tsx': {
+		maxLines: 380,
+		reason:
+			'Sidebar should orchestrate dialogs and state; keep tree, body, storage, and reorder logic split out.',
 	},
 };
 
@@ -75,7 +85,7 @@ for (const sourceRoot of SOURCE_ROOTS) {
 	for (const file of walk(absoluteRoot)) {
 		const relativePath = relative(ROOT, file);
 		const lines = lineCount(file);
-		const budget = LARGE_FILE_BUDGETS[relativePath];
+		const budget = FILE_LINE_BUDGETS[relativePath];
 		const maxLines = budget?.maxLines ?? DEFAULT_MAX_LINES;
 
 		if (lines > maxLines) {

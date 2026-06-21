@@ -2,10 +2,12 @@ import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useArticle, useEnrichArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
+import { useReaderScrollProgress, useTwitterEmbedResize } from './reader-effects';
+import { getReaderPanelMedia, ReaderMediaPanel } from './reader-media-panel';
 
 interface ReaderPaneProps {
 	articleId: string | null;
@@ -41,78 +43,15 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
 	const enrichmentAttemptedIds = useRef(new Set<string>());
-	const scrollerRef = useRef<HTMLDivElement | null>(null);
-	const scrollProgressRef = useRef<HTMLDivElement | null>(null);
-	const scrollProgressFrame = useRef<number | null>(null);
-
-	useLayoutEffect(() => {
-		if (!articleId) return;
-		const node = scrollerRef.current;
-		if (!node) return;
-
-		node.scrollTop = 0;
-		if (scrollProgressFrame.current != null) {
-			if (typeof window.cancelAnimationFrame === 'function') {
-				window.cancelAnimationFrame(scrollProgressFrame.current);
-			}
-			scrollProgressFrame.current = null;
-		}
-		if (scrollProgressRef.current) {
-			scrollProgressRef.current.style.transform = 'scaleX(0)';
-		}
-	}, [articleId]);
-
-	useEffect(() => {
-		const node = scrollerRef.current;
-		if (!node) return;
-
-		const updateProgress = () => {
-			scrollProgressFrame.current = null;
-			const max = node.scrollHeight - node.clientHeight;
-			const ratio = max <= 0 ? 0 : Math.min(1, Math.max(0, node.scrollTop / max));
-			if (scrollProgressRef.current) {
-				scrollProgressRef.current.style.transform = `scaleX(${ratio})`;
-			}
-		};
-
-		const scheduleProgressUpdate = () => {
-			if (scrollProgressFrame.current != null) {
-				return;
-			}
-			if (typeof window.requestAnimationFrame !== 'function') {
-				updateProgress();
-				return;
-			}
-			scrollProgressFrame.current = window.requestAnimationFrame(updateProgress);
-		};
-
-		updateProgress();
-		node.addEventListener('scroll', scheduleProgressUpdate, { passive: true });
-		const observer =
-			typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleProgressUpdate) : null;
-		observer?.observe(node);
-		return () => {
-			node.removeEventListener('scroll', scheduleProgressUpdate);
-			if (scrollProgressFrame.current != null) {
-				if (typeof window.cancelAnimationFrame === 'function') {
-					window.cancelAnimationFrame(scrollProgressFrame.current);
-				}
-				scrollProgressFrame.current = null;
-			}
-			observer?.disconnect();
-		};
-	}, []);
+	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(articleId);
+	useTwitterEmbedResize(scrollerRef);
 
 	const isRead = article?.isRead;
 	const readerHtml = useMemo(() => {
 		const html = article?.contentHtml ?? '';
 		return prepareReaderHtml(html);
 	}, [article?.contentHtml]);
-	const mediaToRender = useMemo(
-		() =>
-			(article?.media ?? []).filter((media) => media.type === 'video' || media.type === 'embed'),
-		[article?.media],
-	);
+	const mediaToRender = useMemo(() => getReaderPanelMedia(article?.media ?? []), [article?.media]);
 	// The following `useMemo` calls must run unconditionally (before
 	// the loading / not-found early returns) to satisfy the rules of
 	// hooks. They default to safe values when `article` is null.
@@ -165,53 +104,6 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 			},
 		});
 	}, [article, enrichArticle]);
-
-	useEffect(() => {
-		const handleMessage = (event: MessageEvent) => {
-			if (event.origin !== 'https://platform.twitter.com') {
-				return;
-			}
-
-			const data = event.data;
-			if (data?.['twttr.embed']?.method === 'twttr.private.resize') {
-				const height = data['twttr.embed'].params?.[0]?.height;
-				if (typeof height === 'number') {
-					const tweetId = data['twttr.embed'].params?.[0]?.data?.tweet_id;
-					const root = scrollerRef.current;
-					if (!root) return;
-					const iframes = root.querySelectorAll<HTMLIFrameElement>(
-						'iframe[src*="platform.twitter.com"]',
-					);
-					let twitterIframesCount = 0;
-					let singleTwitterIframe: HTMLIFrameElement | null = null;
-					for (const iframe of iframes) {
-						twitterIframesCount++;
-						singleTwitterIframe = iframe;
-					}
-
-					for (const iframe of iframes) {
-						const src = iframe.src;
-						const iframeTweetId = src.match(/[?&]id=(\d+)/)?.[1];
-						const matchesTweetId =
-							tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId);
-
-						if (matchesTweetId || (twitterIframesCount === 1 && iframe === singleTwitterIframe)) {
-							iframe.style.height = `${height}px`;
-							const parent = iframe.parentElement;
-							if (parent) {
-								parent.style.height = 'auto';
-							}
-						}
-					}
-				}
-			}
-		};
-
-		window.addEventListener('message', handleMessage);
-		return () => {
-			window.removeEventListener('message', handleMessage);
-		};
-	}, []);
 
 	useEffect(() => {
 		if (!articleId) {
@@ -402,79 +294,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 						</div>
 					) : null}
 
-					{mediaToRender.length > 0 ? (
-						<div className="surface-card motion-enter mt-6 space-y-4 rounded-xl p-4 sm:p-5">
-							{mediaToRender.map((m, i) => {
-								if (m.type === 'image') {
-									return (
-										<img
-											key={m.url}
-											src={m.url}
-											alt=""
-											className="max-w-full rounded-xl"
-											loading="lazy"
-											decoding="async"
-											referrerPolicy="no-referrer"
-										/>
-									);
-								}
-								if (m.type === 'video') {
-									return (
-										<div
-											key={m.url}
-											className="overflow-hidden rounded-xl border border-border/70 bg-muted"
-											style={{
-												aspectRatio: m.width && m.height ? `${m.width} / ${m.height}` : '16 / 9',
-											}}
-										>
-											{/* biome-ignore lint/a11y/useMediaCaption: RSS media records do not include caption track metadata. */}
-											<video
-												src={m.url}
-												title={`Media ${i + 1}`}
-												className="h-full w-full bg-black"
-												controls
-												preload="metadata"
-												playsInline
-											/>
-										</div>
-									);
-								}
-								if (m.type === 'embed') {
-									const isX = (m.provider as string) === 'x';
-									return (
-										<div
-											key={m.url}
-											className={`overflow-hidden rounded-xl border border-border/70 bg-muted ${
-												isX ? 'w-full max-w-[560px] mx-auto' : ''
-											}`}
-											style={
-												isX
-													? { height: '600px' }
-													: {
-															aspectRatio:
-																m.width && m.height ? `${m.width} / ${m.height}` : '16 / 9',
-														}
-											}
-										>
-											<iframe
-												src={m.embedUrl ?? m.url}
-												title={`Media ${i + 1}`}
-												className="h-full w-full"
-												loading="lazy"
-												referrerPolicy="strict-origin-when-cross-origin"
-												sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
-												scrolling={isX ? 'no' : undefined}
-												style={isX ? { overflow: 'hidden' } : undefined}
-												allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture"
-												allowFullScreen
-											/>
-										</div>
-									);
-								}
-								return null;
-							})}
-						</div>
-					) : null}
+					<ReaderMediaPanel media={mediaToRender} />
 				</div>
 
 				<aside className="hidden min-w-0 2xl:block">

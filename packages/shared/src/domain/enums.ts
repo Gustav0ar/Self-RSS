@@ -56,6 +56,8 @@ export const MediaProvider = {
 	YOUTUBE: 'youtube',
 	STREAMABLE: 'streamable',
 	VIMEO: 'vimeo',
+	VIDEOPRESS: 'videopress',
+	X: 'x',
 	UNKNOWN: 'unknown',
 } as const;
 export type MediaProvider = (typeof MediaProvider)[keyof typeof MediaProvider];

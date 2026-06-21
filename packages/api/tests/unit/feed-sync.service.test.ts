@@ -1325,7 +1325,7 @@ describe('FeedSyncService', () => {
 						JSON.stringify({
 							post: {
 								title: 'Test Post',
-								description: '<p>Paragraph text</p>',
+								description: '<p onclick="alert(1)">Paragraph text</p><script>alert(1)</script>',
 								media: {
 									type: 'twitter',
 									content: '123456789',
@@ -1335,7 +1335,7 @@ describe('FeedSyncService', () => {
 					json: async () => ({
 						post: {
 							title: 'Test Post',
-							description: '<p>Paragraph text</p>',
+							description: '<p onclick="alert(1)">Paragraph text</p><script>alert(1)</script>',
 							media: {
 								type: 'twitter',
 								content: '123456789',
@@ -1376,6 +1376,8 @@ describe('FeedSyncService', () => {
 				'<iframe class="embedded-media embedded-media--x" src="https://platform.twitter.com/embed/Tweet.html?id=123456789"></iframe>',
 			);
 			expect(content).toContain('<p>Paragraph text</p>');
+			expect(content).not.toContain('onclick');
+			expect(content).not.toContain('<script');
 			expect(mockFetch).toHaveBeenCalledWith(
 				'https://www.naointendo.com.br/api/posts/12345-test-post',
 				expect.any(Object),

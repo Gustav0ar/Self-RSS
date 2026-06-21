@@ -21,16 +21,11 @@ import {
 	stripHtml,
 } from '../utils/sanitizer.js';
 import type { ArticleCacheService } from './article-cache.service.js';
-
-/** Escape special characters for safe use in HTML attribute values */
-function escapeHtmlAttr(value: string): string {
-	return value
-		.replace(/&/g, '&amp;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;');
-}
+import {
+	buildNaointendidoApiUrl,
+	parseNaointendidoPost,
+	reconstructNaointendidoPostHtml,
+} from './content-extractors/naointendido-post.js';
 
 const logger = createLogger();
 
@@ -862,52 +857,29 @@ export class FeedSyncService {
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 		try {
-			if (canonicalUrl.includes('naointendo.com.br/posts/')) {
-				const match = canonicalUrl.match(/\/posts\/([a-zA-Z0-9_-]+)/);
-				if (match) {
-					const slug = match[1];
-					const apiUrl = `https://www.naointendo.com.br/api/posts/${slug}`;
-					const response = await fetchWithValidatedRedirects(
-						apiUrl,
-						{
-							signal: controller.signal,
-							headers: {
-								'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-								Accept: 'application/json',
-								'X-Requested-With': 'XMLHttpRequest',
-							},
+			const naointendidoApiUrl = buildNaointendidoApiUrl(canonicalUrl);
+			if (naointendidoApiUrl) {
+				const response = await fetchWithValidatedRedirects(
+					naointendidoApiUrl,
+					{
+						signal: controller.signal,
+						headers: {
+							'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+							Accept: 'application/json',
+							'X-Requested-With': 'XMLHttpRequest',
 						},
-						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+					},
+					{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+				);
+				if (response.ok) {
+					const text = await readResponseTextWithinLimit(
+						response,
+						this.config.maxContentLength,
+						controller,
 					);
-					if (response.ok) {
-						const text = await readResponseTextWithinLimit(
-							response,
-							this.config.maxContentLength,
-							controller,
-						);
-						const data = JSON.parse(text);
-						const post = data?.post;
-						if (post) {
-							let reconstructedHtml = '';
-							if (post.media) {
-								const media = post.media;
-								if (media.type === 'image') {
-									reconstructedHtml += `<img src="${escapeHtmlAttr(media.content ?? '')}" />`;
-								} else if (media.type === 'twitter') {
-									reconstructedHtml += `<iframe class="embedded-media embedded-media--x" src="https://platform.twitter.com/embed/Tweet.html?id=${escapeHtmlAttr(media.content ?? '')}"></iframe>`;
-								} else if (media.type === 'html') {
-									reconstructedHtml += sanitizeHtml(media.content) || '';
-								} else if (media.type === 'video') {
-									reconstructedHtml += `<video src="${escapeHtmlAttr(media.content ?? '')}" controls></video>`;
-								} else {
-									reconstructedHtml += sanitizeHtml(media.content) || '';
-								}
-							}
-							if (post.description && typeof post.description === 'string') {
-								reconstructedHtml += sanitizeHtml(post.description);
-							}
-							return reconstructedHtml || null;
-						}
+					const post = parseNaointendidoPost(JSON.parse(text));
+					if (post) {
+						return reconstructNaointendidoPostHtml(post);
 					}
 				}
 			}
