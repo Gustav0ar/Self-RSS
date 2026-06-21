@@ -17,7 +17,7 @@ import { AuthService } from '../services/auth.service.js';
 import { CategoryService } from '../services/category.service.js';
 import { FeedService } from '../services/feed.service.js';
 import { FeedSyncService } from '../services/feed-sync.service.js';
-import { getMetricsService } from '../services/metrics.service.js';
+import { getMetricsService, type MetricsService } from '../services/metrics.service.js';
 import { OpmlExportService } from '../services/opml-export.service.js';
 import { OpmlImportService } from '../services/opml-import.service.js';
 import { PreferencesService } from '../services/preferences.service.js';
@@ -49,6 +49,7 @@ export interface AppDeps {
 		opmlImport: OpmlImportService;
 		article: ArticleService;
 		articleCache: ArticleCacheService;
+		metrics: MetricsService;
 		preferences: PreferencesService;
 		realtime: RealtimeService;
 		stats: StatsService;
@@ -90,10 +91,10 @@ export function createDeps(
 	// depend on them. The final `services` object is assembled in one place so
 	// every property is defined at construction time and the type system stays
 	// honest.
-	const cacheMetrics = getMetricsService();
-	const articleCache = new ArticleCacheService(repos.article, repos.feed, redis, cacheMetrics);
+	const metrics = getMetricsService();
+	const articleCache = new ArticleCacheService(repos.article, repos.feed, redis, metrics);
 
-	const realtime = new RealtimeService(redis);
+	const realtime = new RealtimeService(redis, metrics);
 	const feedSync = new FeedSyncService(
 		repos.feed,
 		repos.article,
@@ -115,6 +116,7 @@ export function createDeps(
 		opmlImport,
 		preferences: new PreferencesService(repos.preferences),
 		realtime,
+		metrics,
 		stats: new StatsService(
 			repos.article,
 			repos.feed,
@@ -133,7 +135,7 @@ export function createDeps(
 			realtime,
 			articleCache,
 			repos.category,
-			cacheMetrics,
+			metrics,
 		),
 	};
 

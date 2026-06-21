@@ -7,8 +7,10 @@ import coil3.disk.DiskCache
 import coil3.disk.directory
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
+import com.selffeed.android.data.local.CompositeOfflineReadStore
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.repository.AppStatusRepository
 import com.selffeed.android.data.repository.AppStatusRepositoryImpl
 import com.selffeed.android.data.repository.ArticleRepository
@@ -75,6 +77,13 @@ object AppModule {
         @ApplicationContext context: Context,
         moshi: Moshi,
     ): LocalStore = LocalStore(context, moshi)
+
+    @Provides
+    @Singleton
+    fun provideOfflineReadStore(
+        localStore: LocalStore,
+        offlineCacheStore: OfflineCacheStore,
+    ): OfflineReadStore = CompositeOfflineReadStore(localStore, offlineCacheStore)
 
     @Provides
     @Singleton

@@ -41,7 +41,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 	// Global middleware
 	app.use('*', requestIdMiddleware);
 	app.use('*', requestLogger);
-	app.use('*', httpMetricsMiddleware());
+	app.use('*', httpMetricsMiddleware(deps?.services.metrics));
 	app.use('*', securityHeaders);
 	app.use(
 		'*',
@@ -133,7 +133,14 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 
 		// Metrics endpoint (requires authentication and admin role)
 		v1.use('/metrics/*', authMiddleware, requireAdmin);
-		v1.route('/metrics', createMetricsRoutes({ db: deps.db, redis: deps.redis }));
+		v1.route(
+			'/metrics',
+			createMetricsRoutes({
+				db: deps.db,
+				metricsService: deps.services.metrics,
+				redis: deps.redis,
+			}),
+		);
 
 		app.route('/api/v1', v1);
 	}

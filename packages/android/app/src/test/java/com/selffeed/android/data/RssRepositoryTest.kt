@@ -3,8 +3,10 @@ package com.selffeed.android.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import coil3.ImageLoader
+import com.selffeed.android.data.local.CompositeOfflineReadStore
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.remote.ArticleRemoteDataSource
 import com.selffeed.android.data.remote.AuthRemoteDataSource
 import com.selffeed.android.data.remote.FeedRemoteDataSource
@@ -51,6 +53,7 @@ class RssRepositoryTest {
     private lateinit var sessionStore: SessionStore
     private lateinit var cacheStore: OfflineCacheStore
     private lateinit var localStore: LocalStore
+    private lateinit var offlineReadStore: OfflineReadStore
     private lateinit var imageLoader: ImageLoader
     private lateinit var networkMonitor: NetworkMonitor
     private lateinit var onlineState: MutableStateFlow<Boolean>
@@ -68,6 +71,7 @@ class RssRepositoryTest {
         val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
         cacheStore = OfflineCacheStore(context, moshi)
         localStore = LocalStore(context, moshi)
+        offlineReadStore = CompositeOfflineReadStore(localStore, cacheStore)
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
         onlineState = MutableStateFlow(true)
@@ -81,8 +85,8 @@ class RssRepositoryTest {
             sessionStore = sessionStore,
             okHttpClient = OkHttpClient(),
             moshi = moshi,
-            offlineCacheStore = cacheStore,
             localStore = localStore,
+            offlineReadStore = offlineReadStore,
             imageRequestContext = context,
             imageLoader = imageLoader,
             networkMonitor = networkMonitor,

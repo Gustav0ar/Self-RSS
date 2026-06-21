@@ -1,4 +1,4 @@
-import { Outlet, useRouter } from '@tanstack/react-router';
+import { Outlet, useRouter, useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -14,34 +14,69 @@ import {
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
+import {
+	buildArticleRouteSearch,
+	type SearchScope,
+	validateArticleRouteSearch,
+} from '@/routes/article-route-search';
 import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
 
 export function RootLayout() {
 	const router = useRouter();
+	const routeSearch = useRouterState({
+		select: (state) => validateArticleRouteSearch(state.location.search as Record<string, unknown>),
+	});
 	const { isAuthenticated, isLoading } = useAuth();
 	const { selectedFeedId, selectedCategoryId } = useAppState();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const searchQuery = routeSearch.q ?? '';
+	const searchScope = routeSearch.searchScope ?? 'all';
 	useReadStateSync(isAuthenticated);
-
-	function buildSelectionSearch() {
-		if (selectedFeedId) {
-			return { feedId: selectedFeedId };
-		}
-
-		if (selectedCategoryId) {
-			return { categoryId: selectedCategoryId };
-		}
-
-		return {};
-	}
 
 	function navigateToArticle(articleId: string) {
 		void router.navigate({
 			to: '/articles/$articleId',
 			params: { articleId },
-			search: buildSelectionSearch(),
+			search: buildArticleRouteSearch({
+				feedId: selectedFeedId,
+				categoryId: selectedCategoryId,
+			}),
 		});
+	}
+
+	function buildCurrentSearch(overrides: { q?: string; searchScope?: SearchScope } = {}) {
+		return buildArticleRouteSearch({
+			feedId: selectedFeedId,
+			categoryId: selectedCategoryId,
+			q: searchQuery,
+			searchScope,
+			...overrides,
+		});
+	}
+
+	function updateSearchQuery(q: string) {
+		void router.navigate({
+			to: '.',
+			search: buildCurrentSearch({ q }),
+			replace: true,
+		});
+	}
+
+	function updateSearchScope(nextScope: SearchScope) {
+		void router.navigate({
+			to: '.',
+			search: buildCurrentSearch({ searchScope: nextScope }),
+			replace: true,
+		});
+	}
+
+	function navigateHome(search = buildArticleRouteSearch()) {
+		if (Object.keys(search).length === 0) {
+			void router.navigate({ to: '/' });
+			return;
+		}
+		void router.navigate({ to: '/', search });
 	}
 
 	if (isLoading) {
@@ -66,6 +101,10 @@ export function RootLayout() {
 					onSelectArticle={navigateToArticle}
 					onOpenSidebar={() => setSidebarOpen(true)}
 					categoryId={selectedCategoryId}
+					searchQuery={searchQuery}
+					searchScope={searchScope}
+					onSearchQueryChange={updateSearchQuery}
+					onSearchScopeChange={updateSearchScope}
 				/>
 				<div className="flex min-h-0 flex-1 gap-2 px-2 pb-2 pt-0 sm:gap-3 sm:px-3 sm:pb-3">
 					<Sidebar
@@ -73,15 +112,21 @@ export function RootLayout() {
 						selectedCategoryId={selectedCategoryId}
 						onSelectAll={() => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/' });
+							navigateHome(buildArticleRouteSearch({ q: searchQuery, searchScope }));
 						}}
 						onSelectFeed={(feedId) => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/', search: { feedId } });
+							navigateHome(buildArticleRouteSearch({ feedId, q: searchQuery, searchScope }));
 						}}
 						onSelectCategory={(categoryId) => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/', search: { categoryId } });
+							navigateHome(
+								buildArticleRouteSearch({
+									categoryId,
+									q: searchQuery,
+									searchScope,
+								}),
+							);
 						}}
 					/>
 					<main className="surface-card surface-quiet motion-enter min-h-0 flex-1 overflow-hidden rounded-2xl">
@@ -100,15 +145,21 @@ export function RootLayout() {
 						selectedCategoryId={selectedCategoryId}
 						onSelectAll={() => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/' });
+							navigateHome(buildArticleRouteSearch({ q: searchQuery, searchScope }));
 						}}
 						onSelectFeed={(feedId) => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/', search: { feedId } });
+							navigateHome(buildArticleRouteSearch({ feedId, q: searchQuery, searchScope }));
 						}}
 						onSelectCategory={(categoryId) => {
 							setSidebarOpen(false);
-							void router.navigate({ to: '/', search: { categoryId } });
+							navigateHome(
+								buildArticleRouteSearch({
+									categoryId,
+									q: searchQuery,
+									searchScope,
+								}),
+							);
 						}}
 					/>
 				</MobileSidebarDrawer>

@@ -44,6 +44,24 @@ describe('SearchBar', () => {
 		expect(useSearchMock).toHaveBeenLastCalledWith('Alpha', undefined);
 	});
 
+	it('reports controlled query changes without mutating the displayed route value itself', () => {
+		const onQueryChange = vi.fn();
+		const { rerender } = render(
+			<SearchBar onSelectArticle={() => {}} query="Alpha" onQueryChange={onQueryChange} />,
+		);
+
+		const input = screen.getByPlaceholderText('Search articles...') as HTMLInputElement;
+		expect(input.value).toBe('Alpha');
+
+		fireEvent.change(input, { target: { value: 'Beta' } });
+
+		expect(onQueryChange).toHaveBeenCalledWith('Beta');
+		expect(input.value).toBe('Alpha');
+
+		rerender(<SearchBar onSelectArticle={() => {}} query="Beta" onQueryChange={onQueryChange} />);
+		expect(input.value).toBe('Beta');
+	});
+
 	it('selects the highlighted result when the user presses Enter', () => {
 		const onSelect = vi.fn();
 		useSearchMock.mockReturnValue({

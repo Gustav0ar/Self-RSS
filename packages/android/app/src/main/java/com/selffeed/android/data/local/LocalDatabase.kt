@@ -200,6 +200,9 @@ interface LocalStoreDao {
     @Query("SELECT * FROM article_details WHERE id = :articleId LIMIT 1")
     suspend fun readArticleDetail(articleId: String): ArticleDetailEntity?
 
+    @Query("DELETE FROM article_details WHERE id = :articleId")
+    suspend fun clearArticleDetail(articleId: String)
+
     @Query("DELETE FROM categories")
     suspend fun clearCategories()
 

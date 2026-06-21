@@ -4,42 +4,7 @@ import { FeedView } from '@/components/articles/feed-view';
 import { RootLayout } from '@/components/layout/root-layout';
 import { StatsPanel } from '@/components/stats/stats-panel';
 import { useAppState } from '@/providers/app-state';
-
-interface ArticleSelectionSearch {
-	feedId?: string;
-	categoryId?: string;
-}
-
-function validateArticleSelectionSearch(search: Record<string, unknown>): ArticleSelectionSearch {
-	const feedId =
-		typeof search.feedId === 'string' && search.feedId.trim() ? search.feedId : undefined;
-	const categoryId =
-		typeof search.categoryId === 'string' && search.categoryId.trim()
-			? search.categoryId
-			: undefined;
-
-	if (feedId) {
-		return { feedId };
-	}
-
-	if (categoryId) {
-		return { categoryId };
-	}
-
-	return {};
-}
-
-function buildSelectionSearch(feedId?: string, categoryId?: string): ArticleSelectionSearch {
-	if (feedId) {
-		return { feedId };
-	}
-
-	if (categoryId) {
-		return { categoryId };
-	}
-
-	return {};
-}
+import { buildArticleRouteSearch, validateArticleRouteSearch } from './article-route-search';
 
 function RoutedFeedView({
 	articleId,
@@ -69,14 +34,14 @@ function RoutedFeedView({
 				if (nextArticleId == null) {
 					void router.navigate({
 						to: '/',
-						search: buildSelectionSearch(feedId, categoryId),
+						search: buildArticleRouteSearch({ feedId, categoryId }),
 					});
 					return;
 				}
 				void router.navigate({
 					to: '/articles/$articleId',
 					params: { articleId: nextArticleId },
-					search: buildSelectionSearch(feedId, categoryId),
+					search: buildArticleRouteSearch({ feedId, categoryId }),
 				});
 			}}
 		/>
@@ -90,7 +55,7 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/',
-	validateSearch: validateArticleSelectionSearch,
+	validateSearch: validateArticleRouteSearch,
 	component: function Index() {
 		const { feedId, categoryId } = indexRoute.useSearch();
 		return <RoutedFeedView articleId={null} feedId={feedId} categoryId={categoryId} />;
@@ -100,7 +65,7 @@ const indexRoute = createRoute({
 const articleRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/articles/$articleId',
-	validateSearch: validateArticleSelectionSearch,
+	validateSearch: validateArticleRouteSearch,
 	component: function Article() {
 		const { articleId } = articleRoute.useParams();
 		const { feedId, categoryId } = articleRoute.useSearch();

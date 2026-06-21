@@ -1,7 +1,7 @@
 import { type ReadStateSyncEvent, readStateSyncEventSchema } from '@self-feed/shared';
 import type Redis from 'ioredis';
 import { createLogger } from '../utils/logger.js';
-import { getMetricsService } from './metrics.service.js';
+import { getMetricsService, type MetricsService } from './metrics.service.js';
 
 type ReadStateEventHandler = (event: ReadStateSyncEvent) => void;
 
@@ -22,7 +22,10 @@ export class RealtimeService {
 	private reconnectAttempts = 0;
 	private closed = false;
 
-	constructor(private redis: Redis) {}
+	constructor(
+		private redis: Redis,
+		private metrics: MetricsService = getMetricsService(),
+	) {}
 
 	async publishReadStateEvent(userId: string, event: ReadStateSyncEvent) {
 		await this.redis.publish(readStateChannel(userId), JSON.stringify(event));
@@ -59,7 +62,7 @@ export class RealtimeService {
 
 		// Track SSE connection count
 		this.connectionsByUser.set(userId, currentConnections + 1);
-		getMetricsService().incrementSseConnections();
+		this.metrics.incrementSseConnections();
 
 		if (firstSubscriberForChannel) {
 			await this.subscriber?.subscribe(channel);
@@ -190,7 +193,7 @@ export class RealtimeService {
 		}
 
 		// Track SSE connection count
-		getMetricsService().decrementSseConnections();
+		this.metrics.decrementSseConnections();
 
 		if (handlers.size > 0) {
 			return;

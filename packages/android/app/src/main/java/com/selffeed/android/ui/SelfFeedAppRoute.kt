@@ -4,6 +4,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
@@ -35,6 +36,7 @@ fun SelfFeedAppRoute(
 
     SelfFeedTheme(darkTheme = darkTheme) {
         val latestFeedsState by rememberUpdatedState(feedsState)
+        val articleEventCoordinator = remember { ArticleFeatureEventCoordinator() }
 
         LaunchedEffect(Unit) {
             authViewModel.bootstrap()
@@ -77,44 +79,43 @@ fun SelfFeedAppRoute(
 
         LaunchedEffect(Unit) {
             articlesViewModel.events.collect { event ->
-                when (event) {
-                    is ArticleFeatureEvent.ArticleReadStateChanged -> {
-                        feedsViewModel.applyUnreadDelta(event.feedId, event.unreadDelta)
-                        settingsViewModel.applyStatsDelta(event.unreadDelta, event.readDelta)
-                        searchViewModel.applyArticleReadState(event.articleId, event.read)
-                    }
-
-                    is ArticleFeatureEvent.ScopeMarkedRead -> {
-                        feedsViewModel.applyScopeMarkedRead(
-                            feedId = event.feedId,
-                            categoryId = event.categoryId,
-                            affectedFeedIds = event.affectedFeedIds,
-                        )
-                        settingsViewModel.applyStatsDelta(
-                            unreadDelta = -event.markedCount,
-                            readDelta = event.markedCount,
-                        )
-                        val searchFeedIds = when {
-                            event.affectedFeedIds.isNotEmpty() -> event.affectedFeedIds
-                            event.feedId != null -> setOf(event.feedId)
-                            event.categoryId != null -> latestFeedsState.feeds
-                                .filter { it.categoryId == event.categoryId }
-                                .map { it.id }
-                                .toSet()
-
-                            else -> emptySet()
+                articleEventCoordinator.handle(
+                    event = event,
+                    latestFeedsState = latestFeedsState,
+                    sink = object : ArticleFeatureEventSink {
+                        override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
+                            feedsViewModel.applyUnreadDelta(feedId, unreadDelta)
                         }
-                        if (
-                            event.feedId == null &&
-                            event.categoryId == null &&
-                            event.affectedFeedIds.isEmpty()
+
+                        override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
+                            settingsViewModel.applyStatsDelta(unreadDelta, readDelta)
+                        }
+
+                        override fun applyArticleReadState(articleId: String, read: Boolean) {
+                            searchViewModel.applyArticleReadState(articleId, read)
+                        }
+
+                        override fun applyScopeMarkedRead(
+                            feedId: String?,
+                            categoryId: String?,
+                            affectedFeedIds: Set<String>,
                         ) {
-                            searchViewModel.applyAllMarkedRead()
-                        } else {
-                            searchViewModel.applyScopeMarkedRead(searchFeedIds)
+                            feedsViewModel.applyScopeMarkedRead(
+                                feedId = feedId,
+                                categoryId = categoryId,
+                                affectedFeedIds = affectedFeedIds,
+                            )
                         }
-                    }
-                }
+
+                        override fun applySearchScopeMarkedRead(feedIds: Set<String>) {
+                            searchViewModel.applyScopeMarkedRead(feedIds)
+                        }
+
+                        override fun applyAllSearchMarkedRead() {
+                            searchViewModel.applyAllMarkedRead()
+                        }
+                    },
+                )
             }
         }
 

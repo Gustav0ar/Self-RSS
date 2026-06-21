@@ -7,7 +7,7 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.map
 import com.selffeed.android.data.local.LocalStore
-import com.selffeed.android.data.local.OfflineCacheStore
+import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.remote.ArticleRemoteDataSource
 import com.selffeed.android.data.remote.AuthRemoteDataSource
 import com.selffeed.android.data.remote.FeedRemoteDataSource
@@ -58,8 +58,8 @@ class RssRepository @Inject constructor(
     private val sessionStore: SessionStore,
     okHttpClient: OkHttpClient,
     moshi: Moshi,
-    private val offlineCacheStore: OfflineCacheStore,
     private val localStore: LocalStore,
+    private val offlineReadStore: OfflineReadStore,
     private val imageRequestContext: Context,
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
@@ -109,24 +109,21 @@ class RssRepository @Inject constructor(
             return@safeReadCall it
         }
 
-        val localCategories = localStore.readCategories()
-        if (localCategories.isNotEmpty()) {
-            runtime.putCached("categories", CATEGORIES_TTL_MS, localCategories)
+        val cachedCategories = offlineReadStore.readCategories()
+        if (cachedCategories.isNotEmpty()) {
+            runtime.putCached("categories", CATEGORIES_TTL_MS, cachedCategories)
             refreshCategoriesInBackground()
-            return@safeReadCall localCategories
+            return@safeReadCall cachedCategories
         }
 
         try {
             runtime.cachedGet(key = "categories", ttlMs = CATEGORIES_TTL_MS) {
                 runtime.withRetry { feedRemote.categories() }.also { categories ->
-                    localStore.writeCategories(categories)
-                    offlineCacheStore.writeCategories(categories)
+                    offlineReadStore.writeCategories(categories)
                 }
             }
         } catch (e: Exception) {
-            val fromSqlite = localStore.readCategories()
-            if (fromSqlite.isNotEmpty()) fromSqlite
-            else offlineCacheStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
+            offlineReadStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
         }
     }
 
@@ -135,12 +132,8 @@ class RssRepository @Inject constructor(
             runtime.invalidateByPrefix("categories")
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("stats")
-            offlineCacheStore.clearByPrefix("categories")
-
-            localStore.clearTable(LocalStore.TABLE_CATEGORIES)
-            offlineCacheStore.clearByPrefix("feeds")
-
-            localStore.clearTable(LocalStore.TABLE_FEEDS)
+            offlineReadStore.clearCategories()
+            offlineReadStore.clearFeeds()
         }
     }
 
@@ -164,9 +157,9 @@ class RssRepository @Inject constructor(
             return@safeReadCall it
         }
 
-        val localFeeds = localStore.readFeeds()
-        if (localFeeds.isNotEmpty()) {
-            val filtered = categoryId?.let { id -> localFeeds.filter { it.categoryId == id } } ?: localFeeds
+        val cachedFeeds = offlineReadStore.readFeeds()
+        if (cachedFeeds.isNotEmpty()) {
+            val filtered = categoryId?.let { id -> cachedFeeds.filter { it.categoryId == id } } ?: cachedFeeds
             if (filtered.isNotEmpty()) {
                 runtime.putCached(key, FEEDS_TTL_MS, filtered)
                 refreshFeedsInBackground(categoryId)
@@ -177,12 +170,11 @@ class RssRepository @Inject constructor(
         try {
             runtime.cachedGet(key = key, ttlMs = FEEDS_TTL_MS) {
                 runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
-                    localStore.writeFeeds(feeds)
-                    offlineCacheStore.writeFeeds(feeds)
+                    offlineReadStore.writeFeeds(feeds)
                 }
             }
         } catch (e: Exception) {
-            val cached = localStore.readFeeds().ifEmpty { offlineCacheStore.readFeeds() }
+            val cached = offlineReadStore.readFeeds()
             val filtered = categoryId?.let { id -> cached.filter { it.categoryId == id } } ?: cached
             filtered.takeIf { it.isNotEmpty() } ?: throw e
         }
@@ -255,9 +247,9 @@ class RssRepository @Inject constructor(
             return@safeReadCall it
         }
 
-        val localPage = localStore.readArticles(key)
-        if (localPage != null) {
-            runtime.putCached(key, ARTICLES_TTL_MS, localPage)
+        val cachedPage = offlineReadStore.readArticles(key)
+        if (cachedPage != null) {
+            runtime.putCached(key, ARTICLES_TTL_MS, cachedPage)
             refreshArticlePageInBackground(
                 key = key,
                 feedId = feedId,
@@ -266,7 +258,7 @@ class RssRepository @Inject constructor(
                 sort = sort,
                 limit = limit,
             )
-            return@safeReadCall localPage
+            return@safeReadCall cachedPage
         }
 
         try {
@@ -274,12 +266,11 @@ class RssRepository @Inject constructor(
                 runtime.withRetry {
                     articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
                 }.also { response ->
-                    localStore.writeArticles(key, response)
-                    offlineCacheStore.writeArticles(key, response)
+                    offlineReadStore.writeArticles(key, response)
                 }
             }
         } catch (e: Exception) {
-            localStore.readArticles(key) ?: offlineCacheStore.readArticles(key) ?: throw e
+            offlineReadStore.readArticles(key) ?: throw e
         }
     }
 
@@ -331,32 +322,31 @@ class RssRepository @Inject constructor(
         // Fast path: in-memory hit. Instant.
         runtime.getCached<ArticleDetail>("article:$articleId")?.let { return@safeReadCall it }
 
-        // Warm path: SQLite has a fresh copy. Return it now and refresh
-        // from the network in the background so the reader opens
-        // instantly for any article the user has ever opened. The
-        // background refresh updates the in-memory cache and SQLite on
-        // success; on failure the SQLite copy stays valid until its own
-        // 7-day expiry.
-        val sqliteCopy = localStore.readArticleDetail(articleId)
-        if (sqliteCopy != null) {
-            runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, sqliteCopy)
+        // Warm path: durable offline storage has a fresh copy. Return it
+        // now and refresh from the network in the background so the reader
+        // opens instantly for any article the user has ever opened. The
+        // background refresh updates the in-memory cache and durable store
+        // on success; on failure the cached copy stays valid until its own
+        // expiry.
+        val cachedDetail = offlineReadStore.readArticleDetail(articleId)
+        if (cachedDetail != null) {
+            runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, cachedDetail)
             // Detached background refresh — does not block the caller.
             // We swallow the result here on purpose: the caller already
             // has a usable ArticleDetail. Errors are surfaced on the next
             // explicit open or pull-to-refresh.
             backgroundRefreshArticle(articleId)
-            return@safeReadCall sqliteCopy
+            return@safeReadCall cachedDetail
         }
 
-        // Cold path: nothing in memory or SQLite. Hit the network.
+        // Cold path: nothing in memory or durable storage. Hit the network.
         try {
             runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
                 runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-                localStore.writeArticleDetail(detail)
-                offlineCacheStore.writeArticleDetail(detail)
+                offlineReadStore.writeArticleDetail(detail)
             }
         } catch (e: Exception) {
-            offlineCacheStore.readArticleDetail(articleId) ?: throw e
+            offlineReadStore.readArticleDetail(articleId) ?: throw e
         }
     }
 
@@ -367,10 +357,9 @@ class RssRepository @Inject constructor(
             try {
                 val detail = runtime.withRetry { articleRemote.article(articleId) }
                 runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-                localStore.writeArticleDetail(detail)
-                offlineCacheStore.writeArticleDetail(detail)
+                offlineReadStore.writeArticleDetail(detail)
             } catch (_: Exception) {
-                // Background refresh is best-effort. The SQLite copy the
+                // Background refresh is best-effort. The cached copy the
                 // user is already reading is still valid.
             }
         }
@@ -381,8 +370,7 @@ class RssRepository @Inject constructor(
             runCatching {
                 runtime.withRetry { feedRemote.categories() }.also { categories ->
                     runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
-                    localStore.writeCategories(categories)
-                    offlineCacheStore.writeCategories(categories)
+                    offlineReadStore.writeCategories(categories)
                 }
             }
         }
@@ -393,8 +381,7 @@ class RssRepository @Inject constructor(
             runCatching {
                 runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
                     runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
-                    localStore.writeFeeds(feeds)
-                    offlineCacheStore.writeFeeds(feeds)
+                    offlineReadStore.writeFeeds(feeds)
                 }
             }
         }
@@ -413,8 +400,7 @@ class RssRepository @Inject constructor(
                 runtime.withRetry { articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor = null) }
                     .also { response ->
                         runtime.putCached(key, ARTICLES_TTL_MS, response)
-                        localStore.writeArticles(key, response)
-                        offlineCacheStore.writeArticles(key, response)
+                        offlineReadStore.writeArticles(key, response)
                     }
             }
         }
@@ -427,8 +413,7 @@ class RssRepository @Inject constructor(
     override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> = safeReadCall {
         runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
             runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-            localStore.writeArticleDetail(detail)
-            offlineCacheStore.writeArticleDetail(detail)
+            offlineReadStore.writeArticleDetail(detail)
         }
     }
 
@@ -488,7 +473,6 @@ class RssRepository @Inject constructor(
                 // The detail is now authoritative; refresh the cached body.
                 invalidateArticleDetailCache(articleId)
                 runtime.invalidateByPrefix("stats")
-                offlineCacheStore.clearByPrefix("article-$articleId")
             }
         } catch (e: Exception) {
             // Roll back the optimistic update so the next read is consistent
@@ -579,26 +563,24 @@ class RssRepository @Inject constructor(
         // are refreshed lazily on the next unread-count read.
         invalidateArticleDetailCache(articleId)
         runtime.invalidateByPrefix("stats")
-        offlineCacheStore.clearByPrefix("article-$articleId")
     }
 
     private suspend fun invalidateArticleDetailCache(articleId: String) {
         runtime.invalidateByPrefix("article:$articleId")
-        offlineCacheStore.clearByPrefix("article-$articleId")
+        offlineReadStore.clearArticleDetail(articleId)
     }
 
     override suspend fun invalidateReadStateCaches(articleId: String?) {
         if (articleId != null) {
             runtime.invalidateByPrefix("article:$articleId")
-            offlineCacheStore.clearByPrefix("article-$articleId")
+            offlineReadStore.clearArticleDetail(articleId)
         }
         invalidateFeedAndArticleCaches()
     }
 
     private suspend fun clearCacheAndDatabase() {
         runtime.clearCache()
-        localStore.clearAll()
-        offlineCacheStore.clearAll()
+        offlineReadStore.clearAll()
     }
 
     private suspend fun invalidateFeedAndArticleCaches() {
@@ -607,16 +589,7 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("search")
         runtime.invalidateByPrefix("stats")
         runtime.invalidateByPrefix("categories")
-        offlineCacheStore.clearByPrefix("feeds")
-
-        localStore.clearTable(LocalStore.TABLE_FEEDS)
-        offlineCacheStore.clearByPrefix("categories")
-
-        localStore.clearTable(LocalStore.TABLE_CATEGORIES)
-        offlineCacheStore.clearByPrefix("articles-")
-
-        localStore.clearTable(LocalStore.TABLE_ARTICLES)
-        localStore.clearTable(LocalStore.TABLE_ARTICLE_PAGES)
+        offlineReadStore.clearFeedAndArticleData()
     }
 
     private suspend fun flushPendingReadStateMutations() {
@@ -648,8 +621,8 @@ class RssRepository @Inject constructor(
         // Article details change rarely once published (only on enrichment
         // or read-state flip, both of which invalidate explicitly). Keep
         // them in the in-memory cache for a full day so reopening an old
-        // article is instant — the SQLite write-through is the durable
-        // source, this just avoids re-parsing on every cold start.
+        // article is instant — durable offline storage is the source, this
+        // just avoids re-parsing on every cold start.
         const val ARTICLE_DETAIL_TTL_MS = 24L * 60 * 60 * 1000
         const val SEARCH_TTL_MS = 30_000L
         const val PREFERENCES_TTL_MS = 60_000L

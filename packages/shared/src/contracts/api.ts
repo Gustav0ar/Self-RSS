@@ -54,7 +54,10 @@ export interface CategoryWithCounts extends Category {
 	children?: CategoryWithCounts[];
 }
 
-export type CategoryTreeResponse = CategoryWithCounts[];
+export interface CategoryTreeResponse {
+	categories: CategoryWithCounts[];
+	totalUnread: number;
+}
 
 export interface ReorderCategoriesResponse {
 	updatedCount: number;

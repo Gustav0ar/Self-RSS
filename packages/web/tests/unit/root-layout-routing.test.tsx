@@ -5,10 +5,18 @@ import { RootLayout } from '../../src/components/layout/root-layout';
 const navigateMock = vi.fn();
 const sidebarPropsSpy = vi.fn();
 const topBarPropsSpy = vi.fn();
+let routeSearchMock: Record<string, unknown> = {};
+let appStateMock = {
+	selectedFeedId: 'feed-1' as string | undefined,
+	selectedCategoryId: undefined as string | undefined,
+};
 
 vi.mock('@tanstack/react-router', () => ({
 	Outlet: () => <div data-testid="outlet" />,
 	useRouter: () => ({ navigate: navigateMock }),
+	useRouterState: (options: {
+		select: (state: { location: { search: Record<string, unknown> } }) => unknown;
+	}) => options.select({ location: { search: routeSearchMock } }),
 }));
 
 vi.mock('../../src/providers/auth', () => ({
@@ -19,10 +27,7 @@ vi.mock('../../src/providers/auth', () => ({
 }));
 
 vi.mock('../../src/providers/app-state', () => ({
-	useAppState: () => ({
-		selectedFeedId: 'feed-1',
-		selectedCategoryId: undefined,
-	}),
+	useAppState: () => appStateMock,
 }));
 
 vi.mock('../../src/components/layout/sidebar', () => ({
@@ -49,7 +54,14 @@ vi.mock('../../src/components/layout/sidebar', () => ({
 }));
 
 vi.mock('../../src/components/layout/top-bar', () => ({
-	TopBar: (props: { onOpenSidebar?: () => void; onSelectArticle?: (id: string) => void }) => {
+	TopBar: (props: {
+		onOpenSidebar?: () => void;
+		onSelectArticle?: (id: string) => void;
+		onSearchQueryChange?: (query: string) => void;
+		onSearchScopeChange?: (scope: 'all' | 'category') => void;
+		searchQuery?: string;
+		searchScope?: 'all' | 'category';
+	}) => {
 		topBarPropsSpy(props);
 		return (
 			<div>
@@ -58,6 +70,12 @@ vi.mock('../../src/components/layout/top-bar', () => ({
 				</button>
 				<button type="button" onClick={() => props.onSelectArticle?.('article-9')}>
 					Open article
+				</button>
+				<button type="button" onClick={() => props.onSearchQueryChange?.('Beta')}>
+					Change search
+				</button>
+				<button type="button" onClick={() => props.onSearchScopeChange?.('category')}>
+					Scope current
 				</button>
 			</div>
 		);
@@ -89,6 +107,14 @@ vi.mock('../../src/hooks/use-read-state-sync', () => ({
 describe('RootLayout routing', () => {
 	afterEach(() => {
 		document.body.style.overflow = '';
+		routeSearchMock = {};
+		appStateMock = {
+			selectedFeedId: 'feed-1',
+			selectedCategoryId: undefined,
+		};
+		navigateMock.mockClear();
+		sidebarPropsSpy.mockClear();
+		topBarPropsSpy.mockClear();
 	});
 
 	it('navigates to article URLs while preserving the current feed context', () => {
@@ -119,6 +145,43 @@ describe('RootLayout routing', () => {
 		expect(navigateMock).toHaveBeenNthCalledWith(3, {
 			to: '/',
 			search: { categoryId: 'category-2' },
+		});
+	});
+
+	it('keeps search query in the URL while preserving the current selection', () => {
+		routeSearchMock = { q: 'Alpha' };
+		render(<RootLayout />);
+
+		expect(topBarPropsSpy).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				searchQuery: 'Alpha',
+				searchScope: 'all',
+			}),
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Change search' }));
+
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: '.',
+			search: { feedId: 'feed-1', q: 'Beta' },
+			replace: true,
+		});
+	});
+
+	it('only writes category search scope when a category is selected', () => {
+		appStateMock = {
+			selectedFeedId: undefined,
+			selectedCategoryId: 'category-1',
+		};
+		routeSearchMock = { q: 'Alpha' };
+		render(<RootLayout />);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Scope current' }));
+
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: '.',
+			search: { categoryId: 'category-1', q: 'Alpha', searchScope: 'category' },
+			replace: true,
 		});
 	});
 

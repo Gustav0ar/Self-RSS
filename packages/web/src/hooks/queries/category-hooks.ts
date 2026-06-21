@@ -1,4 +1,9 @@
-import type { ApiResponse, CategoryWithCounts, ReorderCategoriesResponse } from '@self-feed/shared';
+import type {
+	ApiResponse,
+	CategoryTreeResponse,
+	CategoryWithCounts,
+	ReorderCategoriesResponse,
+} from '@self-feed/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 
@@ -8,10 +13,9 @@ export function useCategories() {
 	return useQuery({
 		queryKey: ['categories'],
 		queryFn: ({ signal }) =>
-			apiFetch<ApiResponse<{ categories: CategoryWithCounts[]; totalUnread: number }>>(
-				'/categories',
-				{ signal },
-			).then((r) => r.data.categories),
+			apiFetch<ApiResponse<CategoryTreeResponse>>('/categories', { signal }).then(
+				(r) => r.data.categories,
+			),
 	});
 }
 

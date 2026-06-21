@@ -7,14 +7,27 @@ import { SearchBar } from '@/components/search/search-bar';
 import { useUpdatePreferences } from '@/hooks/queries';
 import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
+import type { SearchScope } from '@/routes/article-route-search';
 
 interface TopBarProps {
 	onSelectArticle?: (id: string) => void;
 	onOpenSidebar?: () => void;
 	categoryId?: string;
+	searchQuery?: string;
+	searchScope?: SearchScope;
+	onSearchQueryChange?: (query: string) => void;
+	onSearchScopeChange?: (scope: SearchScope) => void;
 }
 
-function TopBarContent({ onSelectArticle, onOpenSidebar, categoryId }: TopBarProps) {
+function TopBarContent({
+	onSelectArticle,
+	onOpenSidebar,
+	categoryId,
+	searchQuery,
+	searchScope,
+	onSearchQueryChange,
+	onSearchScopeChange,
+}: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
 	const { isAuthenticated, logout, username } = useAuth();
@@ -57,7 +70,14 @@ function TopBarContent({ onSelectArticle, onOpenSidebar, categoryId }: TopBarPro
 				{isAuthenticated ? (
 					<div className="order-3 min-w-0 flex-[1_0_100%] items-center gap-3 sm:order-none sm:max-w-2xl sm:flex-1 md:flex">
 						<div className="min-w-0 flex-1">
-							<SearchBar onSelectArticle={onSelectArticle ?? (() => {})} categoryId={categoryId} />
+							<SearchBar
+								onSelectArticle={onSelectArticle ?? (() => {})}
+								categoryId={categoryId}
+								query={searchQuery}
+								scope={searchScope}
+								onQueryChange={onSearchQueryChange}
+								onScopeChange={onSearchScopeChange}
+							/>
 						</div>
 					</div>
 				) : null}

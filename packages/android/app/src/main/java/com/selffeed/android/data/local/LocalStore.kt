@@ -192,6 +192,11 @@ class LocalStore(
         return runCatching { articleDetailAdapter.fromJson(detail.payloadJson) }.getOrNull()
     }
 
+    suspend fun clearArticleDetail(articleId: String) {
+        dao.clearArticleDetail(articleId)
+        notifyInvalidation(TABLE_ARTICLE_DETAILS)
+    }
+
     suspend fun clearAll() {
         dao.clearCategories()
         dao.clearFeeds()

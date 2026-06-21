@@ -3,23 +3,37 @@ import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { useSearch } from '@/hooks/queries';
+import type { SearchScope } from '@/routes/article-route-search';
 
 interface SearchBarProps {
 	onSelectArticle: (id: string) => void;
 	categoryId?: string;
+	query?: string;
+	scope?: SearchScope;
+	onQueryChange?: (query: string) => void;
+	onScopeChange?: (scope: SearchScope) => void;
 }
 
 const MAX_RENDERED_RESULTS = 80;
 
-export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
-	const [query, setQuery] = useState('');
+export function SearchBar({
+	onSelectArticle,
+	categoryId,
+	query: controlledQuery,
+	scope: controlledScope,
+	onQueryChange,
+	onScopeChange,
+}: SearchBarProps) {
+	const [uncontrolledQuery, setUncontrolledQuery] = useState('');
 	const [debouncedQuery, setDebouncedQuery] = useState('');
 	const [isOpen, setIsOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(-1);
-	const [scope, setScope] = useState<'all' | 'category'>('all');
+	const [uncontrolledScope, setUncontrolledScope] = useState<SearchScope>('all');
 	const listboxId = useId();
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
+	const query = controlledQuery ?? uncontrolledQuery;
+	const scope = controlledScope ?? uncontrolledScope;
 	const activeCategoryId = scope === 'category' ? categoryId : undefined;
 	const {
 		data: results,
@@ -29,11 +43,27 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 		isLoading,
 	} = useSearch(debouncedQuery, activeCategoryId);
 
+	const updateQuery = useCallback(
+		(nextQuery: string) => {
+			setUncontrolledQuery(nextQuery);
+			onQueryChange?.(nextQuery);
+		},
+		[onQueryChange],
+	);
+
+	const updateScope = useCallback(
+		(nextScope: SearchScope) => {
+			setUncontrolledScope(nextScope);
+			onScopeChange?.(nextScope);
+		},
+		[onScopeChange],
+	);
+
 	useEffect(() => {
 		if (!categoryId && scope === 'category') {
-			setScope('all');
+			updateScope('all');
 		}
-	}, [categoryId, scope]);
+	}, [categoryId, scope, updateScope]);
 
 	useEffect(() => {
 		const timeout = window.setTimeout(() => {
@@ -113,7 +143,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 					onSelectArticle(target.id);
 					setIsOpen(false);
 					setActiveIndex(-1);
-					setQuery('');
+					updateQuery('');
 					setDebouncedQuery('');
 				}
 			} else if (event.key === 'Escape') {
@@ -121,7 +151,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 				setActiveIndex(-1);
 			}
 		},
-		[activeIndex, onSelectArticle, renderedResults, showDropdown],
+		[activeIndex, onSelectArticle, renderedResults, showDropdown, updateQuery],
 	);
 
 	// Reset the highlight when the result set changes so keyboard selection
@@ -140,7 +170,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 					type="text"
 					value={query}
 					onChange={(e) => {
-						setQuery(e.target.value);
+						updateQuery(e.target.value);
 						setIsOpen(true);
 					}}
 					onFocus={() => setIsOpen(true)}
@@ -158,7 +188,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 					<button
 						type="button"
 						onClick={() => {
-							setQuery('');
+							updateQuery('');
 							setDebouncedQuery('');
 							setIsOpen(false);
 							setActiveIndex(-1);
@@ -181,7 +211,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 							<div className="surface-muted inline-flex rounded-full p-0.5 text-[11px]">
 								<button
 									type="button"
-									onClick={() => setScope('all')}
+									onClick={() => updateScope('all')}
 									aria-pressed={scope === 'all'}
 									className={`rounded-full px-2.5 py-1 ${scope === 'all' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
 								>
@@ -189,7 +219,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 								</button>
 								<button
 									type="button"
-									onClick={() => setScope('category')}
+									onClick={() => updateScope('category')}
 									aria-pressed={scope === 'category'}
 									className={`rounded-full px-2.5 py-1 ${scope === 'category' ? 'bg-background text-foreground' : 'text-muted-foreground'}`}
 								>
@@ -225,7 +255,7 @@ export function SearchBar({ onSelectArticle, categoryId }: SearchBarProps) {
 											onSelectArticle(article.id);
 											setIsOpen(false);
 											setActiveIndex(-1);
-											setQuery('');
+											updateQuery('');
 											setDebouncedQuery('');
 										}}
 										onMouseEnter={() => setActiveIndex(index)}

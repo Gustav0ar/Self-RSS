@@ -3,20 +3,21 @@ import { Hono } from 'hono';
 import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
 import { feeds } from '../db/schema.js';
-import { getMetricsService } from '../services/metrics.service.js';
+import { getMetricsService, type MetricsService } from '../services/metrics.service.js';
 
 export interface MetricsRouteOptions {
 	db?: Database;
+	metricsService?: MetricsService;
 	redis?: Redis;
 }
 
 export function createMetricsRoutes(options: MetricsRouteOptions = {}) {
 	const metrics = new Hono();
-	const metricsService = getMetricsService();
+	const metricsService = options.metricsService ?? getMetricsService();
 
 	metrics.get('/metrics', async (c) => {
 		// Optionally update dynamic metrics before returning
-		await updateDynamicMetrics(options);
+		await updateDynamicMetrics(options, metricsService);
 
 		const metricsOutput = await metricsService.getMetrics();
 		return c.body(metricsOutput, 200, {
@@ -27,16 +28,16 @@ export function createMetricsRoutes(options: MetricsRouteOptions = {}) {
 	return metrics;
 }
 
-async function updateDynamicMetrics(options: MetricsRouteOptions) {
+async function updateDynamicMetrics(options: MetricsRouteOptions, metricsService: MetricsService) {
 	const { db, redis } = options;
 
 	// Update Redis connection status
 	if (redis) {
 		try {
 			await redis.ping();
-			getMetricsService().setRedisConnected(true);
+			metricsService.setRedisConnected(true);
 		} catch {
-			getMetricsService().setRedisConnected(false);
+			metricsService.setRedisConnected(false);
 		}
 	}
 
@@ -44,7 +45,7 @@ async function updateDynamicMetrics(options: MetricsRouteOptions) {
 	if (db) {
 		// For SQLite, we report connection stats based on active queries
 		// This is a best-effort approach since SQLite handles concurrency differently
-		getMetricsService().updateDbPoolStats(0, 0, 1);
+		metricsService.updateDbPoolStats(0, 0, 1);
 	}
 
 	// Update feed sync status from database
@@ -65,7 +66,7 @@ async function updateDynamicMetrics(options: MetricsRouteOptions) {
 					.where(eq(feeds.syncStatus, 'error')),
 			]);
 
-			getMetricsService().updateFeedSyncStatus(
+			metricsService.updateFeedSyncStatus(
 				runningResult[0]?.count ?? 0,
 				pendingResult[0]?.count ?? 0,
 				failedResult[0]?.count ?? 0,
