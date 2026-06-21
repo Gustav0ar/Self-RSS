@@ -320,6 +320,7 @@ object NetworkModule {
                     certificatePinner(pinner)
                 }
             }
+            .cookieJar(PersistedRefreshCookieJar(sessionStore))
             .addInterceptor { chain ->
                 try {
                     chain.proceed(chain.request())

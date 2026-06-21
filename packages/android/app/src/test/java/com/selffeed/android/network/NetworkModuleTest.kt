@@ -2,9 +2,12 @@
 
 package com.selffeed.android.network
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.SessionStore
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import okhttp3.Cookie
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,10 +21,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class NetworkModuleTest {
     @Test
     fun `provideMoshi returns a Moshi with the boolean adapter installed`() {
@@ -137,6 +145,39 @@ class NetworkModuleTest {
         val capturedUrl = loginRequestUrlForConfiguredServer("rss.example.test")
 
         assertEquals("https://rss.example.test/api/v1/auth/login", capturedUrl.toString())
+    }
+
+    @Test
+    fun `api client persists refresh cookies from auth responses`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = mockk<SessionStore>(relaxUnitFun = true)
+        every { store.getApiBaseUrl() } returns "10.0.2.2:3000"
+        every { store.getAccessToken() } returns null
+        every { store.getRefreshCookie() } returns null
+        every { store.getClientId() } returns "client-1"
+        val client = NetworkModule.provideOkHttpClient(
+            context = context,
+            sessionStore = store,
+            sessionRefreshCoordinator = mockk(relaxed = true),
+        )
+        val refreshCookie = Cookie.Builder()
+            .name("rss_refresh_token")
+            .value("refresh-value")
+            .domain("10.0.2.2")
+            .path("/api/v1/auth")
+            .build()
+
+        client.cookieJar.saveFromResponse(
+            url("http://10.0.2.2:3000/api/v1/auth/login"),
+            listOf(refreshCookie),
+        )
+
+        verify {
+            store.setRefreshCookie(match { raw ->
+                raw.contains("rss_refresh_token=refresh-value") &&
+                    raw.contains("path=/api/v1/auth")
+            })
+        }
     }
 
     private suspend fun loginRequestUrlForConfiguredServer(server: String): HttpUrl {

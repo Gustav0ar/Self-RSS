@@ -625,9 +625,14 @@ class RssRepository @Inject constructor(
 
     private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> {
         val result = runtime.safeCall(block)
-        if (result is AppResult.Error && isAuthenticationLost(result)) {
-            handleAuthenticationLost()
-            return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
+        if (result is AppResult.Error) {
+            if (isAuthenticationLost(result)) {
+                handleAuthenticationLost()
+                return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
+            }
+            if (isUnauthorized(result)) {
+                return AppResult.Error(SESSION_REFRESH_UNAVAILABLE_MESSAGE, result.cause)
+            }
         }
         return result
     }
@@ -637,11 +642,11 @@ class RssRepository @Inject constructor(
             return true
         }
         val http = result.cause as? HttpException ?: return false
-        if (http.code() != 401) {
-            return false
-        }
-        return result.message == AUTH_LOST_MESSAGE || sessionRefreshCoordinator.hasRecentRefreshRejection()
+        return http.code() == 401 && sessionRefreshCoordinator.hasRecentRefreshRejection()
     }
+
+    private fun isUnauthorized(result: AppResult.Error): Boolean =
+        (result.cause as? HttpException)?.code() == 401
 
     private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> = runtime.safeCall(block)
 
@@ -746,6 +751,7 @@ class RssRepository @Inject constructor(
         const val ARTICLE_PAGE_SIZE = 30
         const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
+        const val SESSION_REFRESH_UNAVAILABLE_MESSAGE = "Session could not be refreshed. Please try again."
     }
 }
 

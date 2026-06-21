@@ -437,6 +437,35 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `restoreSession clears the local session when refresh session is rejected`() = runTest {
+        every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
+        every { sessionStore.getAccessToken() } returns null
+        every { sessionRefreshCoordinator.refreshAccessToken() } returns SessionRefreshResult.Rejected
+
+        val result = repository.restoreSession()
+
+        assertTrue(result is AppResult.Error)
+        assertEquals("Authentication was lost. Please sign in again.", (result as AppResult.Error).message)
+        io.mockk.verify(exactly = 1) { sessionStore.clear() }
+        coVerify(exactly = 0) { api.me() }
+    }
+
+    @Test
+    fun `restoreSession keeps the local session when refresh is temporarily unavailable`() = runTest {
+        every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
+        every { sessionStore.getAccessToken() } returns null
+        every { sessionRefreshCoordinator.refreshAccessToken() } returns
+            SessionRefreshResult.Unavailable(java.io.IOException("network unavailable"))
+
+        val result = repository.restoreSession()
+
+        assertTrue(result is AppResult.Error)
+        assertEquals("Unable to refresh session. Please check your connection.", (result as AppResult.Error).message)
+        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+        coVerify(exactly = 0) { api.me() }
+    }
+
+    @Test
     fun `unauthorized protected call without auth lost signal does not clear the local session`() = runTest {
         coEvery { api.me() } throws httpError(
             code = 401,
@@ -447,15 +476,32 @@ class RssRepositoryTest {
         val result = repository.me()
 
         assertTrue(result is AppResult.Error)
+        assertEquals("Session could not be refreshed. Please try again.", (result as AppResult.Error).message)
         io.mockk.verify(exactly = 0) { sessionStore.clear() }
     }
 
     @Test
-    fun `auth lost response clears the local session and emits auth lost`() = runTest {
+    fun `auth lost response without refresh rejection keeps the local session`() = runTest {
         coEvery { api.me() } throws httpError(
             code = 401,
             message = "Authentication was lost. Please sign in again.",
         )
+        every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns false
+
+        val result = repository.me()
+
+        assertTrue(result is AppResult.Error)
+        assertEquals("Session could not be refreshed. Please try again.", (result as AppResult.Error).message)
+        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+    }
+
+    @Test
+    fun `auth lost response after refresh rejection clears the local session`() = runTest {
+        coEvery { api.me() } throws httpError(
+            code = 401,
+            message = "Authentication was lost. Please sign in again.",
+        )
+        every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns true
 
         val result = repository.me()
 
