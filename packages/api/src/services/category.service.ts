@@ -198,6 +198,7 @@ function serializeFeed(feed: FeedRow, unreadCountByFeedId: Map<string, number>) 
 		createdAt: feed.createdAt.toISOString(),
 		updatedAt: feed.updatedAt.toISOString(),
 		lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
+		lastSyncErrorAt: feed.lastSyncErrorAt?.toISOString() ?? null,
 	};
 }
 

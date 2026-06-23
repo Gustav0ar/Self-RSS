@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -89,6 +90,7 @@ import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ThemePreference
+import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -400,6 +402,8 @@ private fun FeedRow(
     modifier: Modifier = Modifier,
     onSelect: () -> Unit,
 ) {
+    val syncWarning = feedSyncWarning(feed)
+    val subtitle = syncWarning ?: feed.description ?: feed.feedUrl
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -420,18 +424,30 @@ private fun FeedRow(
         )
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = feed.title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (syncWarning != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = syncWarning,
+                        modifier = Modifier.size(14.dp),
+                        tint = WarningAmber,
+                    )
+                }
+            }
             Text(
-                text = feed.title,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = feed.description ?: feed.feedUrl,
+                text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (syncWarning != null) WarningAmber else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -450,6 +466,12 @@ private fun FeedRow(
             }
         }
     }
+}
+
+internal fun feedSyncWarning(feed: FeedWithCounts): String? {
+    if (feed.syncStatus != "error" && feed.lastSyncError.isNullOrBlank()) return null
+    val detail = feed.lastSyncError?.trim()?.takeIf { it.isNotEmpty() } ?: "Latest refresh failed"
+    return "${feed.title} is not updating. $detail"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

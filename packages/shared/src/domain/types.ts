@@ -59,6 +59,8 @@ export interface Feed {
 	description: string | null;
 	pollingIntervalMinutes: number;
 	lastSyncedAt: string | null;
+	lastSyncError: string | null;
+	lastSyncErrorAt: string | null;
 	syncStatus: SyncStatus;
 	createdAt: string;
 	updatedAt: string;

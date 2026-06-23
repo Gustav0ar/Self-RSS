@@ -67,6 +67,9 @@ describe('CategoryService - getTree', () => {
 				createdAt: now,
 				updatedAt: now,
 				lastSyncedAt: null,
+				syncStatus: 'error',
+				lastSyncError: 'Previous sync was interrupted before it could finish',
+				lastSyncErrorAt: new Date('2026-01-01T00:05:00.000Z'),
 			},
 			{
 				id: 'feed-2',
@@ -107,6 +110,12 @@ describe('CategoryService - getTree', () => {
 		const news = result.categories.find((c) => c.id === 'cat-news');
 		expect(tech?.feedCount).toBe(2);
 		expect(tech?.unreadCount).toBe(3);
+		expect(tech?.feeds[0]).toMatchObject({
+			id: 'feed-1',
+			syncStatus: 'error',
+			lastSyncError: 'Previous sync was interrupted before it could finish',
+			lastSyncErrorAt: '2026-01-01T00:05:00.000Z',
+		});
 		expect(news?.feedCount).toBe(1);
 		expect(news?.unreadCount).toBe(5);
 	});

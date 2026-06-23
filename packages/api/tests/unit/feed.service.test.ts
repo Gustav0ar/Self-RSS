@@ -37,6 +37,8 @@ describe('FeedService - getAll', () => {
 				pollingIntervalMinutes: 60,
 				lastSyncedAt: null,
 				syncStatus: 'idle',
+				lastSyncError: null,
+				lastSyncErrorAt: null,
 				createdAt: new Date('2026-01-01T00:00:00.000Z'),
 				updatedAt: new Date('2026-01-01T00:00:00.000Z'),
 			},
@@ -51,7 +53,9 @@ describe('FeedService - getAll', () => {
 				description: null,
 				pollingIntervalMinutes: 60,
 				lastSyncedAt: null,
-				syncStatus: 'idle',
+				syncStatus: 'error',
+				lastSyncError: 'HTTP 500: Internal Server Error',
+				lastSyncErrorAt: new Date('2026-01-01T00:05:00.000Z'),
 				createdAt: new Date('2026-01-01T00:00:00.000Z'),
 				updatedAt: new Date('2026-01-01T00:00:00.000Z'),
 			},
@@ -71,6 +75,11 @@ describe('FeedService - getAll', () => {
 		expect(result.find((f) => f.id === 'feed-1')?.unreadCount).toBe(4);
 		expect(result.find((f) => f.id === 'feed-2')?.unreadCount).toBe(0);
 		expect(result[0]?.createdAt).toBe('2026-01-01T00:00:00.000Z');
+		expect(result.find((f) => f.id === 'feed-2')).toMatchObject({
+			syncStatus: 'error',
+			lastSyncError: 'HTTP 500: Internal Server Error',
+			lastSyncErrorAt: '2026-01-01T00:05:00.000Z',
+		});
 	});
 });
 

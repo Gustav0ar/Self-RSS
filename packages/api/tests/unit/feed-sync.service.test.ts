@@ -514,6 +514,8 @@ describe('FeedSyncService', () => {
 			'user-1',
 			expect.objectContaining({
 				nextSyncAt: new Date('2026-01-01T00:15:00.000Z'),
+				lastSyncError: 'network failed',
+				lastSyncErrorAt: new Date('2026-01-01T00:00:00.000Z'),
 				syncStatus: 'error',
 			}),
 		);
@@ -566,6 +568,16 @@ describe('FeedSyncService', () => {
 			expect.objectContaining({
 				status: 'failed',
 				errorMessage: 'HTTP 404: Not Found',
+			}),
+		);
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				lastSyncError: 'HTTP 404: Not Found',
+				lastSyncErrorAt: expect.any(Date),
+				syncStatus: 'error',
 			}),
 		);
 	});
@@ -705,6 +717,7 @@ describe('FeedSyncService', () => {
 
 	it('returns syncDueFeeds summary counts without retaining all results', async () => {
 		const feedRepo = {
+			resetStaleSyncing: vi.fn(async () => []),
 			findDueForSync: vi.fn(async () => [
 				{ id: 'feed-1', userId: 'user-1' },
 				{ id: 'feed-2', userId: 'user-1' },
@@ -731,8 +744,35 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncDueFeeds();
 
-		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(2);
+		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(expect.any(Date));
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(24);
 		expect(result).toEqual({ total: 3, succeeded: 2, failed: 1 });
+	});
+
+	it('recovers stale syncing feeds before scheduled sync selection', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-01-01T00:30:00.000Z'));
+		const feedRepo = {
+			resetStaleSyncing: vi.fn(async () => [
+				{ id: 'feed-stale', userId: 'user-1', title: 'Interrupted Feed' },
+			]),
+			findDueForSync: vi.fn(async () => []),
+		};
+
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 3, allowPrivateHosts: false },
+		);
+
+		const result = await service.syncDueFeeds();
+
+		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(new Date('2026-01-01T00:05:00.000Z'));
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(36);
+		expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 });
 	});
 
 	it('continues scheduling remaining feeds after timeouts or failures', async () => {

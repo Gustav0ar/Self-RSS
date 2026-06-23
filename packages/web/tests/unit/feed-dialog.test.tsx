@@ -109,6 +109,8 @@ describe('FeedDialog - edit mode', () => {
 		description: 'A test feed',
 		pollingIntervalMinutes: 60,
 		lastSyncedAt: null,
+		lastSyncError: null,
+		lastSyncErrorAt: null,
 		syncStatus: 'idle' as const,
 		createdAt: '2026-01-01T00:00:00.000Z',
 		updatedAt: '2026-01-01T00:00:00.000Z',

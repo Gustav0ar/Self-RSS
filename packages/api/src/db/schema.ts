@@ -199,6 +199,8 @@ export const feeds = sqliteTable(
 		description: text('description'),
 		pollingIntervalMinutes: integer('polling_interval_minutes').notNull().default(60),
 		lastSyncedAt: timestamp('last_synced_at'),
+		lastSyncError: text('last_sync_error'),
+		lastSyncErrorAt: timestamp('last_sync_error_at'),
 		// Cached "next time the worker should look at this feed". The
 		// scheduler queries by this column with an index, so the due-feed
 		// query is an index range scan instead of a per-row function call.

@@ -68,7 +68,9 @@ type FeedItemRecord = Record<string, unknown>;
 
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
+const DUE_FEED_BATCH_MULTIPLIER = 12;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
+const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
 interface SyncErrorDetails {
 	error: string;
@@ -438,6 +440,8 @@ export class FeedSyncService {
 			await this.feedRepo.update(feedId, userId, {
 				...feedUpdates,
 				lastSyncedAt: new Date(),
+				lastSyncError: null,
+				lastSyncErrorAt: null,
 				nextSyncAt,
 				syncStatus: 'idle',
 			});
@@ -483,6 +487,8 @@ export class FeedSyncService {
 			const errorDetails = getSyncErrorDetails(err);
 			await this.feedRepo.update(feedId, userId, {
 				nextSyncAt: this.nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
+				lastSyncError: errorDetails.error,
+				lastSyncErrorAt: new Date(),
 				syncStatus: 'error',
 			});
 			await this.syncRunRepo.complete(run.id, {
@@ -599,7 +605,17 @@ export class FeedSyncService {
 	}
 
 	async syncDueFeeds() {
-		const dueFeeds = await this.feedRepo.findDueForSync(this.config.concurrency);
+		const staleBefore = new Date(Date.now() - STALE_SYNCING_FEED_MS);
+		const recoveredStaleFeeds = await this.feedRepo.resetStaleSyncing(staleBefore);
+		if (recoveredStaleFeeds.length > 0) {
+			logger.warn('Recovered stale syncing feeds before scheduled sync', {
+				count: recoveredStaleFeeds.length,
+				feedIds: recoveredStaleFeeds.map((feed) => feed.id),
+			});
+		}
+
+		const dueLimit = this.config.concurrency * DUE_FEED_BATCH_MULTIPLIER;
+		const dueFeeds = await this.feedRepo.findDueForSync(dueLimit);
 		let succeeded = 0;
 		let failed = 0;
 

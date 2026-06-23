@@ -128,6 +128,7 @@ export class FeedService {
 			createdAt: f.createdAt.toISOString(),
 			updatedAt: f.updatedAt.toISOString(),
 			lastSyncedAt: f.lastSyncedAt?.toISOString() ?? null,
+			lastSyncErrorAt: f.lastSyncErrorAt?.toISOString() ?? null,
 		}));
 	}
 

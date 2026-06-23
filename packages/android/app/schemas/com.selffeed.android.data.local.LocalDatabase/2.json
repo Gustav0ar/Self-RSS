@@ -1,0 +1,504 @@
+{
+	"formatVersion": 1,
+	"database": {
+		"version": 2,
+		"identityHash": "4c3a9de921a32fc1d97909f0498e1443",
+		"entities": [
+			{
+				"tableName": "categories",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `userId` TEXT, `parentCategoryId` TEXT, `name` TEXT NOT NULL, `slug` TEXT NOT NULL, `sortOrder` INTEGER NOT NULL, `createdAt` TEXT, `updatedAt` TEXT, `feedCount` INTEGER NOT NULL, `unreadCount` INTEGER NOT NULL, `childrenJson` TEXT, `cacheOrder` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+				"fields": [
+					{
+						"fieldPath": "id",
+						"columnName": "id",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "userId",
+						"columnName": "userId",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "parentCategoryId",
+						"columnName": "parentCategoryId",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "name",
+						"columnName": "name",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "slug",
+						"columnName": "slug",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "sortOrder",
+						"columnName": "sortOrder",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "createdAt",
+						"columnName": "createdAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "updatedAt",
+						"columnName": "updatedAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "feedCount",
+						"columnName": "feedCount",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "unreadCount",
+						"columnName": "unreadCount",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "childrenJson",
+						"columnName": "childrenJson",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "cacheOrder",
+						"columnName": "cacheOrder",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["id"]
+				},
+				"indices": [
+					{
+						"name": "index_categories_parentCategoryId",
+						"unique": false,
+						"columnNames": ["parentCategoryId"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_categories_parentCategoryId` ON `${TABLE_NAME}` (`parentCategoryId`)"
+					}
+				]
+			},
+			{
+				"tableName": "feeds",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `userId` TEXT, `categoryId` TEXT NOT NULL, `title` TEXT NOT NULL, `siteUrl` TEXT, `feedUrl` TEXT NOT NULL, `faviconUrl` TEXT, `description` TEXT, `pollingIntervalMinutes` INTEGER NOT NULL, `lastSyncedAt` TEXT, `lastSyncError` TEXT, `lastSyncErrorAt` TEXT, `syncStatus` TEXT NOT NULL, `createdAt` TEXT, `updatedAt` TEXT, `unreadCount` INTEGER NOT NULL, `cacheOrder` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+				"fields": [
+					{
+						"fieldPath": "id",
+						"columnName": "id",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "userId",
+						"columnName": "userId",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "categoryId",
+						"columnName": "categoryId",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "title",
+						"columnName": "title",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "siteUrl",
+						"columnName": "siteUrl",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "feedUrl",
+						"columnName": "feedUrl",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "faviconUrl",
+						"columnName": "faviconUrl",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "description",
+						"columnName": "description",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "pollingIntervalMinutes",
+						"columnName": "pollingIntervalMinutes",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "lastSyncedAt",
+						"columnName": "lastSyncedAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "lastSyncError",
+						"columnName": "lastSyncError",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "lastSyncErrorAt",
+						"columnName": "lastSyncErrorAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "syncStatus",
+						"columnName": "syncStatus",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "createdAt",
+						"columnName": "createdAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "updatedAt",
+						"columnName": "updatedAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "unreadCount",
+						"columnName": "unreadCount",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "cacheOrder",
+						"columnName": "cacheOrder",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["id"]
+				},
+				"indices": [
+					{
+						"name": "index_feeds_categoryId",
+						"unique": false,
+						"columnNames": ["categoryId"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_feeds_categoryId` ON `${TABLE_NAME}` (`categoryId`)"
+					}
+				]
+			},
+			{
+				"tableName": "articles",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `feedId` TEXT NOT NULL, `feedTitle` TEXT NOT NULL, `feedFaviconUrl` TEXT, `title` TEXT NOT NULL, `author` TEXT, `excerpt` TEXT, `heroImageUrl` TEXT, `publishedAt` TEXT, `displayedAt` TEXT, `isRead` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+				"fields": [
+					{
+						"fieldPath": "id",
+						"columnName": "id",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "feedId",
+						"columnName": "feedId",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "feedTitle",
+						"columnName": "feedTitle",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "feedFaviconUrl",
+						"columnName": "feedFaviconUrl",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "title",
+						"columnName": "title",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "author",
+						"columnName": "author",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "excerpt",
+						"columnName": "excerpt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "heroImageUrl",
+						"columnName": "heroImageUrl",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "publishedAt",
+						"columnName": "publishedAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "displayedAt",
+						"columnName": "displayedAt",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "isRead",
+						"columnName": "isRead",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["id"]
+				},
+				"indices": [
+					{
+						"name": "index_articles_feedId",
+						"unique": false,
+						"columnNames": ["feedId"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_articles_feedId` ON `${TABLE_NAME}` (`feedId`)"
+					},
+					{
+						"name": "index_articles_displayedAt",
+						"unique": false,
+						"columnNames": ["displayedAt"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_articles_displayedAt` ON `${TABLE_NAME}` (`displayedAt`)"
+					},
+					{
+						"name": "index_articles_publishedAt",
+						"unique": false,
+						"columnNames": ["publishedAt"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_articles_publishedAt` ON `${TABLE_NAME}` (`publishedAt`)"
+					}
+				]
+			},
+			{
+				"tableName": "article_query_entries",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`queryKey` TEXT NOT NULL, `articleId` TEXT NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`queryKey`, `articleId`))",
+				"fields": [
+					{
+						"fieldPath": "queryKey",
+						"columnName": "queryKey",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "articleId",
+						"columnName": "articleId",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "position",
+						"columnName": "position",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["queryKey", "articleId"]
+				},
+				"indices": [
+					{
+						"name": "index_article_query_entries_queryKey",
+						"unique": false,
+						"columnNames": ["queryKey"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_article_query_entries_queryKey` ON `${TABLE_NAME}` (`queryKey`)"
+					},
+					{
+						"name": "index_article_query_entries_articleId",
+						"unique": false,
+						"columnNames": ["articleId"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_article_query_entries_articleId` ON `${TABLE_NAME}` (`articleId`)"
+					},
+					{
+						"name": "index_article_query_entries_position",
+						"unique": false,
+						"columnNames": ["position"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_article_query_entries_position` ON `${TABLE_NAME}` (`position`)"
+					}
+				]
+			},
+			{
+				"tableName": "article_remote_keys",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`queryKey` TEXT NOT NULL, `nextCursor` TEXT, `endReached` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`queryKey`))",
+				"fields": [
+					{
+						"fieldPath": "queryKey",
+						"columnName": "queryKey",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "nextCursor",
+						"columnName": "nextCursor",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "endReached",
+						"columnName": "endReached",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "updatedAt",
+						"columnName": "updatedAt",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["queryKey"]
+				}
+			},
+			{
+				"tableName": "pending_read_state_mutations",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`articleId` TEXT NOT NULL, `read` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`articleId`))",
+				"fields": [
+					{
+						"fieldPath": "articleId",
+						"columnName": "articleId",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "read",
+						"columnName": "read",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "updatedAt",
+						"columnName": "updatedAt",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["articleId"]
+				}
+			},
+			{
+				"tableName": "article_pages",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`cacheKey` TEXT NOT NULL, `articleIdsJson` TEXT NOT NULL, `cursor` TEXT, `hasMore` INTEGER NOT NULL, `writtenAt` INTEGER NOT NULL, PRIMARY KEY(`cacheKey`))",
+				"fields": [
+					{
+						"fieldPath": "cacheKey",
+						"columnName": "cacheKey",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "articleIdsJson",
+						"columnName": "articleIdsJson",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "cursor",
+						"columnName": "cursor",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "hasMore",
+						"columnName": "hasMore",
+						"affinity": "INTEGER",
+						"notNull": true
+					},
+					{
+						"fieldPath": "writtenAt",
+						"columnName": "writtenAt",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["cacheKey"]
+				}
+			},
+			{
+				"tableName": "article_details",
+				"createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `feedId` TEXT, `payloadJson` TEXT NOT NULL, `writtenAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+				"fields": [
+					{
+						"fieldPath": "id",
+						"columnName": "id",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "feedId",
+						"columnName": "feedId",
+						"affinity": "TEXT"
+					},
+					{
+						"fieldPath": "payloadJson",
+						"columnName": "payloadJson",
+						"affinity": "TEXT",
+						"notNull": true
+					},
+					{
+						"fieldPath": "writtenAt",
+						"columnName": "writtenAt",
+						"affinity": "INTEGER",
+						"notNull": true
+					}
+				],
+				"primaryKey": {
+					"autoGenerate": false,
+					"columnNames": ["id"]
+				},
+				"indices": [
+					{
+						"name": "index_article_details_feedId",
+						"unique": false,
+						"columnNames": ["feedId"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_article_details_feedId` ON `${TABLE_NAME}` (`feedId`)"
+					},
+					{
+						"name": "index_article_details_writtenAt",
+						"unique": false,
+						"columnNames": ["writtenAt"],
+						"orders": [],
+						"createSql": "CREATE INDEX IF NOT EXISTS `index_article_details_writtenAt` ON `${TABLE_NAME}` (`writtenAt`)"
+					}
+				]
+			}
+		],
+		"setupQueries": [
+			"CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+			"INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4c3a9de921a32fc1d97909f0498e1443')"
+		]
+	}
+}

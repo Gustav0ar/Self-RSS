@@ -263,6 +263,8 @@
 					"description",
 					"pollingIntervalMinutes",
 					"lastSyncedAt",
+					"lastSyncError",
+					"lastSyncErrorAt",
 					"syncStatus",
 					"createdAt",
 					"updatedAt"
@@ -309,6 +311,19 @@
 						"type": "integer"
 					},
 					"lastSyncedAt": {
+						"type": [
+							"string",
+							"null"
+						],
+						"format": "date-time"
+					},
+					"lastSyncError": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"lastSyncErrorAt": {
 						"type": [
 							"string",
 							"null"

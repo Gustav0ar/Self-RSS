@@ -8,6 +8,7 @@ import {
 	Pencil,
 	Rss as RssIcon,
 	Trash2,
+	TriangleAlert,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
@@ -385,6 +386,8 @@ function FeedTreeRow({
 	onEditFeed: (feed: FeedWithCounts) => void;
 	onDeleteFeed: (feed: FeedWithCounts) => void;
 }) {
+	const syncWarning = feedSyncWarning(feed);
+
 	return (
 		<div className="group/feed relative">
 			<button
@@ -411,7 +414,19 @@ function FeedTreeRow({
 					)}
 				</div>
 				<div className="min-w-0 flex-1 overflow-hidden">
-					<SidebarOverflowText text={feed.title} />
+					<div className="flex min-w-0 items-center gap-1.5">
+						<SidebarOverflowText text={feed.title} />
+						{syncWarning ? (
+							<span
+								className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-amber-400"
+								title={syncWarning}
+								role="img"
+								aria-label={syncWarning}
+							>
+								<TriangleAlert className="h-3.5 w-3.5" />
+							</span>
+						) : null}
+					</div>
 				</div>
 				{(feed.unreadCount ?? 0) > 0 ? (
 					<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
@@ -435,9 +450,29 @@ function FeedTreeRow({
 	);
 }
 
+function feedSyncWarning(feed: FeedWithCounts) {
+	if (feed.syncStatus !== 'error' && !feed.lastSyncError) {
+		return null;
+	}
+
+	const detail = feed.lastSyncError?.trim() || 'The latest feed refresh failed.';
+	const when = feed.lastSyncErrorAt
+		? ` Last failed at ${formatSyncWarningTime(feed.lastSyncErrorAt)}.`
+		: '';
+	return `${feed.title} is not updating. ${detail}${when}`;
+}
+
+function formatSyncWarningTime(value: string) {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) {
+		return value;
+	}
+	return date.toLocaleString();
+}
+
 function SidebarOverflowText({ text }: { text: string }) {
 	return (
-		<p className="truncate" title={text}>
+		<p className="min-w-0 flex-1 truncate" title={text}>
 			{text}
 		</p>
 	);

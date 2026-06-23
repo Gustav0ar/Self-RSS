@@ -45,6 +45,7 @@ export function createFeedRoutes(
 					createdAt: feed.createdAt.toISOString(),
 					updatedAt: feed.updatedAt.toISOString(),
 					lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
+					lastSyncErrorAt: feed.lastSyncErrorAt?.toISOString() ?? null,
 				},
 			},
 			201,

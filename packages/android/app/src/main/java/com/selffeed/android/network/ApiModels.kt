@@ -106,6 +106,8 @@ data class FeedWithCounts(
     val description: String? = null,
     val pollingIntervalMinutes: Int,
     val lastSyncedAt: String? = null,
+    val lastSyncError: String? = null,
+    val lastSyncErrorAt: String? = null,
     val syncStatus: String,
     val createdAt: String? = null,
     val updatedAt: String? = null,

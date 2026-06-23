@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { categories, feeds } from '../db/schema.js';
 
@@ -132,5 +132,24 @@ export class FeedRepository {
 			orderBy: [asc(feeds.nextSyncAt)],
 			limit,
 		});
+	}
+
+	async resetStaleSyncing(staleBefore: Date) {
+		const now = new Date();
+		return this.db
+			.update(feeds)
+			.set({
+				syncStatus: 'error',
+				nextSyncAt: now,
+				lastSyncError: 'Previous sync was interrupted before it could finish',
+				lastSyncErrorAt: now,
+				updatedAt: now,
+			})
+			.where(and(eq(feeds.syncStatus, 'syncing'), lt(feeds.updatedAt, staleBefore)))
+			.returning({
+				id: feeds.id,
+				userId: feeds.userId,
+				title: feeds.title,
+			});
 	}
 }

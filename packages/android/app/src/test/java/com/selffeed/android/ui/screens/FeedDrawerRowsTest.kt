@@ -42,6 +42,26 @@ class FeedDrawerRowsTest {
         assertEquals(listOf("cat-parent"), rows.map { it.key })
     }
 
+    @Test
+    fun `feedSyncWarning reports persisted feed refresh failures`() {
+        val feed = sampleFeed(
+            id = "phoronix",
+            categoryId = "linux",
+            syncStatus = "error",
+            lastSyncError = "HTTP 403: Forbidden",
+        )
+
+        assertEquals(
+            "phoronix is not updating. HTTP 403: Forbidden",
+            feedSyncWarning(feed),
+        )
+    }
+
+    @Test
+    fun `feedSyncWarning hides healthy feeds`() {
+        assertEquals(null, feedSyncWarning(sampleFeed(id = "healthy", categoryId = "linux")))
+    }
+
     private fun sampleCategory(
         id: String,
         name: String,
@@ -56,13 +76,19 @@ class FeedDrawerRowsTest {
         children = children,
     )
 
-    private fun sampleFeed(id: String, categoryId: String): FeedWithCounts = FeedWithCounts(
+    private fun sampleFeed(
+        id: String,
+        categoryId: String,
+        syncStatus: String = "idle",
+        lastSyncError: String? = null,
+    ): FeedWithCounts = FeedWithCounts(
         id = id,
         categoryId = categoryId,
         title = id,
         feedUrl = "https://example.com/$id.xml",
         pollingIntervalMinutes = 60,
-        syncStatus = "idle",
+        syncStatus = syncStatus,
+        lastSyncError = lastSyncError,
         unreadCount = 0,
     )
 }

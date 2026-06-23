@@ -62,11 +62,21 @@ class LocalStoreTest {
 
     @Test
     fun `feeds write and read round-trip`() = runBlocking {
-        val feeds = listOf(sampleFeed("f-1", "c-1"))
+        val feeds = listOf(
+            sampleFeed(
+                id = "f-1",
+                categoryId = "c-1",
+                syncStatus = "error",
+                lastSyncError = "HTTP 403: Forbidden",
+                lastSyncErrorAt = "2026-06-23T09:00:00.000Z",
+            ),
+        )
         store.writeFeeds(feeds)
         val read = store.readFeeds()
         assertEquals(1, read.size)
         assertEquals("f-1", read[0].id)
+        assertEquals("HTTP 403: Forbidden", read[0].lastSyncError)
+        assertEquals("2026-06-23T09:00:00.000Z", read[0].lastSyncErrorAt)
     }
 
     @Test
@@ -282,13 +292,21 @@ class LocalStoreTest {
         unreadCount = 0,
     )
 
-    private fun sampleFeed(id: String, categoryId: String): FeedWithCounts = FeedWithCounts(
+    private fun sampleFeed(
+        id: String,
+        categoryId: String,
+        syncStatus: String = "idle",
+        lastSyncError: String? = null,
+        lastSyncErrorAt: String? = null,
+    ): FeedWithCounts = FeedWithCounts(
         id = id,
         categoryId = categoryId,
         title = "Feed $id",
         feedUrl = "https://example.com/$id.xml",
         pollingIntervalMinutes = 60,
-        syncStatus = "idle",
+        syncStatus = syncStatus,
+        lastSyncError = lastSyncError,
+        lastSyncErrorAt = lastSyncErrorAt,
         unreadCount = 0,
     )
 

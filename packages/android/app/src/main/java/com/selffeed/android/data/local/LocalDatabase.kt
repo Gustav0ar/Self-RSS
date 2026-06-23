@@ -57,6 +57,8 @@ data class FeedEntity(
     val description: String?,
     val pollingIntervalMinutes: Int,
     val lastSyncedAt: String?,
+    val lastSyncError: String?,
+    val lastSyncErrorAt: String?,
     val syncStatus: String,
     val createdAt: String?,
     val updatedAt: String?,

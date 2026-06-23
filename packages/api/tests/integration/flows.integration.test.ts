@@ -297,6 +297,14 @@ describe('API integration - additional flows', () => {
 				message: 'Could not fetch or parse the feed URL',
 			});
 			expect(failedSync.body.error.details).toEqual(expect.any(String));
+
+			const feeds = await authedRequest('/api/v1/feeds', token);
+			expect(feeds.body.data[0]).toMatchObject({
+				id: feed.body.data.id,
+				syncStatus: 'error',
+				lastSyncError: failedSync.body.error.details,
+				lastSyncErrorAt: expect.any(String),
+			});
 		} finally {
 			await feedServer.stop();
 		}
