@@ -5,7 +5,7 @@ import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
-import { closeRedis, getRedis } from '../../src/db/redis.js';
+import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
 import { auditLogs, authSessions, users } from '../../src/db/schema.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
@@ -1133,6 +1133,39 @@ describe('API integration', () => {
 				running: false,
 				active: true,
 			});
+
+			await redis.set(
+				CacheKeys.feedSyncAllQueued(registered.body.data.user.id),
+				String(Date.now() - 120_000),
+				'EX',
+				1800,
+			);
+			const staleMarkerStatus = await authedRequest('/api/v1/feeds/sync/status', token);
+			expect(staleMarkerStatus.response.status).toBe(200);
+			expect(staleMarkerStatus.body.data).toEqual({
+				queued: true,
+				running: false,
+				active: true,
+			});
+
+			await redis.del(CacheKeys.feedSyncAllQueued(registered.body.data.user.id));
+			const queuedWithoutMarkerStatus = await authedRequest('/api/v1/feeds/sync/status', token);
+			expect(queuedWithoutMarkerStatus.response.status).toBe(200);
+			expect(queuedWithoutMarkerStatus.body.data).toEqual({
+				queued: true,
+				running: false,
+				active: true,
+			});
+
+			const duplicateSync = await authedRequest('/api/v1/feeds/sync', token, {
+				method: 'POST',
+			});
+			expect(duplicateSync.response.status).toBe(202);
+			expect(duplicateSync.body.data).toEqual({
+				accepted: true,
+				alreadyQueued: true,
+			});
+			await expect(redis.llen(CacheKeys.feedSyncAllQueue())).resolves.toBe(1);
 
 			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
 			expect(queuedResult).toMatchObject({

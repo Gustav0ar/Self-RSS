@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://127.0.0.1:3100/api/v1';
@@ -38,6 +39,22 @@ async function setRegistrationLocked(request: APIRequestContext, locked: boolean
 	expect(response.ok()).toBeTruthy();
 }
 
+async function patchUserPreferences(
+	request: APIRequestContext,
+	email: string,
+	password: string,
+	preferences: Record<string, unknown>,
+) {
+	const login = await loginThroughApi(request, email, password);
+	const response = await request.patch(`${apiBaseUrl}/preferences`, {
+		headers: {
+			Authorization: `Bearer ${login.data.tokens.accessToken}`,
+		},
+		data: preferences,
+	});
+	expect(response.ok()).toBeTruthy();
+}
+
 async function loginThroughUi(page: Page, email: string, password: string) {
 	await page.goto('/');
 	await page.getByLabel('Email').fill(email);
@@ -46,6 +63,61 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	// Wait for both the article list to load AND the authenticated UI to render
 	await expect(page.getByText('All Feeds')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+}
+
+function feedXml(items: Array<{ title: string; guid: string; pubDate: string }>) {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+	<rss version="2.0">
+		<channel>
+			<title>Worker Refresh Feed</title>
+			<link>https://example.com/worker-refresh</link>
+			<description>Worker refresh regression feed</description>
+			${items
+				.map(
+					(item) => `<item>
+						<title>${item.title}</title>
+						<link>https://example.com/worker-refresh/${item.guid}</link>
+						<guid>${item.guid}</guid>
+						<description><![CDATA[<p>${item.title} body.</p>]]></description>
+						<pubDate>${item.pubDate}</pubDate>
+					</item>`,
+				)
+				.join('')}
+		</channel>
+	</rss>`;
+}
+
+async function startMutableFeedServer(initialXml: string) {
+	let xml = initialXml;
+	const server = createServer((_request, response) => {
+		response.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' });
+		response.end(xml);
+	});
+
+	await new Promise<void>((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			server.off('error', reject);
+			resolve();
+		});
+	});
+
+	const address = server.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Could not start mutable feed server');
+	}
+
+	return {
+		url: `http://127.0.0.1:${address.port}/feed.xml`,
+		setXml(nextXml: string) {
+			xml = nextXml;
+		},
+		stop() {
+			return new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+			});
+		},
+	};
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -97,7 +169,97 @@ test('all-feeds refresh banner clears after sync status settles', async ({ page 
 	await expect(refreshButton).toBeEnabled();
 });
 
-test('reader can toggle a read article back to unread', async ({ page }) => {
+test('all-feeds refresh fetches new articles through the real worker queue', async ({
+	page,
+	request,
+}) => {
+	const email = `worker-refresh-${Date.now()}@example.com`;
+	const password = 'password123';
+	const feedServer = await startMutableFeedServer(
+		feedXml([
+			{
+				title: 'Initial Worker Story',
+				guid: 'initial-worker-story',
+				pubDate: 'Wed, 08 Jan 2025 10:00:00 GMT',
+			},
+		]),
+	);
+
+	try {
+		await setRegistrationLocked(request, false);
+
+		const registerResponse = await request.post(`${apiBaseUrl}/auth/register`, {
+			data: { email, password },
+		});
+		expect(registerResponse.ok()).toBeTruthy();
+		const registered = await registerResponse.json();
+		const token = registered.data.tokens.accessToken;
+		const authHeaders = { Authorization: `Bearer ${token}` };
+
+		const categoryResponse = await request.post(`${apiBaseUrl}/categories`, {
+			headers: authHeaders,
+			data: { name: 'Worker Refresh' },
+		});
+		expect(categoryResponse.ok()).toBeTruthy();
+		const category = await categoryResponse.json();
+
+		const feedResponse = await request.post(`${apiBaseUrl}/feeds`, {
+			headers: authHeaders,
+			data: {
+				categoryId: category.data.id,
+				feedUrl: feedServer.url,
+				title: 'Worker Refresh Feed',
+			},
+		});
+		expect(feedResponse.ok()).toBeTruthy();
+		const feed = await feedResponse.json();
+
+		const initialSyncResponse = await request.post(`${apiBaseUrl}/feeds/${feed.data.id}/sync`, {
+			headers: authHeaders,
+		});
+		expect(initialSyncResponse.ok()).toBeTruthy();
+
+		feedServer.setXml(
+			feedXml([
+				{
+					title: 'New Worker Story',
+					guid: 'new-worker-story',
+					pubDate: 'Thu, 09 Jan 2025 10:00:00 GMT',
+				},
+				{
+					title: 'Initial Worker Story',
+					guid: 'initial-worker-story',
+					pubDate: 'Wed, 08 Jan 2025 10:00:00 GMT',
+				},
+			]),
+		);
+
+		await loginThroughUi(page, email, password);
+		await expect(page.getByRole('button', { name: /Initial Worker Story/ })).toBeVisible();
+
+		const refreshResponse = page.waitForResponse(
+			(response) =>
+				response.url().includes('/api/v1/feeds/sync') &&
+				response.request().method() === 'POST' &&
+				response.status() === 202,
+		);
+		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+		await refreshResponse;
+
+		await expect(page.getByRole('button', { name: /New Worker Story/ })).toBeVisible({
+			timeout: 15_000,
+		});
+		await expect(page.getByText('Loading new articles')).toHaveCount(0);
+	} finally {
+		await feedServer.stop();
+	}
+});
+
+test('reader can toggle a read article back to unread', async ({ page, request }) => {
+	await patchUserPreferences(request, 'reader@example.com', 'password123', {
+		hideRead: false,
+		defaultSort: 'latest',
+	});
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 
 	// Open Alpha Launch — the seed auto-marks it read on open, so the

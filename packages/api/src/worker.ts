@@ -53,13 +53,20 @@ try {
 		allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
 	});
 
-	// Shared coordinator tracks sync status for shutdown coordination
-	const syncCoordinator = { isRunning: false };
-	const stopSyncScheduler = startSyncScheduler(deps.services.feedSync, undefined, syncCoordinator);
+	// Keep scheduled due-feed syncs and user-triggered queue drains independent.
+	// A slow scheduled cycle must not make manual refresh requests sit in Redis
+	// until their status marker expires.
+	const dueSyncCoordinator = { isRunning: false };
+	const queuedSyncCoordinator = { isRunning: false };
+	const stopSyncScheduler = startSyncScheduler(
+		deps.services.feedSync,
+		undefined,
+		dueSyncCoordinator,
+	);
 	const stopQueuedSyncWorker = startQueuedSyncWorker(
 		deps.services.feedSync,
 		undefined,
-		syncCoordinator,
+		queuedSyncCoordinator,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article, {
 		retentionDays: env.RETENTION_DELETION_DAYS,
@@ -78,14 +85,14 @@ try {
 
 	/**
 	 * Wait for in-flight syncs to complete with timeout.
-	 * Uses the syncCoordinator.isRunning flag which is set by the scheduler.
+	 * Uses the scheduler and queued worker coordinator flags.
 	 *
 	 * @returns true if all syncs completed, false if timeout exceeded
 	 */
 	async function waitForInFlightSyncs(): Promise<boolean> {
 		const startTime = Date.now();
 
-		while (syncCoordinator.isRunning) {
+		while (dueSyncCoordinator.isRunning || queuedSyncCoordinator.isRunning) {
 			const elapsed = Date.now() - startTime;
 			if (elapsed >= DRAIN_TIMEOUT_MS) {
 				logger.warn('Timeout waiting for in-flight syncs to complete', {
@@ -113,7 +120,8 @@ try {
 	async function gracefulShutdown(signal: string) {
 		logger.info('Initiating graceful worker shutdown', {
 			signal,
-			syncInProgress: syncCoordinator.isRunning,
+			dueSyncInProgress: dueSyncCoordinator.isRunning,
+			queuedSyncInProgress: queuedSyncCoordinator.isRunning,
 		});
 
 		// Step 1: Stop all schedulers to prevent new work

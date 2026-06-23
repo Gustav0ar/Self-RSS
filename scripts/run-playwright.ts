@@ -15,6 +15,7 @@ const services = await startTestServices('rss-playwright');
 const apiPort = await getFreePort();
 const webPort = await getFreePort();
 let apiProcess: ChildProcess | undefined;
+let workerProcess: ChildProcess | undefined;
 let webProcess: ChildProcess | undefined;
 
 try {
@@ -36,6 +37,11 @@ try {
 		env,
 	});
 	await waitForHttp(`http://127.0.0.1:${apiPort}/health`);
+
+	workerProcess = spawnBackground('bun', ['run', '--filter', '@self-feed/api', 'start:worker'], {
+		cwd: rootDir,
+		env,
+	});
 
 	webProcess = spawnBackground(
 		'bun',
@@ -75,6 +81,7 @@ try {
 	);
 } finally {
 	await stopProcess(webProcess);
+	await stopProcess(workerProcess);
 	await stopProcess(apiProcess);
 	await services.stop();
 }

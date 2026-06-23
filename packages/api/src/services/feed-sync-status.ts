@@ -13,6 +13,12 @@ const QUEUE_SYNC_ALL_FEEDS_SCRIPT = `
 if redis.call("EXISTS", KEYS[1]) == 1 then
 	return 0
 end
+if redis.call("EXISTS", KEYS[3]) == 1 then
+	return 0
+end
+if redis.call("LPOS", KEYS[2], ARGV[3]) ~= false then
+	return 0
+end
 redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
 redis.call("RPUSH", KEYS[2], ARGV[3])
 return 1
@@ -30,9 +36,10 @@ export interface FeedSyncAllStatus {
 export async function queueManualSyncAllFeeds(redis: Redis, userId: string) {
 	const didQueue = await redis.eval(
 		QUEUE_SYNC_ALL_FEEDS_SCRIPT,
-		2,
+		3,
 		CacheKeys.feedSyncAllQueued(userId),
 		CacheKeys.feedSyncAllQueue(),
+		CacheKeys.feedSyncAllLock(userId),
 		String(Date.now()),
 		String(MANUAL_SYNC_DEDUPE_TTL_SECONDS),
 		userId,
@@ -63,14 +70,33 @@ export async function getManualSyncAllFeedsStatus(
 }
 
 export async function acquireManualSyncAllFeedsLock(redis: Redis, userId: string) {
+	const lockKey = CacheKeys.feedSyncAllLock(userId);
 	const didLock = await redis.set(
-		CacheKeys.feedSyncAllLock(userId),
+		lockKey,
 		String(Date.now()),
 		'EX',
 		MANUAL_SYNC_LOCK_TTL_SECONDS,
 		'NX',
 	);
-	return didLock === 'OK';
+	if (didLock === 'OK') {
+		return true;
+	}
+
+	const existingLockValue = await redis.get(lockKey);
+	if (existingLockValue != null && !hasFreshStatusTimestamp(existingLockValue)) {
+		logger.warn('Clearing stale queued bulk feed sync lock before processing queue', { userId });
+		await redis.del(lockKey);
+		const retryLock = await redis.set(
+			lockKey,
+			String(Date.now()),
+			'EX',
+			MANUAL_SYNC_LOCK_TTL_SECONDS,
+			'NX',
+		);
+		return retryLock === 'OK';
+	}
+
+	return false;
 }
 
 export function startManualSyncAllFeedsHeartbeat(redis: Redis, userId: string) {
@@ -117,12 +143,21 @@ async function getManualSyncQueuedStatus(
 	queuedValue: string | null,
 	lockStatus: LockStatus,
 ): Promise<QueuedStatus> {
-	if (queuedValue == null || lockStatus !== 'missing') {
+	if (lockStatus !== 'missing') {
 		return 'missing';
 	}
 
-	if (hasFreshStatusTimestamp(queuedValue)) {
+	if (queuedValue != null && hasFreshStatusTimestamp(queuedValue)) {
 		return 'active';
+	}
+
+	const isStillQueued = await isManualSyncQueued(redis, userId);
+	if (isStillQueued) {
+		return 'active';
+	}
+
+	if (queuedValue == null) {
+		return 'missing';
 	}
 
 	logger.warn('Clearing stale queued bulk feed sync marker', { userId });
@@ -133,4 +168,9 @@ async function getManualSyncQueuedStatus(
 function hasFreshStatusTimestamp(value: string) {
 	const timestamp = Number(value);
 	return Number.isFinite(timestamp) && Date.now() - timestamp <= MANUAL_SYNC_STATUS_STALE_MS;
+}
+
+async function isManualSyncQueued(redis: Redis, userId: string) {
+	const index = await redis.call('LPOS', CacheKeys.feedSyncAllQueue(), userId);
+	return index !== null;
 }

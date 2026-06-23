@@ -104,6 +104,24 @@ describe('scheduler error handling', () => {
 			expect(errorLog!.extra.error).toBe('Queue processing error');
 			expect(errorLog!.extra.stack).toBeDefined();
 		});
+
+		it('drains manual refresh work with an independent coordinator while scheduled sync is busy', async () => {
+			const scheduledCoordinator = { isRunning: true };
+			const queuedCoordinator = { isRunning: false };
+			const syncService = {
+				processNextQueuedSyncAllFeeds: vi.fn().mockResolvedValue(null),
+			};
+
+			const stop = startQueuedSyncWorker(syncService as never, 1000, queuedCoordinator);
+
+			await vi.waitFor(() => {
+				expect(syncService.processNextQueuedSyncAllFeeds).toHaveBeenCalledTimes(1);
+			});
+			stop();
+
+			expect(scheduledCoordinator.isRunning).toBe(true);
+			expect(queuedCoordinator.isRunning).toBe(false);
+		});
 	});
 
 	describe('startRetentionCleanup', () => {

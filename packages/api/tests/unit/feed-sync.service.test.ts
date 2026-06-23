@@ -739,9 +739,10 @@ describe('FeedSyncService', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('RPUSH'),
-			2,
+			3,
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
+			'feed:sync-all:lock:user-1',
 			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
 			'1800',
 			'user-1',
@@ -767,10 +768,11 @@ describe('FeedSyncService', () => {
 		const result = await service.queueSyncAllFeeds('user-1');
 
 		expect(redis.eval).toHaveBeenCalledWith(
-			expect.stringContaining('EXISTS'),
-			2,
+			expect.stringContaining('LPOS'),
+			3,
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
+			'feed:sync-all:lock:user-1',
 			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
 			'1800',
 			'user-1',
@@ -795,6 +797,52 @@ describe('FeedSyncService', () => {
 
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
+		expect(result).toEqual({ queued: true, running: false, active: true });
+	});
+
+	it('reports queued bulk refresh status from Redis queue membership after the visual marker expires', async () => {
+		const redis = {
+			get: vi.fn(async () => null),
+			call: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.getSyncAllFeedsStatus('user-1');
+
+		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
+		expect(result).toEqual({ queued: true, running: false, active: true });
+	});
+
+	it('keeps stale queued bulk refresh markers active while the user remains in the Redis queue', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
+		const redis = {
+			get: vi.fn(async (key: string) =>
+				key.includes(':queued:') ? String(new Date('2026-06-21T11:58:00.000Z').getTime()) : null,
+			),
+			call: vi.fn(async () => 0),
+			del: vi.fn(async () => 1),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.getSyncAllFeedsStatus('user-1');
+
+		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
+		expect(redis.del).not.toHaveBeenCalled();
 		expect(result).toEqual({ queued: true, running: false, active: true });
 	});
 
@@ -881,6 +929,7 @@ describe('FeedSyncService', () => {
 			get: vi.fn(async (key: string) =>
 				key.includes(':queued:') ? String(new Date('2026-06-21T11:58:00.000Z').getTime()) : null,
 			),
+			call: vi.fn(async () => null),
 			del: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
@@ -894,6 +943,7 @@ describe('FeedSyncService', () => {
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
+		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
 		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
 		expect(result).toEqual({ queued: false, running: false, active: false });
 	});
@@ -903,6 +953,7 @@ describe('FeedSyncService', () => {
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
 			lpop: vi.fn(async () => 'user-1'),
+			lrem: vi.fn(async () => 0),
 			set: vi.fn(async () => 'OK'),
 			del: vi.fn(async () => 2),
 		};
@@ -925,6 +976,7 @@ describe('FeedSyncService', () => {
 		const result = await service.processNextQueuedSyncAllFeeds();
 
 		expect(redis.lpop).toHaveBeenCalledWith('feed:sync-all:queue');
+		expect(redis.lrem).toHaveBeenCalledWith('feed:sync-all:queue', 0, 'user-1');
 		expect(redis.set).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
 			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
@@ -946,6 +998,49 @@ describe('FeedSyncService', () => {
 				failedFeeds: 0,
 				skippedFeeds: 0,
 				newArticles: 3,
+			},
+		});
+	});
+
+	it('processes queued bulk refreshes after clearing a stale worker lock', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
+		const redis = {
+			lpop: vi.fn(async () => 'user-1'),
+			lrem: vi.fn(async () => 0),
+			set: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('OK').mockResolvedValue('OK'),
+			get: vi.fn(async () => String(new Date('2026-06-21T11:58:00.000Z').getTime())),
+			del: vi.fn(async () => 1),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds').mockResolvedValue({
+			totalFeeds: 1,
+			syncedFeeds: 1,
+			failedFeeds: 0,
+			skippedFeeds: 0,
+			newArticles: 2,
+		});
+
+		const result = await service.processNextQueuedSyncAllFeeds();
+
+		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
+		expect(syncAllSpy).toHaveBeenCalledWith('user-1');
+		expect(result).toEqual({
+			userId: 'user-1',
+			skipped: false,
+			result: {
+				totalFeeds: 1,
+				syncedFeeds: 1,
+				failedFeeds: 0,
+				skippedFeeds: 0,
+				newArticles: 2,
 			},
 		});
 	});

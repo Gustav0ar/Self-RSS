@@ -609,6 +609,8 @@ export class FeedSyncService {
 			return null;
 		}
 
+		await this.redis.lrem(CacheKeys.feedSyncAllQueue(), 0, userId);
+
 		const didLock = await acquireManualSyncAllFeedsLock(this.redis, userId);
 		if (!didLock) {
 			logger.warn('Skipping queued bulk feed sync because one is already running', { userId });
