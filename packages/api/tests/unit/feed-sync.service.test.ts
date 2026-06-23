@@ -606,14 +606,17 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: false,
 			warmArticleCache: false,
+			forceFetch: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: false,
 			warmArticleCache: false,
+			forceFetch: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: false,
 			warmArticleCache: false,
+			forceFetch: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 3,
@@ -622,6 +625,82 @@ describe('FeedSyncService', () => {
 			skippedFeeds: 0,
 			newArticles: 4,
 		});
+	});
+
+	it('retries feeds that are already locked before counting them skipped in bulk refresh', async () => {
+		vi.useFakeTimers();
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
+		};
+
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		const syncFeedSpy = vi
+			.spyOn(service, 'syncFeed')
+			.mockResolvedValueOnce({ newArticles: 0, total: 0, skipped: true })
+			.mockResolvedValueOnce({ newArticles: 3, total: 5 });
+
+		const syncPromise = service.syncAllFeeds('user-1');
+		await vi.waitFor(() => {
+			expect(syncFeedSpy).toHaveBeenCalledTimes(1);
+		});
+
+		await vi.advanceTimersByTimeAsync(750);
+		const result = await syncPromise;
+
+		expect(syncFeedSpy).toHaveBeenCalledTimes(2);
+		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
+			enrichArticles: false,
+			warmArticleCache: false,
+			forceFetch: true,
+		});
+		expect(result).toEqual({
+			totalFeeds: 1,
+			syncedFeeds: 1,
+			failedFeeds: 0,
+			skippedFeeds: 0,
+			newArticles: 3,
+		});
+	});
+
+	it('warms the article list cache after bulk refresh without blocking completion', async () => {
+		let finishCacheWarm: () => void = () => undefined;
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
+		};
+		const articleCache = {
+			populateCache: vi.fn(
+				() =>
+					new Promise<void>((resolve) => {
+						finishCacheWarm = resolve;
+					}),
+			),
+		};
+
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			articleCache as never,
+		);
+
+		vi.spyOn(service, 'syncFeed').mockResolvedValue({ newArticles: 2, total: 2 });
+
+		const result = await service.syncAllFeeds('user-1');
+
+		expect(result.newArticles).toBe(2);
+		expect(articleCache.populateCache).toHaveBeenCalledWith('user-1');
+		finishCacheWarm();
 	});
 
 	it('returns syncDueFeeds summary counts without retaining all results', async () => {
@@ -708,7 +787,11 @@ describe('FeedSyncService', () => {
 		const result = await syncPromise;
 
 		for (const call of syncFeedSpy.mock.calls) {
-			expect(call[2]).toEqual({ enrichArticles: false, warmArticleCache: false });
+			expect(call[2]).toEqual({
+				enrichArticles: false,
+				warmArticleCache: false,
+				forceFetch: true,
+			});
 		}
 
 		expect(result).toEqual({
@@ -1043,6 +1126,54 @@ describe('FeedSyncService', () => {
 				newArticles: 2,
 			},
 		});
+	});
+
+	it('force-fetches feed content even when existing articles have cached validators', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Force Feed',
+				feedUrl: 'https://example.com/feed.xml',
+				userId: 'user-1',
+				pollingIntervalMinutes: 60,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+
+		const articleRepo = {
+			countByFeeds: vi.fn(async () => 10),
+			findExistingGuids: vi.fn(async () => []),
+			persistSyncResults: vi.fn(async () => []),
+		};
+
+		const service = new FeedSyncService(
+			feedRepo as never,
+			articleRepo as never,
+			{
+				create: vi.fn(async () => ({ id: 'run-1' })),
+				complete: vi.fn(async () => undefined),
+			} as never,
+			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
+			{ del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		const fetchAndParseSpy = vi
+			.spyOn(
+				service as unknown as {
+					fetchAndParse: (feedUrl: string, ignoreCache: boolean) => Promise<unknown>;
+				},
+				'fetchAndParse',
+			)
+			.mockResolvedValue({ title: 'Force Feed', items: [] });
+
+		await service.syncFeed('feed-1', 'user-1', {
+			enrichArticles: false,
+			warmArticleCache: false,
+			forceFetch: true,
+		});
+
+		expect(fetchAndParseSpy).toHaveBeenCalledWith('https://example.com/feed.xml', true);
 	});
 
 	it('skips expensive processing for existing items during bulk sync prefetch', async () => {

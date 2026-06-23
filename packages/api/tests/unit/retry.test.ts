@@ -13,6 +13,11 @@ describe('isRetryableError', () => {
 		expect(isRetryableError(error)).toBe(true);
 	});
 
+	it('returns false for feeds that exceed the configured content limit', () => {
+		const error = new Error('Feed content exceeds maximum size');
+		expect(isRetryableError(error)).toBe(false);
+	});
+
 	it('returns true for 5xx HTTP responses', () => {
 		const response = new Response('', { status: 500 });
 		expect(isRetryableError(response)).toBe(true);
@@ -107,6 +112,21 @@ describe('withRetry', () => {
 		await expect(withRetry(fn, { maxRetries: 1, baseDelayMs: 1 })).rejects.toThrow();
 		// 2 total attempts: initial + 1 retry
 		expect(fn).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not wait after the final failed attempt', async () => {
+		const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+		const fn = vi.fn().mockRejectedValue(new Error('Always fails'));
+
+		try {
+			await expect(withRetry(fn, { maxRetries: 0, baseDelayMs: 1000 })).rejects.toThrow(
+				'Always fails',
+			);
+			expect(fn).toHaveBeenCalledTimes(1);
+			expect(timeoutSpy).not.toHaveBeenCalled();
+		} finally {
+			timeoutSpy.mockRestore();
+		}
 	});
 
 	it('includes context in retry logging', async () => {

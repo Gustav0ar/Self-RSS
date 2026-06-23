@@ -9,7 +9,7 @@ import type { MetricsRepository, SyncRunRepository } from '../repositories/setti
 import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createLogger } from '../utils/logger.js';
-import { fetchWithRetry } from '../utils/retry.js';
+import { withRetry } from '../utils/retry.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import {
 	extractArticleContentFromPage,
@@ -26,6 +26,7 @@ import {
 	parseNaointendidoPost,
 	reconstructNaointendidoPostHtml,
 } from './content-extractors/naointendido-post.js';
+import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
 	acquireManualSyncAllFeedsLock,
 	getManualSyncAllFeedsStatus,
@@ -51,6 +52,7 @@ interface SyncConfig {
 interface SyncFeedOptions {
 	enrichArticles?: boolean;
 	warmArticleCache?: boolean;
+	forceFetch?: boolean;
 }
 
 interface PendingArticleEnrichment {
@@ -173,7 +175,7 @@ export class FeedSyncService {
 
 		try {
 			const articleCount = (await this.articleRepo.countByFeeds?.([feedId])) ?? 0;
-			const ignoreCache = articleCount === 0;
+			const ignoreCache = options.forceFetch === true || articleCount === 0;
 			const parsed = await this.fetchAndParse(feed.feedUrl, ignoreCache).catch((error) => {
 				throw new FeedSyncFetchError(getSyncErrorDetails(error));
 			});
@@ -467,13 +469,7 @@ export class FeedSyncService {
 
 			// Populate article cache after sync completes
 			if (shouldWarmArticleCache && this.articleCache && insertedArticles.length > 0) {
-				void this.articleCache.populateCache(userId).catch((error) => {
-					logger.warn('Background article cache population failed after feed sync', {
-						userId,
-						feedId,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				});
+				this.warmArticleCacheInBackground(userId, { feedId });
 			}
 
 			logger.info('Feed synced', {
@@ -519,73 +515,45 @@ export class FeedSyncService {
 			);
 		}
 		const syncableFeeds = feeds;
-		let skippedFeeds = 0;
 
 		if (syncableFeeds.length === 0) {
 			return {
 				totalFeeds: feeds.length,
 				syncedFeeds: 0,
 				failedFeeds: 0,
-				skippedFeeds,
+				skippedFeeds: 0,
 				newArticles: 0,
 			};
 		}
 
-		let syncedFeeds = 0;
-		let failedFeeds = 0;
-		let newArticles = 0;
-		const bulkConcurrency = Math.max(1, this.config.concurrency);
-		let nextFeedIndex = 0;
-
-		const worker = async () => {
-			while (nextFeedIndex < syncableFeeds.length) {
-				const currentIndex = nextFeedIndex;
-				nextFeedIndex += 1;
-				const feed = syncableFeeds[currentIndex];
-				if (!feed) {
-					continue;
-				}
-				try {
-					const result = await this.syncFeed(feed.id, userId, {
-						enrichArticles: false,
-						warmArticleCache: false,
-					});
-					if (result) {
-						if ('skipped' in result && result.skipped) {
-							skippedFeeds += 1;
-						} else {
-							syncedFeeds += 1;
-							newArticles += result.newArticles;
-						}
-					}
-				} catch (err) {
-					failedFeeds += 1;
-					const errorDetails = getSyncErrorDetails(err);
-					logger.error('Feed sync failed during bulk sync', {
-						operation: 'bulkFeedSync',
-						feedId: feed.id,
-						userId,
-						...errorDetails,
-					});
-				}
-			}
-		};
-
-		await Promise.all(
-			Array.from({ length: Math.min(bulkConcurrency, syncableFeeds.length) }, () => worker()),
-		);
+		const bulkResult = await syncFeedsForBulk({
+			feeds: syncableFeeds,
+			concurrency: this.config.concurrency,
+			syncFeed: (feed) =>
+				this.syncFeed(feed.id, userId, {
+					enrichArticles: false,
+					warmArticleCache: false,
+					forceFetch: true,
+				}),
+			onFeedError: (feed, err) => {
+				const errorDetails = getSyncErrorDetails(err);
+				logger.error('Feed sync failed during bulk sync', {
+					operation: 'bulkFeedSync',
+					feedId: feed.id,
+					userId,
+					...errorDetails,
+				});
+			},
+		});
 
 		// Populate cache after bulk sync completes
-		if (this.articleCache && newArticles > 0) {
-			await this.articleCache.populateCache(userId);
+		if (this.articleCache && bulkResult.newArticles > 0) {
+			this.warmArticleCacheInBackground(userId, { operation: 'bulkFeedSync' });
 		}
 
 		return {
 			totalFeeds: feeds.length,
-			syncedFeeds,
-			failedFeeds,
-			skippedFeeds,
-			newArticles,
+			...bulkResult,
 		};
 	}
 
@@ -650,6 +618,19 @@ export class FeedSyncService {
 		}
 
 		return { total: dueFeeds.length, succeeded, failed };
+	}
+
+	private warmArticleCacheInBackground(userId: string, context: Record<string, unknown>) {
+		if (!this.articleCache) {
+			return;
+		}
+		void this.articleCache.populateCache(userId).catch((error) => {
+			logger.warn('Background article cache population failed after feed sync', {
+				userId,
+				...context,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 	}
 
 	async enrichArticleNow(enrichment: PendingArticleEnrichment) {
@@ -761,70 +742,86 @@ export class FeedSyncService {
 	}
 
 	private async fetchAndParse(feedUrl: string, ignoreCache = false) {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+		const etagKey = CacheKeys.feedEtag(feedUrl);
+		const lastModKey = CacheKeys.feedLastModified(feedUrl);
 
-		try {
-			const etagKey = CacheKeys.feedEtag(feedUrl);
-			const lastModKey = CacheKeys.feedLastModified(feedUrl);
+		const [etag, lastMod] = ignoreCache
+			? [null, null]
+			: await Promise.all([this.redis.get(etagKey), this.redis.get(lastModKey)]);
 
-			const [etag, lastMod] = ignoreCache
-				? [null, null]
-				: await Promise.all([this.redis.get(etagKey), this.redis.get(lastModKey)]);
+		const headers: Record<string, string> = {
+			'User-Agent': 'SelfFeed/1.0',
+			Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
+		};
+		if (!ignoreCache) {
+			if (etag) headers['If-None-Match'] = etag;
+			if (lastMod) headers['If-Modified-Since'] = lastMod;
+		}
 
-			const headers: Record<string, string> = {
-				'User-Agent': 'SelfFeed/1.0',
-				Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-			};
-			if (!ignoreCache) {
-				if (etag) headers['If-None-Match'] = etag;
-				if (lastMod) headers['If-Modified-Since'] = lastMod;
-			}
+		const result = await withRetry(
+			async () => {
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
 
-			const response = await fetchWithRetry(
-				() =>
-					fetchWithValidatedRedirects(
+				try {
+					const response = await fetchWithValidatedRedirects(
 						feedUrl,
 						{
 							signal: controller.signal,
 							headers,
 						},
 						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
-					),
-				{ maxRetries: 3 },
-				{ operation: 'fetchAndParse', feedUrl },
-			);
+					);
 
-			if (response.status === 304) {
-				logger.debug('Feed not modified (304)', { feedUrl });
-				return { items: [] };
-			}
+					if (response.status === 304) {
+						logger.debug('Feed not modified (304)', { feedUrl });
+						return { notModified: true as const };
+					}
 
-			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-			}
+					if (!response.ok) {
+						await response.body?.cancel().catch(() => undefined);
+						throw response;
+					}
 
-			const newEtag = response.headers.get('etag');
-			const newLastMod = response.headers.get('last-modified');
+					const contentLength = response.headers?.get?.('content-length');
+					if (contentLength && Number.parseInt(contentLength, 10) > this.config.maxContentLength) {
+						await response.body?.cancel().catch(() => undefined);
+						throw new Error('Feed content exceeds maximum size');
+					}
 
-			const ttl = 60 * 60 * 24 * 7;
-			if (newEtag) await this.redis.set(etagKey, newEtag, 'EX', ttl);
-			if (newLastMod) await this.redis.set(lastModKey, newLastMod, 'EX', ttl);
+					const text = await readResponseTextWithinLimit(
+						response,
+						this.config.maxContentLength,
+						controller,
+					);
 
-			const contentLength = response.headers?.get?.('content-length');
-			if (contentLength && Number.parseInt(contentLength, 10) > this.config.maxContentLength) {
-				throw new Error('Feed content exceeds maximum size');
-			}
+					return {
+						notModified: false as const,
+						text,
+						etag: response.headers.get('etag'),
+						lastModified: response.headers.get('last-modified'),
+					};
+				} finally {
+					clearTimeout(timeout);
+				}
+			},
+			{ maxRetries: 3 },
+			{ operation: 'fetchAndParse', feedUrl },
+		);
 
-			const text = await readResponseTextWithinLimit(
-				response,
-				this.config.maxContentLength,
-				controller,
-			);
-			return this.parser.parseString(text);
-		} finally {
-			clearTimeout(timeout);
+		if (result.notModified) {
+			return { items: [] };
 		}
+
+		const parsed = await this.parser.parseString(result.text);
+		const ttl = 60 * 60 * 24 * 7;
+		await Promise.all([
+			result.etag ? this.redis.set(etagKey, result.etag, 'EX', ttl) : Promise.resolve(null),
+			result.lastModified
+				? this.redis.set(lastModKey, result.lastModified, 'EX', ttl)
+				: Promise.resolve(null),
+		]);
+		return parsed;
 	}
 
 	private async fetchArticlePageContent(canonicalUrl: string) {

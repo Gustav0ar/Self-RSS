@@ -22,6 +22,10 @@ export function isRetryableError(error: unknown): boolean {
 		return true;
 	}
 
+	if (error instanceof Error && error.message.includes('Feed content exceeds maximum size')) {
+		return false;
+	}
+
 	if (error instanceof Error && error.name === 'AbortError') {
 		// Request timeout/abort - could be transient
 		return true;
@@ -73,7 +77,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * Retry a function with exponential backoff.
  *
- * Backoff delays: 0ms (attempt 1), 1000ms (attempt 2), 2000ms (attempt 3), 4000ms (attempt 4)
+ * Backoff delays after failures: 1000ms, 2000ms, 4000ms, ...
  *
  * @param fn The function to retry
  * @param options Retry configuration options
@@ -91,7 +95,9 @@ export async function withRetry<T>(
 
 	let lastError: unknown;
 
-	for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
+	const maxAttempts = maxRetries + 1;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 		try {
 			return await fn();
 		} catch (error) {
@@ -108,7 +114,7 @@ export async function withRetry<T>(
 			}
 
 			// Check if we should retry
-			if (attempt > maxRetries + 1 || !isRetryableError(error)) {
+			if (attempt >= maxAttempts || !isRetryableError(error)) {
 				logger.debug('Not retrying - max attempts reached or non-retryable error', {
 					...context,
 					attempt,
@@ -117,13 +123,13 @@ export async function withRetry<T>(
 				throw error;
 			}
 
-			// Calculate delay: baseDelayMs * 2^(attempt-2) = 1s, 2s, 4s, ...
-			const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 2), maxDelayMs);
+			// Calculate delay: baseDelayMs, 2x baseDelayMs, 4x baseDelayMs, ...
+			const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
 
 			logger.info('Retrying after error', {
 				...context,
 				attempt,
-				maxAttempts: maxRetries + 1,
+				maxAttempts,
 				delayMs,
 				error: error instanceof Error ? error.message : String(error),
 			});
