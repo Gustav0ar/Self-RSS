@@ -119,6 +119,21 @@ async function seed() {
 	]);
 
 	const betaArticle = insertedArticles.find((article) => article.guid === 'beta-update');
+	const alphaArticle = insertedArticles.find((article) => article.guid === 'alpha-launch');
+	if (alphaArticle) {
+		await articleRepo.insertMedia([
+			{
+				articleId: alphaArticle.id,
+				type: 'video',
+				provider: 'videopress',
+				url: 'https://videos.files.wordpress.com/e2e/alpha-navigation.mp4',
+				embedUrl: 'https://videos.files.wordpress.com/e2e/alpha-navigation.mp4',
+				width: 1280,
+				height: 720,
+				position: 0,
+			},
+		]);
+	}
 	if (betaArticle) {
 		await articleRepo.markRead(reader.id, betaArticle.id, 'manual');
 	}

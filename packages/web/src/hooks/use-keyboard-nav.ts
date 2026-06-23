@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 export interface KeyboardNavOptions {
 	articleIds: string[];
@@ -20,6 +20,23 @@ export function useKeyboardNav({
 	enabled = true,
 }: KeyboardNavOptions) {
 	const currentIndex = selectedId ? articleIds.indexOf(selectedId) : -1;
+	const lastKnownSelectionRef = useRef<LastKnownSelection | null>(null);
+
+	useEffect(() => {
+		if (!selectedId) {
+			lastKnownSelectionRef.current = null;
+			return;
+		}
+
+		if (currentIndex >= 0) {
+			lastKnownSelectionRef.current = { id: selectedId, index: currentIndex };
+			return;
+		}
+
+		if (lastKnownSelectionRef.current?.id !== selectedId) {
+			lastKnownSelectionRef.current = null;
+		}
+	}, [currentIndex, selectedId]);
 
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent) => {
@@ -34,16 +51,14 @@ export function useKeyboardNav({
 				case 'j':
 				case 'ArrowDown': {
 					e.preventDefault();
-					const nextIdx = Math.min(currentIndex + 1, articleIds.length - 1);
-					const nextId = articleIds[nextIdx];
+					const nextId = getNextArticleId(articleIds, selectedId, lastKnownSelectionRef.current);
 					if (nextId) onSelect(nextId);
 					break;
 				}
 				case 'k':
 				case 'ArrowUp': {
 					e.preventDefault();
-					const prevIdx = Math.max(currentIndex - 1, 0);
-					const prevId = articleIds[prevIdx];
+					const prevId = getPrevArticleId(articleIds, selectedId, lastKnownSelectionRef.current);
 					if (prevId) onSelect(prevId);
 					break;
 				}
@@ -77,16 +92,7 @@ export function useKeyboardNav({
 				}
 			}
 		},
-		[
-			enabled,
-			articleIds,
-			currentIndex,
-			selectedId,
-			onSelect,
-			onToggleRead,
-			onOpenExternal,
-			onRefresh,
-		],
+		[enabled, articleIds, selectedId, onSelect, onToggleRead, onOpenExternal, onRefresh],
 	);
 
 	useEffect(() => {
@@ -98,16 +104,39 @@ export function useKeyboardNav({
 	return { currentIndex };
 }
 
-export function getNextArticleId(articleIds: string[], currentId: string | null): string | null {
+interface LastKnownSelection {
+	id: string;
+	index: number;
+}
+
+export function getNextArticleId(
+	articleIds: string[],
+	currentId: string | null,
+	lastKnownSelection?: LastKnownSelection | null,
+): string | null {
 	if (!currentId || articleIds.length === 0) return articleIds[0] ?? null;
 	const idx = articleIds.indexOf(currentId);
-	if (idx === -1) return articleIds[0] ?? null;
+	if (idx === -1) {
+		if (lastKnownSelection?.id === currentId) {
+			return articleIds[lastKnownSelection.index] ?? currentId;
+		}
+		return articleIds[0] ?? null;
+	}
 	return articleIds[Math.min(idx + 1, articleIds.length - 1)] ?? null;
 }
 
-export function getPrevArticleId(articleIds: string[], currentId: string | null): string | null {
+export function getPrevArticleId(
+	articleIds: string[],
+	currentId: string | null,
+	lastKnownSelection?: LastKnownSelection | null,
+): string | null {
 	if (!currentId || articleIds.length === 0) return articleIds[0] ?? null;
 	const idx = articleIds.indexOf(currentId);
-	if (idx === -1) return articleIds[0] ?? null;
+	if (idx === -1) {
+		if (lastKnownSelection?.id === currentId) {
+			return articleIds[lastKnownSelection.index - 1] ?? currentId;
+		}
+		return articleIds[0] ?? null;
+	}
 	return articleIds[Math.max(idx - 1, 0)] ?? null;
 }

@@ -44,6 +44,63 @@ describe('useKeyboardNav', () => {
 		expect(ctx.onSelect).toHaveBeenNthCalledWith(2, 'a-1');
 	});
 
+	it('continues from the last known selection slot after reader media takes focus and the item leaves the list', () => {
+		const ctx = makeContext();
+		const { rerender } = renderHook(
+			({ articleIds, selectedId }: { articleIds: string[]; selectedId: string | null }) =>
+				useKeyboardNav({
+					articleIds,
+					selectedId,
+					enabled: true,
+					...ctx,
+				}),
+			{
+				initialProps: {
+					articleIds: ['a-1', 'a-2', 'a-3', 'a-4'],
+					selectedId: 'a-3',
+				},
+			},
+		);
+		rerender({ articleIds: ['a-1', 'a-2', 'a-4'], selectedId: 'a-3' });
+
+		const video = document.createElement('video');
+		document.body.appendChild(video);
+		video.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+		video.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+		document.body.removeChild(video);
+
+		expect(ctx.onSelect).toHaveBeenNthCalledWith(1, 'a-4');
+		expect(ctx.onSelect).toHaveBeenNthCalledWith(2, 'a-2');
+	});
+
+	it('stays on a missing boundary article instead of jumping to the wrong neighbor', () => {
+		const ctx = makeContext();
+		const { rerender } = renderHook(
+			({ articleIds, selectedId }: { articleIds: string[]; selectedId: string | null }) =>
+				useKeyboardNav({
+					articleIds,
+					selectedId,
+					enabled: true,
+					...ctx,
+				}),
+			{
+				initialProps: {
+					articleIds: ['a-1', 'a-2', 'a-3'],
+					selectedId: 'a-1',
+				},
+			},
+		);
+
+		rerender({ articleIds: ['a-2', 'a-3'], selectedId: 'a-1' });
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+		expect(ctx.onSelect).toHaveBeenLastCalledWith('a-1');
+
+		rerender({ articleIds: ['a-1', 'a-2', 'a-3'], selectedId: 'a-3' });
+		rerender({ articleIds: ['a-1', 'a-2'], selectedId: 'a-3' });
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+		expect(ctx.onSelect).toHaveBeenLastCalledWith('a-3');
+	});
+
 	it('skips the handler when the user is typing in an input', () => {
 		const ctx = makeContext();
 		renderHook(() =>

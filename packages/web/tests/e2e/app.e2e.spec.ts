@@ -93,8 +93,14 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(alphaRow).toHaveAttribute('aria-current', 'true');
 	const selectedAlphaBox = await alphaRow.boundingBox();
 	expect(selectedAlphaBox?.height).toBeLessThanOrEqual(84);
+	const readerVideo = page.locator('video[title="Media 1"]');
+	await expect(readerVideo).toBeVisible();
+	await readerVideo.scrollIntoViewIfNeeded();
+	await readerVideo.click();
 	await page.keyboard.press('j');
 	await expect(page.getByRole('heading', { name: 'Beta Update' })).toBeVisible();
+	await page.keyboard.press('k');
+	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
 
 	await page.getByPlaceholder('Search articles...').fill('Gamma');
 	const gammaButton = page.getByRole('option', { name: /Gamma World/ });

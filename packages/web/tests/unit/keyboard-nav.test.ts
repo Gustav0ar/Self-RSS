@@ -21,6 +21,14 @@ describe('keyboard navigation helpers', () => {
 			expect(getNextArticleId(ids, 'unknown')).toBe('a');
 		});
 
+		it('uses the last known slot when the current article was removed', () => {
+			expect(getNextArticleId(['a', 'b', 'd', 'e'], 'c', { id: 'c', index: 2 })).toBe('d');
+		});
+
+		it('keeps the current article when a removed current article was last in the list', () => {
+			expect(getNextArticleId(['a', 'b'], 'c', { id: 'c', index: 2 })).toBe('c');
+		});
+
 		it('returns null for empty list', () => {
 			expect(getNextArticleId([], 'a')).toBeNull();
 		});
@@ -41,6 +49,14 @@ describe('keyboard navigation helpers', () => {
 
 		it('returns first when current not found', () => {
 			expect(getPrevArticleId(ids, 'unknown')).toBe('a');
+		});
+
+		it('uses the previous item from the last known slot when the current article was removed', () => {
+			expect(getPrevArticleId(['a', 'b', 'd', 'e'], 'c', { id: 'c', index: 2 })).toBe('b');
+		});
+
+		it('keeps the current article when a removed current article was first in the list', () => {
+			expect(getPrevArticleId(['b', 'c'], 'a', { id: 'a', index: 0 })).toBe('a');
 		});
 
 		it('returns null for empty list', () => {
