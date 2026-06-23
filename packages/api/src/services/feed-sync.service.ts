@@ -26,6 +26,7 @@ import {
 	parseNaointendidoPost,
 	reconstructNaointendidoPostHtml,
 } from './content-extractors/naointendido-post.js';
+import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
 	acquireManualSyncAllFeedsLock,
@@ -136,7 +137,6 @@ function normalizeSyncThrowable(error: unknown, details: SyncErrorDetails): Erro
 
 export class FeedSyncService {
 	private parser: RSSParser;
-
 	constructor(
 		private feedRepo: FeedRepository,
 		private articleRepo: ArticleRepository,
@@ -177,16 +177,27 @@ export class FeedSyncService {
 
 		try {
 			const articleCount = (await this.articleRepo.countByFeeds?.([feedId])) ?? 0;
-			const ignoreCache = options.forceFetch === true || articleCount === 0;
-			const parsed = await this.fetchAndParse(feed.feedUrl, ignoreCache).catch((error) => {
+			const isProxyFeed = isKnownProxyFeedUrl(feed.feedUrl);
+			const ignoreCache = options.forceFetch === true || articleCount === 0 || isProxyFeed;
+			const initialParsed = await this.fetchAndParse(feed.feedUrl, ignoreCache).catch((error) => {
 				throw new FeedSyncFetchError(getSyncErrorDetails(error));
 			});
+			const proxyResolution = await resolveStaleProxyFeed({
+				feedUrl: feed.feedUrl,
+				parsed: initialParsed,
+				config: this.config,
+				fetchAndParse: (candidateUrl, ignoreCache) => this.fetchAndParse(candidateUrl, ignoreCache),
+			});
+			const parsed = proxyResolution?.parsed ?? initialParsed;
+			const effectiveFeedUrl = proxyResolution?.feedUrl ?? feed.feedUrl;
+			const syncWarning = proxyResolution?.warning ?? null;
 			const parsedTitle = this.normalizeText(parsed.title)?.trim() ?? null;
 			const parsedLink = this.normalizeText(parsed.link);
 			const parsedDescription = this.normalizeText(parsed.description);
 			const parsedImageUrl = this.normalizeText(parsed.image?.url);
 
 			const feedUpdates: Record<string, unknown> = {};
+			if (effectiveFeedUrl !== feed.feedUrl) feedUpdates.feedUrl = effectiveFeedUrl;
 			if (parsedTitle && parsedTitle !== feed.title) feedUpdates.title = parsedTitle;
 			if (parsedLink) feedUpdates.siteUrl = parsedLink;
 			if (parsedImageUrl) feedUpdates.faviconUrl = parsedImageUrl;
@@ -198,7 +209,7 @@ export class FeedSyncService {
 				string,
 				Omit<PendingArticleEnrichment, 'articleId'>
 			>();
-			const now = new Date(); // Use consistent timestamp for all enrichments in this sync
+			const now = new Date();
 			const guids = items
 				.map((item, index) => this.resolveItemGuid(item, index))
 				.filter((guid): guid is string => !!guid);
@@ -440,8 +451,8 @@ export class FeedSyncService {
 			await this.feedRepo.update(feedId, userId, {
 				...feedUpdates,
 				lastSyncedAt: new Date(),
-				lastSyncError: null,
-				lastSyncErrorAt: null,
+				lastSyncError: syncWarning,
+				lastSyncErrorAt: syncWarning ? new Date() : null,
 				nextSyncAt,
 				syncStatus: 'idle',
 			});
@@ -471,7 +482,6 @@ export class FeedSyncService {
 				});
 			}
 
-			// Populate article cache after sync completes
 			if (shouldWarmArticleCache && this.articleCache && insertedArticles.length > 0) {
 				this.warmArticleCacheInBackground(userId, { feedId });
 			}
@@ -757,7 +767,10 @@ export class FeedSyncService {
 		return articlePageHtml;
 	}
 
-	private async fetchAndParse(feedUrl: string, ignoreCache = false) {
+	private async fetchAndParse(
+		feedUrl: string,
+		ignoreCache = false,
+	): Promise<RSSParser.Output<FeedItemRecord>> {
 		const etagKey = CacheKeys.feedEtag(feedUrl);
 		const lastModKey = CacheKeys.feedLastModified(feedUrl);
 
@@ -829,7 +842,7 @@ export class FeedSyncService {
 			return { items: [] };
 		}
 
-		const parsed = await this.parser.parseString(result.text);
+		const parsed = (await this.parser.parseString(result.text)) as RSSParser.Output<FeedItemRecord>;
 		const ttl = 60 * 60 * 24 * 7;
 		await Promise.all([
 			result.etag ? this.redis.set(etagKey, result.etag, 'EX', ttl) : Promise.resolve(null),

@@ -214,6 +214,176 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ newArticles: 1, total: 2 });
 	});
 
+	it('replaces a stale FeedBurner proxy with a fresher direct feed URL', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-06-23T13:30:00.000Z'));
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Phoronix',
+				feedUrl: 'http://feeds.feedburner.com/Phoronix',
+				userId: 'user-1',
+				pollingIntervalMinutes: 60,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const articleRepo = {
+			countByFeeds: vi.fn(async () => 10),
+			findByFeedAndGuids: vi.fn(async () => []),
+			persistSyncResults: vi.fn(
+				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
+					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+			),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			articleRepo as never,
+			syncRunRepo as never,
+			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
+			{ set: vi.fn(async () => 'OK'), del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		const fetchAndParseSpy = vi.spyOn(
+			service as unknown as {
+				fetchAndParse: (feedUrl: string, ignoreCache?: boolean) => Promise<unknown>;
+			},
+			'fetchAndParse',
+		);
+		fetchAndParseSpy
+			.mockResolvedValueOnce({
+				title: 'Phoronix',
+				link: 'https://www.phoronix.com/',
+				items: [
+					{
+						guid: 'https://www.phoronix.com/news/Mesa-NVK-Vulkan-Does-DLSS',
+						link: 'https://www.phoronix.com/news/Mesa-NVK-Vulkan-Does-DLSS',
+						title: 'Open-Source NVIDIA NVK Vulkan Driver Now Supports DLSS',
+						description: 'Stale FeedBurner item',
+						pubDate: 'Fri, 19 Jun 2026 16:26:52 -0400',
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				title: 'Phoronix',
+				link: 'https://www.phoronix.com/',
+				items: [
+					{
+						guid: 'https://www.phoronix.com/news/Fwupd-2.0.21-Released',
+						link: 'https://www.phoronix.com/news/Fwupd-2.0.21-Released',
+						title:
+							'Fwupd 2.0.21 Brings Fixes For More Than 250 Potential Security Issues Found Via AI',
+						description: 'Fresh direct item',
+						pubDate: 'Tue, 23 Jun 2026 08:24:22 -0400',
+					},
+				],
+			});
+		const result = await service.syncFeed('feed-1', 'user-1');
+
+		expect(fetchAndParseSpy).toHaveBeenNthCalledWith(
+			1,
+			'http://feeds.feedburner.com/Phoronix',
+			true,
+		);
+		expect(fetchAndParseSpy).toHaveBeenNthCalledWith(2, 'https://www.phoronix.com/rss.php', true);
+		expect(articleRepo.persistSyncResults).toHaveBeenCalledWith(
+			expect.objectContaining({
+				articlesToInsert: [
+					expect.objectContaining({
+						guid: 'https://www.phoronix.com/news/Fwupd-2.0.21-Released',
+						title:
+							'Fwupd 2.0.21 Brings Fixes For More Than 250 Potential Security Issues Found Via AI',
+					}),
+				],
+			}),
+		);
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				feedUrl: 'https://www.phoronix.com/rss.php',
+				lastSyncError: null,
+				lastSyncErrorAt: null,
+				syncStatus: 'idle',
+			}),
+		);
+		expect(result).toEqual({ newArticles: 1, total: 1 });
+	});
+
+	it('keeps stale proxy feeds visible as warnings when no fresher direct feed is found', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-06-23T13:30:00.000Z'));
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				title: 'Proxy Feed',
+				feedUrl: 'http://feeds.feedburner.com/ProxyFeed',
+				userId: 'user-1',
+				pollingIntervalMinutes: 60,
+			})),
+			update: vi.fn(async () => undefined),
+		};
+		const articleRepo = {
+			countByFeeds: vi.fn(async () => 1),
+			findByFeedAndGuids: vi.fn(async () => [
+				{
+					id: 'article-1',
+					guid: 'old-guid',
+					contentHtml: '<p>Old</p>',
+					heroImageUrl: null,
+				},
+			]),
+			persistSyncResults: vi.fn(async () => []),
+		};
+		const syncRunRepo = {
+			create: vi.fn(async () => ({ id: 'run-1' })),
+			complete: vi.fn(async () => undefined),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			articleRepo as never,
+			syncRunRepo as never,
+			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
+			{ set: vi.fn(async () => 'OK'), del: vi.fn(async () => 0) } as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		vi.spyOn(
+			service as unknown as {
+				fetchAndParse: (feedUrl: string, ignoreCache?: boolean) => Promise<unknown>;
+			},
+			'fetchAndParse',
+		).mockResolvedValue({
+			title: 'Proxy Feed',
+			items: [
+				{
+					guid: 'old-guid',
+					link: 'https://example.com/old',
+					title: 'Old',
+					description: 'Old item',
+					pubDate: 'Fri, 19 Jun 2026 16:26:52 -0400',
+				},
+			],
+		});
+
+		await service.syncFeed('feed-1', 'user-1');
+
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				lastSyncError: 'Feed proxy appears stale; latest item is from 2026-06-19T20:26:52.000Z',
+				lastSyncErrorAt: new Date('2026-06-23T13:30:00.000Z'),
+				syncStatus: 'idle',
+			}),
+		);
+	});
+
 	it('derives enriched text and excerpt from sanitized content', async () => {
 		const redis = {
 			set: vi.fn(async () => 'OK'),
