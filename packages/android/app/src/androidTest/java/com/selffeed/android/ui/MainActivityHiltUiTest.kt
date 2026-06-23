@@ -6,9 +6,12 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.test.core.app.ActivityScenario
 import com.selffeed.android.MainActivity
 import com.selffeed.android.data.FakeSelfFeedRepository
@@ -68,6 +71,35 @@ class MainActivityHiltUiTest {
     }
 
     @Test
+    fun tappingArticleOpensReaderBeforeDetailFetchCompletes() {
+        repository.reset(authenticated = true)
+        repository.delayArticleDetailsBy(5_000L)
+        launchActivity()
+
+        waitForText("Injected Article 2")
+        composeRule.onNodeWithText("Injected Article 2").performClick()
+
+        waitForContentDescription("Back to list", timeoutMillis = 1_200)
+        composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
+    }
+
+    @Test
+    fun readerSwipeNavigatesToNextArticleInUnreadOnlyMode() {
+        repository.reset(authenticated = true, hideRead = true)
+        launchActivity()
+
+        waitForText("Injected Article")
+        waitForText("Injected Article 2")
+        composeRule.onNodeWithText("Injected Article").performClick()
+        waitForContentDescription("Back to list")
+
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+
+        waitForText("Injected Article 2")
+        composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
+    }
+
+    @Test
     fun loginFlow_acceptsHostOnlyServerAndOpensWorkspace() {
         repository.reset(authenticated = false)
         launchActivity()
@@ -88,14 +120,14 @@ class MainActivityHiltUiTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
     }
 
-    private fun waitForText(text: String) {
-        composeRule.waitUntil(timeoutMillis = 5_000) {
+    private fun waitForText(text: String, timeoutMillis: Long = 5_000) {
+        composeRule.waitUntil(timeoutMillis = timeoutMillis) {
             composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
         }
     }
 
-    private fun waitForContentDescription(contentDescription: String) {
-        composeRule.waitUntil(timeoutMillis = 5_000) {
+    private fun waitForContentDescription(contentDescription: String, timeoutMillis: Long = 5_000) {
+        composeRule.waitUntil(timeoutMillis = timeoutMillis) {
             composeRule.onAllNodesWithContentDescription(contentDescription).fetchSemanticsNodes().isNotEmpty()
         }
     }

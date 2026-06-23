@@ -80,6 +80,7 @@ class ArticlesViewModel @Inject constructor(
         .cachedIn(viewModelScope)
 
     private val requestSequence = AtomicLong(0)
+    private val openArticleSequence = AtomicLong(0)
     private var articlePagingGeneration = 0L
 
     init {
@@ -191,29 +192,44 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun openArticle(id: String, forceRefresh: Boolean = false) {
+        val openRequestId = openArticleSequence.incrementAndGet()
+        val optimisticArticle = _state.value.items
+            .firstOrNull { it.id == id }
+            ?.toArticleDetail(knownArticleReadStates()[id])
+        if (optimisticArticle != null) {
+            selectArticle(optimisticArticle)
+            articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
+        }
+
         viewModelScope.launch {
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
+                    if (openRequestId != openArticleSequence.get()) return@launch
                     val article = result.data.withReadState(knownArticleReadStates()[id])
-                    _state.update { current ->
-                        current.copy(
-                            selectedArticle = article,
-                        )
-                    }
-                    enrichmentManager.updateSelectedArticle(article)
-                    readStateManager.updateSelectedArticle(article)
+                    selectArticle(article)
 
-                    if (!article.isRead) {
-                        markReadAutomatically(id)
-                    } else {
-                        readStateManager.readStateStore.remember(id, true)
-                        publishReadStateOverrides(id to true)
+                    if (article.isRead) {
+                        readStateManager.readStateStore.remember(id, article.isRead)
+                        publishReadStateOverrides(id to article.isRead)
                     }
                     enrichmentManager.maybeEnrichSelectedArticle(article)
                     articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> {
+                    if (openRequestId != openArticleSequence.get()) return@launch
+                    _state.update { it.copy(errorMessage = result.message) }
+                }
             }
+        }
+    }
+
+    fun onArticleDisplayed(articleId: String) {
+        val article = _state.value.selectedArticle?.takeIf { it.id == articleId } ?: return
+        if (!article.isRead) {
+            markReadAutomatically(articleId)
+        } else {
+            readStateManager.readStateStore.remember(articleId, true)
+            publishReadStateOverrides(articleId to true)
         }
     }
 
@@ -336,6 +352,14 @@ class ArticlesViewModel @Inject constructor(
             )
         }
         publishReadStateOverrides(articleId to isRead)
+    }
+
+    private fun selectArticle(article: ArticleDetail) {
+        _state.update { current ->
+            current.copy(selectedArticle = article)
+        }
+        enrichmentManager.updateSelectedArticle(article)
+        readStateManager.updateSelectedArticle(article)
     }
 
     private fun applyArticleReadStateConfirmed(
@@ -470,6 +494,29 @@ class ArticlesViewModel @Inject constructor(
 
     private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail =
         isRead?.let { copy(isRead = it) } ?: this
+
+    private fun ArticleListItem.toArticleDetail(isRead: Boolean?): ArticleDetail =
+        ArticleDetail(
+            id = id,
+            feedId = feedId,
+            guid = id,
+            canonicalUrl = null,
+            title = title,
+            author = author,
+            excerpt = excerpt,
+            contentHtml = null,
+            contentText = excerpt,
+            heroImageUrl = heroImageUrl,
+            publishedAt = publishedAt,
+            fetchedAt = null,
+            hash = id,
+            feedTitle = feedTitle,
+            feedFaviconUrl = feedFaviconUrl,
+            feedSiteUrl = null,
+            media = emptyList(),
+            isRead = isRead ?: this.isRead,
+            isEnriched = false,
+        )
 
     private fun readDelta(previousReadState: Boolean?, newReadState: Boolean): Pair<Int, Int> {
         val changed = previousReadState?.let { it != newReadState } ?: false

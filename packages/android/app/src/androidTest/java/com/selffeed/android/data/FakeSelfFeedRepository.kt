@@ -19,6 +19,7 @@ import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.network.normalizeApiServerHost
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -32,6 +33,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private var apiBaseUrl = "10.0.2.2:3000"
     private var authenticated = true
     private var preferences = defaultPreferences
+    private var articleDetailDelayMs = 0L
     private val articleReadStates = mutableMapOf<String, Boolean>()
     private val fakeArticles = listOf(
         ArticleListItem(
@@ -40,6 +42,22 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             feedTitle = "Injected Feed",
             title = "Injected Article",
             excerpt = "Rendered from the Hilt test repository",
+            isRead = false,
+        ),
+        ArticleListItem(
+            id = "article-2",
+            feedId = "feed-1",
+            feedTitle = "Injected Feed",
+            title = "Injected Article 2",
+            excerpt = "Second rendered article from the Hilt test repository",
+            isRead = false,
+        ),
+        ArticleListItem(
+            id = "article-3",
+            feedId = "feed-1",
+            feedTitle = "Injected Feed",
+            title = "Injected Article 3",
+            excerpt = "Third rendered article from the Hilt test repository",
             isRead = false,
         ),
     )
@@ -57,7 +75,12 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         this.authenticated = authenticated
         apiBaseUrl = "10.0.2.2:3000"
         preferences = defaultPreferences.copy(hideRead = hideRead)
+        articleDetailDelayMs = 0L
         articleReadStates.clear()
+    }
+
+    fun delayArticleDetailsBy(delayMs: Long) {
+        articleDetailDelayMs = delayMs
     }
 
     override suspend fun login(email: String, password: String): AppResult<User> {
@@ -158,8 +181,12 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return flowOf(PagingData.from(articles))
     }
 
-    override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> =
-        AppResult.Success(fakeArticleDetail(articleId))
+    override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> {
+        if (articleDetailDelayMs > 0L) {
+            delay(articleDetailDelayMs)
+        }
+        return AppResult.Success(fakeArticleDetail(articleId))
+    }
 
     override fun cachedArticleDetail(articleId: String): ArticleDetail? = null
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
@@ -244,19 +271,26 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     private fun unreadCount(): Int = fakeArticles.count { articleReadStates[it.id] != true }
 
-    private fun fakeArticleDetail(articleId: String) = ArticleDetail(
-        id = articleId,
-        feedId = "feed-1",
-        guid = articleId,
-        canonicalUrl = "https://example.com/articles/$articleId",
-        title = "Injected Article",
-        contentText = "Body",
-        hash = "hash-$articleId",
-        feedTitle = "Injected Feed",
-        media = emptyList(),
-        isRead = articleReadStates[articleId] ?: false,
-        isEnriched = false,
-    )
+    private fun fakeArticleDetail(articleId: String): ArticleDetail {
+        val article = fakeArticles.firstOrNull { it.id == articleId }
+        return ArticleDetail(
+            id = articleId,
+            feedId = article?.feedId ?: "feed-1",
+            guid = articleId,
+            canonicalUrl = "https://example.com/articles/$articleId",
+            title = article?.title ?: "Injected Article",
+            excerpt = article?.excerpt,
+            contentText = article?.excerpt ?: "Body",
+            heroImageUrl = article?.heroImageUrl,
+            publishedAt = article?.publishedAt,
+            hash = "hash-$articleId",
+            feedTitle = article?.feedTitle ?: "Injected Feed",
+            feedFaviconUrl = article?.feedFaviconUrl,
+            media = emptyList(),
+            isRead = articleReadStates[articleId] ?: article?.isRead ?: false,
+            isEnriched = false,
+        )
+    }
 
     private companion object {
         val fakeUser = User(id = "user-1", email = "reader@example.com", role = "user", isActive = true)

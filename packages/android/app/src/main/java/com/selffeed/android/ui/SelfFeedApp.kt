@@ -118,6 +118,7 @@ data class SelfFeedAppActions(
     val onRefreshArticles: () -> Unit,
     val onLoadMoreArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
+    val onArticleDisplayed: (String) -> Unit,
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
     val onMarkAllRead: () -> Unit,
@@ -214,9 +215,13 @@ fun SelfFeedApp(
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
     // Use paging items if available, otherwise fall back to state items
-    val rawArticleQueue = articlePagingItems.itemSnapshotList.items
-        .takeIf { it.isNotEmpty() }
-        ?: state.articles.items
+    val rawArticleQueue = if (selectedArticle != null && state.articles.items.isNotEmpty()) {
+        state.articles.items
+    } else {
+        articlePagingItems.itemSnapshotList.items
+            .takeIf { it.isNotEmpty() }
+            ?: state.articles.items
+    }
     // Apply read state overrides to show articles as read without filtering them out
     val articleQueue = remember(rawArticleQueue, readStateOverrides) {
         rawArticleQueue.map { article ->
@@ -397,6 +402,7 @@ fun SelfFeedApp(
                                     },
                                     onBackToList = actions.onCloseArticle,
                                     onArticleSelected = actions.onOpenArticle,
+                                    onArticleDisplayed = actions.onArticleDisplayed,
                                 )
                             } else {
                                 ArticlesTab(articleTabState, articleActions, articlePagingItems)

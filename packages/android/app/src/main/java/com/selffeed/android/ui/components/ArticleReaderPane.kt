@@ -75,43 +75,45 @@ fun ArticleReaderPane(
     onOpenOriginal: (ArticleDetail) -> Unit,
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
+    onArticleDisplayed: (String) -> Unit = {},
 ) {
-    val selectedArticleIndex = remember(articles, selectedArticle.id) {
-        articles.indexOfFirst { it.id == selectedArticle.id }
+    val readerArticles = remember(articles, selectedArticle) {
+        articles.withSelectedArticle(selectedArticle)
+    }
+    val selectedArticleIndex = remember(readerArticles, selectedArticle.id) {
+        readerArticles.indexOfFirst { it.id == selectedArticle.id }
     }
 
     BackHandler(onBack = onBackToList)
 
-    // When the selected read article is filtered out of the unread queue,
-    // keep rendering it directly instead of letting the pager snap to the
-    // first remaining row and replace the user's reading context.
-    if (articles.isEmpty() || selectedArticleIndex == -1) {
+    if (readerArticles.isEmpty() || selectedArticleIndex == -1) {
         ArticleDetailView(
             article = selectedArticle,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
+            onDisplayed = { onArticleDisplayed(selectedArticle.id) },
         )
         return
     }
 
     val pagerState = rememberPagerState(initialPage = selectedArticleIndex) {
-        articles.size
+        readerArticles.size
     }
 
-    LaunchedEffect(selectedArticle.id) {
-        val targetPage = articles.indexOfFirst { it.id == selectedArticle.id }
+    LaunchedEffect(selectedArticle.id, readerArticles) {
+        val targetPage = readerArticles.indexOfFirst { it.id == selectedArticle.id }
         if (targetPage != -1 && targetPage != pagerState.currentPage) {
             pagerState.scrollToPage(targetPage)
         }
     }
 
-    LaunchedEffect(pagerState.currentPage, articles) {
+    LaunchedEffect(pagerState.currentPage, readerArticles) {
         // Guard against the article list shrinking while the user is mid-swipe
         // (e.g. SSE event marks-read + hideRead removes the current article
         // from the list). Without this bounds check the previous code threw
         // IndexOutOfBoundsException on the next frame.
-        if (articles.isEmpty()) return@LaunchedEffect
-        val page = pagerState.currentPage.coerceIn(0, articles.lastIndex)
-        val articleId = articles[page].id
+        if (readerArticles.isEmpty()) return@LaunchedEffect
+        val page = pagerState.currentPage.coerceIn(0, readerArticles.lastIndex)
+        val articleId = readerArticles[page].id
         if (articleId != selectedArticle.id) {
             onArticleSelected(articleId)
         }
@@ -122,12 +124,13 @@ fun ArticleReaderPane(
         modifier = Modifier.fillMaxSize(),
         beyondViewportPageCount = 1,
     ) { page ->
-        if (articles.isEmpty()) return@HorizontalPager
-        val articleItem = articles[page]
+        if (readerArticles.isEmpty()) return@HorizontalPager
+        val articleItem = readerArticles[page]
         if (articleItem.id == selectedArticle.id) {
             ArticleDetailView(
                 article = selectedArticle,
                 onOpenOriginal = { onOpenOriginal(selectedArticle) },
+                onDisplayed = { onArticleDisplayed(selectedArticle.id) },
             )
         } else {
             // articleItem already has read state applied from the queue
@@ -141,6 +144,7 @@ fun ArticleReaderPane(
 private fun ArticleDetailView(
     article: ArticleDetail,
     onOpenOriginal: () -> Unit,
+    onDisplayed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
@@ -149,6 +153,10 @@ private fun ArticleDetailView(
     }
     var fullscreenMedia by remember { mutableStateOf<FullscreenMediaView?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
+
+    LaunchedEffect(article.id) {
+        onDisplayed()
+    }
 
     val backgroundColor = MaterialTheme.colorScheme.background
     val textColor = MaterialTheme.colorScheme.onSurface
@@ -318,6 +326,25 @@ private fun ArticleDetailView(
         },
     )
 }
+
+private fun List<ArticleListItem>.withSelectedArticle(selectedArticle: ArticleDetail): List<ArticleListItem> {
+    if (isEmpty() || any { it.id == selectedArticle.id }) return this
+    return listOf(selectedArticle.toArticleListItem()) + this
+}
+
+private fun ArticleDetail.toArticleListItem(): ArticleListItem =
+    ArticleListItem(
+        id = id,
+        feedId = feedId,
+        feedTitle = feedTitle,
+        feedFaviconUrl = feedFaviconUrl,
+        title = title,
+        author = author,
+        excerpt = excerpt,
+        heroImageUrl = heroImageUrl,
+        publishedAt = publishedAt,
+        isRead = isRead,
+    )
 
 @Composable
 private fun EmbedPlayer(

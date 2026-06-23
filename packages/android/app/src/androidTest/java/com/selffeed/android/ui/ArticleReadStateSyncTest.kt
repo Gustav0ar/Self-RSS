@@ -9,7 +9,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.components.ArticleReaderPane
@@ -245,6 +248,33 @@ class ArticleReadStateSyncTest {
 
         composeRule.waitForIdle()
         composeRule.onNodeWithText("First Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun readerPane_canNavigateWhenSelectedArticleIsMissingFromLiveSnapshot() {
+        var selectedArticleId: String? = null
+        val selectedArticle = sampleArticleDetail("article-1", "First Article", isRead = true)
+        val liveSnapshotAfterReadFilter = listOf(
+            sampleArticleListItem("article-2", "Second Article", isRead = false),
+        )
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = liveSnapshotAfterReadFilter,
+                    selectedArticle = selectedArticle,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { selectedArticleId = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("First Article").assertIsDisplayed()
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            selectedArticleId == "article-2"
+        }
     }
 
     @Test

@@ -173,6 +173,7 @@ fun SelfFeedAppRoute(
                     articlesViewModel.openArticle(it)
                     appViewModel.setTab(HomeTab.ARTICLES)
                 },
+                onArticleDisplayed = articlesViewModel::onArticleDisplayed,
                 onCloseArticle = articlesViewModel::closeArticle,
                 onToggleRead = articlesViewModel::markRead,
                 onMarkAllRead = articlesViewModel::markAllRead,

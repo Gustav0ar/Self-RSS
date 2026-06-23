@@ -236,6 +236,7 @@ class AuthFlowUiTest {
         onRefreshArticles = {},
         onLoadMoreArticles = {},
         onOpenArticle = {},
+        onArticleDisplayed = {},
         onCloseArticle = {},
         onToggleRead = { _, _ -> },
         onMarkAllRead = {},

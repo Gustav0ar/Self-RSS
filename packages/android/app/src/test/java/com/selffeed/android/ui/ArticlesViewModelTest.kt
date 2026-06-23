@@ -143,15 +143,103 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `openArticle sets selectedArticle and marks read locally`() = runTest {
+    fun `openArticle sets selectedArticle without marking read before display`() = runTest {
         val viewModel = createViewModel()
         viewModel.loadArticles()
         viewModel.openArticle("a1")
         val s = viewModel.state.value
         assertNotNull(s.selectedArticle)
-        assertEquals(true, s.items.first().isRead)
+        assertEquals(false, s.items.first().isRead)
         coVerify { repository.article("a1", false) }
+        coVerify(exactly = 0) { repository.markRead("a1", true, "auto_open") }
+    }
+
+    @Test
+    fun `onArticleDisplayed marks selected unread article as read`() = runTest {
+        val viewModel = createViewModel()
+        viewModel.loadArticles()
+        viewModel.openArticle("a1")
+        runCurrent()
+
+        viewModel.onArticleDisplayed("a1")
+        runCurrent()
+
+        val s = viewModel.state.value
+        assertEquals(true, s.items.first().isRead)
+        assertEquals(true, s.selectedArticle?.isRead)
         coVerify { repository.markRead("a1", true, "auto_open") }
+    }
+
+    @Test
+    fun `openArticle selects retained row immediately while detail fetch is pending`() = runTest {
+        val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
+        coEvery { repository.article("a2", false) } coAnswers { detailResult.await() }
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle("a1", title = "First Article"),
+                sampleArticle("a2", title = "Second Article"),
+            ),
+        )
+
+        viewModel.openArticle("a2")
+        runCurrent()
+
+        assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+        assertEquals("Second Article", viewModel.state.value.selectedArticle?.title)
+        coVerify(exactly = 0) { repository.markRead("a2", true, "auto_open") }
+
+        detailResult.complete(AppResult.Success(sampleDetail("a2", title = "Fetched Second Article")))
+        runCurrent()
+
+        assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+        assertEquals("Fetched Second Article", viewModel.state.value.selectedArticle?.title)
+        coVerify(exactly = 0) { repository.markRead("a2", true, "auto_open") }
+    }
+
+    @Test
+    fun `openArticle ignores stale detail response from an older tap`() = runTest {
+        val firstDetailResult = CompletableDeferred<AppResult<ArticleDetail>>()
+        coEvery { repository.article("a1", false) } coAnswers { firstDetailResult.await() }
+        coEvery { repository.article("a2", false) } returns AppResult.Success(sampleDetail("a2", title = "Fetched Second"))
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle("a1", title = "First Article"),
+                sampleArticle("a2", title = "Second Article"),
+            ),
+        )
+
+        viewModel.openArticle("a1")
+        runCurrent()
+        viewModel.openArticle("a2")
+        runCurrent()
+        firstDetailResult.complete(AppResult.Success(sampleDetail("a1", title = "Fetched First")))
+        runCurrent()
+
+        assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+        assertEquals("Fetched Second", viewModel.state.value.selectedArticle?.title)
+    }
+
+    @Test
+    fun `openAdjacentArticle uses retained article queue`() = runTest {
+        coEvery { repository.article("a1", false) } returns AppResult.Success(sampleDetail("a1", title = "First Article"))
+        coEvery { repository.article("a2", false) } returns AppResult.Success(sampleDetail("a2", title = "Second Article"))
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle("a1", title = "First Article"),
+                sampleArticle("a2", title = "Second Article"),
+            ),
+        )
+
+        viewModel.openArticle("a1")
+        runCurrent()
+        viewModel.openAdjacentArticle(1)
+        runCurrent()
+
+        assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+        assertEquals("Second Article", viewModel.state.value.selectedArticle?.title)
     }
 
     @Test
@@ -179,6 +267,7 @@ class ArticlesViewModelTest {
 
         viewModel.markRead("a1", false)
         viewModel.openArticle("a1")
+        viewModel.onArticleDisplayed("a1")
         runCurrent()
 
         assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
@@ -345,20 +434,20 @@ class ArticlesViewModelTest {
         coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
-    private fun sampleArticle(id: String, feedId: String = "f-1"): ArticleListItem = ArticleListItem(
+    private fun sampleArticle(id: String, feedId: String = "f-1", title: String = "T"): ArticleListItem = ArticleListItem(
         id = id,
         feedId = feedId,
         feedTitle = "F",
-        title = "T",
+        title = title,
         isRead = false,
     )
 
-    private fun sampleDetail(id: String): ArticleDetail = ArticleDetail(
+    private fun sampleDetail(id: String, title: String = "T"): ArticleDetail = ArticleDetail(
         id = id,
         feedId = "f-1",
         guid = id,
         canonicalUrl = null,
-        title = "T",
+        title = title,
         author = null,
         excerpt = null,
         contentHtml = null,
