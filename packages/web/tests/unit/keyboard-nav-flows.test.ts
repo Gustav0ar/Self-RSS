@@ -73,6 +73,46 @@ describe('useKeyboardNav', () => {
 		expect(ctx.onSelect).toHaveBeenNthCalledWith(2, 'a-2');
 	});
 
+	it('uses the latest active article when reader media receives a key handled by an older listener', () => {
+		const ctx = makeContext();
+		const keyHandlers: EventListener[] = [];
+		const addEventListenerSpy = vi
+			.spyOn(window, 'addEventListener')
+			.mockImplementation((type, listener) => {
+				if (type === 'keydown') {
+					keyHandlers.push(listener as EventListener);
+				}
+			});
+
+		const { rerender, unmount } = renderHook(
+			({ selectedId }: { selectedId: string | null }) =>
+				useKeyboardNav({
+					articleIds: ['a-1', 'a-2', 'a-3'],
+					selectedId,
+					enabled: true,
+					...ctx,
+				}),
+			{
+				initialProps: { selectedId: null as string | null },
+			},
+		);
+
+		const initialKeyHandler = keyHandlers[0];
+		expect(initialKeyHandler).toBeTruthy();
+
+		rerender({ selectedId: 'a-2' });
+
+		const video = document.createElement('video');
+		const event = new KeyboardEvent('keydown', { key: 'j', bubbles: true });
+		Object.defineProperty(event, 'target', { value: video });
+		initialKeyHandler?.(event);
+
+		expect(ctx.onSelect).toHaveBeenCalledWith('a-3');
+
+		unmount();
+		addEventListenerSpy.mockRestore();
+	});
+
 	it('stays on a missing boundary article instead of jumping to the wrong neighbor', () => {
 		const ctx = makeContext();
 		const { rerender } = renderHook(

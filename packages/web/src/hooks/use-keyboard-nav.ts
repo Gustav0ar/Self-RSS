@@ -21,6 +21,25 @@ export function useKeyboardNav({
 }: KeyboardNavOptions) {
 	const currentIndex = selectedId ? articleIds.indexOf(selectedId) : -1;
 	const lastKnownSelectionRef = useRef<LastKnownSelection | null>(null);
+	const stateRef = useRef({
+		articleIds,
+		selectedId,
+		onSelect,
+		onToggleRead,
+		onOpenExternal,
+		onRefresh,
+		enabled,
+	});
+
+	stateRef.current = {
+		articleIds,
+		selectedId,
+		onSelect,
+		onToggleRead,
+		onOpenExternal,
+		onRefresh,
+		enabled,
+	};
 
 	useEffect(() => {
 		if (!selectedId) {
@@ -38,62 +57,77 @@ export function useKeyboardNav({
 		}
 	}, [currentIndex, selectedId]);
 
-	const handleKeyDown = useCallback(
-		(e: KeyboardEvent) => {
-			if (!enabled || articleIds.length === 0) return;
+	const handleKeyDown = useCallback((e: KeyboardEvent) => {
+		const {
+			articleIds: latestArticleIds,
+			selectedId: latestSelectedId,
+			onSelect: latestOnSelect,
+			onToggleRead: latestOnToggleRead,
+			onOpenExternal: latestOnOpenExternal,
+			onRefresh: latestOnRefresh,
+			enabled: latestEnabled,
+		} = stateRef.current;
 
-			const target = e.target as HTMLElement;
-			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-				return;
-			}
+		if (!latestEnabled || latestArticleIds.length === 0) return;
 
-			switch (e.key) {
-				case 'j':
-				case 'ArrowDown': {
-					e.preventDefault();
-					const nextId = getNextArticleId(articleIds, selectedId, lastKnownSelectionRef.current);
-					if (nextId) onSelect(nextId);
-					break;
-				}
-				case 'k':
-				case 'ArrowUp': {
-					e.preventDefault();
-					const prevId = getPrevArticleId(articleIds, selectedId, lastKnownSelectionRef.current);
-					if (prevId) onSelect(prevId);
-					break;
-				}
-				case 'm': {
-					if (selectedId && onToggleRead) {
-						e.preventDefault();
-						onToggleRead(selectedId);
-					}
-					break;
-				}
-				case 'v': {
-					if (selectedId && onOpenExternal) {
-						e.preventDefault();
-						onOpenExternal(selectedId);
-					}
-					break;
-				}
-				case 'r': {
-					if (onRefresh) {
-						e.preventDefault();
-						onRefresh();
-					}
-					break;
-				}
-				case 'Enter': {
-					if (selectedId) {
-						e.preventDefault();
-						onSelect(selectedId);
-					}
-					break;
-				}
+		const target = e.target as HTMLElement;
+		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+			return;
+		}
+
+		switch (e.key) {
+			case 'j':
+			case 'ArrowDown': {
+				e.preventDefault();
+				const nextId = getNextArticleId(
+					latestArticleIds,
+					latestSelectedId,
+					lastKnownSelectionRef.current,
+				);
+				if (nextId) latestOnSelect(nextId);
+				break;
 			}
-		},
-		[enabled, articleIds, selectedId, onSelect, onToggleRead, onOpenExternal, onRefresh],
-	);
+			case 'k':
+			case 'ArrowUp': {
+				e.preventDefault();
+				const prevId = getPrevArticleId(
+					latestArticleIds,
+					latestSelectedId,
+					lastKnownSelectionRef.current,
+				);
+				if (prevId) latestOnSelect(prevId);
+				break;
+			}
+			case 'm': {
+				if (latestSelectedId && latestOnToggleRead) {
+					e.preventDefault();
+					latestOnToggleRead(latestSelectedId);
+				}
+				break;
+			}
+			case 'v': {
+				if (latestSelectedId && latestOnOpenExternal) {
+					e.preventDefault();
+					latestOnOpenExternal(latestSelectedId);
+				}
+				break;
+			}
+			case 'r': {
+				if (latestOnRefresh) {
+					e.preventDefault();
+					latestOnRefresh();
+				}
+				break;
+			}
+			case 'Enter': {
+				if (latestSelectedId) {
+					e.preventDefault();
+					latestOnSelect(latestSelectedId);
+				}
+				break;
+			}
+		}
+	}, []);
 
 	useEffect(() => {
 		if (!enabled) return;
@@ -120,7 +154,7 @@ export function getNextArticleId(
 		if (lastKnownSelection?.id === currentId) {
 			return articleIds[lastKnownSelection.index] ?? currentId;
 		}
-		return articleIds[0] ?? null;
+		return currentId;
 	}
 	return articleIds[Math.min(idx + 1, articleIds.length - 1)] ?? null;
 }
@@ -136,7 +170,7 @@ export function getPrevArticleId(
 		if (lastKnownSelection?.id === currentId) {
 			return articleIds[lastKnownSelection.index - 1] ?? currentId;
 		}
-		return articleIds[0] ?? null;
+		return currentId;
 	}
 	return articleIds[Math.max(idx - 1, 0)] ?? null;
 }

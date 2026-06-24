@@ -86,7 +86,8 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await expect(alphaRow).not.toContainText('Bun Team');
 	await expect(alphaRow).not.toContainText('Alpha launch excerpt');
 	await expect(alphaRow.locator('img[src="https://example.com/images/alpha.png"]')).toHaveCount(0);
-	await expect(page.getByRole('button', { name: /Beta Update/ })).toBeVisible();
+	const betaRow = page.getByRole('button', { name: /Beta Update/ });
+	await expect(betaRow).toBeVisible();
 
 	await page.keyboard.press('j');
 	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
@@ -99,8 +100,10 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await readerVideo.click();
 	await page.keyboard.press('j');
 	await expect(page.getByRole('heading', { name: 'Beta Update' })).toBeVisible();
+	await expect(betaRow).toHaveAttribute('aria-current', 'true');
 	await page.keyboard.press('k');
 	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
+	await expect(alphaRow).toHaveAttribute('aria-current', 'true');
 
 	await page.getByPlaceholder('Search articles...').fill('Gamma');
 	const gammaButton = page.getByRole('option', { name: /Gamma World/ });

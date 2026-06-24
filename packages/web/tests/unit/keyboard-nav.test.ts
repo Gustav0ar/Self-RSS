@@ -17,8 +17,8 @@ describe('keyboard navigation helpers', () => {
 			expect(getNextArticleId(ids, 'e')).toBe('e');
 		});
 
-		it('returns first when current not found', () => {
-			expect(getNextArticleId(ids, 'unknown')).toBe('a');
+		it('keeps the current article when current is not found and no last slot is known', () => {
+			expect(getNextArticleId(ids, 'unknown')).toBe('unknown');
 		});
 
 		it('uses the last known slot when the current article was removed', () => {
@@ -47,8 +47,8 @@ describe('keyboard navigation helpers', () => {
 			expect(getPrevArticleId(ids, 'a')).toBe('a');
 		});
 
-		it('returns first when current not found', () => {
-			expect(getPrevArticleId(ids, 'unknown')).toBe('a');
+		it('keeps the current article when current is not found and no last slot is known', () => {
+			expect(getPrevArticleId(ids, 'unknown')).toBe('unknown');
 		});
 
 		it('uses the previous item from the last known slot when the current article was removed', () => {
