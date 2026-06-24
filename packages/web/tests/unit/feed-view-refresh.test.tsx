@@ -145,12 +145,42 @@ describe('FeedView refresh', () => {
 				pages: [
 					{
 						data: [
-							{ id: 'article-7', feedId: 'feed-42', isRead: false },
-							{ id: 'article-8', feedId: 'feed-42', isRead: false },
-							{ id: 'article-9', feedId: 'feed-42', isRead: false },
-							{ id: 'article-10', feedId: 'feed-42', isRead: false },
-							{ id: 'article-11', feedId: 'feed-42', isRead: false },
-							{ id: 'article-12', feedId: 'feed-42', isRead: false },
+							{
+								id: 'article-7',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T12:00:00.000Z',
+								isRead: false,
+							},
+							{
+								id: 'article-8',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T11:00:00.000Z',
+								isRead: false,
+							},
+							{
+								id: 'article-9',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T10:00:00.000Z',
+								isRead: false,
+							},
+							{
+								id: 'article-10',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T09:00:00.000Z',
+								isRead: false,
+							},
+							{
+								id: 'article-11',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T08:00:00.000Z',
+								isRead: false,
+							},
+							{
+								id: 'article-12',
+								feedId: 'feed-42',
+								displayedAt: '2026-06-01T07:00:00.000Z',
+								isRead: false,
+							},
 						],
 					},
 				],

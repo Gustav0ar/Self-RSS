@@ -3,12 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { ArticleList } from '../../src/components/articles/article-list';
 
 vi.mock('@tanstack/react-virtual', () => ({
-	useVirtualizer: (options: { count: number; estimateSize: () => number }) => ({
+	useVirtualizer: (options: {
+		count: number;
+		estimateSize: () => number;
+		getItemKey?: (index: number) => string | number;
+	}) => ({
 		getTotalSize: () => options.count * options.estimateSize(),
 		getVirtualItems: () =>
 			Array.from({ length: options.count }, (_, index) => ({
 				index,
-				key: index,
+				key: options.getItemKey?.(index) ?? index,
 				start: index * options.estimateSize(),
 			})),
 		scrollToIndex: vi.fn(),

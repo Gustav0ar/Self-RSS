@@ -107,9 +107,10 @@ export class ArticleCacheService {
 				return null;
 			}
 
-			const filtered = [...data.articles].sort(
-				(a, b) => new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime(),
-			);
+			const filtered = [...data.articles].sort((a, b) => {
+				const timeDelta = new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime();
+				return timeDelta || b.id.localeCompare(a.id);
+			});
 
 			// Apply limit + cursor
 			const cursorIndex = options.limit > 0 ? options.limit : 20;

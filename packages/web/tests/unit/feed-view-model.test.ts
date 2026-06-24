@@ -9,7 +9,12 @@ import {
 	resolveEffectiveArticleId,
 } from '../../src/components/articles/feed-view-model';
 
-function article(id: string, feedId = 'feed-1', isRead = false): ArticleListItem {
+function article(
+	id: string,
+	feedId = 'feed-1',
+	isRead = false,
+	displayedAt = '2026-06-01T00:00:00.000Z',
+): ArticleListItem {
 	return {
 		id,
 		feedId,
@@ -20,7 +25,7 @@ function article(id: string, feedId = 'feed-1', isRead = false): ArticleListItem
 		excerpt: null,
 		heroImageUrl: null,
 		publishedAt: null,
-		displayedAt: '2026-06-01T00:00:00.000Z',
+		displayedAt,
 		isRead,
 	};
 }
@@ -129,15 +134,31 @@ describe('feed view model helpers', () => {
 		).toMatchObject({ viewTitle: 'Parent / Child', scopeUnreadCount: 3 });
 	});
 
-	it('keeps read articles in their previous slots while an unread-only list refreshes', () => {
+	it('keeps retained read articles sorted newest-first after an unread-only refresh', () => {
 		const retained = new Map<string, RetainedReadArticle>([
-			['article-2', { article: article('article-2', 'feed-1', true), index: 1 }],
-			['article-4', { article: article('article-4', 'feed-1', true), index: 10 }],
+			[
+				'article-2',
+				{
+					article: article('article-2', 'feed-1', true, '2026-06-01T10:00:00.000Z'),
+					index: 99,
+				},
+			],
+			[
+				'article-4',
+				{
+					article: article('article-4', 'feed-1', true, '2026-06-01T07:00:00.000Z'),
+					index: 0,
+				},
+			],
 		]);
 
 		const merged = mergeRetainedReadArticles(
-			[article('article-1'), article('article-3')],
+			[
+				article('article-1', 'feed-1', false, '2026-06-01T11:00:00.000Z'),
+				article('article-3', 'feed-1', false, '2026-06-01T09:00:00.000Z'),
+			],
 			retained,
+			'latest',
 			true,
 		);
 
@@ -147,8 +168,49 @@ describe('feed view model helpers', () => {
 			'article-3',
 			'article-4',
 		]);
-		expect(mergeRetainedReadArticles([article('article-1')], retained, false)).toEqual([
-			article('article-1'),
+		expect(
+			mergeRetainedReadArticles(
+				[article('article-1', 'feed-1', false, '2026-06-01T11:00:00.000Z')],
+				retained,
+				'latest',
+				false,
+			),
+		).toEqual([article('article-1', 'feed-1', false, '2026-06-01T11:00:00.000Z')]);
+	});
+
+	it('keeps retained read articles sorted oldest-first after an unread-only refresh', () => {
+		const retained = new Map<string, RetainedReadArticle>([
+			[
+				'article-2',
+				{
+					article: article('article-2', 'feed-1', true, '2026-06-01T10:00:00.000Z'),
+					index: 0,
+				},
+			],
+			[
+				'article-4',
+				{
+					article: article('article-4', 'feed-1', true, '2026-06-01T07:00:00.000Z'),
+					index: 99,
+				},
+			],
+		]);
+
+		const merged = mergeRetainedReadArticles(
+			[
+				article('article-1', 'feed-1', false, '2026-06-01T11:00:00.000Z'),
+				article('article-3', 'feed-1', false, '2026-06-01T09:00:00.000Z'),
+			],
+			retained,
+			'oldest',
+			true,
+		);
+
+		expect(merged.map((item) => item.id)).toEqual([
+			'article-4',
+			'article-3',
+			'article-2',
+			'article-1',
 		]);
 	});
 

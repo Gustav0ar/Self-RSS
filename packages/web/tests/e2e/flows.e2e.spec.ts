@@ -65,6 +65,20 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
+async function visibleArticleTitleOrder(page: Page, titles: string[]) {
+	const rowTexts = await page
+		.locator('[data-article-id]')
+		.evaluateAll((rows) => rows.map((row) => row.textContent ?? ''));
+	const positions = titles.map((title) => ({
+		title,
+		index: rowTexts.findIndex((text) => text.includes(title)),
+	}));
+	if (positions.some(({ index }) => index < 0)) {
+		return [];
+	}
+	return positions.sort((a, b) => a.index - b.index).map(({ title }) => title);
+}
+
 function feedXml(items: Array<{ title: string; guid: string; pubDate: string }>) {
 	return `<?xml version="1.0" encoding="UTF-8"?>
 	<rss version="2.0">
@@ -289,16 +303,27 @@ test('hide read toggle persists the user preference', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Unread' })).toBeVisible();
 });
 
-test('sort toggle changes the order of articles in the list', async ({ page }) => {
+test('sort toggle changes the order of articles in the list', async ({ page, request }) => {
+	await patchUserPreferences(request, 'reader@example.com', 'password123', {
+		hideRead: false,
+		defaultSort: 'latest',
+	});
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 
 	// The toolbar starts on "Newest" sort.
 	const sortButton = page.getByRole('button', { name: 'Newest' });
 	await expect(sortButton).toBeVisible();
+	await expect(page.getByRole('button', { name: /Alpha Launch/ })).toBeVisible();
+	await expect
+		.poll(() => visibleArticleTitleOrder(page, ['Alpha Launch', 'Beta Update', 'Gamma World']))
+		.toEqual(['Alpha Launch', 'Beta Update', 'Gamma World']);
 
 	// Clicking the sort button toggles to oldest.
 	await sortButton.click();
 	await expect(page.getByRole('button', { name: 'Oldest' })).toBeVisible();
+	await expect
+		.poll(() => visibleArticleTitleOrder(page, ['Alpha Launch', 'Beta Update', 'Gamma World']))
+		.toEqual(['Gamma World', 'Beta Update', 'Alpha Launch']);
 });
 
 test('user can sign out and the session is cleared', async ({ page }) => {

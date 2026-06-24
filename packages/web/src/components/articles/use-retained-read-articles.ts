@@ -62,8 +62,8 @@ export function useRetainedReadArticles({
 	}, [resetRetainedReadArticles, retentionScope]);
 
 	const articles = useMemo(
-		() => mergeRetainedReadArticles(fetchedArticles, retainedReadArticles, unreadOnly),
-		[fetchedArticles, retainedReadArticles, unreadOnly],
+		() => mergeRetainedReadArticles(fetchedArticles, retainedReadArticles, sort, unreadOnly),
+		[fetchedArticles, retainedReadArticles, sort, unreadOnly],
 	);
 
 	return {

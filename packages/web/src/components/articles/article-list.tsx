@@ -15,6 +15,7 @@ interface ArticleListItemData {
 	excerpt: string | null;
 	heroImageUrl: string | null;
 	publishedAt: string | null;
+	displayedAt?: string;
 	isRead: boolean;
 }
 
@@ -67,6 +68,7 @@ export function ArticleList({
 	const virtualizer = useVirtualizer({
 		count: articles.length,
 		getScrollElement: () => scrollRef.current,
+		getItemKey: (index) => articles[index]?.id ?? index,
 		estimateSize: () => rowSize,
 		overscan: ROW_OVERSCAN,
 	});

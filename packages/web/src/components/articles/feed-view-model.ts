@@ -1,4 +1,10 @@
-import type { ApiListResponse, ArticleListItem, CategoryWithCounts } from '@self-feed/shared';
+import type {
+	ApiListResponse,
+	ArticleListItem,
+	CategoryWithCounts,
+	SortOrder,
+} from '@self-feed/shared';
+import { sortArticlesByDisplayOrder } from '@/components/articles/article-ordering';
 import { categoryPathLabel, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 
 export interface RetainedReadArticle {
@@ -116,25 +122,25 @@ export function buildEmptyState({
 export function mergeRetainedReadArticles(
 	fetchedArticles: readonly ArticleListItem[],
 	retainedReadArticles: ReadonlyMap<string, RetainedReadArticle>,
+	sort: SortOrder,
 	unreadOnly: boolean,
 ) {
 	if (!unreadOnly || retainedReadArticles.size === 0) {
-		return [...fetchedArticles];
+		return sortArticlesByDisplayOrder(fetchedArticles, sort);
 	}
 
 	const seenArticleIds = new Set(fetchedArticles.map((article) => article.id));
-	const retainedArticles = Array.from(retainedReadArticles.values())
-		.filter(({ article }) => !seenArticleIds.has(article.id))
-		.sort((a, b) => a.index - b.index);
+	const retainedArticles = Array.from(retainedReadArticles.values()).filter(
+		({ article }) => !seenArticleIds.has(article.id),
+	);
 	if (retainedArticles.length === 0) {
-		return [...fetchedArticles];
+		return sortArticlesByDisplayOrder(fetchedArticles, sort);
 	}
 
-	const mergedArticles = [...fetchedArticles];
-	for (const retained of retainedArticles) {
-		mergedArticles.splice(Math.min(retained.index, mergedArticles.length), 0, retained.article);
-	}
-	return mergedArticles;
+	return sortArticlesByDisplayOrder(
+		[...fetchedArticles, ...retainedArticles.map(({ article }) => article)],
+		sort,
+	);
 }
 
 export function resolveEffectiveArticleId({

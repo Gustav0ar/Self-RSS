@@ -144,6 +144,34 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
 	});
 
+	it('orders cached newest articles by timestamp and id for stable ties', async () => {
+		const cached = {
+			articles: [
+				cachedArticle('00000000-0000-0000-0000-000000000001', '2026-01-02T00:00:00.000Z'),
+				cachedArticle('00000000-0000-0000-0000-000000000003', '2026-01-02T00:00:00.000Z'),
+				cachedArticle('00000000-0000-0000-0000-000000000002', '2026-01-02T00:00:00.000Z'),
+				cachedArticle('00000000-0000-0000-0000-000000000004', '2026-01-01T00:00:00.000Z'),
+			],
+			cursor: null,
+			hasMore: false,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const redis = {
+			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+		};
+		const metrics = cacheMetrics();
+		const service = new ArticleCacheService({} as never, {} as never, redis as never, metrics);
+
+		const result = await service.getCachedArticleList('user-1', { limit: 20 });
+
+		expect(result?.articles.map((article) => article.id)).toEqual([
+			'00000000-0000-0000-0000-000000000003',
+			'00000000-0000-0000-0000-000000000002',
+			'00000000-0000-0000-0000-000000000001',
+			'00000000-0000-0000-0000-000000000004',
+		]);
+	});
+
 	it('records scoped article-list cache hit types', async () => {
 		const cached = {
 			articles: [cachedArticle('a1', '2026-01-01T00:00:00.000Z')],
