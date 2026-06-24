@@ -332,6 +332,27 @@ describe('api module', () => {
 			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
 
+		it('times out mutations that never settle', async () => {
+			vi.useFakeTimers();
+			const fetchMock = vi.fn(
+				async (_input: RequestInfo | URL, init?: RequestInit) =>
+					new Promise<Response>((_resolve, reject) => {
+						const signal = init?.signal;
+						signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+					}),
+			);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const request = apiFetch('/feeds/sync', { method: 'POST' });
+			const handledRequest = request.catch((error: unknown) => error);
+			await Promise.resolve();
+
+			await vi.advanceTimersByTimeAsync(45_000);
+
+			await expect(handledRequest).resolves.toMatchObject({ name: 'TimeoutError' });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+
 		it('stops retrying when a signal aborts during retry backoff', async () => {
 			vi.useFakeTimers();
 			const controller = new AbortController();

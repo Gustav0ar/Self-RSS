@@ -2,6 +2,7 @@ const API_BASE = '/api/v1';
 const RETRY_INITIAL_DELAY_MS = 300;
 const RETRY_MAX_DELAY_MS = 2000;
 const RETRY_MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT_MS = 45_000;
 const CLIENT_ID_STORAGE_KEY = 'self-feed-client-id';
 const AUTH_LOST_MESSAGE = 'Authentication was lost. Please sign in again.';
 
@@ -77,7 +78,7 @@ export async function refreshAccessToken(): Promise<boolean> {
 
 	refreshPromise = (async () => {
 		try {
-			const res = await fetch(`${API_BASE}/auth/refresh`, {
+			const res = await fetchWithTimeout(`${API_BASE}/auth/refresh`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -131,7 +132,11 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 	const isMutation = method !== 'GET';
 
 	async function doFetch(): Promise<Response> {
-		return fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
+		return fetchWithTimeout(`${API_BASE}${path}`, {
+			...options,
+			headers,
+			credentials: 'include',
+		});
 	}
 
 	let res: Response;
@@ -189,6 +194,12 @@ function createAbortError(reason?: unknown): Error {
 	return error;
 }
 
+function createTimeoutError(): Error {
+	const error = new Error(`Request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`);
+	error.name = 'TimeoutError';
+	return error;
+}
+
 function isAbortError(error: unknown): boolean {
 	return error instanceof Error && error.name === 'AbortError';
 }
@@ -196,6 +207,33 @@ function isAbortError(error: unknown): boolean {
 function throwIfAborted(signal?: AbortSignal | null): void {
 	if (signal?.aborted) {
 		throw createAbortError(signal.reason);
+	}
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+	throwIfAborted(init.signal);
+
+	const controller = new AbortController();
+	const timeout = globalThis.setTimeout(() => {
+		controller.abort(createTimeoutError());
+	}, REQUEST_TIMEOUT_MS);
+
+	const onAbort = () => {
+		controller.abort(init.signal?.reason);
+	};
+
+	init.signal?.addEventListener('abort', onAbort, { once: true });
+
+	try {
+		return await fetch(input, { ...init, signal: controller.signal });
+	} catch (error) {
+		if (controller.signal.aborted && controller.signal.reason instanceof Error) {
+			throw controller.signal.reason;
+		}
+		throw error;
+	} finally {
+		globalThis.clearTimeout(timeout);
+		init.signal?.removeEventListener('abort', onAbort);
 	}
 }
 

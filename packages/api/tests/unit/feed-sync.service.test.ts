@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 
 describe('FeedSyncService', () => {
+	const noonTimestamp = new Date('2026-06-21T12:00:00.000Z').getTime();
+	const queuedMarker = JSON.stringify({ queuedAt: noonTimestamp });
+	const runningMarker = JSON.stringify({
+		startedAt: noonTimestamp,
+		heartbeatAt: noonTimestamp,
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
@@ -1036,7 +1043,7 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
 			'feed:sync-all:lock:user-1',
-			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
+			queuedMarker,
 			'1800',
 			'user-1',
 		);
@@ -1066,7 +1073,7 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
 			'feed:sync-all:lock:user-1',
-			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
+			queuedMarker,
 			'1800',
 			'user-1',
 		);
@@ -1090,7 +1097,15 @@ describe('FeedSyncService', () => {
 
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
-		expect(result).toEqual({ queued: true, running: false, active: true });
+		expect(result).toEqual({
+			queued: true,
+			running: false,
+			active: true,
+			stale: false,
+			queuedAt: expect.any(String),
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('reports queued bulk refresh status from Redis queue membership after the visual marker expires', async () => {
@@ -1110,7 +1125,15 @@ describe('FeedSyncService', () => {
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
-		expect(result).toEqual({ queued: true, running: false, active: true });
+		expect(result).toEqual({
+			queued: true,
+			running: false,
+			active: true,
+			stale: false,
+			queuedAt: null,
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('keeps stale queued bulk refresh markers active while the user remains in the Redis queue', async () => {
@@ -1136,7 +1159,15 @@ describe('FeedSyncService', () => {
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
 		expect(redis.del).not.toHaveBeenCalled();
-		expect(result).toEqual({ queued: true, running: false, active: true });
+		expect(result).toEqual({
+			queued: true,
+			running: false,
+			active: true,
+			stale: false,
+			queuedAt: '2026-06-21T11:58:00.000Z',
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('reports running bulk refresh status', async () => {
@@ -1158,7 +1189,15 @@ describe('FeedSyncService', () => {
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
 		expect(redis.del).not.toHaveBeenCalled();
-		expect(result).toEqual({ queued: false, running: true, active: true });
+		expect(result).toEqual({
+			queued: false,
+			running: true,
+			active: true,
+			stale: false,
+			queuedAt: null,
+			startedAt: '2026-06-21T12:00:00.000Z',
+			heartbeatAt: '2026-06-21T12:00:00.000Z',
+		});
 	});
 
 	it('clears stale running bulk refresh locks and releases active status', async () => {
@@ -1189,7 +1228,15 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 		);
-		expect(result).toEqual({ queued: false, running: false, active: false });
+		expect(result).toEqual({
+			queued: false,
+			running: false,
+			active: false,
+			stale: true,
+			queuedAt: null,
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('clears legacy running bulk refresh locks that have no heartbeat timestamp', async () => {
@@ -1212,7 +1259,15 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 		);
-		expect(result).toEqual({ queued: false, running: false, active: false });
+		expect(result).toEqual({
+			queued: false,
+			running: false,
+			active: false,
+			stale: true,
+			queuedAt: null,
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('clears stale queued bulk refresh markers and releases active status', async () => {
@@ -1238,7 +1293,15 @@ describe('FeedSyncService', () => {
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
 		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
-		expect(result).toEqual({ queued: false, running: false, active: false });
+		expect(result).toEqual({
+			queued: false,
+			running: false,
+			active: false,
+			stale: true,
+			queuedAt: null,
+			startedAt: null,
+			heartbeatAt: null,
+		});
 	});
 
 	it('processes the next queued bulk refresh and clears queue state', async () => {
@@ -1272,7 +1335,7 @@ describe('FeedSyncService', () => {
 		expect(redis.lrem).toHaveBeenCalledWith('feed:sync-all:queue', 0, 'user-1');
 		expect(redis.set).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
-			String(new Date('2026-06-21T12:00:00.000Z').getTime()),
+			runningMarker,
 			'EX',
 			1800,
 			'NX',

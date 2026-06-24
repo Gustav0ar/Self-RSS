@@ -744,7 +744,11 @@
 				"required": [
 					"queued",
 					"running",
-					"active"
+					"active",
+					"stale",
+					"queuedAt",
+					"startedAt",
+					"heartbeatAt"
 				],
 				"properties": {
 					"queued": {
@@ -755,6 +759,24 @@
 					},
 					"active": {
 						"type": "boolean"
+					},
+					"stale": {
+						"type": "boolean"
+					},
+					"queuedAt": {
+						"type": "string",
+						"format": "date-time",
+						"nullable": true
+					},
+					"startedAt": {
+						"type": "string",
+						"format": "date-time",
+						"nullable": true
+					},
+					"heartbeatAt": {
+						"type": "string",
+						"format": "date-time",
+						"nullable": true
 					}
 				}
 			}

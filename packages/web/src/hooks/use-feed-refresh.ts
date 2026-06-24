@@ -7,9 +7,13 @@ import {
 	useSyncAllFeedsStatus,
 	useSyncFeed,
 } from '@/hooks/queries';
+import { REFRESH_INTERVALS } from '@/lib/constants';
+import {
+	ALL_FEEDS_SYNC_ID,
+	buildAllFeedsRefreshActivity,
+	getFeedSyncStatusActiveSince,
+} from '@/lib/feed-sync-status';
 import { useAppState } from '@/providers/app-state';
-
-const ALL_FEEDS_SYNC_ID = '__all_feeds__';
 
 interface RefreshOptions {
 	force?: boolean;
@@ -27,11 +31,50 @@ export function useFeedRefresh() {
 	const syncFeed = useSyncFeed();
 	const { feedSyncError, setFeedSyncError, setSyncingFeedId, syncingFeedId } = useAppState();
 	const [allFeedsRefreshQueuedAt, setAllFeedsRefreshQueuedAt] = useState(0);
+	const [untimedStatusActiveSince, setUntimedStatusActiveSince] = useState(0);
+	const [, setRefreshClock] = useState(0);
 	const wasRefreshingAllFeeds = useRef(false);
-	const isRefreshingAllFeeds =
-		syncAllFeeds.isPending ||
-		syncingFeedId === ALL_FEEDS_SYNC_ID ||
-		allFeedsSyncStatus?.active === true;
+	const allFeedsRefreshActivity = buildAllFeedsRefreshActivity({
+		status: allFeedsSyncStatus,
+		statusUpdatedAt: untimedStatusActiveSince || allFeedsSyncStatusUpdatedAt,
+		localQueuedAt: allFeedsRefreshQueuedAt,
+		isMutationPending: syncAllFeeds.isPending,
+		isLocalRefreshSelected: syncingFeedId === ALL_FEEDS_SYNC_ID,
+		now: Date.now(),
+	});
+	const isRefreshingAllFeeds = allFeedsRefreshActivity.isBlocking;
+
+	useEffect(() => {
+		const isUntimedActive =
+			allFeedsSyncStatus?.active === true &&
+			getFeedSyncStatusActiveSince(allFeedsSyncStatus) == null;
+		setUntimedStatusActiveSince((current) => {
+			if (isUntimedActive) {
+				return current || Date.now();
+			}
+			return current === 0 ? current : 0;
+		});
+	}, [allFeedsSyncStatus]);
+
+	useEffect(() => {
+		if (!allFeedsRefreshActivity.isActive) {
+			return;
+		}
+
+		const elapsedMs = allFeedsRefreshActivity.elapsedMs ?? 0;
+		const delayMs = allFeedsRefreshActivity.isTakingLonger
+			? REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS
+			: Math.max(250, REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS - elapsedMs + 50);
+		const timer = globalThis.setTimeout(() => {
+			setRefreshClock((tick) => tick + 1);
+		}, delayMs);
+
+		return () => globalThis.clearTimeout(timer);
+	}, [
+		allFeedsRefreshActivity.elapsedMs,
+		allFeedsRefreshActivity.isActive,
+		allFeedsRefreshActivity.isTakingLonger,
+	]);
 
 	useEffect(() => {
 		if (syncingFeedId !== ALL_FEEDS_SYNC_ID || syncAllFeeds.isPending) {
@@ -59,7 +102,17 @@ export function useFeedRefresh() {
 	]);
 
 	useEffect(() => {
-		if (isRefreshingAllFeeds) {
+		if (syncingFeedId !== ALL_FEEDS_SYNC_ID || !allFeedsRefreshActivity.isTakingLonger) {
+			return;
+		}
+
+		setAllFeedsRefreshQueuedAt(0);
+		setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
+		invalidateReaderQueries(qc);
+	}, [allFeedsRefreshActivity.isTakingLonger, qc, setSyncingFeedId, syncingFeedId]);
+
+	useEffect(() => {
+		if (allFeedsRefreshActivity.isActive) {
 			wasRefreshingAllFeeds.current = true;
 			return;
 		}
@@ -70,7 +123,7 @@ export function useFeedRefresh() {
 
 		wasRefreshingAllFeeds.current = false;
 		invalidateReaderQueries(qc);
-	}, [isRefreshingAllFeeds, qc]);
+	}, [allFeedsRefreshActivity.isActive, qc]);
 
 	const refreshFeed = useCallback(
 		async (feedId?: string, options: RefreshOptions = {}) => {
@@ -85,6 +138,7 @@ export function useFeedRefresh() {
 				try {
 					await syncAllFeeds.mutateAsync();
 					setAllFeedsRefreshQueuedAt(Date.now());
+					setRefreshClock((tick) => tick + 1);
 					void refetchAllFeedsSyncStatus();
 					return true;
 				} catch (error) {
@@ -137,6 +191,7 @@ export function useFeedRefresh() {
 	return {
 		feedSyncError,
 		allFeedsSyncStatus,
+		allFeedsRefreshActivity,
 		isRefreshingAllFeeds,
 		isRefreshingFeed: (feedId?: string) => !!feedId && syncingFeedId === feedId,
 		refreshFeed,

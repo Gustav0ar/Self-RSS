@@ -60,6 +60,15 @@ vi.mock('../../src/hooks/queries', () => ({
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
 	useFeedRefresh: () => ({
+		allFeedsRefreshActivity: {
+			phase: 'idle',
+			isActive: false,
+			isBlocking: false,
+			isTakingLonger: false,
+			shouldShowStatus: false,
+			activeSinceMs: null,
+			elapsedMs: null,
+		},
 		allFeedsSyncStatus: null,
 		isRefreshingAllFeeds: false,
 		isRefreshingFeed: () => false,

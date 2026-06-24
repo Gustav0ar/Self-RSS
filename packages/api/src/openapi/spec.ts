@@ -323,11 +323,15 @@ export const openApiSpec = {
 			},
 			FeedSyncAllStatus: {
 				type: 'object',
-				required: ['queued', 'running', 'active'],
+				required: ['queued', 'running', 'active', 'stale', 'queuedAt', 'startedAt', 'heartbeatAt'],
 				properties: {
 					queued: { type: 'boolean' },
 					running: { type: 'boolean' },
 					active: { type: 'boolean' },
+					stale: { type: 'boolean' },
+					queuedAt: { type: 'string', format: 'date-time', nullable: true },
+					startedAt: { type: 'string', format: 'date-time', nullable: true },
+					heartbeatAt: { type: 'string', format: 'date-time', nullable: true },
 				},
 			},
 		},

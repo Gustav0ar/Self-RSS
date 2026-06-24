@@ -2,8 +2,7 @@ import type { ApiResponse, FeedWithCounts, OpmlImportSummary } from '@self-feed/
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef } from 'react';
 import { apiDownload, apiFetch } from '@/lib/api';
-import { REFRESH_INTERVALS } from '@/lib/constants';
-import type { FeedSyncAllStatus } from './cache-utils';
+import { type FeedSyncAllStatus, getFeedSyncStatusPollInterval } from '@/lib/feed-sync-status';
 import { invalidateReaderQueries } from './cache-utils';
 
 // --- Feeds ---
@@ -140,8 +139,7 @@ export function useSyncAllFeedsStatus() {
 			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status', { signal }).then(
 				(response) => response.data,
 			),
-		refetchInterval: (query) =>
-			query.state.data?.active ? REFRESH_INTERVALS.SYNC_STATUS_POLL_MS : false,
+		refetchInterval: (query) => getFeedSyncStatusPollInterval(query.state.data),
 		staleTime: 1_000,
 	});
 }

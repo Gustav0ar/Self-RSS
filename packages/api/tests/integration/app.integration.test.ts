@@ -1128,11 +1128,15 @@ describe('API integration', () => {
 
 			const queuedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
 			expect(queuedStatus.response.status).toBe(200);
-			expect(queuedStatus.body.data).toEqual({
+			expect(queuedStatus.body.data).toMatchObject({
 				queued: true,
 				running: false,
 				active: true,
+				stale: false,
 			});
+			expect(queuedStatus.body.data.queuedAt).toEqual(expect.any(String));
+			expect(queuedStatus.body.data.startedAt).toBeNull();
+			expect(queuedStatus.body.data.heartbeatAt).toBeNull();
 
 			await redis.set(
 				CacheKeys.feedSyncAllQueued(registered.body.data.user.id),
@@ -1142,20 +1146,22 @@ describe('API integration', () => {
 			);
 			const staleMarkerStatus = await authedRequest('/api/v1/feeds/sync/status', token);
 			expect(staleMarkerStatus.response.status).toBe(200);
-			expect(staleMarkerStatus.body.data).toEqual({
+			expect(staleMarkerStatus.body.data).toMatchObject({
 				queued: true,
 				running: false,
 				active: true,
 			});
+			expect(staleMarkerStatus.body.data.queuedAt).toEqual(expect.any(String));
 
 			await redis.del(CacheKeys.feedSyncAllQueued(registered.body.data.user.id));
 			const queuedWithoutMarkerStatus = await authedRequest('/api/v1/feeds/sync/status', token);
 			expect(queuedWithoutMarkerStatus.response.status).toBe(200);
-			expect(queuedWithoutMarkerStatus.body.data).toEqual({
+			expect(queuedWithoutMarkerStatus.body.data).toMatchObject({
 				queued: true,
 				running: false,
 				active: true,
 			});
+			expect(queuedWithoutMarkerStatus.body.data.queuedAt).toBeNull();
 
 			const duplicateSync = await authedRequest('/api/v1/feeds/sync', token, {
 				method: 'POST',
@@ -1186,6 +1192,10 @@ describe('API integration', () => {
 				queued: false,
 				running: false,
 				active: false,
+				stale: false,
+				queuedAt: null,
+				startedAt: null,
+				heartbeatAt: null,
 			});
 
 			const feeds = await authedRequest('/api/v1/feeds', token);

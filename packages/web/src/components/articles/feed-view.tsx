@@ -2,6 +2,7 @@ import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
+import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
 import {
 	buildFeedViewModel,
 	dedupeArticlePages,
@@ -58,8 +59,13 @@ export function FeedView({
 	const { data: prefs } = usePreferences();
 	const updatePrefs = useUpdatePreferences();
 	const { feedSyncError } = useAppState();
-	const { allFeedsSyncStatus, isRefreshingAllFeeds, isRefreshingFeed, refreshFeed } =
-		useFeedRefresh();
+	const {
+		allFeedsRefreshActivity,
+		allFeedsSyncStatus,
+		isRefreshingAllFeeds,
+		isRefreshingFeed,
+		refreshFeed,
+	} = useFeedRefresh();
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
@@ -231,16 +237,6 @@ export function FeedView({
 		}
 	}
 
-	const refreshStatusTitle = feedId
-		? 'Loading new articles'
-		: allFeedsSyncStatus?.queued
-			? 'Refresh queued'
-			: 'Loading new articles';
-	const refreshStatusDetail = feedId
-		? 'Checking this feed now'
-		: allFeedsSyncStatus?.queued
-			? 'Waiting for the background worker'
-			: 'Checking feeds and pulling in new stories';
 	const showListLoader =
 		isLoading ||
 		(isFetching && articles.length === 0) ||
@@ -321,30 +317,12 @@ export function FeedView({
 						</ToolbarButton>
 					</div>
 
-					{isRefreshingCurrentSelection ? (
-						<div
-							aria-live="polite"
-							className="mt-2.5 overflow-hidden rounded-xl border border-primary/20 bg-primary/10 px-3 py-2"
-						>
-							<div className="flex min-w-0 items-center gap-3">
-								<div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-									<span className="absolute h-8 w-8 animate-ping rounded-full bg-primary/20" />
-									<RefreshCw className="relative h-4 w-4 animate-spin" />
-								</div>
-								<div className="min-w-0 flex-1">
-									<p className="truncate text-sm font-medium text-foreground">
-										{refreshStatusTitle}
-									</p>
-									<p className="mt-0.5 truncate text-xs text-muted-foreground">
-										{refreshStatusDetail}
-									</p>
-								</div>
-							</div>
-							<div className="mt-3 h-1 overflow-hidden rounded-full bg-background/60">
-								<div className="h-full w-full animate-pulse rounded-full bg-primary/70" />
-							</div>
-						</div>
-					) : null}
+					<FeedRefreshStatusBanner
+						feedId={feedId}
+						allFeedsRefreshActivity={allFeedsRefreshActivity}
+						allFeedsSyncStatus={allFeedsSyncStatus}
+						isRefreshingCurrentSelection={isRefreshingCurrentSelection}
+					/>
 				</div>
 
 				<div className="min-h-0 flex-1">

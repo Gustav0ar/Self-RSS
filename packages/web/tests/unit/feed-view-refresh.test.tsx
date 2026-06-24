@@ -14,6 +14,8 @@ let articleListProps: {
 	onSelect: (id: string) => void;
 } | null = null;
 let isRefreshingAllFeeds = false;
+let allFeedsRefreshIsTakingLonger = false;
+let allFeedsRefreshShouldShowStatus = false;
 let hideReadPreference = false;
 let defaultSortPreference = 'latest';
 let keyboardShortcutsEnabled = true;
@@ -74,6 +76,19 @@ vi.mock('../../src/hooks/queries', () => ({
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
 	useFeedRefresh: () => ({
+		allFeedsRefreshActivity: {
+			phase: allFeedsRefreshIsTakingLonger
+				? 'background'
+				: isRefreshingAllFeeds
+					? 'syncing'
+					: 'idle',
+			isActive: isRefreshingAllFeeds || allFeedsRefreshIsTakingLonger,
+			isBlocking: isRefreshingAllFeeds,
+			isTakingLonger: allFeedsRefreshIsTakingLonger,
+			shouldShowStatus: isRefreshingAllFeeds || allFeedsRefreshShouldShowStatus,
+			activeSinceMs: null,
+			elapsedMs: null,
+		},
 		allFeedsSyncStatus: {
 			queued: false,
 			running: isRefreshingAllFeeds,
@@ -118,6 +133,8 @@ describe('FeedView refresh', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		isRefreshingAllFeeds = false;
+		allFeedsRefreshIsTakingLonger = false;
+		allFeedsRefreshShouldShowStatus = false;
 		hideReadPreference = false;
 		defaultSortPreference = 'latest';
 		keyboardShortcutsEnabled = true;
@@ -181,6 +198,22 @@ describe('FeedView refresh', () => {
 			true,
 		);
 		expect(screen.getByText('Article list')).toBeTruthy();
+	});
+
+	it('shows long all-feeds syncs as background work without blocking refresh', () => {
+		allFeedsRefreshIsTakingLonger = true;
+		allFeedsRefreshShouldShowStatus = true;
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(screen.getByText('Still syncing in background')).toBeTruthy();
+		expect(screen.getByText('Articles will update as new stories arrive')).toBeTruthy();
+
+		const refreshButton = screen.getByRole('button', { name: 'Refresh' });
+		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
+
+		fireEvent.click(refreshButton);
+		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true });
 	});
 
 	it('opens article URLs with the active feed context in a new tab', () => {

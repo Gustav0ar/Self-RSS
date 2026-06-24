@@ -1,10 +1,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
-export interface FeedSyncAllStatus {
-	queued: boolean;
-	running: boolean;
-	active: boolean;
-}
+export type { FeedSyncAllStatus } from '@/lib/feed-sync-status';
 
 export interface ArticleQueryParams {
 	feedId?: string;
