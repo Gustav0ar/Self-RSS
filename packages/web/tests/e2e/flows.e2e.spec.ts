@@ -175,11 +175,90 @@ test('all-feeds refresh banner clears after sync status settles', async ({ page 
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 	await expect(page.getByText('Loading new articles')).toHaveCount(0);
 
-	const refreshButton = page.getByRole('button', { name: 'Refresh' });
+	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
 	await refreshButton.click();
 
 	await expect(page.getByText('Loading new articles')).toBeVisible();
 	await expect(page.getByText('Loading new articles')).toHaveCount(0, { timeout: 6_000 });
+	await expect(refreshButton).toBeEnabled();
+});
+
+test('all-feeds background sync banner clears after inactive sync status', async ({ page }) => {
+	let syncRequested = false;
+	let statusPollsAfterRefresh = 0;
+
+	await page.route('**/api/v1/articles**', async (route) => {
+		const url = new URL(route.request().url());
+		if (route.request().method() !== 'GET' || url.pathname !== '/api/v1/articles') {
+			await route.continue();
+			return;
+		}
+
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({ data: [], hasMore: false, cursor: null }),
+		});
+	});
+
+	await page.route('**/api/v1/feeds/sync', async (route) => {
+		if (route.request().method() !== 'POST') {
+			await route.continue();
+			return;
+		}
+
+		syncRequested = true;
+		statusPollsAfterRefresh = 0;
+		await route.fulfill({
+			status: 202,
+			contentType: 'application/json',
+			body: JSON.stringify({ data: { accepted: true, alreadyQueued: false } }),
+		});
+	});
+
+	await page.route('**/api/v1/feeds/sync/status', async (route) => {
+		const shouldReportLongRunning = syncRequested && statusPollsAfterRefresh < 2;
+		if (syncRequested) {
+			statusPollsAfterRefresh += 1;
+		}
+
+		const startedAt = new Date(Date.now() - 90_000).toISOString();
+
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				data: shouldReportLongRunning
+					? {
+							queued: false,
+							running: true,
+							active: true,
+							stale: true,
+							queuedAt: null,
+							startedAt,
+							heartbeatAt: startedAt,
+						}
+					: {
+							queued: false,
+							running: false,
+							active: false,
+							stale: false,
+							queuedAt: null,
+							startedAt: null,
+							heartbeatAt: null,
+						},
+			}),
+		});
+	});
+
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+	await expect(page.getByText('Still syncing in background')).toHaveCount(0);
+
+	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
+	await refreshButton.click();
+
+	await expect(page.getByText('Still syncing in background')).toBeVisible();
+	await expect(page.getByText('Still syncing in background')).toHaveCount(0, { timeout: 20_000 });
 	await expect(refreshButton).toBeEnabled();
 });
 

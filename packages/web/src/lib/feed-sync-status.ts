@@ -34,6 +34,26 @@ interface BuildAllFeedsRefreshActivityOptions {
 	foregroundTimeoutMs?: number;
 }
 
+interface FeedSyncStatusFreshnessOptions {
+	status: FeedSyncAllStatus | undefined;
+	statusUpdatedAt: number;
+	localQueuedAt: number;
+	isMutationPending: boolean;
+}
+
+export function hasFreshInactiveFeedSyncStatus({
+	status,
+	statusUpdatedAt,
+	localQueuedAt,
+	isMutationPending,
+}: FeedSyncStatusFreshnessOptions) {
+	if (isMutationPending || status?.active !== false) {
+		return false;
+	}
+
+	return localQueuedAt === 0 || statusUpdatedAt >= localQueuedAt;
+}
+
 export function buildAllFeedsRefreshActivity({
 	status,
 	statusUpdatedAt,
@@ -44,7 +64,14 @@ export function buildAllFeedsRefreshActivity({
 	foregroundTimeoutMs = REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS,
 }: BuildAllFeedsRefreshActivityOptions): AllFeedsRefreshActivity {
 	const serverActive = status?.active === true;
-	const localActive = isMutationPending || isLocalRefreshSelected || localQueuedAt > 0;
+	const serverSettledInactive = hasFreshInactiveFeedSyncStatus({
+		status,
+		statusUpdatedAt,
+		localQueuedAt,
+		isMutationPending,
+	});
+	const localActive =
+		isMutationPending || (!serverSettledInactive && (isLocalRefreshSelected || localQueuedAt > 0));
 	const isActive = serverActive || localActive;
 
 	if (!isActive) {
