@@ -13,7 +13,7 @@ interface SyncCoordinator {
 
 export function startSyncScheduler(
 	syncService: FeedSyncService,
-	intervalMs: number = 60 * 1000,
+	intervalMs: number = 30 * 1000,
 	coordinator: SyncCoordinator = { isRunning: false },
 ) {
 	logger.info('Feed sync scheduler started', { intervalMs });

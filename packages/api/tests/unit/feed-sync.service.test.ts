@@ -922,7 +922,7 @@ describe('FeedSyncService', () => {
 		const result = await service.syncDueFeeds();
 
 		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(expect.any(Date));
-		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(24);
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(1000);
 		expect(result).toEqual({ total: 3, succeeded: 2, failed: 1 });
 	});
 
@@ -948,7 +948,7 @@ describe('FeedSyncService', () => {
 		const result = await service.syncDueFeeds();
 
 		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(new Date('2026-01-01T00:05:00.000Z'));
-		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(36);
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(1000);
 		expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 });
 	});
 

@@ -69,7 +69,6 @@ type FeedItemRecord = Record<string, unknown>;
 
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
-const DUE_FEED_BATCH_MULTIPLIER = 12;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
@@ -624,8 +623,11 @@ export class FeedSyncService {
 			});
 		}
 
-		const dueLimit = this.config.concurrency * DUE_FEED_BATCH_MULTIPLIER;
-		const dueFeeds = await this.feedRepo.findDueForSync(dueLimit);
+		// Fetch ALL due feeds - no artificial limit. The concurrency control
+		// handles parallel processing, so there's no need to artificially cap
+		// the batch size. This ensures all due feeds are processed as quickly
+		// as possible without creating backlogs.
+		const dueFeeds = await this.feedRepo.findDueForSync(1000);
 		let succeeded = 0;
 		let failed = 0;
 

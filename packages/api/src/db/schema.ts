@@ -197,7 +197,7 @@ export const feeds = sqliteTable(
 		feedUrl: text('feed_url').notNull(),
 		faviconUrl: text('favicon_url'),
 		description: text('description'),
-		pollingIntervalMinutes: integer('polling_interval_minutes').notNull().default(60),
+		pollingIntervalMinutes: integer('polling_interval_minutes').notNull().default(5),
 		lastSyncedAt: timestamp('last_synced_at'),
 		lastSyncError: text('last_sync_error'),
 		lastSyncErrorAt: timestamp('last_sync_error_at'),
