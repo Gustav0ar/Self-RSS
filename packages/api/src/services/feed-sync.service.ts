@@ -624,9 +624,7 @@ export class FeedSyncService {
 		}
 
 		// Fetch ALL due feeds - no artificial limit. The concurrency control
-		// handles parallel processing, so there's no need to artificially cap
-		// the batch size. This ensures all due feeds are processed as quickly
-		// as possible without creating backlogs.
+		// handles parallel processing, so there's no need to cap the batch size.
 		const dueFeeds = await this.feedRepo.findDueForSync(1000);
 		let succeeded = 0;
 		let failed = 0;
