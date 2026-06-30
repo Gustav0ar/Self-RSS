@@ -198,7 +198,9 @@ If integration or E2E tests fail, inspect these scripts before changing app code
 - When only the current work should go to production and local `main` has unrelated commits, create or use a clean branch based on `origin/main`, commit there, and push with `git push origin HEAD:main`.
 - If GitHub reports the PR-only rule was bypassed on direct push, that is expected for admin-authenticated deploy work, but still confirm the pushed commit list is exactly what was intended.
 - After pushing to `main`, watch GitHub Actions with `gh run list --branch main --limit 10 --json databaseId,workflowName,status,conclusion,headSha,createdAt,displayTitle,url` and `gh run watch <run-id> --exit-status`.
+- After pushing any commit, treat the push as incomplete until every GitHub Actions workflow triggered for that pushed SHA has finished successfully. Do not report the push as done while a triggered workflow is queued, in progress, waiting for approval, failed, or cancelled.
 - The important workflows for a production push are `CI`, `Security`, `Containers`, and then `Deploy`. `Deploy` is triggered by a successful `Containers` workflow run.
+- Also verify `Android CI` for pushed SHAs when that workflow is triggered.
 - The `Security` workflow runs Trivy against `bun.lock`. If it flags a transitive package, prefer a root `package.json` `overrides` entry plus a regenerated lockfile, then verify with `bun audit --audit-level high` and `bun pm why <package>`.
 - The root `package.json` currently overrides `undici` to `7.28.0` to satisfy Trivy for `CVE-2026-9697`; keep that override until all transitive consumers naturally resolve to a fixed version.
 - The `Deploy` workflow uses the protected `production` environment and usually pauses in `waiting`. Check pending approvals with `gh api /repos/Gustav0ar/Self-RSS/actions/runs/<run-id>/pending_deployments`.

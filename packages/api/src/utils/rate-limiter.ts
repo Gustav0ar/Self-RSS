@@ -4,6 +4,16 @@ import { CacheKeys } from '../db/redis.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger();
+const STANDARD_READ_RATE_LIMIT_MAX = 100;
+const TEST_READ_RATE_LIMIT_MAX = 1_000;
+
+function getReadRateLimit() {
+	return {
+		windowMs: 60_000,
+		maxRequests:
+			process.env.NODE_ENV === 'test' ? TEST_READ_RATE_LIMIT_MAX : STANDARD_READ_RATE_LIMIT_MAX,
+	};
+}
 
 export interface RateLimitConfig {
 	windowMs: number;
@@ -120,28 +130,28 @@ export const RATE_LIMITS = {
 	},
 	// Read-heavy endpoints - higher limits
 	get articlesRead() {
-		return { windowMs: 60_000, maxRequests: 100 };
+		return getReadRateLimit();
 	},
 	get articlesMutate() {
 		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get categoriesRead() {
-		return { windowMs: 60_000, maxRequests: 100 };
+		return getReadRateLimit();
 	},
 	get categoriesMutate() {
 		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get preferencesRead() {
-		return { windowMs: 60_000, maxRequests: 100 };
+		return getReadRateLimit();
 	},
 	get preferencesMutate() {
 		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
 	},
 	get statsRead() {
-		return { windowMs: 60_000, maxRequests: 100 };
+		return getReadRateLimit();
 	},
 	get feedsRead() {
-		return { windowMs: 60_000, maxRequests: 100 };
+		return getReadRateLimit();
 	},
 	get feedsMutate() {
 		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };

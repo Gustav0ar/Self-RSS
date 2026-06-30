@@ -218,12 +218,22 @@ describe('RATE_LIMITS', () => {
 		});
 	});
 
-	it('exposes read-heavy endpoint limits at 100/min', () => {
+	it('exposes production read-heavy endpoint limits at 100/min', () => {
+		process.env.NODE_ENV = 'production';
 		expect(RATE_LIMITS.articlesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.categoriesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.preferencesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.statsRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.feedsRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+	});
+
+	it('raises read-heavy endpoint limits in test to avoid E2E suite self-throttling', () => {
+		process.env.NODE_ENV = 'test';
+		expect(RATE_LIMITS.articlesRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
+		expect(RATE_LIMITS.categoriesRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
+		expect(RATE_LIMITS.preferencesRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
+		expect(RATE_LIMITS.statsRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
+		expect(RATE_LIMITS.feedsRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
 	});
 
 	it('exposes mutation endpoint limits at 30/min', () => {
