@@ -27,8 +27,12 @@ export class RealtimeService {
 		private metrics: MetricsService = getMetricsService(),
 	) {}
 
-	async publishReadStateEvent(userId: string, event: ReadStateSyncEvent) {
+	async publishEvent(userId: string, event: ReadStateSyncEvent) {
 		await this.redis.publish(readStateChannel(userId), JSON.stringify(event));
+	}
+
+	async publishReadStateEvent(userId: string, event: ReadStateSyncEvent) {
+		await this.publishEvent(userId, event);
 	}
 
 	async subscribeToReadStateEvents(

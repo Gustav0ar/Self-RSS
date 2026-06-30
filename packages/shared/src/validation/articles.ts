@@ -51,9 +51,19 @@ export const articlesMarkedReadEventSchema = readStateEventMetadataSchema.extend
 	markedCount: z.number().int().nonnegative(),
 });
 
+export const articlesNewEventSchema = z.object({
+	type: z.literal('articles.new'),
+	eventId: z.string().min(1),
+	feedId: z.string().min(1),
+	articleIds: z.array(z.string().min(1)),
+	count: z.number().int().nonnegative(),
+	updatedAt: z.string().min(1),
+});
+
 export const readStateSyncEventSchema = z.discriminatedUnion('type', [
 	articleReadStateChangedEventSchema,
 	articlesMarkedReadEventSchema,
+	articlesNewEventSchema,
 ]);
 
 export type MarkReadInput = z.infer<typeof markReadSchema>;

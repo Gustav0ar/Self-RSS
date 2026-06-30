@@ -151,7 +151,19 @@ export interface ArticlesMarkedReadEvent {
 	updatedAt: string;
 }
 
-export type ReadStateSyncEvent = ArticleReadStateChangedEvent | ArticlesMarkedReadEvent;
+export interface ArticlesNewEvent {
+	type: 'articles.new';
+	eventId: string;
+	feedId: string;
+	articleIds: string[];
+	count: number;
+	updatedAt: string;
+}
+
+export type ReadStateSyncEvent =
+	| ArticleReadStateChangedEvent
+	| ArticlesMarkedReadEvent
+	| ArticlesNewEvent;
 
 // Stats
 export interface StatsResponse {

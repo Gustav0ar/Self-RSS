@@ -25,6 +25,19 @@ export function applyReadStateSyncEvent(
 	event: ReadStateSyncEvent,
 	options: { clientId: string },
 ) {
+	// Handle new articles event - invalidate caches to show new articles
+	if (event.type === 'articles.new') {
+		// Invalidate article list to show new articles
+		qc.invalidateQueries({ queryKey: ['articles'] });
+		// Invalidate feed counts since new articles affect unread counts
+		qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
+		// Invalidate categories since new articles affect category counts
+		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
+		// Invalidate stats
+		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		return;
+	}
+
 	if (event.clientId && event.clientId === options.clientId) {
 		return;
 	}
@@ -48,8 +61,9 @@ export function applyReadStateSyncEvent(
 		return;
 	}
 
+	// Handle articles.marked_read event
 	const feedIds = new Set(event.feedIds);
-	const feedUnreadCounts = event.feedIds.map((feedId) => ({
+	const feedUnreadCounts = event.feedIds.map((feedId: string) => ({
 		feedId,
 		unreadCount: cachedUnreadCountForFeed(qc, feedId),
 	}));

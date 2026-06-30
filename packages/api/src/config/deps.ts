@@ -97,6 +97,7 @@ export function createDeps(
 	const metrics = getMetricsService();
 	const articleCache = new ArticleCacheService(repos.article, repos.feed, redis, metrics);
 
+	// Realtime must be created before FeedSync since it depends on it
 	const realtime = new RealtimeService(redis, metrics);
 	const feedSync = new FeedSyncService(
 		repos.feed,
@@ -106,6 +107,7 @@ export function createDeps(
 		redis,
 		resolvedSyncConfig,
 		articleCache,
+		realtime,
 	);
 	const opmlImport = new OpmlImportService(repos.category, repos.feed, {
 		allowPrivateHosts: resolvedSyncConfig.allowPrivateHosts,
