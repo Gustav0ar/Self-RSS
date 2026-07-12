@@ -7,6 +7,7 @@ interface ArticleFeatureEventSink {
     fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>)
     fun applySearchScopeMarkedRead(feedIds: Set<String>)
     fun applyAllSearchMarkedRead()
+    fun refreshArticleContent()
 }
 
 class ArticleFeatureEventCoordinator {
@@ -39,6 +40,8 @@ class ArticleFeatureEventCoordinator {
                     sink.applySearchScopeMarkedRead(searchFeedIds)
                 }
             }
+
+            is ArticleFeatureEvent.ArticlesChanged -> sink.refreshArticleContent()
         }
     }
 

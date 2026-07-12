@@ -127,6 +127,8 @@ data class ArticleListItem(
     val publishedAt: String? = null,
     val displayedAt: String? = null,
     val isRead: Boolean,
+    val contentStatus: String = "feed_ready",
+    val contentVersion: Int = 1,
 )
 
 @JsonClass(generateAdapter = true)
@@ -163,6 +165,12 @@ data class ArticleDetail(
     val media: List<ArticleMedia> = emptyList(),
     val isRead: Boolean,
     val isEnriched: Boolean = false,
+    val contentStatus: String = "feed_ready",
+    val contentVersion: Int = 1,
+    val enrichmentQueuedAt: String? = null,
+    val enrichmentAttemptedAt: String? = null,
+    val enrichedAt: String? = null,
+    val enrichmentError: String? = null,
 )
 
 sealed interface ReadStateSyncEvent {
@@ -190,6 +198,31 @@ data class ArticlesMarkedReadEvent(
     override val updatedAt: String,
 ) : ReadStateSyncEvent
 
+data class ArticlesNewEvent(
+    override val eventId: String,
+    val feedId: String,
+    val articleIds: List<String>,
+    val count: Int,
+    override val updatedAt: String,
+    override val clientId: String? = null,
+) : ReadStateSyncEvent
+
+data class ArticleUpdatedEvent(
+    override val eventId: String,
+    val articleId: String,
+    val feedId: String,
+    val contentStatus: String,
+    val contentVersion: Int,
+    override val updatedAt: String,
+    override val clientId: String? = null,
+) : ReadStateSyncEvent
+
+data class RealtimeConnectedEvent(
+    override val eventId: String = "connected-${System.currentTimeMillis()}",
+    override val updatedAt: String = "",
+    override val clientId: String? = null,
+) : ReadStateSyncEvent
+
 @JsonClass(generateAdapter = true)
 data class ReadStateScope(
     val feedId: String? = null,
@@ -209,6 +242,10 @@ data class ReadStateEventPayload(
     val feedIds: List<String>? = null,
     val scope: ReadStateScope? = null,
     val markedCount: Int? = null,
+    val articleIds: List<String>? = null,
+    val count: Int? = null,
+    val contentStatus: String? = null,
+    val contentVersion: Int? = null,
 ) {
     fun toEvent(): ReadStateSyncEvent? = when (type) {
         "article.read_state_changed" -> {
@@ -240,6 +277,38 @@ data class ReadStateEventPayload(
                 scope = scope ?: ReadStateScope(),
                 markedCount = validMarkedCount,
                 clientId = clientId,
+                updatedAt = validUpdatedAt,
+            )
+        }
+
+        "articles.new" -> {
+            val validEventId = eventId ?: return null
+            val validFeedId = feedId ?: return null
+            val validArticleIds = articleIds ?: return null
+            val validCount = count ?: return null
+            val validUpdatedAt = updatedAt ?: return null
+            ArticlesNewEvent(
+                eventId = validEventId,
+                feedId = validFeedId,
+                articleIds = validArticleIds,
+                count = validCount,
+                updatedAt = validUpdatedAt,
+            )
+        }
+
+        "article.updated" -> {
+            val validEventId = eventId ?: return null
+            val validArticleId = articleId ?: return null
+            val validFeedId = feedId ?: return null
+            val validContentStatus = contentStatus ?: return null
+            val validContentVersion = contentVersion ?: return null
+            val validUpdatedAt = updatedAt ?: return null
+            ArticleUpdatedEvent(
+                eventId = validEventId,
+                articleId = validArticleId,
+                feedId = validFeedId,
+                contentStatus = validContentStatus,
+                contentVersion = validContentVersion,
                 updatedAt = validUpdatedAt,
             )
         }
@@ -305,6 +374,8 @@ data class MarkAllReadResponse(
 
 @JsonClass(generateAdapter = true)
 data class SyncResponse(
+    val accepted: Boolean? = null,
+    val alreadyQueued: Boolean? = null,
     val syncedCount: Int? = null,
     val status: String? = null,
     val totalFeeds: Int? = null,
@@ -315,9 +386,21 @@ data class SyncResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class FeedSyncAllStatus(
+    val queued: Boolean,
+    val running: Boolean,
+    val active: Boolean,
+    val stale: Boolean,
+    val queuedAt: String? = null,
+    val startedAt: String? = null,
+    val heartbeatAt: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
 data class EnrichArticleResponse(
     val success: Boolean,
     val reason: String? = null,
+    val queued: Boolean? = null,
 )
 
 @JsonClass(generateAdapter = true)

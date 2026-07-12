@@ -787,12 +787,27 @@ describe('API integration', () => {
 			expect(articles.response.status).toBe(200);
 			expect(articles.body.data).toHaveLength(2);
 			expect(articles.body.data[0].title).toBe('Beta Integration Story');
+			expect(articles.body.data[0]).toMatchObject({
+				contentStatus: 'enrichment_pending',
+				contentVersion: 1,
+			});
 
 			const articleId = articles.body.data[0].id;
 			const detail = await authedRequest(`/api/v1/articles/${articleId}`, token);
 			expect(detail.response.status).toBe(200);
 			expect(detail.body.data.contentHtml).toContain('Beta integration content body');
 			expect(detail.body.data.canonicalUrl).toBe('https://example.com/beta');
+			expect(detail.body.data).toMatchObject({
+				contentStatus: 'enrichment_pending',
+				contentVersion: 1,
+				isEnriched: false,
+			});
+
+			const queuedEnrichment = await authedRequest(`/api/v1/articles/${articleId}/enrich`, token, {
+				method: 'POST',
+			});
+			expect(queuedEnrichment.response.status).toBe(200);
+			expect(queuedEnrichment.body.data).toEqual({ success: true, queued: true });
 
 			const search = await authedRequest('/api/v1/search?q=Alpha', token);
 			expect(search.response.status).toBe(200);

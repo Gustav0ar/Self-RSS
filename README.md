@@ -179,7 +179,11 @@ All API endpoints are prefixed with `/api/v1`.
 | PATCH  | /feeds/:id                    | ✓        | Update feed                  |
 | DELETE | /feeds/:id                    | ✓        | Unsubscribe from feed        |
 | POST   | /feeds/:id/sync               | ✓        | Trigger feed sync            |
+| POST   | /feeds/sync                   | ✓        | Queue an all-feeds sync      |
+| GET    | /feeds/sync/status            | ✓        | Get all-feeds sync status    |
 | GET    | /articles                     | ✓        | List articles (with filters) |
+| GET    | /articles/:id                 | ✓        | Get article content/readiness|
+| POST   | /articles/:id/enrich          | ✓        | Queue source enrichment      |
 | PATCH  | /articles/:id/read            | ✓        | Mark article read/unread     |
 | POST   | /articles/mark-all-read       | ✓        | Mark all read (by category)  |
 | GET    | /search                       | ✓        | Full-text article search     |
@@ -194,11 +198,13 @@ All API endpoints are prefixed with `/api/v1`.
 
 The API is designed for multi-client consumption:
 
-- **Stateless JWT auth** — no server-side sessions; tokens work from any client
+- **Session-bound JWT auth** — short-lived access tokens plus persisted, revocable refresh sessions work consistently across clients
 - **JSON REST** — standard HTTP methods with consistent response envelopes
 - **Generated OpenAPI document** — `packages/api/openapi.json`
 - **Pagination** — cursor-based via `cursor`/`limit` query parameters
 - **Consistent error format** — `{ success: false, error: { code, message } }`
+
+Article list responses include durable `contentStatus` and `contentVersion` fields. Feed content is immediately readable; canonical-source enrichment runs in the worker through a persisted, retryable queue and publishes `article.updated` events when fuller content is ready. Clients should render the feed content immediately, prefetch nearby article details, and refresh cached detail when its content version changes.
 
 Refresh the OpenAPI artifact with:
 

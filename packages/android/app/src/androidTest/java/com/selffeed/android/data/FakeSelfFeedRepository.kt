@@ -10,6 +10,7 @@ import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RegistrationStatusResponse
@@ -155,6 +156,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun deleteFeed(id: String): AppResult<Boolean> = AppResult.Error("Not supported in fake")
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
     override suspend fun syncAllFeeds(): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
+    override suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus> = AppResult.Success(
+        FeedSyncAllStatus(
+            queued = false,
+            running = false,
+            active = false,
+            stale = false,
+        ),
+    )
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray) =
         AppResult.Error("Not supported in fake")
 
@@ -211,6 +220,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun clientId(): String = "android-test-client"
     override fun readStateEvents(): Flow<ReadStateSyncEvent> = emptyFlow()
     override suspend fun invalidateReadStateCaches(articleId: String?) = Unit
+    override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
         articleReadStates[articleId] = read
     }

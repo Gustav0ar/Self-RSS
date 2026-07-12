@@ -81,6 +81,36 @@ export function startQueuedSyncWorker(
 	return () => clearInterval(interval);
 }
 
+export function startArticleEnrichmentWorker(
+	syncService: FeedSyncService,
+	intervalMs: number = 500,
+	coordinator: SyncCoordinator = { isRunning: false },
+) {
+	logger.info('Article enrichment worker started', { intervalMs });
+
+	const drainOnce = async () => {
+		if (coordinator.isRunning) return;
+		coordinator.isRunning = true;
+		try {
+			const result = await syncService.processPendingArticleEnrichments();
+			if (result.processed > 0) logger.info('Article enrichment batch complete', result);
+		} catch (err) {
+			const error = err instanceof Error ? err : new Error(String(err));
+			logger.error('Article enrichment worker error', {
+				operation: 'articleEnrichmentWorker',
+				error: error.message,
+				stack: error.stack,
+			});
+		} finally {
+			coordinator.isRunning = false;
+		}
+	};
+
+	void drainOnce();
+	const interval = setInterval(() => void drainOnce(), intervalMs);
+	return () => clearInterval(interval);
+}
+
 export interface RetentionCleanupOptions {
 	retentionDays: number;
 	enabled: boolean;

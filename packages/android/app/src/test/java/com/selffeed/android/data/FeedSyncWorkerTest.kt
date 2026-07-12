@@ -2,6 +2,7 @@ package com.selffeed.android.data
 
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.SyncResponse
+import com.selffeed.android.network.FeedSyncAllStatus
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -121,6 +122,14 @@ class FeedSyncWorkerTest {
         coEvery { repo.isLoggedIn() } returns loggedIn
         if (syncResult != null) {
             coEvery { repo.syncAllFeeds() } returns syncResult
+            coEvery { repo.syncAllFeedsStatus() } returns AppResult.Success(
+                FeedSyncAllStatus(
+                    queued = false,
+                    running = false,
+                    active = false,
+                    stale = false,
+                ),
+            )
         }
         val params = mockk<androidx.work.WorkerParameters>(relaxed = true)
         return FeedSyncWorker(ApplicationProvider.getApplicationContext(), params, repo)

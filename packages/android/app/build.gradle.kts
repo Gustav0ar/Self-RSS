@@ -46,15 +46,15 @@ val releaseApiBaseUrl = configuredReleaseApiBaseUrl?.let {
 //     openssl dgst -sha256 -binary | openssl enc -base64
 //
 // For intermediate CA certificates, also pin those if your server doesn't send the full chain.
-val releaseCertificatePins = listOf<String>(
-    // TODO: Replace with your actual production certificate SHA-256 pin(s)
-    // Example: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-)
+fun certificatePinsFromEnvironment(name: String): List<String> =
+    providers.environmentVariable(name).orNull
+        ?.split('|', ',')
+        ?.map(String::trim)
+        ?.filter(String::isNotBlank)
+        .orEmpty()
 
-val releaseBackupCertificatePins = listOf<String>(
-    // TODO: Replace with your actual backup certificate SHA-256 pin(s) for rotation
-    // Example: "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
-)
+val releaseCertificatePins = certificatePinsFromEnvironment("SELF_FEED_CERTIFICATE_PINS")
+val releaseBackupCertificatePins = certificatePinsFromEnvironment("SELF_FEED_BACKUP_CERTIFICATE_PINS")
 
 android {
     namespace = "com.selffeed.android"

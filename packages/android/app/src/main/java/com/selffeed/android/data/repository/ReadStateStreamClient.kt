@@ -4,6 +4,7 @@ import com.selffeed.android.BuildConfig
 import com.selffeed.android.network.apiEndpointUrl
 import com.selffeed.android.network.ReadStateEventPayload
 import com.selffeed.android.network.ReadStateSyncEvent
+import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.network.SseEventParser
 import com.selffeed.android.network.toReadStateEvent
 import com.squareup.moshi.JsonAdapter
@@ -27,7 +28,7 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 
 class ReadStateStreamClient(
@@ -36,7 +37,7 @@ class ReadStateStreamClient(
     private val runtime: RepositoryRuntime,
     private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
 ) {
-    private val sseLastEventId = AtomicLong(0)
+    private val sseLastEventId = AtomicReference<String?>(null)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
 
     // Heartbeat tracking: timestamp of the last received event
@@ -60,8 +61,8 @@ class ReadStateStreamClient(
             val original = chain.request()
             val builder = original.newBuilder()
             val lastId = sseLastEventId.get()
-            if (lastId > 0) {
-                builder.header("Last-Event-ID", lastId.toString())
+            if (!lastId.isNullOrBlank()) {
+                builder.header("Last-Event-ID", lastId)
             }
             chain.proceed(builder.build())
         }
@@ -73,7 +74,9 @@ class ReadStateStreamClient(
             try {
                 eventsOnce().collect { event ->
                     attempt = 0
-                    sseLastEventId.set(parseEventId(event.eventId))
+                    if (event !is RealtimeConnectedEvent && event.eventId.isNotBlank()) {
+                        sseLastEventId.set(event.eventId)
+                    }
                     emit(event)
                 }
             } catch (e: CancellationException) {
@@ -83,10 +86,6 @@ class ReadStateStreamClient(
             }
 
             if (!coroutineContext.isActive || !isLoggedIn()) break
-            if (attempt >= READ_STATE_RECONNECT_MAX_ATTEMPTS) {
-                runtime.debugLog("Read-state stream giving up after $attempt attempts")
-                break
-            }
             delay(readStateReconnectDelay(attempt))
             attempt++
         }
@@ -132,12 +131,15 @@ class ReadStateStreamClient(
                             this@stream.close(IOException("Read-state stream failed with HTTP ${response.code}"))
                             return
                         }
+                        lastEventTimestampMs = System.currentTimeMillis()
+                        this@stream.trySend(RealtimeConnectedEvent())
 
                         val parser = SseEventParser()
                         try {
                             val source = response.body.source()
                             while (!call.isCanceled()) {
                                 val line = source.readUtf8Line() ?: break
+                                lastEventTimestampMs = System.currentTimeMillis()
                                 parser.pushLine(line)
                                     ?.toReadStateEvent(readStateEventAdapter)
                                     ?.also { lastEventTimestampMs = System.currentTimeMillis() }
@@ -170,13 +172,9 @@ class ReadStateStreamClient(
         (READ_STATE_RECONNECT_INITIAL_DELAY_MS * (1L shl attempt.coerceAtMost(5)))
             .coerceAtMost(READ_STATE_RECONNECT_MAX_DELAY_MS)
 
-    private fun parseEventId(raw: String): Long = raw.toLongOrNull() ?: 0L
-
     private companion object {
         const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1_000L
         const val READ_STATE_RECONNECT_MAX_DELAY_MS = 30_000L
-        const val READ_STATE_RECONNECT_MAX_ATTEMPTS = 50
-
         /** Interval between heartbeat checks for stuck connection detection. */
         const val HEARTBEAT_CHECK_INTERVAL_MS = 30_000L
 

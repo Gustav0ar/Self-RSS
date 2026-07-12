@@ -60,10 +60,21 @@ export const articlesNewEventSchema = z.object({
 	updatedAt: z.string().min(1),
 });
 
+export const articleUpdatedEventSchema = z.object({
+	type: z.literal('article.updated'),
+	eventId: z.string().min(1),
+	articleId: z.string().min(1),
+	feedId: z.string().min(1),
+	contentStatus: z.enum(['feed_ready', 'enrichment_pending', 'full_ready', 'failed']),
+	contentVersion: z.number().int().positive(),
+	updatedAt: z.string().min(1),
+});
+
 export const readStateSyncEventSchema = z.discriminatedUnion('type', [
 	articleReadStateChangedEventSchema,
 	articlesMarkedReadEventSchema,
 	articlesNewEventSchema,
+	articleUpdatedEventSchema,
 ]);
 
 export type MarkReadInput = z.infer<typeof markReadSchema>;

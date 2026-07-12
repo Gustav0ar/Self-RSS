@@ -209,6 +209,11 @@ class LocalStore(
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
+    suspend fun clearArticleDetails() {
+        dao.clearArticleDetails()
+        notifyInvalidation(TABLE_ARTICLE_DETAILS)
+    }
+
     suspend fun clearAll() {
         dao.clearCategories()
         dao.clearFeeds()
@@ -328,6 +333,8 @@ class LocalStore(
             publishedAt = publishedAt,
             displayedAt = displayedAt,
             isRead = isRead,
+            contentStatus = contentStatus,
+            contentVersion = contentVersion,
         )
 
     private fun ArticleEntity.toModel(): ArticleListItem =
@@ -343,6 +350,8 @@ class LocalStore(
             publishedAt = publishedAt,
             displayedAt = displayedAt,
             isRead = isRead,
+            contentStatus = contentStatus,
+            contentVersion = contentVersion,
         )
 
     companion object {

@@ -256,6 +256,14 @@ export const articles = sqliteTable(
 			.notNull()
 			.$defaultFn(() => new Date()),
 		hash: text('hash').notNull(),
+		contentStatus: text('content_status').notNull().default('feed_ready'),
+		contentVersion: integer('content_version').notNull().default(1),
+		enrichmentQueuedAt: timestamp('enrichment_queued_at'),
+		enrichmentAttemptedAt: timestamp('enrichment_attempted_at'),
+		enrichedAt: timestamp('enriched_at'),
+		enrichmentError: text('enrichment_error'),
+		enrichmentAttempts: integer('enrichment_attempts').notNull().default(0),
+		nextEnrichmentAt: timestamp('next_enrichment_at'),
 	},
 	(t) => [
 		uniqueIndex('articles_feed_guid_idx').on(t.feedId, t.guid),
@@ -268,6 +276,7 @@ export const articles = sqliteTable(
 			t.id,
 		),
 		index('articles_sort_idx').on(sql`coalesce(${t.publishedAt}, ${t.fetchedAt})`, t.id),
+		index('articles_enrichment_queue_idx').on(t.contentStatus, t.nextEnrichmentAt),
 	],
 );
 

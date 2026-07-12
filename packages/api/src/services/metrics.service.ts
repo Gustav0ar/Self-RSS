@@ -41,6 +41,9 @@ export class MetricsService {
 
 	// Article metrics
 	private articleCountByUser: Gauge<string>;
+	private articleEnrichmentDuration: Histogram<string>;
+	private articleEnrichmentQueueDepth: Gauge<string>;
+	private articleEnrichmentTotal: Counter<string>;
 
 	// Registry reference
 	public readonly registry: Registry = register;
@@ -142,6 +145,22 @@ export class MetricsService {
 			labelNames: ['user_id'],
 		});
 
+		this.articleEnrichmentDuration = new HistogramMetric({
+			name: 'article_enrichment_duration_seconds',
+			help: 'Time spent extracting and persisting canonical article content',
+			labelNames: ['outcome'],
+			buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+		});
+		this.articleEnrichmentQueueDepth = new GaugeMetric({
+			name: 'article_enrichment_queue_depth',
+			help: 'Number of due article enrichment jobs observed by the worker',
+		});
+		this.articleEnrichmentTotal = new CounterMetric({
+			name: 'article_enrichment_total',
+			help: 'Canonical article enrichment attempts by outcome',
+			labelNames: ['outcome'],
+		});
+
 		// Collect default Node.js metrics only once
 		if (!defaultMetricsCollected) {
 			collectDefaultMetrics({ register });
@@ -216,6 +235,15 @@ export class MetricsService {
 		this.articleCountByUser.remove(userId);
 	}
 
+	recordArticleEnrichment(outcome: 'success' | 'retry' | 'failed', durationSeconds: number) {
+		this.articleEnrichmentDuration.labels(outcome).observe(durationSeconds);
+		this.articleEnrichmentTotal.labels(outcome).inc();
+	}
+
+	setArticleEnrichmentQueueDepth(depth: number) {
+		this.articleEnrichmentQueueDepth.set(depth);
+	}
+
 	// Get all metrics as string
 	async getMetrics(): Promise<string> {
 		return this.registry.metrics();
@@ -237,6 +265,7 @@ export class MetricsService {
 		this.feedSyncRunning.set(0);
 		this.feedSyncPending.set(0);
 		this.feedSyncFailed.set(0);
+		this.articleEnrichmentQueueDepth.set(0);
 		// Note: We don't reset counters as they can only be incremented
 		// For counters, a full registry reset is needed between test suites
 	}

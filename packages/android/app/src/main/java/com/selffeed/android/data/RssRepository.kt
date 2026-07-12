@@ -252,8 +252,12 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun syncAllFeeds() = safeCall {
-        feedRemote.syncAllFeeds().also {
-            invalidateFeedAndArticleCaches()
+        feedRemote.syncAllFeeds()
+    }
+
+    override suspend fun syncAllFeedsStatus() = safeReadCall {
+        feedRemote.syncAllFeedsStatus().also { status ->
+            if (!status.active) invalidateFeedAndArticleCaches()
         }
     }
 
@@ -681,6 +685,21 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("stats")
     }
 
+    override suspend fun invalidateArticleContentCaches(articleId: String?) {
+        if (articleId != null) {
+            invalidateArticleDetailCache(articleId)
+        } else {
+            runtime.invalidateByPrefix("article:")
+            offlineReadStore.clearArticleDetails()
+        }
+        runtime.invalidateByPrefix("articles")
+        runtime.invalidateByPrefix("search")
+        runtime.invalidateByPrefix("feeds")
+        runtime.invalidateByPrefix("categories")
+        runtime.invalidateByPrefix("stats")
+        offlineReadStore.clearArticlePages()
+    }
+
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
         val key = "article:$articleId"
         runtime.getCached<ArticleDetail>(key)?.let { cached ->
@@ -705,6 +724,7 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("search")
         runtime.invalidateByPrefix("stats")
         runtime.invalidateByPrefix("categories")
+        runtime.invalidateByPrefix("article:")
         offlineReadStore.clearFeedAndArticleData()
     }
 

@@ -37,6 +37,12 @@ export function applyReadStateSyncEvent(
 		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
 		return;
 	}
+	if (event.type === 'article.updated') {
+		qc.invalidateQueries({ queryKey: ['article', event.articleId] });
+		qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['search'], refetchType: 'none' });
+		return;
+	}
 
 	if (event.clientId && event.clientId === options.clientId) {
 		return;
@@ -61,7 +67,7 @@ export function applyReadStateSyncEvent(
 		return;
 	}
 
-	// Handle articles.marked_read event
+	// Handle articles.marked_read event. Earlier branches narrow the union.
 	const feedIds = new Set(event.feedIds);
 	const feedUnreadCounts = event.feedIds.map((feedId: string) => ({
 		feedId,

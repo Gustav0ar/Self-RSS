@@ -20,6 +20,8 @@ export interface RawSearchRow {
 	feedFaviconUrl: string | null;
 	isRead: number | boolean;
 	ftsRank: number;
+	contentStatus: string;
+	contentVersion: number;
 }
 
 export interface SearchRow {
@@ -35,6 +37,8 @@ export interface SearchRow {
 	feedFaviconUrl: string | null;
 	isRead: boolean;
 	ftsRank: number;
+	contentStatus: string;
+	contentVersion: number;
 }
 
 export function toFtsQuery(query: string): string | null {

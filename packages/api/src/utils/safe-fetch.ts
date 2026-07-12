@@ -307,6 +307,9 @@ export async function fetchWithValidatedRedirects(
 		if (!isRedirectStatus(response.status)) {
 			return response;
 		}
+		// Redirect bodies are never consumed. Cancel them explicitly so the
+		// underlying connection can be released before the next hop.
+		await response.body?.cancel().catch(() => undefined);
 
 		if (redirectCount === maxRedirects) {
 			throw AppError.badRequest('Feed URL exceeded the maximum number of redirects');

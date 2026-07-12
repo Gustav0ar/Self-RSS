@@ -11,6 +11,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -51,6 +52,7 @@ interface FeedRepository {
     suspend fun deleteFeed(id: String): AppResult<Boolean>
     suspend fun syncFeed(id: String): AppResult<SyncResponse>
     suspend fun syncAllFeeds(): AppResult<SyncResponse>
+    suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus>
     suspend fun importOpml(fileName: String, fileBytes: ByteArray): AppResult<OpmlImportSummary>
     suspend fun exportOpml(): AppResult<String>
 }
@@ -81,6 +83,7 @@ interface ArticleRepository {
     fun clientId(): String
     fun readStateEvents(): Flow<ReadStateSyncEvent>
     suspend fun invalidateReadStateCaches(articleId: String? = null)
+    suspend fun invalidateArticleContentCaches(articleId: String? = null)
     suspend fun updateCachedReadState(articleId: String, read: Boolean)
     suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>)
 }

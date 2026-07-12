@@ -1,8 +1,10 @@
 import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedView } from '../../src/components/articles/feed-view';
 
 const onSelectArticle = vi.fn();
+let searchResult: { data?: { pages: Array<{ data: unknown[] }> } } = { data: undefined };
+let readerArticleIds: string[] = [];
 let currentResult: {
 	data: { pages: Array<{ data: unknown[]; hasMore: boolean; cursor: null }> } | undefined;
 	isFetching: boolean;
@@ -38,6 +40,7 @@ const categories = [
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: () => currentResult,
+	useSearch: () => searchResult,
 	useArticle: () => ({ data: null, isLoading: false }),
 	useEnrichArticle: () => ({ mutate: vi.fn(), isPending: false }),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
@@ -56,6 +59,13 @@ vi.mock('../../src/hooks/queries', () => ({
 	useUpdatePreferences: () => ({ mutate: vi.fn() }),
 	usePrefetchArticle: () => vi.fn(),
 	useWarmNextArticles: () => vi.fn(),
+}));
+
+vi.mock('../../src/components/articles/reader-pane', () => ({
+	ReaderPane: ({ articles }: { articles: Array<{ id: string }> }) => {
+		readerArticleIds = articles.map((article) => article.id);
+		return <div>Reader</div>;
+	},
 }));
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
@@ -99,6 +109,10 @@ vi.mock('@/hooks/use-read-state-sync', () => ({
 }));
 
 describe('FeedView selected article sync', () => {
+	beforeEach(() => {
+		searchResult = { data: undefined };
+		readerArticleIds = [];
+	});
 	it('clears the active article when the article is not in the loaded list (list view)', () => {
 		currentResult = {
 			data: { pages: [{ data: [], hasMore: false, cursor: null }] },
@@ -170,5 +184,30 @@ describe('FeedView selected article sync', () => {
 			/>,
 		);
 		expect(onSelectArticle).not.toHaveBeenCalled();
+	});
+
+	it('uses search results as the reader navigation queue for search deep links', () => {
+		currentResult = {
+			data: { pages: [{ data: [], hasMore: false, cursor: null }] },
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		};
+		searchResult = {
+			data: { pages: [{ data: [{ id: 'search-1' }, { id: 'search-2' }] }] },
+		};
+
+		render(
+			<FeedView
+				selectedArticleId="search-1"
+				fromDeepLink
+				searchQuery="query"
+				onSelectArticle={onSelectArticle}
+			/>,
+		);
+
+		expect(readerArticleIds).toEqual(['search-1', 'search-2']);
 	});
 });

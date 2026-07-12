@@ -16,6 +16,7 @@ import okhttp3.CertificatePinner
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -253,23 +254,27 @@ class TokenAuthenticator(
 
             return CertificatePinner.Builder()
                 .apply {
+                    val productionApiHostname = BuildConfig.API_BASE_URL.toHttpUrlOrNull()?.host
+                    if (productionApiHostname.isNullOrBlank()) {
+                        Log.w(TAG, "Certificate pinning disabled because API_BASE_URL has no valid host")
+                        return null
+                    }
                     // Primary domain pinning
                     add(
-                        PRODUCTION_API_HOSTNAME,
+                        productionApiHostname,
                         *primaryPins.split("|").filter { it.isNotBlank() }.toTypedArray(),
                     )
 
                     // Backup pins for certificate rotation
                     if (backupPins.isNotBlank()) {
                         val backupList = backupPins.split("|").filter { it.isNotBlank() }
-                        add(PRODUCTION_API_HOSTNAME, *backupList.toTypedArray())
+                        add(productionApiHostname, *backupList.toTypedArray())
                     }
                 }
                 .build()
         }
 
         private const val TAG = "TokenAuthenticator"
-        private const val PRODUCTION_API_HOSTNAME = "api.selffeed.com"
         val certificatePinner: CertificatePinner? by lazy { buildCertificatePinner() }
 
         fun logCertificatePinningFailure(e: SSLPeerUnverifiedException) {

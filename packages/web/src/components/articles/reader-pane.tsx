@@ -1,9 +1,18 @@
 import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowLeft, ArrowRight, BookOpen, ExternalLink, Eye, EyeOff, Sparkles } from 'lucide-react';
+import {
+	ArrowLeft,
+	ArrowRight,
+	BookOpen,
+	ExternalLink,
+	Eye,
+	EyeOff,
+	RefreshCw,
+	Sparkles,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useArticle, useEnrichArticle, useMarkRead, usePreferences } from '@/hooks/queries';
+import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
 import { useReaderScrollProgress, useTwitterEmbedResize } from './reader-effects';
@@ -36,13 +45,11 @@ function prepareReaderHtml(html: string) {
 }
 
 export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
-	const { data: article, isLoading } = useArticle(articleId);
+	const { data: article, isLoading, isError, isFetching, refetch } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
-	const enrichArticle = useEnrichArticle();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
-	const enrichmentAttemptedIds = useRef(new Set<string>());
 	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(articleId);
 	useTwitterEmbedResize(scrollerRef);
 
@@ -90,20 +97,20 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
 
 	useEffect(() => {
-		if (!article || article.isEnriched || !article.canonicalUrl?.trim()) {
-			return;
-		}
-		if (enrichmentAttemptedIds.current.has(article.id)) {
-			return;
-		}
+		if (!articleId) return;
+		performance.mark(`article-open-${articleId}`);
+	}, [articleId]);
 
-		enrichmentAttemptedIds.current.add(article.id);
-		enrichArticle.mutate(article.id, {
-			onError: () => {
-				enrichmentAttemptedIds.current.delete(article.id);
-			},
-		});
-	}, [article, enrichArticle]);
+	useEffect(() => {
+		if (!article || article.id !== articleId) return;
+		const start = `article-open-${article.id}`;
+		const measure = `article-detail-ready-${article.id}`;
+		try {
+			performance.measure(measure, start);
+		} catch {
+			// The start mark may have been evicted; telemetry must never affect reading.
+		}
+	}, [article, articleId]);
 
 	useEffect(() => {
 		if (!articleId) {
@@ -160,6 +167,26 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		return (
 			<div className="flex h-full items-center justify-center px-6 py-10">
 				<p className="text-sm text-muted-foreground">Loading article...</p>
+			</div>
+		);
+	}
+
+	if (isError) {
+		return (
+			<div className="flex h-full items-center justify-center px-6 py-10">
+				<div className="text-center">
+					<p className="text-sm font-medium text-foreground">Could not load this article</p>
+					<p className="mt-1 text-xs text-muted-foreground">Check your connection and try again.</p>
+					<button
+						type="button"
+						onClick={() => void refetch()}
+						disabled={isFetching}
+						className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
+					>
+						<RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+						Retry
+					</button>
+				</div>
 			</div>
 		);
 	}

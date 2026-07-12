@@ -22,10 +22,13 @@ const logger = createLogger();
 // stash in Redis) is string-only.
 type ArticleDetailResponse = Omit<
 	NonNullable<Awaited<ReturnType<ArticleRepository['findDetailForUser']>>>,
-	'publishedAt' | 'fetchedAt'
+	'publishedAt' | 'fetchedAt' | 'enrichmentQueuedAt' | 'enrichmentAttemptedAt' | 'enrichedAt'
 > & {
 	publishedAt: string | null;
 	fetchedAt: string;
+	enrichmentQueuedAt: string | null;
+	enrichmentAttemptedAt: string | null;
+	enrichedAt: string | null;
 	isEnriched: boolean;
 };
 
@@ -120,6 +123,8 @@ export class ArticleService {
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: a.isRead,
+			contentStatus: a.contentStatus,
+			contentVersion: a.contentVersion,
 		}));
 
 		return {
@@ -162,7 +167,10 @@ export class ArticleService {
 			...article,
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			fetchedAt: article.fetchedAt.toISOString(),
-			isEnriched: !!article.heroImageUrl || (article.media?.length ?? 0) > 0,
+			enrichmentQueuedAt: article.enrichmentQueuedAt?.toISOString() ?? null,
+			enrichmentAttemptedAt: article.enrichmentAttemptedAt?.toISOString() ?? null,
+			enrichedAt: article.enrichedAt?.toISOString() ?? null,
+			isEnriched: article.contentStatus === 'full_ready',
 		};
 
 		// Populate the cache for next time. Fire-and-forget — a cache
@@ -305,7 +313,7 @@ export class ArticleService {
 			return { success: false, reason: 'missing_canonical_url' };
 		}
 
-		if (article.heroImageUrl || (article.media?.length ?? 0) > 0) {
+		if (article.contentStatus === 'full_ready') {
 			return { success: false, reason: 'already_enriched' };
 		}
 
@@ -313,20 +321,13 @@ export class ArticleService {
 			return { success: false, reason: 'enrichment_unavailable' };
 		}
 
-		await this.feedSyncService.enrichArticleNow({
-			articleId: article.id,
-			userId,
-			canonicalUrl,
-			contentHtml: article.contentHtml,
-			heroImageUrl: article.heroImageUrl,
-			fetchedAt: article.fetchedAt,
-		});
+		await this.feedSyncService.queueArticleEnrichment(article.id);
 
 		// Enrichment adds hero image / media which are part of the detail
 		// response, so the cached copy is now stale.
 		await this.invalidateArticleDetailCache(userId, articleId);
 
-		return { success: true };
+		return { success: true, queued: true };
 	}
 
 	async search(userId: string, query: string, categoryId?: string, limit = 20, cursor?: string) {
@@ -356,6 +357,8 @@ export class ArticleService {
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: a.isRead,
+			contentStatus: a.contentStatus,
+			contentVersion: a.contentVersion,
 		}));
 
 		return {

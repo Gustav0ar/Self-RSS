@@ -33,6 +33,8 @@ function article(id: string, feedId: string, isRead: boolean): ArticleListItem {
 		publishedAt: null,
 		displayedAt: '2026-06-01T00:00:00.000Z',
 		isRead,
+		contentStatus: 'feed_ready',
+		contentVersion: 1,
 	};
 }
 
@@ -61,6 +63,12 @@ function detail(id: string, feedId: string, isRead: boolean): ArticleDetail {
 		media: [],
 		isRead,
 		isEnriched: false,
+		contentStatus: 'feed_ready',
+		contentVersion: 1,
+		enrichmentQueuedAt: null,
+		enrichmentAttemptedAt: null,
+		enrichedAt: null,
+		enrichmentError: null,
 	};
 }
 

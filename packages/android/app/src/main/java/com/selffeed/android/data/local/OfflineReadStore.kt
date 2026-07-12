@@ -22,6 +22,7 @@ interface OfflineReadStore {
     suspend fun writeArticleDetail(detail: ArticleDetail)
     suspend fun readArticleDetail(articleId: String): ArticleDetail?
     suspend fun clearArticleDetail(articleId: String)
+    suspend fun clearArticleDetails()
 
     suspend fun clearAll()
     suspend fun clearFeedAndArticleData()
@@ -84,6 +85,11 @@ class CompositeOfflineReadStore(
         fileCacheStore.clearByPrefix("article-$articleId")
     }
 
+    override suspend fun clearArticleDetails() {
+        localStore.clearArticleDetails()
+        fileCacheStore.clearByPrefix("article-")
+    }
+
     override suspend fun clearAll() {
         localStore.clearAll()
         fileCacheStore.clearAll()
@@ -93,5 +99,6 @@ class CompositeOfflineReadStore(
         clearFeeds()
         clearCategories()
         clearArticlePages()
+        clearArticleDetails()
     }
 }

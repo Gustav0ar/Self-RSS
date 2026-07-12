@@ -2,7 +2,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
-import { useSearch } from '@/hooks/queries';
+import { usePrefetchArticle, useSearch } from '@/hooks/queries';
 import type { SearchScope } from '@/routes/article-route-search';
 
 interface SearchBarProps {
@@ -32,6 +32,7 @@ export function SearchBar({
 	const listboxId = useId();
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
+	const prefetchArticle = usePrefetchArticle();
 	const query = controlledQuery ?? uncontrolledQuery;
 	const scope = controlledScope ?? uncontrolledScope;
 	const activeCategoryId = scope === 'category' ? categoryId : undefined;
@@ -143,15 +144,13 @@ export function SearchBar({
 					onSelectArticle(target.id);
 					setIsOpen(false);
 					setActiveIndex(-1);
-					updateQuery('');
-					setDebouncedQuery('');
 				}
 			} else if (event.key === 'Escape') {
 				setIsOpen(false);
 				setActiveIndex(-1);
 			}
 		},
-		[activeIndex, onSelectArticle, renderedResults, showDropdown, updateQuery],
+		[activeIndex, onSelectArticle, renderedResults, showDropdown],
 	);
 
 	// Reset the highlight when the result set changes so keyboard selection
@@ -255,10 +254,12 @@ export function SearchBar({
 											onSelectArticle(article.id);
 											setIsOpen(false);
 											setActiveIndex(-1);
-											updateQuery('');
-											setDebouncedQuery('');
 										}}
-										onMouseEnter={() => setActiveIndex(index)}
+										onMouseEnter={() => {
+											setActiveIndex(index);
+											void prefetchArticle(article.id);
+										}}
+										onFocus={() => void prefetchArticle(article.id)}
 										className={`grid w-full gap-3 rounded-2xl px-4 py-4 text-left hover:bg-accent sm:px-5 md:grid-cols-[1fr_auto] ${
 											isActive ? 'bg-accent' : ''
 										}`}

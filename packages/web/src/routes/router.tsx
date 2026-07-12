@@ -10,10 +10,14 @@ function RoutedFeedView({
 	articleId,
 	feedId,
 	categoryId,
+	q,
+	searchScope,
 }: {
 	articleId: string | null;
 	feedId?: string;
 	categoryId?: string;
+	q?: string;
+	searchScope?: 'all' | 'category';
 }) {
 	const router = useRouter();
 	const { applySelection } = useAppState();
@@ -26,6 +30,8 @@ function RoutedFeedView({
 		<FeedView
 			feedId={feedId}
 			categoryId={categoryId}
+			searchQuery={q}
+			searchScope={searchScope}
 			selectedArticleId={articleId}
 			fromDeepLink={articleId != null}
 			onSelectArticle={(nextArticleId) => {
@@ -34,14 +40,14 @@ function RoutedFeedView({
 				if (nextArticleId == null) {
 					void router.navigate({
 						to: '/',
-						search: buildArticleRouteSearch({ feedId, categoryId }),
+						search: buildArticleRouteSearch({ feedId, categoryId, q, searchScope }),
 					});
 					return;
 				}
 				void router.navigate({
 					to: '/articles/$articleId',
 					params: { articleId: nextArticleId },
-					search: buildArticleRouteSearch({ feedId, categoryId }),
+					search: buildArticleRouteSearch({ feedId, categoryId, q, searchScope }),
 				});
 			}}
 		/>
@@ -57,8 +63,16 @@ const indexRoute = createRoute({
 	path: '/',
 	validateSearch: validateArticleRouteSearch,
 	component: function Index() {
-		const { feedId, categoryId } = indexRoute.useSearch();
-		return <RoutedFeedView articleId={null} feedId={feedId} categoryId={categoryId} />;
+		const { feedId, categoryId, q, searchScope } = indexRoute.useSearch();
+		return (
+			<RoutedFeedView
+				articleId={null}
+				feedId={feedId}
+				categoryId={categoryId}
+				q={q}
+				searchScope={searchScope}
+			/>
+		);
 	},
 });
 
@@ -68,8 +82,16 @@ const articleRoute = createRoute({
 	validateSearch: validateArticleRouteSearch,
 	component: function Article() {
 		const { articleId } = articleRoute.useParams();
-		const { feedId, categoryId } = articleRoute.useSearch();
-		return <RoutedFeedView articleId={articleId} feedId={feedId} categoryId={categoryId} />;
+		const { feedId, categoryId, q, searchScope } = articleRoute.useSearch();
+		return (
+			<RoutedFeedView
+				articleId={articleId}
+				feedId={feedId}
+				categoryId={categoryId}
+				q={q}
+				searchScope={searchScope}
+			/>
+		);
 	},
 });
 

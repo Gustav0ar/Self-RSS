@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetchArticlePageContent } from '../../src/services/article-source-fetcher.js';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 
 describe('FeedSyncService', () => {
@@ -793,17 +794,17 @@ describe('FeedSyncService', () => {
 		expect(feedRepo.update).toHaveBeenCalledWith('feed-3', 'user-1', { syncStatus: 'idle' });
 		expect(syncFeedSpy).toHaveBeenCalledTimes(3);
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
-			enrichArticles: false,
+			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
-			enrichArticles: false,
+			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
-			enrichArticles: false,
+			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 		});
@@ -846,7 +847,7 @@ describe('FeedSyncService', () => {
 
 		expect(syncFeedSpy).toHaveBeenCalledTimes(2);
 		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
-			enrichArticles: false,
+			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 		});
@@ -1005,7 +1006,7 @@ describe('FeedSyncService', () => {
 
 		for (const call of syncFeedSpy.mock.calls) {
 			expect(call[2]).toEqual({
-				enrichArticles: false,
+				enrichArticles: true,
 				warmArticleCache: false,
 				forceFetch: true,
 			});
@@ -1949,21 +1950,10 @@ describe('FeedSyncService', () => {
 		globalThis.fetch = mockFetch as unknown as typeof fetch;
 
 		try {
-			// Create service AFTER setting up the mock
-			const service = new FeedSyncService(
-				{} as never,
-				{} as never,
-				{} as never,
-				{} as never,
-				{} as never,
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+			const content = await fetchArticlePageContent(
+				'https://www.naointendo.com.br/posts/12345-test-post',
+				{ timeoutMs: 5_000, maxContentLength: 1_000_000, allowPrivateHosts: true },
 			);
-
-			const content = await (
-				service as unknown as {
-					fetchArticlePageContent(canonicalUrl: string): Promise<string | null>;
-				}
-			).fetchArticlePageContent('https://www.naointendo.com.br/posts/12345-test-post');
 
 			expect(content).toContain(
 				'<iframe class="embedded-media embedded-media--x" src="https://platform.twitter.com/embed/Tweet.html?id=123456789"></iframe>',

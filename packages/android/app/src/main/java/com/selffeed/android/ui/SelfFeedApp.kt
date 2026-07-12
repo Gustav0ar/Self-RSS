@@ -215,8 +215,8 @@ fun SelfFeedApp(
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
     // Use paging items if available, otherwise fall back to state items
-    val rawArticleQueue = if (selectedArticle != null && state.articles.items.isNotEmpty()) {
-        state.articles.items
+    val rawArticleQueue = if (selectedArticle != null && state.articles.readerQueue.isNotEmpty()) {
+        state.articles.readerQueue
     } else {
         articlePagingItems.itemSnapshotList.items
             .takeIf { it.isNotEmpty() }

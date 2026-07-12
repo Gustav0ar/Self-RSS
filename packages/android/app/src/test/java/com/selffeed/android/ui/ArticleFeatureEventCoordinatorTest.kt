@@ -140,5 +140,7 @@ class ArticleFeatureEventCoordinatorTest {
         override fun applyAllSearchMarkedRead() {
             allSearchMarkedRead += Unit
         }
+
+        override fun refreshArticleContent() = Unit
     }
 }

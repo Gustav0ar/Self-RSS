@@ -27,6 +27,8 @@ function article(
 		publishedAt: null,
 		displayedAt,
 		isRead,
+		contentStatus: 'feed_ready',
+		contentVersion: 1,
 	};
 }
 

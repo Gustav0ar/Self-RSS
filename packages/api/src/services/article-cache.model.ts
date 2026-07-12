@@ -25,6 +25,8 @@ export interface CachedArticle {
 	publishedAt: string | null;
 	displayedAt: string;
 	isRead: boolean;
+	contentStatus: string;
+	contentVersion: number;
 }
 
 export interface ArticleListCacheMeta {
@@ -70,6 +72,8 @@ export function cacheableArticleRows(
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			displayedAt: (article.publishedAt ?? article.fetchedAt).toISOString(),
 			isRead: article.isRead,
+			contentStatus: article.contentStatus,
+			contentVersion: article.contentVersion,
 		})),
 		cursor: hasMore ? encodeArticleCursor(rows[rows.length - 1] ?? null, 'latest') : null,
 		hasMore,

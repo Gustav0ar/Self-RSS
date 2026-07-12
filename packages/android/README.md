@@ -19,7 +19,7 @@ Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and t
   - OPML import/export (exported as attached `.opml` file via share sheet)
   - OPML import summary + warning details dialog
 - Performance-oriented UI with lazy lists and stateflow-driven rendering
-- Repository-level resilience for read APIs (retry with bounded backoff/jitter) plus short-lived in-memory caching for frequently refreshed lists/detail views
+- Repository-level resilience for read APIs (retry with bounded backoff/jitter), Room-backed offline detail caching, parallel adjacent-article warming, and realtime content-version invalidation
 
 ## Project Layout
 
@@ -43,6 +43,7 @@ packages/android/
 
 - Debug builds use `http://10.0.2.2:3000/api/v1/` for emulator-to-host API access.
 - Release builds require `SELF_FEED_API_BASE_URL` to be set to an HTTPS API endpoint.
+- Release certificate pinning is configured with pipe- or comma-separated `sha256/...` values in `SELF_FEED_CERTIFICATE_PINS` and `SELF_FEED_BACKUP_CERTIFICATE_PINS`.
 
 For physical-device debug testing, update the debug `API_BASE_URL` in `app/build.gradle.kts` to your LAN host IP.
 
@@ -89,13 +90,14 @@ Install these in Android Studio SDK Manager:
 - `android:allowBackup` is disabled.
 - `network_security_config` is variant-specific: debug allows local cleartext (`10.0.2.2`, `localhost`), release disables cleartext traffic.
 - Trusted embedded media preview is restricted to known providers/hosts.
+- Release certificate pins are applied to the hostname derived from `SELF_FEED_API_BASE_URL`; configure both primary and backup pins so certificate rotation does not strand installed clients.
 
 ## Testing
 
 - Added unit tests for trusted media URL validation in `app/src/test/java/com/selffeed/android/ui/utils/MediaTrustTest.kt`.
-- Added comprehensive ViewModel unit tests in `app/src/test/java/com/selffeed/android/ui/MainViewModelTest.kt` covering bootstrap/auth, debounced search, pagination, and debug resilience metric reset paths.
-- Added baseline instrumentation UI tests for auth flow rendering/toggle in `app/src/androidTest/java/com/selffeed/android/ui/AuthFlowUiTest.kt`.
-- Added instrumentation tests for tab content interactions/load-more behavior in `app/src/androidTest/java/com/selffeed/android/ui/TabContentUiTest.kt`.
+- ViewModel tests cover auth/bootstrap, feed sync completion, article/search queues, pagination, caching, and realtime invalidation.
+- Article warming and enrichment-manager tests verify bounded parallel prefetch and selected-reader refresh behavior.
+- Instrumentation coverage exercises the root Hilt activity and major Compose flows.
 - Run unit tests with `./gradlew -p packages/android :app:testDebugUnitTest`.
 - Run instrumentation tests with `./gradlew -p packages/android :app:connectedDebugAndroidTest`.
 - Run lint + debug build checks with `./gradlew -p packages/android :app:lintDebug :app:assembleDebug`.
@@ -115,6 +117,7 @@ Install these in Android Studio SDK Manager:
 Before shipping a production build:
 
 - Set `SELF_FEED_API_BASE_URL` to your HTTPS API domain before building release artifacts.
+- Set at least two valid pins across `SELF_FEED_CERTIFICATE_PINS` and `SELF_FEED_BACKUP_CERTIFICATE_PINS`; retain an overlap pin during certificate rotation.
 - Confirm release network policy keeps cleartext disabled (`src/release/res/xml/network_security_config.xml`).
 - Ensure signing config/keystore is configured in Android Studio or CI secrets.
 - Run full Android checks:

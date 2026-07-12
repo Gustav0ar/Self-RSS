@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -147,18 +148,52 @@ class FeedsViewModel @Inject constructor(
             _state.update { it.copy(loading = true, errorMessage = null) }
             when (val result = repository.syncAllFeeds()) {
                 is AppResult.Success -> {
-                    _state.update {
-                        it.copy(
-                            loading = false,
-                            lastSyncSummary = result.data,
-                            syncRevision = it.syncRevision + 1,
-                        )
+                    var completed = false
+                    var failureMessage: String? = null
+                    for (poll in 0 until SYNC_STATUS_MAX_POLLS) {
+                        when (val status = repository.syncAllFeedsStatus()) {
+                            is AppResult.Success -> {
+                                if (status.data.stale) {
+                                    failureMessage = "Feed sync stalled. Please try again."
+                                    break
+                                }
+                                if (!status.data.active) {
+                                    completed = true
+                                    break
+                                }
+                            }
+                            is AppResult.Error -> {
+                                failureMessage = status.message
+                                break
+                            }
+                        }
+                        delay(SYNC_STATUS_POLL_MS)
                     }
-                    loadFeeds()
+                    _state.update {
+                        if (completed) {
+                            it.copy(
+                                loading = false,
+                                lastSyncSummary = result.data,
+                                syncRevision = it.syncRevision + 1,
+                                statusMessage = "Feeds refreshed",
+                            )
+                        } else {
+                            it.copy(
+                                loading = false,
+                                errorMessage = failureMessage ?: "Feed sync timed out. Please try again.",
+                            )
+                        }
+                    }
+                    if (completed) loadFeeds()
                 }
                 is AppResult.Error -> _state.update { it.copy(loading = false, errorMessage = result.message) }
             }
         }
+    }
+
+    private companion object {
+        const val SYNC_STATUS_POLL_MS = 750L
+        const val SYNC_STATUS_MAX_POLLS = 400
     }
 
     fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {

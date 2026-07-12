@@ -360,7 +360,7 @@ describe('ArticleService', () => {
 		expect(metrics.recordCacheHit).not.toHaveBeenCalled();
 	});
 
-	it('waits for enrichment to complete before returning success', async () => {
+	it('queues enrichment without blocking the reader request', async () => {
 		const articleRepo = {
 			findById: vi.fn(async () => ({
 				id: 'article-1',
@@ -369,6 +369,7 @@ describe('ArticleService', () => {
 				contentHtml: 'Only text in the RSS feed',
 				heroImageUrl: null,
 				media: [],
+				contentStatus: 'feed_ready',
 			})),
 		};
 		const feedRepo = {
@@ -377,7 +378,7 @@ describe('ArticleService', () => {
 		const metricsRepo = {};
 		const redis = { del: vi.fn(async () => 0) };
 		const feedSyncService = {
-			enrichArticleNow: vi.fn(async () => undefined),
+			queueArticleEnrichment: vi.fn(async () => undefined),
 		};
 
 		const service = new ArticleService(
@@ -390,15 +391,8 @@ describe('ArticleService', () => {
 
 		const result = await service.enrichArticle('user-1', 'article-1');
 
-		expect(feedSyncService.enrichArticleNow).toHaveBeenCalledWith({
-			articleId: 'article-1',
-			userId: 'user-1',
-			canonicalUrl: 'https://example.com/post-1',
-			contentHtml: 'Only text in the RSS feed',
-			heroImageUrl: null,
-			fetchedAt: undefined,
-		});
-		expect(result).toEqual({ success: true });
+		expect(feedSyncService.queueArticleEnrichment).toHaveBeenCalledWith('article-1');
+		expect(result).toEqual({ success: true, queued: true });
 	});
 
 	it('invalidates only affected unread cache keys on markRead', async () => {

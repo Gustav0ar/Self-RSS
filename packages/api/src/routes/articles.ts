@@ -30,7 +30,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		// (hash) or mark-read (isRead). Client sends back via
 		// If-None-Match; if unchanged, 304 avoids transferring the full
 		// HTML body — the dominant cost for old, long articles.
-		const etag = `"${article.hash ?? article.id}-${article.isRead ? 'r' : 'u'}"`;
+		const etag = `"${article.hash ?? article.id}-v${article.contentVersion}-${article.isRead ? 'r' : 'u'}"`;
 		if (c.req.header('If-None-Match') === etag) {
 			return c.body(null, 304, { ETag: etag });
 		}

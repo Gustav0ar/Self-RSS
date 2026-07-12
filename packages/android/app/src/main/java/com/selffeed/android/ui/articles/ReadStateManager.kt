@@ -7,7 +7,10 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
 import com.selffeed.android.network.ArticlesMarkedReadEvent
+import com.selffeed.android.network.ArticlesNewEvent
+import com.selffeed.android.network.ArticleUpdatedEvent
 import com.selffeed.android.network.ReadStateSyncEvent
+import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.ui.ArticleReadStateStore
 import com.selffeed.android.ui.ArticleFeatureEvent
 import kotlinx.coroutines.CancellationException
@@ -191,6 +194,14 @@ class ReadStateManager @Inject constructor(
         when (event) {
             is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
             is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
+            is ArticlesNewEvent, is RealtimeConnectedEvent -> {
+                repository.invalidateArticleContentCaches()
+                _events.emit(ArticleFeatureEvent.ArticlesChanged())
+            }
+            is ArticleUpdatedEvent -> {
+                repository.invalidateArticleContentCaches(event.articleId)
+                _events.emit(ArticleFeatureEvent.ArticlesChanged(event.articleId))
+            }
         }
     }
 

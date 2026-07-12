@@ -11,6 +11,7 @@ import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.LoginRequest
 import com.selffeed.android.network.MarkAllReadRequest
 import com.selffeed.android.network.MarkReadRequest
@@ -66,6 +67,7 @@ class FeedRemoteDataSource @Inject constructor(
     suspend fun deleteFeed(id: String): Boolean = api.deleteFeed(id).data.success
     suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id).data
     suspend fun syncAllFeeds(): SyncResponse = api.syncAllFeeds().data
+    suspend fun syncAllFeedsStatus(): FeedSyncAllStatus = api.syncAllFeedsStatus().data
     suspend fun importOpml(part: MultipartBody.Part): OpmlImportSummary = api.importOpml(part).data
     suspend fun exportOpml(): Response<ResponseBody> = api.exportOpml()
 }

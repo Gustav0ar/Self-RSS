@@ -17,6 +17,7 @@ import {
 	useMarkRead,
 	usePreferences,
 	usePrefetchArticle,
+	useSearch,
 	useUpdatePreferences,
 	useWarmNextArticles,
 } from '@/hooks/queries';
@@ -35,13 +36,10 @@ interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
 	selectedArticleId: string | null;
-	/**
-	 * True when the article id came from a deep link (`/articles/:id`),
-	 * false when the user is on the list view. Deep links must
-	 * always render their article even if the surrounding list is
-	 * empty — only clear the active article in the list-view case.
-	 */
+	/** Keep deep-linked articles selected while the surrounding list loads. */
 	fromDeepLink?: boolean;
+	searchQuery?: string;
+	searchScope?: 'all' | 'category';
 	onSelectArticle: (id: string | null) => void;
 }
 
@@ -52,6 +50,8 @@ export function FeedView({
 	categoryId,
 	selectedArticleId,
 	fromDeepLink = false,
+	searchQuery = '',
+	searchScope = 'all',
 	onSelectArticle,
 }: FeedViewProps) {
 	const [unreadOnly, setUnreadOnly] = useState(false);
@@ -80,10 +80,15 @@ export function FeedView({
 			sort,
 			limit: 30,
 		});
+	const { data: searchData } = useSearch(
+		searchQuery,
+		searchScope === 'category' ? categoryId : undefined,
+	);
 
 	useSilentArticleRefresh({ feedId, categoryId, unreadOnly, sort, limit: 30 });
 
 	const markRead = useMarkRead();
+	const markReadMutate = markRead.mutate;
 	const markAllRead = useMarkAllRead();
 	const fetchedArticles = useMemo(() => dedupeArticlePages(data?.pages), [data?.pages]);
 	const categoryTree = categories ?? EMPTY_CATEGORY_TREE;
@@ -98,7 +103,14 @@ export function FeedView({
 		sort,
 		unreadOnly,
 	});
-	const articleIds = useMemo(() => articles.map((a) => a.id), [articles]);
+	const searchArticles = useMemo(
+		() => searchData?.pages.flatMap((page) => page.data) ?? [],
+		[searchData?.pages],
+	);
+	const readingQueue =
+		searchQuery.trim().length >= 2 && searchArticles.length > 0 ? searchArticles : articles;
+	const articleIds = useMemo(() => readingQueue.map((a) => a.id), [readingQueue]);
+	const listArticleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	// The article URL (`/articles/:articleId`) can be deep-linked or
 	// bookmarked. The article list is loaded asynchronously, so an
 	// incoming article id may briefly not be in the list while the
@@ -106,7 +118,7 @@ export function FeedView({
 	// is fully loaded and the id is genuinely missing — never while
 	// we're still loading, otherwise deep links would flash the empty
 	// state during the first paint.
-	const articleIdsSet = useMemo(() => new Set(articleIds), [articleIds]);
+	const articleIdsSet = useMemo(() => new Set(listArticleIds), [listArticleIds]);
 	const articleIsInLoadedList = selectedArticleId ? articleIdsSet.has(selectedArticleId) : false;
 	// On a deep link (`/articles/:id`) we must keep the article id even
 	// when the surrounding list is empty or hasn't loaded it yet. In the
@@ -182,31 +194,41 @@ export function FeedView({
 		}
 	}, [fetchedArticles, retainReadArticle, selectedArticleId, unreadOnly]);
 
-	function handleSelectArticle(id: string) {
-		if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {
-			const nextArticleIndex = articles.findIndex((article) => article.id === id);
-			const nextArticle = nextArticleIndex >= 0 ? articles[nextArticleIndex] : null;
-			if (nextArticle && !nextArticle.isRead) {
-				retainReadArticle(nextArticle, nextArticleIndex);
-				markRead.mutate({ articleId: nextArticle.id, read: true });
+	const handleSelectArticle = useCallback(
+		(id: string) => {
+			if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {
+				const nextArticleIndex = readingQueue.findIndex((article) => article.id === id);
+				const nextArticle = nextArticleIndex >= 0 ? readingQueue[nextArticleIndex] : null;
+				if (nextArticle && !nextArticle.isRead) {
+					retainReadArticle(nextArticle, nextArticleIndex);
+					markReadMutate({ articleId: nextArticle.id, read: true });
+				}
 			}
-		}
 
-		onSelectArticle(id);
-	}
+			onSelectArticle(id);
+		},
+		[
+			autoMarkReadMode,
+			selectedArticleId,
+			readingQueue,
+			retainReadArticle,
+			markReadMutate,
+			onSelectArticle,
+		],
+	);
 
 	useKeyboardNav({
 		articleIds,
 		selectedId: effectiveArticleId,
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
-			const article = articles.find((a) => a.id === id);
+			const article = readingQueue.find((a) => a.id === id);
 			if (article) {
-				markRead.mutate({ articleId: id, read: !article.isRead });
+				markReadMutate({ articleId: id, read: !article.isRead });
 			}
 		},
 		onOpenExternal: (id) => {
-			const article = articles.find((a) => a.id === id);
+			const article = readingQueue.find((a) => a.id === id);
 			if (article) {
 				window.open(
 					`/articles/${id}${articleSearchParams ? `?${articleSearchParams}` : ''}`,
@@ -364,7 +386,7 @@ export function FeedView({
 			<div className="min-h-0 flex-1 bg-background/10">
 				<ReaderPane
 					articleId={effectiveArticleId}
-					articles={articles}
+					articles={readingQueue}
 					onSelectArticle={handleSelectArticle}
 				/>
 			</div>

@@ -115,7 +115,8 @@ export class ArticleCacheService {
 			// Apply limit + cursor
 			const cursorIndex = options.limit > 0 ? options.limit : 20;
 			const result = filtered.slice(0, cursorIndex + 1);
-			const hasMore = result.length > cursorIndex;
+			const hasMore =
+				result.length > cursorIndex || (cursorIndex >= filtered.length && data.hasMore);
 			const items = result.slice(0, cursorIndex);
 
 			this.cacheMetrics?.recordCacheHit(metricType);

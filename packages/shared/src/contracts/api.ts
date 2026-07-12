@@ -1,6 +1,7 @@
 import type {
 	AppSettings,
 	Article,
+	ArticleContentStatus,
 	ArticleMedia,
 	Category,
 	Feed,
@@ -111,6 +112,8 @@ export interface ArticleListItem {
 	publishedAt: string | null;
 	displayedAt: string;
 	isRead: boolean;
+	contentStatus: ArticleContentStatus;
+	contentVersion: number;
 }
 
 export interface ArticleDetail extends Article {
@@ -160,10 +163,21 @@ export interface ArticlesNewEvent {
 	updatedAt: string;
 }
 
+export interface ArticleUpdatedEvent {
+	type: 'article.updated';
+	eventId: string;
+	articleId: string;
+	feedId: string;
+	contentStatus: ArticleContentStatus;
+	contentVersion: number;
+	updatedAt: string;
+}
+
 export type ReadStateSyncEvent =
 	| ArticleReadStateChangedEvent
 	| ArticlesMarkedReadEvent
-	| ArticlesNewEvent;
+	| ArticlesNewEvent
+	| ArticleUpdatedEvent;
 
 // Stats
 export interface StatsResponse {

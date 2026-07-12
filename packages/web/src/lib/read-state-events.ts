@@ -103,14 +103,20 @@ async function fetchReadStateStream(signal: AbortSignal) {
 export async function streamReadStateEvents({
 	signal,
 	onEvent,
+	onConnected,
 }: {
 	signal: AbortSignal;
 	onEvent: (event: ReadStateSyncEvent) => void;
+	onConnected?: () => void;
 }) {
 	const body = await fetchReadStateStream(signal);
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	const parser = createSseParser((eventName, data) => {
+		if (eventName === 'read-state.connected') {
+			onConnected?.();
+			return;
+		}
 		if (eventName !== 'read-state') {
 			return;
 		}

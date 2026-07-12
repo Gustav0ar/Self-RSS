@@ -108,6 +108,7 @@ export function createDeps(
 		resolvedSyncConfig,
 		articleCache,
 		realtime,
+		metrics,
 	);
 	const opmlImport = new OpmlImportService(repos.category, repos.feed, {
 		allowPrivateHosts: resolvedSyncConfig.allowPrivateHosts,

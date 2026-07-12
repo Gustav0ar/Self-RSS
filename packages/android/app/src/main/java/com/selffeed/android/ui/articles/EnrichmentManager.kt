@@ -22,6 +22,7 @@ class EnrichmentManager @Inject constructor(
     private var scope: CoroutineScope? = null
     private var enrichArticleJob: Job? = null
     private var selectedArticle: ArticleDetail? = null
+    private var onArticleRefreshed: ((ArticleDetail) -> Unit)? = null
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
@@ -29,6 +30,10 @@ class EnrichmentManager @Inject constructor(
 
     fun updateSelectedArticle(article: ArticleDetail?) {
         selectedArticle = article
+    }
+
+    fun setOnArticleRefreshed(callback: (ArticleDetail) -> Unit) {
+        onArticleRefreshed = callback
     }
 
     /**
@@ -44,10 +49,9 @@ class EnrichmentManager @Inject constructor(
                     delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
                     when (val refreshed = repository.article(article.id, forceRefresh = true)) {
                         is AppResult.Success -> {
-                            selectedArticle = if (selectedArticle?.id == article.id) {
-                                refreshed.data
-                            } else {
-                                selectedArticle
+                            if (selectedArticle?.id == article.id) {
+                                selectedArticle = refreshed.data
+                                onArticleRefreshed?.invoke(refreshed.data)
                             }
                         }
                         is AppResult.Error -> Unit

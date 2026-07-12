@@ -3,6 +3,7 @@ import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
 import { closeRedis, getRedis } from './db/redis.js';
 import {
+	startArticleEnrichmentWorker,
 	startCacheWarmer,
 	startQueuedSyncWorker,
 	startRetentionCleanup,
@@ -58,6 +59,7 @@ try {
 	// until their status marker expires.
 	const dueSyncCoordinator = { isRunning: false };
 	const queuedSyncCoordinator = { isRunning: false };
+	const articleEnrichmentCoordinator = { isRunning: false };
 	const stopSyncScheduler = startSyncScheduler(
 		deps.services.feedSync,
 		undefined,
@@ -67,6 +69,11 @@ try {
 		deps.services.feedSync,
 		undefined,
 		queuedSyncCoordinator,
+	);
+	const stopArticleEnrichmentWorker = startArticleEnrichmentWorker(
+		deps.services.feedSync,
+		undefined,
+		articleEnrichmentCoordinator,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article, {
 		retentionDays: env.RETENTION_DELETION_DAYS,
@@ -92,7 +99,11 @@ try {
 	async function waitForInFlightSyncs(): Promise<boolean> {
 		const startTime = Date.now();
 
-		while (dueSyncCoordinator.isRunning || queuedSyncCoordinator.isRunning) {
+		while (
+			dueSyncCoordinator.isRunning ||
+			queuedSyncCoordinator.isRunning ||
+			articleEnrichmentCoordinator.isRunning
+		) {
 			const elapsed = Date.now() - startTime;
 			if (elapsed >= DRAIN_TIMEOUT_MS) {
 				logger.warn('Timeout waiting for in-flight syncs to complete', {
@@ -128,6 +139,7 @@ try {
 		logger.info('Stopping schedulers');
 		stopSyncScheduler();
 		stopQueuedSyncWorker();
+		stopArticleEnrichmentWorker();
 		stopRetentionCleanup();
 		stopCacheWarmer();
 		stopWorkerHeartbeat();

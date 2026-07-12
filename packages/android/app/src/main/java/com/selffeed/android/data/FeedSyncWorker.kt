@@ -16,6 +16,7 @@ import androidx.hilt.work.HiltWorker
 import com.selffeed.android.BuildConfig
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.delay
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
 
@@ -31,7 +32,7 @@ class FeedSyncWorker @AssistedInject constructor(
             return Result.success()
         }
         return when (val result = repository.syncAllFeeds()) {
-            is AppResult.Success -> Result.success()
+            is AppResult.Success -> awaitQueuedSync()
             is AppResult.Error -> {
                 val cause = result.cause
                 when {
@@ -54,11 +55,27 @@ class FeedSyncWorker @AssistedInject constructor(
         }
     }
 
+    private suspend fun awaitQueuedSync(): Result {
+        repeat(SYNC_STATUS_MAX_POLLS) {
+            when (val status = repository.syncAllFeedsStatus()) {
+                is AppResult.Success -> {
+                    if (status.data.stale) return Result.retry()
+                    if (!status.data.active) return Result.success()
+                }
+                is AppResult.Error -> return Result.retry()
+            }
+            delay(SYNC_STATUS_POLL_MS)
+        }
+        return Result.retry()
+    }
+
     companion object {
         private const val TAG = "FeedSyncWorker"
         private const val PERIODIC_WORK_NAME = "rss-feed-sync"
         private const val ONE_SHOT_WORK_NAME = "rss-feed-sync-kick"
         private const val SYNC_INTERVAL_MINUTES = 30L
+        private const val SYNC_STATUS_POLL_MS = 1_000L
+        private const val SYNC_STATUS_MAX_POLLS = 600
 
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<FeedSyncWorker>(

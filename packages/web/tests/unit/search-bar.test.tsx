@@ -6,6 +6,7 @@ const useSearchMock = vi.fn();
 
 vi.mock('../../src/hooks/queries', () => ({
 	useSearch: (...args: unknown[]) => useSearchMock(...args),
+	usePrefetchArticle: () => vi.fn(),
 }));
 
 describe('SearchBar', () => {

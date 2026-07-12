@@ -48,4 +48,21 @@ class ReadStateEventStreamTest {
         assertTrue(event.isRead)
         assertEquals("web-client", event.clientId)
     }
+
+    @Test
+    fun parser_convertsNewAndUpdatedArticleEvents() {
+        val newArticles = SseMessage(
+            eventName = "read-state",
+            data = """{"type":"articles.new","eventId":"event-2","feedId":"feed-1","articleIds":["article-1"],"count":1,"updatedAt":"2026-07-11T12:00:00.000Z"}""",
+        ).toReadStateEvent(adapter)
+        val updatedArticle = SseMessage(
+            eventName = "read-state",
+            data = """{"type":"article.updated","eventId":"event-3","articleId":"article-1","feedId":"feed-1","contentStatus":"full_ready","contentVersion":2,"updatedAt":"2026-07-11T12:00:01.000Z"}""",
+        ).toReadStateEvent(adapter)
+
+        assertTrue(newArticles is ArticlesNewEvent)
+        assertEquals(listOf("article-1"), (newArticles as ArticlesNewEvent).articleIds)
+        assertTrue(updatedArticle is ArticleUpdatedEvent)
+        assertEquals(2, (updatedArticle as ArticleUpdatedEvent).contentVersion)
+    }
 }

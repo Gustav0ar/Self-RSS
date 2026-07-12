@@ -58,6 +58,7 @@ const categories = [
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: (params: unknown) => useInfiniteArticlesMock(params),
+	useSearch: () => ({ data: undefined }),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	usePreferences: () => ({

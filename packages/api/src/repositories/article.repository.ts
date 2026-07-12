@@ -1,17 +1,19 @@
 import type { Database as BunDatabase } from 'bun:sqlite';
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { getRawDb } from '../db/client.js';
 import { articleMedia, articleReads, articles, feeds } from '../db/schema.js';
 import { decodeArticleCursor } from '../utils/article-cursor.js';
 import {
-	type ArticleScope,
-	mapSearchRow,
-	type RawSearchRow,
-	type SearchRow,
-	scopeConditions,
-	toFtsQuery,
-} from './article-query.helpers.js';
+	type EnrichedContentReplacement,
+	findPendingArticleEnrichments,
+	markArticleEnrichmentAttempt,
+	markArticleEnrichmentComplete,
+	markArticleEnrichmentRetry,
+	queueArticleEnrichments,
+	replaceArticleEnrichedContent,
+} from './article-enrichment.persistence.js';
+import { type ArticleScope, type SearchRow, scopeConditions } from './article-query.helpers.js';
+import { searchArticles, searchArticlesByScope } from './article-search.js';
 
 export type { ArticleScope } from './article-query.helpers.js';
 
@@ -64,6 +66,8 @@ export class ArticleRepository {
 				author: articles.author,
 				excerpt: articles.excerpt,
 				heroImageUrl: articles.heroImageUrl,
+				contentStatus: articles.contentStatus,
+				contentVersion: articles.contentVersion,
 				publishedAt: articles.publishedAt,
 				fetchedAt: articles.fetchedAt,
 				feedTitle: feeds.title,
@@ -113,6 +117,8 @@ export class ArticleRepository {
 				author: articles.author,
 				excerpt: articles.excerpt,
 				heroImageUrl: articles.heroImageUrl,
+				contentStatus: articles.contentStatus,
+				contentVersion: articles.contentVersion,
 				publishedAt: articles.publishedAt,
 				fetchedAt: articles.fetchedAt,
 				feedTitle: feeds.title,
@@ -191,6 +197,12 @@ export class ArticleRepository {
 				publishedAt: articles.publishedAt,
 				fetchedAt: articles.fetchedAt,
 				hash: articles.hash,
+				contentStatus: articles.contentStatus,
+				contentVersion: articles.contentVersion,
+				enrichmentQueuedAt: articles.enrichmentQueuedAt,
+				enrichmentAttemptedAt: articles.enrichmentAttemptedAt,
+				enrichedAt: articles.enrichedAt,
+				enrichmentError: articles.enrichmentError,
 				feedTitle: feeds.title,
 				feedFaviconUrl: feeds.faviconUrl,
 				feedSiteUrl: feeds.siteUrl,
@@ -252,6 +264,9 @@ export class ArticleRepository {
 				author: articles.author,
 				contentHtml: articles.contentHtml,
 				heroImageUrl: articles.heroImageUrl,
+				contentStatus: articles.contentStatus,
+				contentVersion: articles.contentVersion,
+				enrichmentAttempts: articles.enrichmentAttempts,
 			})
 			.from(articles)
 			.where(and(eq(articles.feedId, feedId), inArray(articles.guid, guids)));
@@ -368,53 +383,7 @@ export class ArticleRepository {
 		limit: number,
 		cursor?: string,
 	): Promise<SearchRow[]> {
-		if (feedIds.length === 0) return [];
-
-		const ftsQuery = toFtsQuery(query);
-		if (!ftsQuery) {
-			return [];
-		}
-
-		const decodedCursor = decodeArticleCursor(cursor, 'latest');
-
-		// Use parameterized query to prevent SQL injection
-		// All user input (feedIds, _userId, cursor values) are passed as bound parameters
-		const params: (string | number)[] = [ftsQuery, _userId, ...feedIds];
-
-		// Cursor pagination: results are ordered by fts_rank ASC, sortTimestamp DESC, id DESC
-		// bm25() returns negative values where lower = more relevant
-		// For pagination, we want articles that come AFTER the cursor:
-		// - Either fts_rank > cursorRank (less relevant after more relevant)
-		// - Or fts_rank = cursorRank AND (sortTimestamp < cursorTimestamp OR (sortTimestamp = cursorTimestamp AND id < cursorId))
-		let cursorCondition = '';
-		if (decodedCursor?.ftsRank != null) {
-			const cursorRank = decodedCursor.ftsRank;
-			const cursorSeconds = decodedCursor.seconds;
-			const cursorId = decodedCursor.id;
-			cursorCondition = ` AND (fts.fts_rank > ? OR (fts.fts_rank = ? AND (coalesce(a.published_at, a.fetched_at) < ? OR (coalesce(a.published_at, a.fetched_at) = ? AND a.id < ?))))`;
-			params.push(cursorRank, cursorRank, cursorSeconds, cursorSeconds, cursorId);
-		}
-
-		// Use parameterized IN clause for feed IDs
-		const feedIdPlaceholders = feedIds.map(() => '?').join(', ');
-
-		const sqlQuery =
-			`WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE a.feed_id IN (${feedIdPlaceholders})` +
-			cursorCondition +
-			` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
-
-		// Add limit parameter
-		params.push(limit + 1);
-
-		// Use raw SQLite client for FTS queries with bm25
-		const rawDb = this.rawDb ?? getRawDb();
-		if (!rawDb) {
-			return [];
-		}
-
-		const rows = rawDb.query(sqlQuery).all(...params) as RawSearchRow[];
-
-		return rows.map(mapSearchRow);
+		return searchArticles(this.rawDb, _userId, query, feedIds, limit, cursor);
 	}
 
 	async searchByScope(
@@ -423,66 +392,7 @@ export class ArticleRepository {
 		limit: number,
 		cursor?: string,
 	): Promise<SearchRow[]> {
-		const ftsQuery = toFtsQuery(query);
-		if (!ftsQuery) {
-			return [];
-		}
-
-		const decodedCursor = decodeArticleCursor(cursor, 'latest');
-
-		// Use parameterized query to prevent SQL injection
-		// All user input (scope.userId, scope.feedId, scope.categoryId, cursor values) are passed as bound parameters
-		// Parameter order must match SQL placeholders:
-		// 1. ftsQuery (MATCH), 2. ar.user_id (JOIN), 3. f.user_id (WHERE), then feedId/categoryId, then cursor, then limit
-		const params: (string | number)[] = [ftsQuery, scope.userId]; // ftsQuery and ar.user_id first
-
-		// Build scope filter - f.user_id placeholder comes FIRST in WHERE (before categoryId)
-		let scopeFilter = 'f.user_id = ?';
-		params.push(scope.userId); // for f.user_id in WHERE (comes before categoryId in SQL)
-
-		if (scope.feedId) {
-			scopeFilter += ' AND f.id = ?';
-			params.push(scope.feedId);
-		}
-		if (scope.categoryId) {
-			// Include the category and all its descendants
-			scopeFilter +=
-				' AND f.category_id IN (WITH RECURSIVE category_scope(id) AS (SELECT id FROM categories WHERE id = ? AND user_id = ? UNION ALL SELECT child.id FROM categories child INNER JOIN category_scope parent ON child.parent_category_id = parent.id WHERE child.user_id = ?) SELECT id FROM category_scope)';
-			params.push(scope.categoryId, scope.userId, scope.userId);
-		}
-
-		// Cursor pagination: results are ordered by fts_rank ASC, sortTimestamp DESC, id DESC
-		// bm25() returns negative values where lower = more relevant
-		// For pagination, we want articles that come AFTER the cursor:
-		// - Either fts_rank > cursorRank (less relevant after more relevant)
-		// - Or fts_rank = cursorRank AND (sortTimestamp < cursorTimestamp OR (sortTimestamp = cursorTimestamp AND id < cursorId))
-		let cursorCondition = '';
-		if (decodedCursor?.ftsRank != null) {
-			const cursorRank = decodedCursor.ftsRank;
-			const cursorSeconds = decodedCursor.seconds;
-			const cursorId = decodedCursor.id;
-			cursorCondition = ` AND (fts.fts_rank > ? OR (fts.fts_rank = ? AND (coalesce(a.published_at, a.fetched_at) < ? OR (coalesce(a.published_at, a.fetched_at) = ? AND a.id < ?))))`;
-			params.push(cursorRank, cursorRank, cursorSeconds, cursorSeconds, cursorId);
-		}
-
-		const sqlQuery =
-			`WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? WHERE ` +
-			scopeFilter +
-			cursorCondition +
-			` ORDER BY fts.fts_rank ASC, coalesce(a.published_at, a.fetched_at) DESC, a.id DESC LIMIT ?`;
-
-		// Add limit
-		params.push(limit + 1);
-
-		// Use raw SQLite client for FTS queries with bm25
-		const rawDb = this.rawDb ?? getRawDb();
-		if (!rawDb) {
-			return [];
-		}
-
-		const rows = rawDb.query(sqlQuery).all(...params) as RawSearchRow[];
-
-		return rows.map(mapSearchRow);
+		return searchArticlesByScope(this.rawDb, scope, query, limit, cursor);
 	}
 
 	async insertMedia(data: (typeof articleMedia.$inferInsert)[]) {
@@ -492,6 +402,33 @@ export class ArticleRepository {
 
 	async updateContent(id: string, data: Partial<typeof articles.$inferInsert>) {
 		await this.db.update(articles).set(data).where(eq(articles.id, id));
+	}
+
+	async queueEnrichments(articleIds: string[], queuedAt = new Date()) {
+		await queueArticleEnrichments(this.db, articleIds, queuedAt);
+	}
+
+	async findPendingEnrichments(limit: number, now = new Date()) {
+		return findPendingArticleEnrichments(this.db, limit, now);
+	}
+
+	async markEnrichmentAttempt(articleId: string, attemptedAt = new Date()) {
+		await markArticleEnrichmentAttempt(this.db, articleId, attemptedAt);
+	}
+
+	async markEnrichmentRetry(
+		articleId: string,
+		data: { failed: boolean; error: string; nextEnrichmentAt: Date | null },
+	) {
+		return markArticleEnrichmentRetry(this.db, articleId, data);
+	}
+
+	async markEnrichmentComplete(articleId: string, enrichedAt = new Date()) {
+		return markArticleEnrichmentComplete(this.db, articleId, enrichedAt);
+	}
+
+	async replaceEnrichedContent(articleId: string, data: EnrichedContentReplacement) {
+		return replaceArticleEnrichedContent(this.db, articleId, data);
 	}
 
 	async replaceMedia(articleId: string, data: (typeof articleMedia.$inferInsert)[]) {

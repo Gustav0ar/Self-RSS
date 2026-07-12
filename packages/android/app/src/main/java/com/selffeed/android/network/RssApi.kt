@@ -68,6 +68,9 @@ interface RssApi {
     @POST("feeds/sync")
     suspend fun syncAllFeeds(): ApiEnvelope<SyncResponse>
 
+    @GET("feeds/sync/status")
+    suspend fun syncAllFeedsStatus(): ApiEnvelope<FeedSyncAllStatus>
+
     @Multipart
     @POST("feeds/import/opml")
     suspend fun importOpml(@Part file: MultipartBody.Part): ApiEnvelope<OpmlImportSummary>

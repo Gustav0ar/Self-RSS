@@ -36,6 +36,7 @@ fun SelfFeedAppRoute(
 
     SelfFeedTheme(darkTheme = darkTheme) {
         val latestFeedsState by rememberUpdatedState(feedsState)
+        val latestSearchState by rememberUpdatedState(searchState)
         val articleEventCoordinator = remember { ArticleFeatureEventCoordinator() }
 
         LaunchedEffect(Unit) {
@@ -115,6 +116,13 @@ fun SelfFeedAppRoute(
                         override fun applyAllSearchMarkedRead() {
                             searchViewModel.applyAllMarkedRead()
                         }
+
+                        override fun refreshArticleContent() {
+                            feedsViewModel.loadCategories()
+                            feedsViewModel.loadFeeds()
+                            settingsViewModel.loadStats()
+                            if (latestSearchState.query.length >= 2) searchViewModel.search(debounceMs = 0)
+                        }
                     },
                 )
             }
@@ -170,7 +178,11 @@ fun SelfFeedAppRoute(
                 },
                 onLoadMoreArticles = articlesViewModel::loadMoreArticles,
                 onOpenArticle = {
-                    articlesViewModel.openArticle(it)
+                    if (chromeState.activeTab == HomeTab.SEARCH) {
+                        articlesViewModel.openArticleFromQueue(it, searchState.results)
+                    } else {
+                        articlesViewModel.openArticle(it)
+                    }
                     appViewModel.setTab(HomeTab.ARTICLES)
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,

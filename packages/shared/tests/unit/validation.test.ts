@@ -5,6 +5,7 @@ import {
 	createFeedSchema,
 	markAllReadSchema,
 	markReadSchema,
+	readStateSyncEventSchema,
 	updatePreferencesSchema,
 } from '../../src/index.js';
 
@@ -101,5 +102,19 @@ describe('shared validation contracts', () => {
 				password: 'short',
 			}).success,
 		).toBe(false);
+	});
+
+	it('validates article content completion events', () => {
+		expect(
+			readStateSyncEventSchema.parse({
+				type: 'article.updated',
+				eventId: uuidA,
+				articleId: uuidB,
+				feedId: uuidA,
+				contentStatus: 'full_ready',
+				contentVersion: 2,
+				updatedAt: '2026-07-11T12:00:00.000Z',
+			}),
+		).toMatchObject({ type: 'article.updated', contentVersion: 2 });
 	});
 });

@@ -46,11 +46,16 @@ const markReadMutate = vi.fn();
 const enrichMutate = vi.fn();
 let autoMarkReadMode = 'on_navigate';
 let currentArticle = articleWithEmbeddedHtml;
+let articleIsError = false;
+const refetchArticle = vi.fn();
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
 		data: currentArticle,
 		isLoading: false,
+		isError: articleIsError,
+		isFetching: false,
+		refetch: refetchArticle,
 	}),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	useEnrichArticle: () => ({ mutate: enrichMutate, isPending: false }),
@@ -62,6 +67,7 @@ describe('ReaderPane', () => {
 		vi.clearAllMocks();
 		autoMarkReadMode = 'on_navigate';
 		currentArticle = articleWithEmbeddedHtml;
+		articleIsError = false;
 	});
 
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
@@ -135,7 +141,7 @@ describe('ReaderPane', () => {
 		});
 	});
 
-	it('requests enrichment for the selected article when media is not enriched yet', async () => {
+	it('does not fetch canonical content from the reader navigation path', () => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
@@ -145,9 +151,17 @@ describe('ReaderPane', () => {
 
 		render(<ReaderPane articleId="article-1" />);
 
-		await waitFor(() => {
-			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
-		});
+		expect(enrichMutate).not.toHaveBeenCalled();
+	});
+
+	it('shows a retry action for transient article failures', () => {
+		articleIsError = true;
+		currentArticle = null as never;
+		const { getByText } = render(<ReaderPane articleId="article-1" />);
+
+		fireEvent.click(getByText('Retry'));
+
+		expect(refetchArticle).toHaveBeenCalledOnce();
 	});
 
 	it('updates scroll progress through a scheduled DOM write', () => {

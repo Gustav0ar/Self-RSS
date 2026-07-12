@@ -8,7 +8,11 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
 
 function encodeSse(event: string, data: unknown) {
 	const payload = typeof data === 'string' ? data : JSON.stringify(data);
-	return `event: ${event}\ndata: ${payload}\n\n`;
+	const eventId =
+		typeof data === 'object' && data !== null && 'eventId' in data
+			? String((data as { eventId: unknown }).eventId)
+			: null;
+	return `${eventId ? `id: ${eventId}\n` : ''}event: ${event}\ndata: ${payload}\n\n`;
 }
 
 export function createEventRoutes(realtimeService: RealtimeService) {

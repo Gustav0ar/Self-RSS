@@ -2,13 +2,12 @@ package com.selffeed.android.ui.articles
 
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SelfFeedRepository
-import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import java.util.Collections
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,7 +22,6 @@ class ArticleWarmingManager @Inject constructor(
 ) {
     private var scope: CoroutineScope? = null
     private var warmNextArticlesJob: Job? = null
-    private val backgroundEnrichAttemptedAt = Collections.synchronizedMap(mutableMapOf<String, Long>())
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
@@ -37,14 +35,15 @@ class ArticleWarmingManager @Inject constructor(
         val currentIndex = items.indexOfFirst { it.id == articleId }
         if (currentIndex == -1) return
 
-        val previous = items
-            .asReversed()
-            .drop(items.size - 1 - currentIndex)
-            .take(NEXT_ARTICLE_WARM_LIMIT)
+        val previous = (currentIndex - 1 downTo 0)
+            .take(PREVIOUS_ARTICLE_WARM_LIMIT)
+            .map(items::get)
         val next = items
             .drop(currentIndex + 1)
             .take(NEXT_ARTICLE_WARM_LIMIT)
-        val articlesToWarm = (previous + next).distinct()
+        // Forward navigation is the common path, so next articles get cache
+        // priority. The current article is deliberately excluded.
+        val articlesToWarm = (next + previous).distinctBy { it.id }
         if (articlesToWarm.isEmpty()) return
 
         // Prefetch hero images for all articles to warm
@@ -52,27 +51,19 @@ class ArticleWarmingManager @Inject constructor(
 
         warmNextArticlesJob?.cancel()
         warmNextArticlesJob = scope?.launch {
-            for (article in articlesToWarm) {
-                val detail = repository.cachedArticleDetail(article.id)
-                    ?: when (val prefetched = repository.prefetchArticle(article.id)) {
-                        is AppResult.Success -> prefetched.data
-                        is AppResult.Error -> continue
-                    }
-
-                repository.prefetchHeroImages(listOf(detail.heroImageUrl))
-
-                if (!shouldAttemptBackgroundEnrichment(detail)) continue
-
-                when (val enriched = repository.enrichArticle(article.id, invalidateCaches = false)) {
-                    is AppResult.Success -> {
-                        if (enriched.data.success || enriched.data.reason == "already_enriched") {
-                            delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
-                            repository.refreshArticleDetail(article.id)
+            // Detail fetches run concurrently and are intentionally decoupled
+            // from canonical enrichment. A slow publisher must never block the
+            // next swipe target from entering memory/disk cache.
+            val details = articlesToWarm.map { article ->
+                async {
+                    repository.cachedArticleDetail(article.id)
+                        ?: when (val prefetched = repository.prefetchArticle(article.id)) {
+                            is AppResult.Success -> prefetched.data
+                            is AppResult.Error -> null
                         }
-                    }
-                    is AppResult.Error -> Unit
                 }
-            }
+            }.awaitAll()
+            repository.prefetchHeroImages(details.map { it?.heroImageUrl })
         }
     }
 
@@ -84,24 +75,8 @@ class ArticleWarmingManager @Inject constructor(
         warmNextArticlesJob = null
     }
 
-    private fun shouldAttemptBackgroundEnrichment(article: ArticleDetail): Boolean {
-        if (article.isEnriched || article.canonicalUrl.isNullOrBlank()) return false
-
-        val now = System.currentTimeMillis()
-        backgroundEnrichAttemptedAt.entries.removeIf {
-            now - it.value >= ARTICLE_BACKGROUND_ENRICH_RETRY_MS
-        }
-
-        val lastAttemptAt = backgroundEnrichAttemptedAt[article.id]
-        if (lastAttemptAt != null && now - lastAttemptAt < ARTICLE_BACKGROUND_ENRICH_RETRY_MS) return false
-
-        backgroundEnrichAttemptedAt[article.id] = now
-        return true
-    }
-
     private companion object {
-        const val ARTICLE_ENRICH_REFRESH_DELAY_MS = 600L
-        const val ARTICLE_BACKGROUND_ENRICH_RETRY_MS = 10 * 60 * 1000L
         const val NEXT_ARTICLE_WARM_LIMIT = 2
+        const val PREVIOUS_ARTICLE_WARM_LIMIT = 1
     }
 }

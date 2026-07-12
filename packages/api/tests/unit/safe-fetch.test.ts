@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AppError } from '../../src/middleware/errors.js';
 import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../../src/utils/safe-fetch.js';
 
@@ -100,6 +100,30 @@ describe('fetchWithValidatedRedirects', () => {
 		);
 
 		expect(response.status).toBe(200);
+	});
+
+	it('cancels an unused redirect body before following the next hop', async () => {
+		const cancel = vi.fn();
+		const redirectBody = new ReadableStream({ cancel });
+		const fetchImpl = fetchSequence([
+			new Response(redirectBody, {
+				status: 302,
+				headers: { location: 'https://feeds.example.com/feed.xml' },
+			}),
+			new Response('<rss />', { status: 200 }),
+		]);
+
+		await fetchWithValidatedRedirects(
+			'https://example.com/redirect',
+			{},
+			{ allowPrivateHosts: false, maxRedirects: 3 },
+			{
+				fetchImpl,
+				lookupFn: async () => [{ address: '93.184.216.34', family: 4 as const }],
+			},
+		);
+
+		expect(cancel).toHaveBeenCalledOnce();
 	});
 
 	it('validates DNS before delegating to an injected fetch implementation', async () => {

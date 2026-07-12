@@ -14,6 +14,8 @@ function cachedArticle(id: string, displayedAt: string, isRead = false) {
 		publishedAt: null,
 		displayedAt,
 		isRead,
+		contentStatus: 'feed_ready',
+		contentVersion: 1,
 	};
 }
 
@@ -31,6 +33,8 @@ function articleRow(index: number) {
 		publishedAt: date,
 		fetchedAt: date,
 		isRead: false,
+		contentStatus: 'feed_ready',
+		contentVersion: 1,
 	};
 }
 
@@ -142,6 +146,27 @@ describe('ArticleCacheService - getCachedArticleList', () => {
 		expect(result?.hasMore).toBe(true);
 		expect(metrics.recordCacheHit).toHaveBeenCalledWith('article_list');
 		expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+	});
+
+	it('preserves the stored cache boundary when the caller requests all 100 warmed rows', async () => {
+		const cached = {
+			articles: Array.from({ length: 100 }, (_, index) =>
+				cachedArticle(`a-${index}`, new Date(2026, 0, 1, 0, 100 - index).toISOString()),
+			),
+			cursor: 'stored-boundary',
+			hasMore: true,
+			meta: { syncedAt: '2026-01-01T00:00:00.000Z', newArticlesCount: 0, generation: 1 },
+		};
+		const redis = {
+			get: vi.fn().mockResolvedValueOnce(JSON.stringify(cached)).mockResolvedValueOnce('1'),
+		};
+		const service = new ArticleCacheService({} as never, {} as never, redis as never);
+
+		const result = await service.getCachedArticleList('user-1', { limit: 100 });
+
+		expect(result?.articles).toHaveLength(100);
+		expect(result?.hasMore).toBe(true);
+		expect(result?.cursor).not.toBeNull();
 	});
 
 	it('orders cached newest articles by timestamp and id for stable ties', async () => {

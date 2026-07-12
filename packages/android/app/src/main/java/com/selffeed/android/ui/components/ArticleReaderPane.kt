@@ -344,6 +344,8 @@ private fun ArticleDetail.toArticleListItem(): ArticleListItem =
         heroImageUrl = heroImageUrl,
         publishedAt = publishedAt,
         isRead = isRead,
+        contentStatus = contentStatus,
+        contentVersion = contentVersion,
     )
 
 @Composable

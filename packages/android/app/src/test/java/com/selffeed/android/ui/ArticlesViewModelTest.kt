@@ -72,6 +72,7 @@ class ArticlesViewModelTest {
         every { repository.readStateEvents() } returns kotlinx.coroutines.flow.flowOf()
         every { repository.clientId() } returns "test-client"
         coEvery { repository.invalidateReadStateCaches(any()) } just runs
+        coEvery { repository.invalidateArticleContentCaches(any()) } just runs
         coEvery { repository.markCachedArticlesReadByFeeds(any()) } just runs
 
         // Create real managers with mocked repository
@@ -240,6 +241,28 @@ class ArticlesViewModelTest {
 
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Second Article", viewModel.state.value.selectedArticle?.title)
+    }
+
+    @Test
+    fun `search article opens from its own queue without flashing the previous reader`() = runTest {
+        coEvery { repository.article("search-1", false) } returns
+            AppResult.Success(sampleDetail("search-1", title = "Fetched Search One"))
+        coEvery { repository.article("search-2", false) } returns
+            AppResult.Success(sampleDetail("search-2", title = "Fetched Search Two"))
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("feed-article", title = "Feed Article")))
+        viewModel.openArticle("feed-article")
+        val searchQueue = listOf(
+            sampleArticle("search-1", title = "Search One"),
+            sampleArticle("search-2", title = "Search Two"),
+        )
+
+        viewModel.openArticleFromQueue("search-1", searchQueue)
+        assertEquals("search-1", viewModel.state.value.selectedArticle?.id)
+        assertEquals(searchQueue.map { it.id }, viewModel.state.value.readerQueue.map { it.id })
+
+        viewModel.openAdjacentArticle(1)
+        assertEquals("search-2", viewModel.state.value.selectedArticle?.id)
     }
 
     @Test

@@ -11,6 +11,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -66,6 +67,7 @@ class FeedRepositoryImpl @Inject constructor(
     override suspend fun deleteFeed(id: String): AppResult<Boolean> = source.deleteFeed(id)
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = source.syncFeed(id)
     override suspend fun syncAllFeeds(): AppResult<SyncResponse> = source.syncAllFeeds()
+    override suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus> = source.syncAllFeedsStatus()
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray): AppResult<OpmlImportSummary> =
         source.importOpml(fileName, fileBytes)
 
@@ -112,6 +114,8 @@ class ArticleRepositoryImpl @Inject constructor(
     override fun clientId(): String = delegate.clientId()
     override fun readStateEvents(): Flow<ReadStateSyncEvent> = delegate.readStateEvents()
     override suspend fun invalidateReadStateCaches(articleId: String?) = delegate.invalidateReadStateCaches(articleId)
+    override suspend fun invalidateArticleContentCaches(articleId: String?) =
+        delegate.invalidateArticleContentCaches(articleId)
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) =
         delegate.updateCachedReadState(articleId, read)
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) =

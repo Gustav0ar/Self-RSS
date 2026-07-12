@@ -80,7 +80,15 @@ export interface Article {
 	publishedAt: string | null;
 	fetchedAt: string;
 	hash: string;
+	contentStatus: ArticleContentStatus;
+	contentVersion: number;
+	enrichmentQueuedAt: string | null;
+	enrichmentAttemptedAt: string | null;
+	enrichedAt: string | null;
+	enrichmentError: string | null;
 }
+
+export type ArticleContentStatus = 'feed_ready' | 'enrichment_pending' | 'full_ready' | 'failed';
 
 export interface ArticleMedia {
 	id: string;

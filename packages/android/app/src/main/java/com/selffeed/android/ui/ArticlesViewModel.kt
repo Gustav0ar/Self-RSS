@@ -29,6 +29,7 @@ import javax.inject.Inject
 
 data class ArticlesUiState(
     val items: List<ArticleListItem> = emptyList(),
+    val readerQueue: List<ArticleListItem> = emptyList(),
     val selectedArticle: ArticleDetail? = null,
     val selectedFeedId: String? = null,
     val selectedCategoryId: String? = null,
@@ -54,6 +55,8 @@ sealed interface ArticleFeatureEvent {
         val affectedFeedIds: Set<String>,
         val markedCount: Int,
     ) : ArticleFeatureEvent
+
+    data class ArticlesChanged(val articleId: String? = null) : ArticleFeatureEvent
 }
 
 @HiltViewModel
@@ -87,6 +90,15 @@ class ArticlesViewModel @Inject constructor(
         // Initialize managers with viewModelScope
         readStateManager.setScope(viewModelScope)
         enrichmentManager.setScope(viewModelScope)
+        enrichmentManager.setOnArticleRefreshed { refreshed ->
+            _state.update { current ->
+                if (current.selectedArticle?.id == refreshed.id) {
+                    current.copy(selectedArticle = refreshed.withReadState(knownArticleReadStates()[refreshed.id]))
+                } else {
+                    current
+                }
+            }
+        }
         articleWarmingManager.setScope(viewModelScope)
 
         // Forward read state manager events to our events flow
@@ -104,6 +116,7 @@ class ArticlesViewModel @Inject constructor(
                 selectedFeedId = feedId,
                 selectedCategoryId = categoryId,
                 selectedArticle = null,
+                readerQueue = emptyList(),
                 errorMessage = null,
             )
         }
@@ -193,12 +206,18 @@ class ArticlesViewModel @Inject constructor(
 
     fun openArticle(id: String, forceRefresh: Boolean = false) {
         val openRequestId = openArticleSequence.incrementAndGet()
-        val optimisticArticle = _state.value.items
+        val current = _state.value
+        val activeQueue = current.readerQueue.takeIf { queue -> queue.any { it.id == id } }
+            ?: current.items
+        if (current.readerQueue !== activeQueue) {
+            _state.update { it.copy(readerQueue = activeQueue) }
+        }
+        val optimisticArticle = activeQueue
             .firstOrNull { it.id == id }
             ?.toArticleDetail(knownArticleReadStates()[id])
         if (optimisticArticle != null) {
             selectArticle(optimisticArticle)
-            articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
+            articleWarmingManager.warmAdjacentArticles(id, activeQueue)
         }
 
         viewModelScope.launch {
@@ -213,7 +232,7 @@ class ArticlesViewModel @Inject constructor(
                         publishReadStateOverrides(id to article.isRead)
                     }
                     enrichmentManager.maybeEnrichSelectedArticle(article)
-                    articleWarmingManager.warmAdjacentArticles(id, _state.value.items)
+                    articleWarmingManager.warmAdjacentArticles(id, _state.value.readerQueue)
                 }
                 is AppResult.Error -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
@@ -221,6 +240,11 @@ class ArticlesViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    fun openArticleFromQueue(id: String, queue: List<ArticleListItem>) {
+        if (queue.isNotEmpty()) _state.update { it.copy(readerQueue = queue) }
+        openArticle(id)
     }
 
     fun onArticleDisplayed(articleId: String) {
@@ -236,7 +260,7 @@ class ArticlesViewModel @Inject constructor(
     fun closeArticle() {
         enrichmentManager.cancelEnrichment()
         articleWarmingManager.cancelWarming()
-        _state.update { it.copy(selectedArticle = null) }
+        _state.update { it.copy(selectedArticle = null, readerQueue = emptyList()) }
         enrichmentManager.updateSelectedArticle(null)
         readStateManager.updateSelectedArticle(null)
     }
@@ -244,11 +268,12 @@ class ArticlesViewModel @Inject constructor(
     fun openAdjacentArticle(direction: Int) {
         val state = _state.value
         val selectedId = state.selectedArticle?.id ?: return
-        val currentIndex = state.items.indexOfFirst { it.id == selectedId }
+        val queue = state.readerQueue.ifEmpty { state.items }
+        val currentIndex = queue.indexOfFirst { it.id == selectedId }
         if (currentIndex == -1) return
         val nextIndex = currentIndex + direction
-        if (nextIndex !in state.items.indices) return
-        openArticle(state.items[nextIndex].id)
+        if (nextIndex !in queue.indices) return
+        openArticle(queue[nextIndex].id)
     }
 
     fun markRead(articleId: String, read: Boolean) {
@@ -388,6 +413,13 @@ class ArticlesViewModel @Inject constructor(
             is ArticleFeatureEvent.ScopeMarkedRead -> {
                 applyScopeReadState(event.affectedFeedIds)
             }
+            is ArticleFeatureEvent.ArticlesChanged -> {
+                refreshArticlePager()
+                val selectedId = _state.value.selectedArticle?.id
+                if (selectedId != null && (event.articleId == null || event.articleId == selectedId)) {
+                    openArticle(selectedId, forceRefresh = true)
+                }
+            }
         }
     }
 
@@ -515,7 +547,9 @@ class ArticlesViewModel @Inject constructor(
             feedSiteUrl = null,
             media = emptyList(),
             isRead = isRead ?: this.isRead,
-            isEnriched = false,
+            isEnriched = contentStatus == "full_ready",
+            contentStatus = contentStatus,
+            contentVersion = contentVersion,
         )
 
     private fun readDelta(previousReadState: Boolean?, newReadState: Boolean): Pair<Int, Int> {

@@ -4,6 +4,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
@@ -43,6 +44,7 @@ class FeedsViewModelTest {
         coEvery { repository.updateFeed(any(), any(), any(), any()) } returns AppResult.Success(sampleFeed())
         coEvery { repository.deleteFeed(any()) } returns AppResult.Success(true)
         coEvery { repository.syncAllFeeds() } returns AppResult.Success(SyncResponse(syncedFeeds = 3, failedFeeds = 0))
+        coEvery { repository.syncAllFeedsStatus() } returns AppResult.Success(completedSyncStatus())
     }
 
     @After
@@ -258,3 +260,10 @@ class FeedsViewModelTest {
         unreadCount = unreadCount,
     )
 }
+
+private fun completedSyncStatus() = FeedSyncAllStatus(
+    queued = false,
+    running = false,
+    active = false,
+    stale = false,
+)

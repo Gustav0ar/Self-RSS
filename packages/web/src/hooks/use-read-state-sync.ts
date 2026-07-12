@@ -34,6 +34,18 @@ export function useReadStateSync(enabled: boolean) {
 			controller = new AbortController();
 			void streamReadStateEvents({
 				signal: controller.signal,
+				onConnected: () => {
+					reconnectAttempt = 0;
+					// Redis Pub/Sub is intentionally ephemeral. Reconcile every active
+					// cache family after reconnect so events lost while offline cannot
+					// leave the reader or counts stale.
+					qc.invalidateQueries({ queryKey: ['articles'] });
+					qc.invalidateQueries({ queryKey: ['article'] });
+					qc.invalidateQueries({ queryKey: ['search'] });
+					qc.invalidateQueries({ queryKey: ['feeds'] });
+					qc.invalidateQueries({ queryKey: ['categories'] });
+					qc.invalidateQueries({ queryKey: ['stats'] });
+				},
 				onEvent: (event) => {
 					reconnectAttempt = 0;
 					applyReadStateSyncEvent(qc, event, { clientId });

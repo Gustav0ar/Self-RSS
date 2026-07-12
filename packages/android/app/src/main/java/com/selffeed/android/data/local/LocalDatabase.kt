@@ -82,6 +82,8 @@ data class ArticleEntity(
     val publishedAt: String?,
     val displayedAt: String?,
     val isRead: Boolean,
+    val contentStatus: String,
+    val contentVersion: Int,
 )
 
 @Entity(

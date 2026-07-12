@@ -41,6 +41,8 @@ export function RootLayout() {
 			search: buildArticleRouteSearch({
 				feedId: selectedFeedId,
 				categoryId: selectedCategoryId,
+				q: searchQuery,
+				searchScope,
 			}),
 		});
 	}

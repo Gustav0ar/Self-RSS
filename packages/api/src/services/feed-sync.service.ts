@@ -12,7 +12,6 @@ import { createLogger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import {
-	extractArticleContentFromPage,
 	extractExcerpt,
 	extractHeroImage,
 	extractMediaFromHtml,
@@ -21,11 +20,7 @@ import {
 	stripHtml,
 } from '../utils/sanitizer.js';
 import type { ArticleCacheService } from './article-cache.service.js';
-import {
-	buildNaointendidoApiUrl,
-	parseNaointendidoPost,
-	reconstructNaointendidoPostHtml,
-} from './content-extractors/naointendido-post.js';
+import { fetchArticlePageContent } from './article-source-fetcher.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
@@ -35,6 +30,7 @@ import {
 	releaseManualSyncAllFeedsState,
 	startManualSyncAllFeedsHeartbeat,
 } from './feed-sync-status.js';
+import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
 const logger = createLogger();
@@ -70,6 +66,8 @@ type FeedItemRecord = Record<string, unknown>;
 
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
+const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
+const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
@@ -146,6 +144,10 @@ export class FeedSyncService {
 		private config: SyncConfig,
 		private articleCache?: ArticleCacheService,
 		private realtimeService?: RealtimeService,
+		private performanceMetrics?: Pick<
+			MetricsService,
+			'recordArticleEnrichment' | 'setArticleEnrichmentQueueDepth'
+		>,
 	) {
 		this.parser = new RSSParser({
 			timeout: this.config.timeoutMs,
@@ -294,10 +296,7 @@ export class FeedSyncService {
 							}),
 						});
 					}
-					if (
-						shouldEnrichArticles &&
-						this.shouldAttemptArticleEnrichment(canonicalUrl, rawHtml, existingArticle.contentHtml)
-					) {
+					if (shouldEnrichArticles && this.shouldAttemptArticleEnrichment(canonicalUrl)) {
 						pendingEnrichments.push({
 							articleId: existingArticle.id,
 							userId,
@@ -319,10 +318,7 @@ export class FeedSyncService {
 					contentText: textContent || null,
 					heroImageUrl: heroImage,
 				});
-				if (
-					shouldEnrichArticles &&
-					this.shouldAttemptArticleEnrichment(canonicalUrl, rawHtml, null)
-				) {
+				if (shouldEnrichArticles && this.shouldAttemptArticleEnrichment(canonicalUrl)) {
 					pendingInsertedEnrichmentsByGuid.set(guid, {
 						canonicalUrl: canonicalUrl!,
 						userId,
@@ -343,6 +339,9 @@ export class FeedSyncService {
 					heroImageUrl: heroImage,
 					publishedAt,
 					hash,
+					contentStatus: canonicalUrl && shouldEnrichArticles ? 'enrichment_pending' : 'feed_ready',
+					enrichmentQueuedAt: canonicalUrl && shouldEnrichArticles ? now : null,
+					nextEnrichmentAt: canonicalUrl && shouldEnrichArticles ? now : null,
 				});
 			};
 
@@ -433,6 +432,9 @@ export class FeedSyncService {
 					});
 				}
 			}
+			if (pendingEnrichments.length > 0) {
+				await this.enrichArticlesInBackground(pendingEnrichments);
+			}
 
 			// Update nextSyncAt so the scheduler's index-backed query skips this
 			// feed until it's due (prevents re-fetching every minute).
@@ -473,15 +475,6 @@ export class FeedSyncService {
 					count: insertedArticles.length,
 					updatedAt: new Date().toISOString(),
 				});
-
-			if (pendingEnrichments.length > 0) {
-				void this.enrichArticlesInBackground(pendingEnrichments).catch((error) => {
-					logger.warn('Background article enrichment failed after feed sync', {
-						feedId,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				});
-			}
 
 			if (shouldWarmArticleCache && this.articleCache && insertedArticles.length > 0) {
 				this.warmArticleCacheInBackground(userId, { feedId });
@@ -548,7 +541,7 @@ export class FeedSyncService {
 			concurrency: this.config.concurrency,
 			syncFeed: (feed) =>
 				this.syncFeed(feed.id, userId, {
-					enrichArticles: false,
+					enrichArticles: true,
 					warmArticleCache: false,
 					forceFetch: true,
 				}),
@@ -662,31 +655,94 @@ export class FeedSyncService {
 	}
 
 	async enrichArticleNow(enrichment: PendingArticleEnrichment) {
-		await this.enrichSingleArticle(enrichment);
+		await this.articleRepo.queueEnrichments([enrichment.articleId]);
+		return this.processPendingArticleEnrichments(1);
+	}
+
+	async queueArticleEnrichment(articleId: string) {
+		await this.articleRepo.queueEnrichments([articleId]);
 	}
 
 	private async enrichArticlesInBackground(pendingEnrichments: PendingArticleEnrichment[]) {
-		// Sort by most recent first
-		pendingEnrichments.sort((a, b) => b.fetchedAt.getTime() - a.fetchedAt.getTime());
+		await this.articleRepo.queueEnrichments?.(pendingEnrichments.map((item) => item.articleId));
+	}
 
-		for (let i = 0; i < pendingEnrichments.length; i += ARTICLE_ENRICHMENT_CONCURRENCY) {
-			const batch = pendingEnrichments.slice(i, i + ARTICLE_ENRICHMENT_CONCURRENCY);
-			await Promise.allSettled(batch.map((item) => this.enrichSingleArticle(item)));
+	async processPendingArticleEnrichments(limit = ARTICLE_ENRICHMENT_CONCURRENCY * 2) {
+		const pending = await this.articleRepo.findPendingEnrichments(limit);
+		this.performanceMetrics?.setArticleEnrichmentQueueDepth(pending.length);
+		if (pending.length === 0) return { processed: 0, succeeded: 0, failed: 0 };
+
+		let succeeded = 0;
+		let failed = 0;
+		for (let i = 0; i < pending.length; i += ARTICLE_ENRICHMENT_CONCURRENCY) {
+			const batch = pending.slice(i, i + ARTICLE_ENRICHMENT_CONCURRENCY);
+			const results = await Promise.allSettled(
+				batch.map(async (item) => {
+					const startedAt = Date.now();
+					await this.articleRepo.markEnrichmentAttempt(item.articleId);
+					try {
+						const processed = await this.enrichSingleArticle({
+							articleId: item.articleId,
+							userId: item.userId,
+							canonicalUrl: item.canonicalUrl!,
+							contentHtml: item.contentHtml,
+							heroImageUrl: item.heroImageUrl,
+							fetchedAt: item.fetchedAt,
+						});
+						if (!processed) throw new Error('Article enrichment is already in progress');
+						this.performanceMetrics?.recordArticleEnrichment(
+							'success',
+							(Date.now() - startedAt) / 1000,
+						);
+						return true;
+					} catch (error) {
+						const attempts = item.enrichmentAttempts + 1;
+						const exhausted = attempts >= ARTICLE_ENRICHMENT_MAX_ATTEMPTS;
+						const retryDelay = ARTICLE_ENRICHMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5);
+						const updated = await this.articleRepo.markEnrichmentRetry(item.articleId, {
+							failed: exhausted,
+							error: error instanceof Error ? error.message : String(error),
+							nextEnrichmentAt: exhausted ? null : new Date(Date.now() + retryDelay),
+						});
+						if (exhausted) {
+							await this.invalidateArticleDetailCaches(item.userId, [item.articleId]);
+							if (updated && this.realtimeService) {
+								await this.realtimeService.publishEvent(item.userId, {
+									type: 'article.updated',
+									eventId: crypto.randomUUID(),
+									articleId: item.articleId,
+									feedId: updated.feedId,
+									contentStatus: 'failed',
+									contentVersion: updated.contentVersion,
+									updatedAt: new Date().toISOString(),
+								});
+							}
+						}
+						this.performanceMetrics?.recordArticleEnrichment(
+							exhausted ? 'failed' : 'retry',
+							(Date.now() - startedAt) / 1000,
+						);
+						throw error;
+					}
+				}),
+			);
+			for (const result of results) {
+				if (result.status === 'fulfilled') succeeded++;
+				else failed++;
+			}
 		}
+		return { processed: pending.length, succeeded, failed };
 	}
 
 	private async enrichSingleArticle(enrichment: PendingArticleEnrichment) {
 		const lockKey = CacheKeys.articleEnrichmentLock(enrichment.articleId);
 		const lockAcquired = await this.redis.set(lockKey, '1', 'EX', 60, 'NX');
-		if (lockAcquired !== 'OK') return;
+		if (lockAcquired !== 'OK') return false;
 
 		try {
-			const enrichedHtml = await this.resolveEnrichedArticleHtml(
-				enrichment.canonicalUrl,
-				enrichment.contentHtml,
-			);
+			const enrichedHtml = await this.resolveEnrichedArticleHtml(enrichment.canonicalUrl);
 			if (!enrichedHtml) {
-				return;
+				throw new Error('Canonical article content was unavailable');
 			}
 
 			const sanitizedHtml = sanitizeHtml(enrichedHtml);
@@ -697,23 +753,19 @@ export class FeedSyncService {
 				extractHeroImage(sanitizedHtml) ??
 				enrichment.heroImageUrl;
 
-			if (
-				!this.shouldRefreshArticle(
-					enrichment.contentHtml,
-					enrichment.heroImageUrl,
-					sanitizedHtml,
-					heroImage,
-				)
-			) {
-				return;
-			}
+			const shouldReplace = this.shouldRefreshArticle(
+				enrichment.contentHtml,
+				enrichment.heroImageUrl,
+				sanitizedHtml,
+				heroImage,
+			);
 
 			const article = await this.articleRepo.findById(enrichment.articleId);
 			if (!article) {
 				return;
 			}
 
-			await this.articleRepo.updateContent(enrichment.articleId, {
+			const replacement = {
 				contentHtml: sanitizedHtml || null,
 				contentText: textContent || null,
 				excerpt,
@@ -727,44 +779,51 @@ export class FeedSyncService {
 					contentText: textContent || null,
 					heroImageUrl: heroImage,
 				}),
-			});
-			await this.replaceArticleMedia(enrichment.articleId, sanitizedHtml || null);
+				media: extractMediaFromHtml(sanitizedHtml || null).map((item, index) => ({
+					articleId: enrichment.articleId,
+					type: item.type,
+					provider: item.provider,
+					url: item.url,
+					embedUrl: item.embedUrl,
+					width: item.width,
+					height: item.height,
+					position: index,
+				})),
+				enrichedAt: new Date(),
+			};
+			let updated: { feedId: string; contentVersion: number } | null = null;
+			if (shouldReplace && this.articleRepo.replaceEnrichedContent) {
+				updated = await this.articleRepo.replaceEnrichedContent(enrichment.articleId, replacement);
+			} else if (shouldReplace) {
+				await this.articleRepo.updateContent(enrichment.articleId, replacement);
+				await this.articleRepo.replaceMedia(enrichment.articleId, replacement.media);
+			} else if (this.articleRepo.markEnrichmentComplete) {
+				updated = await this.articleRepo.markEnrichmentComplete(enrichment.articleId);
+			}
 			await this.invalidateArticleDetailCaches(enrichment.userId, [enrichment.articleId]);
+			if (updated && this.realtimeService) {
+				await this.realtimeService.publishEvent(enrichment.userId, {
+					type: 'article.updated',
+					eventId: crypto.randomUUID(),
+					articleId: enrichment.articleId,
+					feedId: updated.feedId,
+					contentStatus: 'full_ready',
+					contentVersion: updated.contentVersion,
+					updatedAt: new Date().toISOString(),
+				});
+			}
+			return true;
 		} finally {
 			await this.redis.del(lockKey);
 		}
 	}
 
-	private shouldAttemptArticleEnrichment(
-		canonicalUrl: string | null,
-		rawHtml: string,
-		existingContentHtml: string | null,
-	) {
-		if (!canonicalUrl) return false;
-		const feedHasMedia = hasRichMedia(rawHtml) || extractMediaFromHtml(rawHtml).length > 0;
-		const existingHasMedia =
-			hasRichMedia(existingContentHtml ?? '') ||
-			extractMediaFromHtml(existingContentHtml ?? '').length > 0;
-		if (feedHasMedia || existingHasMedia) {
-			return false;
-		}
-		return true;
+	private shouldAttemptArticleEnrichment(canonicalUrl: string | null) {
+		return !!canonicalUrl?.trim();
 	}
 
-	private async resolveEnrichedArticleHtml(
-		canonicalUrl: string,
-		existingContentHtml: string | null,
-	) {
-		const articlePageHtml = await this.fetchArticlePageContent(canonicalUrl);
-		if (!articlePageHtml) return null;
-
-		const fallbackTextLength = stripHtml(articlePageHtml).length;
-		const existingTextLength = stripHtml(existingContentHtml ?? '').length;
-		if (!hasRichMedia(articlePageHtml) && fallbackTextLength <= existingTextLength) {
-			return null;
-		}
-
-		return articlePageHtml;
+	private resolveEnrichedArticleHtml(canonicalUrl: string) {
+		return fetchArticlePageContent(canonicalUrl, this.config);
 	}
 
 	private async fetchAndParse(
@@ -853,77 +912,6 @@ export class FeedSyncService {
 		return parsed;
 	}
 
-	private async fetchArticlePageContent(canonicalUrl: string) {
-		const controller = new AbortController();
-		const timeoutMs = Math.min(this.config.timeoutMs, 5000);
-		const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-		try {
-			const naointendidoApiUrl = buildNaointendidoApiUrl(canonicalUrl);
-			if (naointendidoApiUrl) {
-				const response = await fetchWithValidatedRedirects(
-					naointendidoApiUrl,
-					{
-						signal: controller.signal,
-						headers: {
-							'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-							Accept: 'application/json',
-							'X-Requested-With': 'XMLHttpRequest',
-						},
-					},
-					{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
-				);
-				if (response.ok) {
-					const text = await readResponseTextWithinLimit(
-						response,
-						this.config.maxContentLength,
-						controller,
-					);
-					const post = parseNaointendidoPost(JSON.parse(text));
-					if (post) {
-						return reconstructNaointendidoPostHtml(post);
-					}
-				}
-			}
-
-			const response = await fetchWithValidatedRedirects(
-				canonicalUrl,
-				{
-					signal: controller.signal,
-					headers: {
-						'User-Agent': 'SelfFeed/1.0',
-						Accept: 'text/html,application/xhtml+xml',
-					},
-				},
-				{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
-			);
-
-			if (!response.ok) {
-				return null;
-			}
-
-			const contentLength = response.headers?.get?.('content-length');
-			if (contentLength && Number.parseInt(contentLength, 10) > this.config.maxContentLength) {
-				return null;
-			}
-
-			const pageHtml = await readResponseTextWithinLimit(
-				response,
-				this.config.maxContentLength,
-				controller,
-			);
-			return extractArticleContentFromPage(pageHtml);
-		} catch (error) {
-			logger.warn('Unable to enrich article from canonical page', {
-				canonicalUrl,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			return null;
-		} finally {
-			clearTimeout(timeout);
-		}
-	}
-
 	private shouldRefreshArticle(
 		existingContentHtml: string | null,
 		existingHeroImageUrl: string | null,
@@ -953,6 +941,7 @@ export class FeedSyncService {
 		existingArticle: {
 			contentHtml: string | null;
 			heroImageUrl: string | null;
+			contentStatus: string;
 		} | null,
 		shouldEnrichArticles: boolean,
 	) {
@@ -964,21 +953,12 @@ export class FeedSyncService {
 			return false;
 		}
 
-		return !existingArticle.contentHtml || !existingArticle.heroImageUrl;
-	}
-
-	private async replaceArticleMedia(articleId: string, html: string | null) {
-		const media = extractMediaFromHtml(html).map((item, index) => ({
-			articleId,
-			type: item.type,
-			provider: item.provider,
-			url: item.url,
-			embedUrl: item.embedUrl,
-			width: item.width,
-			height: item.height,
-			position: index,
-		}));
-		await this.articleRepo.replaceMedia(articleId, media);
+		return !(
+			existingArticle.contentStatus === 'full_ready' ||
+			(!existingArticle.contentStatus &&
+				existingArticle.contentHtml &&
+				existingArticle.heroImageUrl)
+		);
 	}
 
 	private async invalidateUnreadCache(userId: string, feedId?: string) {
