@@ -6,6 +6,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalContext
+import com.selffeed.android.ui.components.shareOpmlContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
@@ -20,6 +22,7 @@ fun SelfFeedAppRoute(
     settingsViewModel: SettingsViewModel,
     performanceMetricsState: PerformanceMetricsState.Holder,
 ) {
+    val context = LocalContext.current
     val authState by authViewModel.state.collectAsStateWithLifecycle()
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
     val isOnline by appViewModel.isOnline.collectAsStateWithLifecycle()
@@ -43,6 +46,12 @@ fun SelfFeedAppRoute(
             authViewModel.bootstrap()
         }
 
+        LaunchedEffect(Unit) {
+            feedsViewModel.opmlExports.collect { content ->
+                shareOpmlContent(context, content)
+            }
+        }
+
         LaunchedEffect(authState.isAuthenticated) {
             if (authState.isAuthenticated) {
                 articlesViewModel.clearSessionReadStateMemory()
@@ -60,9 +69,14 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(settingsState.preferences?.defaultSort, settingsState.preferences?.hideRead) {
+        LaunchedEffect(
+            settingsState.preferences?.defaultSort,
+            settingsState.preferences?.hideRead,
+            settingsState.preferences?.autoMarkReadMode,
+        ) {
             settingsState.preferences?.let {
                 articlesViewModel.setFilter(sort = it.defaultSort, hideRead = it.hideRead)
+                articlesViewModel.setAutoMarkReadMode(it.autoMarkReadMode)
             }
         }
 
@@ -173,20 +187,35 @@ fun SelfFeedAppRoute(
                     articlesViewModel.setScope(feedId = it, categoryId = null)
                     appViewModel.setTab(HomeTab.ARTICLES)
                 },
+                onCreateCategory = feedsViewModel::createCategory,
+                onUpdateCategory = feedsViewModel::updateCategory,
+                onDeleteCategory = feedsViewModel::deleteCategory,
+                onCreateFeed = feedsViewModel::createFeed,
+                onUpdateFeed = { id, title, categoryId, pollingIntervalMinutes ->
+                    feedsViewModel.updateFeed(id, title, categoryId, pollingIntervalMinutes)
+                },
+                onDeleteFeed = feedsViewModel::deleteFeed,
+                onImportOpml = feedsViewModel::importOpml,
+                onExportOpml = feedsViewModel::exportOpml,
+                onDismissImportSummary = feedsViewModel::dismissImportSummary,
                 onRefreshArticles = {
                     feedsViewModel.syncAllFeeds()
                 },
                 onLoadMoreArticles = articlesViewModel::loadMoreArticles,
                 onOpenArticle = {
-                    if (chromeState.activeTab == HomeTab.SEARCH) {
+                    val origin = if (chromeState.activeTab == HomeTab.SEARCH) HomeTab.SEARCH else HomeTab.ARTICLES
+                    if (origin == HomeTab.SEARCH) {
                         articlesViewModel.openArticleFromQueue(it, searchState.results)
                     } else {
                         articlesViewModel.openArticle(it)
                     }
-                    appViewModel.setTab(HomeTab.ARTICLES)
+                    appViewModel.openReaderFrom(origin)
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
-                onCloseArticle = articlesViewModel::closeArticle,
+                onCloseArticle = {
+                    articlesViewModel.closeArticle()
+                    appViewModel.closeReader()
+                },
                 onToggleRead = articlesViewModel::markRead,
                 onMarkAllRead = articlesViewModel::markAllRead,
                 onArticleSnapshot = articlesViewModel::updateArticleQueueSnapshot,
@@ -201,6 +230,11 @@ fun SelfFeedAppRoute(
                 },
                 onDensityChanged = { settingsViewModel.updateDensity(it.apiValue) },
                 onTextSizeChanged = settingsViewModel::updateTextSize,
+                onFontChanged = { settingsViewModel.updateFontFamily(it.apiValue) },
+                onAutoMarkReadModeChanged = {
+                    settingsViewModel.updateAutoMarkReadMode(it.apiValue)
+                    articlesViewModel.setAutoMarkReadMode(it.apiValue)
+                },
                 onRevokeAuthSession = settingsViewModel::revokeAuthSession,
                 onClearMessages = {
                     authViewModel.clearMessages()

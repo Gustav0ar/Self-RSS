@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.dagger.hilt.android")
     // KSP for Moshi adapter codegen. See the matching version in
     // packages/android/build.gradle.kts.
@@ -190,7 +191,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("androidx.metrics:metrics-performance:1.0.0")
-    implementation("androidx.navigation:navigation-compose:2.9.8")
+    implementation("androidx.navigation3:navigation3-runtime:1.1.4")
+    implementation("androidx.navigation3:navigation3-ui:1.1.4")
+    implementation("androidx.compose.material3.adaptive:adaptive-navigation3:1.3.0-rc01")
     implementation("androidx.paging:paging-compose:3.5.0")
     implementation("androidx.paging:paging-runtime-ktx:3.5.0")
 
@@ -201,6 +204,7 @@ dependencies {
     implementation("com.google.android.material:material:1.14.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.9.0")
 
     implementation(platform("com.squareup.okhttp3:okhttp-bom:5.4.0"))
     implementation("com.squareup.okhttp3:okhttp")

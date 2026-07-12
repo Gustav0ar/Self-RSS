@@ -20,6 +20,7 @@ import javax.inject.Inject
  */
 data class AppChromeState(
     val activeTab: HomeTab = HomeTab.ARTICLES,
+    val readerOrigin: HomeTab = HomeTab.ARTICLES,
     val isOnline: Boolean = true,
     val isSyncingFeeds: Boolean = false,
     val globalStatus: String? = null,
@@ -47,6 +48,25 @@ class AppViewModel @Inject constructor(
 
     fun setTab(tab: HomeTab) {
         _chrome.value = _chrome.value.copy(activeTab = tab, globalError = null, globalStatus = null)
+    }
+
+    /**
+     * Reader state is owned by ArticlesViewModel, but the originating tab
+     * belongs to the app shell. Keeping it here makes Back return a search
+     * result to Search instead of unexpectedly dropping the user into All
+     * Articles.
+     */
+    fun openReaderFrom(origin: HomeTab) {
+        _chrome.value = _chrome.value.copy(
+            activeTab = HomeTab.ARTICLES,
+            readerOrigin = origin,
+            globalError = null,
+            globalStatus = null,
+        )
+    }
+
+    fun closeReader() {
+        _chrome.value = _chrome.value.copy(activeTab = _chrome.value.readerOrigin)
     }
 
     fun setSyncingFeeds(syncing: Boolean) {

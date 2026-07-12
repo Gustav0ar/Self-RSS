@@ -9,16 +9,16 @@ Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and t
 - Encrypted local session storage (DataStore preferences with per-value AES/GCM)
 - Feature coverage aligned with web app core flows:
   - Login / Register / Session restore
-  - Categories and feeds (create/edit/delete/select)
+  - Categories and feeds (create/edit/delete/select), including nested categories and per-feed refresh intervals
   - Feed sync
-  - Article list/detail with rich/text reader mode, trusted embedded media preview (YouTube/Vimeo/Streamable), mark read/unread, mark all read, load-more pagination
+  - Article list/detail with rich/text reader mode, trusted embedded media preview (YouTube/Vimeo/Streamable), reader typography controls, share/open-original actions, mark read/unread with undo, mark-all confirmation, and load-more pagination
   - Search with load-more pagination
   - Preferences (theme, density, sort, auto-mark mode, text size, font family, hide read)
   - Stats dashboard with daily activity + recent sync runs
   - Admin registration-lock toggle
-  - OPML import/export (exported as attached `.opml` file via share sheet)
+  - OPML import/export from the subscription UI (exported as attached `.opml` file via share sheet)
   - OPML import summary + warning details dialog
-- Performance-oriented UI with lazy lists and stateflow-driven rendering
+- Performance-oriented UI with lazy lists, stateflow-driven rendering, background refresh status, Navigation 3 responsive list-detail reading, and origin-preserving search navigation
 - Repository-level resilience for read APIs (retry with bounded backoff/jitter), Room-backed offline detail caching, parallel adjacent-article warming, and realtime content-version invalidation
 
 ## Project Layout
@@ -108,9 +108,11 @@ Install these in Android Studio SDK Manager:
 - Android checks run in the dedicated `.github/workflows/android-ci.yml` workflow.
 - Dedicated workflow triggers on Android path changes and supports manual runs (`workflow_dispatch`).
 
-## Known Gaps vs Web
+## UX Notes
 
-- Most core web flows are implemented; remaining gaps are deeper visual polish, additional admin flows, and full keyboard/navigation parity.
+- Reader text size, font, density, and auto-mark behavior are applied consistently to the reader and article queue.
+- Tablets and foldables use a list-detail reader layout once sufficient width is available; compact screens retain the focused reader flow.
+- Search-result readers return to Search when closed, preserving the original query and results.
 
 ## Release Checklist
 

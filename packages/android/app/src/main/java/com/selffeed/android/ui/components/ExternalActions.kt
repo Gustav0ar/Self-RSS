@@ -64,6 +64,17 @@ fun reapStaleOpmlExports(context: Context) {
     }
 }
 
+fun shareArticle(context: Context, title: String, url: String?) {
+    val safeUrl = url?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TITLE, title)
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, "$title\n$safeUrl")
+    }
+    context.startActivity(Intent.createChooser(shareIntent, "Share article"))
+}
+
 fun openExternalUrl(context: Context, url: String?, onCustomTabClosed: (() -> Unit)? = null) {
     val safeUrl = url?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return
     try {

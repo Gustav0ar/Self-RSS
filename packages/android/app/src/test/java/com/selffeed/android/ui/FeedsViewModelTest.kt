@@ -5,6 +5,7 @@ import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
+import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
@@ -75,6 +76,14 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `createCategory preserves the selected parent`() = runTest {
+        val viewModel = FeedsViewModel(repository)
+        viewModel.createCategory("Android", parentCategoryId = "tech")
+
+        coVerify { repository.createCategory("Android", "tech") }
+    }
+
+    @Test
     fun `createCategory with blank name is a no-op`() = runTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.createCategory("   ")
@@ -118,6 +127,26 @@ class FeedsViewModelTest {
 
         assertEquals(firstSummary, viewModel.state.value.lastSyncSummary)
         assertEquals(firstRevision + 1, viewModel.state.value.syncRevision)
+    }
+
+    @Test
+    fun `importOpml exposes a result summary and refreshes subscription data`() = runTest {
+        coEvery { repository.importOpml(any(), any()) } returns AppResult.Success(
+            OpmlImportSummary(
+                createdCategories = 2,
+                createdFeeds = 3,
+                skippedDuplicates = 1,
+                invalidEntries = 0,
+            ),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.importOpml("feeds.opml", "<opml/>".encodeToByteArray())
+
+        assertEquals(3, viewModel.state.value.lastImportSummary?.createdFeeds)
+        assertEquals("OPML imported: 3 feeds, 2 categories", viewModel.state.value.statusMessage)
+        coVerify { repository.categories() }
+        coVerify { repository.feeds(null) }
     }
 
     @Test

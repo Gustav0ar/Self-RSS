@@ -9,14 +9,20 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -26,6 +32,8 @@ data class FeedsUiState(
     val feeds: List<FeedWithCounts> = emptyList(),
     val lastSyncSummary: SyncResponse? = null,
     val syncRevision: Long = 0L,
+    val syncInBackground: Boolean = false,
+    val lastImportSummary: OpmlImportSummary? = null,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
 )
@@ -42,6 +50,8 @@ class FeedsViewModel @Inject constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(FeedsUiState())
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
+    private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
 
     fun loadCategories() {
         viewModelScope.launch {
@@ -61,10 +71,10 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    fun createCategory(name: String) {
+    fun createCategory(name: String, parentCategoryId: String? = null) {
         if (name.isBlank()) return
         viewModelScope.launch {
-            when (val result = repository.createCategory(name.trim(), null)) {
+            when (val result = repository.createCategory(name.trim(), parentCategoryId)) {
                 is AppResult.Success -> {
                     _state.update { it.copy(statusMessage = "Category created") }
                     loadCategories()
@@ -144,56 +154,81 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun syncAllFeeds() {
+        if (_state.value.loading || _state.value.syncInBackground) return
         viewModelScope.launch {
             _state.update { it.copy(loading = true, errorMessage = null) }
             when (val result = repository.syncAllFeeds()) {
                 is AppResult.Success -> {
-                    var completed = false
-                    var failureMessage: String? = null
-                    for (poll in 0 until SYNC_STATUS_MAX_POLLS) {
-                        when (val status = repository.syncAllFeedsStatus()) {
-                            is AppResult.Success -> {
-                                if (status.data.stale) {
-                                    failureMessage = "Feed sync stalled. Please try again."
-                                    break
-                                }
-                                if (!status.data.active) {
-                                    completed = true
-                                    break
-                                }
-                            }
-                            is AppResult.Error -> {
-                                failureMessage = status.message
-                                break
-                            }
-                        }
-                        delay(SYNC_STATUS_POLL_MS)
-                    }
                     _state.update {
-                        if (completed) {
-                            it.copy(
-                                loading = false,
-                                lastSyncSummary = result.data,
-                                syncRevision = it.syncRevision + 1,
-                                statusMessage = "Feeds refreshed",
-                            )
-                        } else {
-                            it.copy(
-                                loading = false,
-                                errorMessage = failureMessage ?: "Feed sync timed out. Please try again.",
-                            )
-                        }
+                        it.copy(
+                            loading = false,
+                            syncInBackground = true,
+                            lastSyncSummary = result.data,
+                            statusMessage = "Refreshing feeds in the background",
+                        )
                     }
-                    if (completed) loadFeeds()
+                    monitorQueuedSync()
                 }
                 is AppResult.Error -> _state.update { it.copy(loading = false, errorMessage = result.message) }
             }
         }
     }
 
+    private suspend fun monitorQueuedSync() {
+        var poll = 0
+        var reportedLongRunningSync = false
+        while (currentCoroutineContext().isActive) {
+            when (val status = repository.syncAllFeedsStatus()) {
+                is AppResult.Success -> {
+                    if (!status.data.active) {
+                        _state.update {
+                            it.copy(
+                                syncInBackground = false,
+                                syncRevision = it.syncRevision + 1,
+                                statusMessage = "Feeds refreshed",
+                            )
+                        }
+                        loadFeeds()
+                        return
+                    }
+                    if (status.data.stale) {
+                        _state.update {
+                            it.copy(
+                                syncInBackground = false,
+                                errorMessage = "Feed sync stalled. Please try again.",
+                            )
+                        }
+                        return
+                    }
+                }
+                is AppResult.Error -> {
+                    _state.update {
+                        it.copy(
+                            syncInBackground = false,
+                            errorMessage = status.message,
+                        )
+                    }
+                    return
+                }
+            }
+
+            poll += 1
+            // Fast polling keeps normal pull-to-refresh responsive. A very
+            // large feed collection can legitimately take longer, so keep
+            // monitoring at a lower cadence instead of losing the completion
+            // signal and leaving the list stale.
+            if (poll == SYNC_STATUS_MAX_FAST_POLLS && !reportedLongRunningSync) {
+                reportedLongRunningSync = true
+                _state.update { it.copy(statusMessage = "Feed refresh is taking longer than usual") }
+            }
+            delay(if (poll < SYNC_STATUS_MAX_FAST_POLLS) SYNC_STATUS_FAST_POLL_MS else SYNC_STATUS_SLOW_POLL_MS)
+        }
+    }
+
     private companion object {
-        const val SYNC_STATUS_POLL_MS = 750L
-        const val SYNC_STATUS_MAX_POLLS = 400
+        const val SYNC_STATUS_FAST_POLL_MS = 750L
+        const val SYNC_STATUS_SLOW_POLL_MS = 10_000L
+        const val SYNC_STATUS_MAX_FAST_POLLS = 400
     }
 
     fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
@@ -243,13 +278,34 @@ class FeedsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.importOpml(fileName, fileBytes)) {
                 is AppResult.Success -> {
-                    _state.update { it.copy(statusMessage = "OPML imported: ${result.data.createdFeeds} feeds, ${result.data.createdCategories} categories") }
+                    _state.update {
+                        it.copy(
+                            lastImportSummary = result.data,
+                            statusMessage = "OPML imported: ${result.data.createdFeeds} feeds, ${result.data.createdCategories} categories",
+                        )
+                    }
                     loadCategories()
                     loadFeeds()
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
             }
         }
+    }
+
+    fun exportOpml() {
+        viewModelScope.launch {
+            when (val result = repository.exportOpml()) {
+                is AppResult.Success -> {
+                    _opmlExports.emit(result.data)
+                    _state.update { it.copy(statusMessage = "OPML export is ready to share") }
+                }
+                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+            }
+        }
+    }
+
+    fun dismissImportSummary() {
+        _state.update { it.copy(lastImportSummary = null) }
     }
 
     fun clearMessages() {

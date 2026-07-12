@@ -1,5 +1,7 @@
 package com.selffeed.android.ui.components
 
+import com.selffeed.android.ui.ReaderAppearance
+import com.selffeed.android.ui.ReaderFontPreference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,6 +36,7 @@ class ReaderHtmlDocumentTest {
         assertTrue(document.contains("picture-in-picture; web-share"))
         assertTrue(document.contains("fallbackChecks >= 10"))
         assertTrue(document.contains("clearInterval(fallbackTimer)"))
+        assertTrue(document.contains("maximum-scale=5.0, user-scalable=yes"))
     }
 
     @Test
@@ -86,5 +89,18 @@ class ReaderHtmlDocumentTest {
             DefaultReaderDocumentBaseUrl,
             readerDocumentBaseUrl(null, "", "not a url", "ftp://example.com/article"),
         )
+    }
+
+    @Test
+    fun readerHtmlDocumentAppliesTheSelectedReaderAppearance() {
+        val document = buildReaderHtmlDocument(
+            html = "<p>Readable</p>",
+            colors = ReaderHtmlColors("#000", "#fff", "#111", "#aaa", "#88f"),
+            appearance = ReaderAppearance(textSizeSp = 20, font = ReaderFontPreference.SERIF),
+            textScale = 1.2f,
+        )
+
+        assertTrue(document.contains("font-family: Georgia"))
+        assertTrue(document.contains("font-size: 24px"))
     }
 }

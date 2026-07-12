@@ -65,6 +65,18 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `reader returns to the tab where it was opened`() = runTest {
+        val viewModel = AppViewModel(repository, sessionStore)
+
+        viewModel.openReaderFrom(HomeTab.SEARCH)
+        assertEquals(HomeTab.ARTICLES, viewModel.chrome.value.activeTab)
+        assertEquals(HomeTab.SEARCH, viewModel.chrome.value.readerOrigin)
+
+        viewModel.closeReader()
+        assertEquals(HomeTab.SEARCH, viewModel.chrome.value.activeTab)
+    }
+
+    @Test
     fun `postError bumps the message and stores it`() = runTest {
         val viewModel = AppViewModel(repository, sessionStore)
         viewModel.postError("first")

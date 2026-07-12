@@ -36,6 +36,7 @@ data class ArticlesUiState(
     val loading: Boolean = false,
     val sort: String? = null,
     val hideRead: Boolean = false,
+    val autoMarkReadMode: AutoMarkReadPreference = AutoMarkReadPreference.ON_NAVIGATE,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
 )
@@ -145,6 +146,10 @@ class ArticlesViewModel @Inject constructor(
         }
     }
 
+    fun setAutoMarkReadMode(mode: String?) {
+        _state.update { it.copy(autoMarkReadMode = AutoMarkReadPreference.fromApiValue(mode)) }
+    }
+
     fun refreshArticles() {
         refreshArticlePager()
     }
@@ -217,6 +222,12 @@ class ArticlesViewModel @Inject constructor(
             ?.toArticleDetail(knownArticleReadStates()[id])
         if (optimisticArticle != null) {
             selectArticle(optimisticArticle)
+            if (
+                current.autoMarkReadMode == AutoMarkReadPreference.ON_NAVIGATE &&
+                !optimisticArticle.isRead
+            ) {
+                markReadAutomatically(id)
+            }
             articleWarmingManager.warmAdjacentArticles(id, activeQueue)
         }
 
@@ -249,11 +260,14 @@ class ArticlesViewModel @Inject constructor(
 
     fun onArticleDisplayed(articleId: String) {
         val article = _state.value.selectedArticle?.takeIf { it.id == articleId } ?: return
-        if (!article.isRead) {
-            markReadAutomatically(articleId)
-        } else {
+        when {
+            _state.value.autoMarkReadMode == AutoMarkReadPreference.ON_OPEN && !article.isRead -> {
+                markReadAutomatically(articleId)
+            }
+            article.isRead -> {
             readStateManager.readStateStore.remember(articleId, true)
             publishReadStateOverrides(articleId to true)
+            }
         }
     }
 

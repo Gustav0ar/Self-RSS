@@ -4,6 +4,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +34,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -47,6 +52,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -63,9 +69,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.paging.PagingData
@@ -77,6 +88,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.openExternalUrl
+import com.selffeed.android.ui.components.shareArticle
 import com.selffeed.android.ui.screens.ArticleTabActions
 import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
@@ -115,6 +127,15 @@ data class SelfFeedAppActions(
     val onHideReadChanged: (Boolean) -> Unit,
     val onCategorySelected: (String?) -> Unit,
     val onFeedSelected: (String?) -> Unit,
+    val onCreateCategory: (String, String?) -> Unit = { _, _ -> },
+    val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
+    val onDeleteCategory: (String) -> Unit = {},
+    val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
+    val onUpdateFeed: (String, String?, String?, Int?) -> Unit = { _, _, _, _ -> },
+    val onDeleteFeed: (String) -> Unit = {},
+    val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
+    val onExportOpml: () -> Unit = {},
+    val onDismissImportSummary: () -> Unit = {},
     val onRefreshArticles: () -> Unit,
     val onLoadMoreArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
@@ -131,6 +152,8 @@ data class SelfFeedAppActions(
     val onSortChanged: (ArticleSortPreference) -> Unit,
     val onDensityChanged: (DensityPreference) -> Unit,
     val onTextSizeChanged: (Int) -> Unit,
+    val onFontChanged: (ReaderFontPreference) -> Unit = {},
+    val onAutoMarkReadModeChanged: (AutoMarkReadPreference) -> Unit = {},
     val onRevokeAuthSession: (String) -> Unit,
     val onClearMessages: () -> Unit,
 )
@@ -152,6 +175,23 @@ fun SelfFeedApp(
     val selectedFeedId = state.articles.selectedFeedId
     val selectedCategoryId = state.articles.selectedCategoryId
     val readStateOverrides by readStateOverrides.collectAsStateWithLifecycle()
+    var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
+    val offerReadUndo: (String, Boolean, Boolean) -> Unit = remember(actions, snackbarHostState, scope) {
+        { articleId, previousRead, read ->
+            scope.launch {
+                val message = if (read) "Marked as read" else "Marked as unread"
+                if (snackbarHostState.showSnackbar(message = message, actionLabel = "Undo") == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                    actions.onToggleRead(articleId, previousRead)
+                }
+            }
+        }
+    }
+    val toggleReadWithUndo: (String, Boolean) -> Unit = remember(actions, offerReadUndo) {
+        { articleId, read ->
+            actions.onToggleRead(articleId, read)
+            offerReadUndo(articleId, !read, read)
+        }
+    }
     val topBarLabel = remember(
         activeTab,
         selectedArticle,
@@ -243,21 +283,29 @@ fun SelfFeedApp(
             totalUnread = state.settings.stats?.totalUnread ?: 0,
             selectedCategoryId = selectedCategoryId,
             selectedFeedId = selectedFeedId,
+            loading = state.feeds.loading,
+            lastImportSummary = state.feeds.lastImportSummary,
         )
     }
     val articleTabState = remember(
         articleQueue,
-        selectedArticle?.id,
-        state.feeds.loading,
+            selectedArticle?.id,
+            state.feeds.loading,
+            state.feeds.syncInBackground,
+            state.isOnline,
+            state.feeds.feeds.size,
         state.articles.loading,
+        state.settings.preferences?.density,
     ) {
-        val isRefreshingArticles = state.feeds.loading || state.articles.loading
         ArticleTabState(
             articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
             hasMoreArticles = false,
             loadingMoreArticles = false,
-            isSyncingFeeds = isRefreshingArticles,
+            isSyncingFeeds = state.feeds.syncInBackground,
+            density = DensityPreference.fromApiValue(state.settings.preferences?.density),
+            isOffline = !state.isOnline,
+            feedCount = state.feeds.feeds.size,
         )
     }
     val searchTabState = remember(
@@ -299,14 +347,26 @@ fun SelfFeedApp(
             onHideReadChanged = actions.onHideReadChanged,
             onCategorySelected = actions.onCategorySelected,
             onFeedSelected = actions.onFeedSelected,
+            onCreateCategory = actions.onCreateCategory,
+            onUpdateCategory = actions.onUpdateCategory,
+            onDeleteCategory = actions.onDeleteCategory,
+            onCreateFeed = actions.onCreateFeed,
+            onUpdateFeed = actions.onUpdateFeed,
+            onDeleteFeed = actions.onDeleteFeed,
+            onImportOpml = actions.onImportOpml,
+            onExportOpml = actions.onExportOpml,
+            onDismissImportSummary = actions.onDismissImportSummary,
         )
     }
-    val articleActions = remember(actions) {
+    val articleActions = remember(actions, snackbarHostState, scope) {
         ArticleTabActions(
             onRefresh = actions.onRefreshArticles,
             onLoadMore = actions.onLoadMoreArticles,
             onOpenArticle = actions.onOpenArticle,
             onToggleRead = actions.onToggleRead,
+            onReadStateChanged = { articleId, previousRead ->
+                offerReadUndo(articleId, previousRead, !previousRead)
+            },
             onArticleSnapshot = actions.onArticleSnapshot,
         )
     }
@@ -326,9 +386,28 @@ fun SelfFeedApp(
             onSortChanged = actions.onSortChanged,
             onDensityChanged = actions.onDensityChanged,
             onTextSizeChanged = actions.onTextSizeChanged,
+            onFontChanged = actions.onFontChanged,
+            onAutoMarkReadModeChanged = actions.onAutoMarkReadModeChanged,
             onRevokeAuthSession = actions.onRevokeAuthSession,
             onLogout = actions.onLogout,
         )
+    }
+    val readerContent: @Composable () -> Unit = {
+        selectedArticle?.let { article ->
+            ArticleReaderPane(
+                articles = articleQueue,
+                selectedArticle = article,
+                onOpenOriginal = { openedArticle ->
+                    openedArticle.canonicalUrl?.let { url ->
+                        openExternalUrl(context, url)
+                    }
+                },
+                onBackToList = actions.onCloseArticle,
+                onArticleSelected = actions.onOpenArticle,
+                onArticleDisplayed = actions.onArticleDisplayed,
+                appearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance(),
+            )
+        }
     }
 
     ModalNavigationDrawer(
@@ -357,14 +436,16 @@ fun SelfFeedApp(
                         articleQueue.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
-                    onMarkAllRead = {
-                        actions.onArticleSnapshot(articlePagingItems.itemSnapshotList.items)
-                        actions.onMarkAllRead()
-                    },
+                    onMarkAllRead = { confirmMarkAllRead = true },
                     onBack = actions.onCloseArticle,
                     onToggleRead = {
                         selectedArticle?.let { article ->
-                            actions.onToggleRead(article.id, !article.isRead)
+                            toggleReadWithUndo(article.id, !article.isRead)
+                        }
+                    },
+                    onShare = {
+                        selectedArticle?.let { article ->
+                            shareArticle(context, article.title, article.canonicalUrl)
                         }
                     },
                 )
@@ -391,22 +472,13 @@ fun SelfFeedApp(
                 ) { tab ->
                     when (tab) {
                         HomeTab.ARTICLES -> {
-                            if (selectedArticle != null) {
-                                ArticleReaderPane(
-                                    articles = articleQueue,
-                                    selectedArticle = selectedArticle,
-                                    onOpenOriginal = { article ->
-                                        article.canonicalUrl?.let { url ->
-                                            openExternalUrl(context, url)
-                                        }
-                                    },
-                                    onBackToList = actions.onCloseArticle,
-                                    onArticleSelected = actions.onOpenArticle,
-                                    onArticleDisplayed = actions.onArticleDisplayed,
-                                )
-                            } else {
-                                ArticlesTab(articleTabState, articleActions, articlePagingItems)
-                            }
+                            ArticleListDetailNavigation(
+                                selectedArticleId = selectedArticle?.id,
+                                onCloseArticle = actions.onCloseArticle,
+                                listContent = { ArticlesTab(articleTabState, articleActions, articlePagingItems) },
+                                detailContent = readerContent,
+                                modifier = Modifier.fillMaxSize(),
+                            )
                         }
                         HomeTab.SEARCH -> SearchTab(searchTabState, searchActions)
                         HomeTab.SETTINGS -> SettingsTab(settingsTabState, settingsActions)
@@ -416,6 +488,24 @@ fun SelfFeedApp(
                 }
             }
         }
+    }
+
+    if (confirmMarkAllRead) {
+        AlertDialog(
+            onDismissRequest = { confirmMarkAllRead = false },
+            title = { Text("Mark all as read?") },
+            text = { Text("This marks every article in the current feed or category as read.") },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmMarkAllRead = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    actions.onArticleSnapshot(articlePagingItems.itemSnapshotList.items)
+                    actions.onMarkAllRead()
+                    confirmMarkAllRead = false
+                }) { Text("Mark all read") }
+            },
+        )
     }
 
 }
@@ -451,7 +541,8 @@ private fun OnlineDot() {
         modifier = Modifier
             .size(8.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.error),
+            .background(MaterialTheme.colorScheme.error)
+            .semantics { contentDescription = "Offline" },
     )
 }
 
@@ -467,8 +558,14 @@ private fun AppTopBar(
     onMarkAllRead: () -> Unit,
     onBack: () -> Unit,
     onToggleRead: () -> Unit,
+    onShare: () -> Unit,
 ) {
     val isArticleSelected = activeTab == HomeTab.ARTICLES && selectedArticle != null
+    // The Navigation 3 list-detail scene keeps the list visible at this
+    // width, so a Back button would be redundant and could incorrectly send
+    // a search-origin reader away from its visible context. System Back still
+    // follows the Navigation 3 stack.
+    val showReaderBack = isArticleSelected && LocalConfiguration.current.screenWidthDp < 600
 
     CenterAlignedTopAppBar(
         title = {
@@ -487,7 +584,7 @@ private fun AppTopBar(
             }
         },
         navigationIcon = {
-            if (isArticleSelected) {
+            if (showReaderBack) {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to list")
                 }
@@ -499,6 +596,9 @@ private fun AppTopBar(
         },
         actions = {
             if (isArticleSelected) {
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, contentDescription = "Share article")
+                }
                 IconButton(onClick = onToggleRead) {
                     val isRead = selectedArticle?.isRead == true
                     val icon = if (isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
@@ -604,6 +704,8 @@ internal fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
@@ -675,6 +777,7 @@ internal fun AuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                 )
                 OutlinedTextField(
                     value = email,
@@ -684,6 +787,7 @@ internal fun AuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
                 )
                 OutlinedTextField(
                     value = password,
@@ -694,6 +798,7 @@ internal fun AuthScreen(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     shape = RoundedCornerShape(20.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 )
                 Button(
                     onClick = {

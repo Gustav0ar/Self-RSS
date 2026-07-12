@@ -144,20 +144,21 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `openArticle sets selectedArticle without marking read before display`() = runTest {
+    fun `openArticle marks unread article when auto-mark is set to navigate`() = runTest {
         val viewModel = createViewModel()
         viewModel.loadArticles()
         viewModel.openArticle("a1")
         val s = viewModel.state.value
         assertNotNull(s.selectedArticle)
-        assertEquals(false, s.items.first().isRead)
+        assertEquals(true, s.items.first().isRead)
         coVerify { repository.article("a1", false) }
-        coVerify(exactly = 0) { repository.markRead("a1", true, "auto_open") }
+        coVerify { repository.markRead("a1", true, "auto_open") }
     }
 
     @Test
-    fun `onArticleDisplayed marks selected unread article as read`() = runTest {
+    fun `onArticleDisplayed marks selected unread article only in on-open mode`() = runTest {
         val viewModel = createViewModel()
+        viewModel.setAutoMarkReadMode(AutoMarkReadPreference.ON_OPEN.apiValue)
         viewModel.loadArticles()
         viewModel.openArticle("a1")
         runCurrent()
@@ -188,14 +189,14 @@ class ArticlesViewModelTest {
 
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Second Article", viewModel.state.value.selectedArticle?.title)
-        coVerify(exactly = 0) { repository.markRead("a2", true, "auto_open") }
+        coVerify { repository.markRead("a2", true, "auto_open") }
 
         detailResult.complete(AppResult.Success(sampleDetail("a2", title = "Fetched Second Article")))
         runCurrent()
 
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Fetched Second Article", viewModel.state.value.selectedArticle?.title)
-        coVerify(exactly = 0) { repository.markRead("a2", true, "auto_open") }
+        coVerify { repository.markRead("a2", true, "auto_open") }
     }
 
     @Test
@@ -286,9 +287,11 @@ class ArticlesViewModelTest {
     @Test
     fun `manual unread is preserved when opening the article again`() = runTest {
         val viewModel = createViewModel()
+        viewModel.setAutoMarkReadMode(AutoMarkReadPreference.DISABLED.apiValue)
         viewModel.loadArticles()
 
         viewModel.markRead("a1", false)
+        runCurrent()
         viewModel.openArticle("a1")
         viewModel.onArticleDisplayed("a1")
         runCurrent()

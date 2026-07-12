@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -63,6 +64,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.canPreviewMedia
 import com.selffeed.android.ui.utils.formatPublishedAt
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
@@ -76,6 +78,7 @@ fun ArticleReaderPane(
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
     onArticleDisplayed: (String) -> Unit = {},
+    appearance: ReaderAppearance = ReaderAppearance(),
 ) {
     val readerArticles = remember(articles, selectedArticle) {
         articles.withSelectedArticle(selectedArticle)
@@ -91,6 +94,7 @@ fun ArticleReaderPane(
             article = selectedArticle,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+            appearance = appearance,
         )
         return
     }
@@ -131,6 +135,7 @@ fun ArticleReaderPane(
                 article = selectedArticle,
                 onOpenOriginal = { onOpenOriginal(selectedArticle) },
                 onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+                appearance = appearance,
             )
         } else {
             // articleItem already has read state applied from the queue
@@ -145,6 +150,7 @@ private fun ArticleDetailView(
     article: ArticleDetail,
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
+    appearance: ReaderAppearance,
 ) {
     val context = LocalContext.current
     var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
@@ -163,6 +169,7 @@ private fun ArticleDetailView(
     val surfaceColor = MaterialTheme.colorScheme.surfaceVariant
     val mutedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
+    val textScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
     val showFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit = { view, callback ->
         val currentMedia = fullscreenMedia
         if (currentMedia?.view !== view) {
@@ -210,12 +217,13 @@ private fun ArticleDetailView(
             text = article.title,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            modifier = if (!article.canonicalUrl.isNullOrBlank()) {
-                Modifier.clickable { onOpenOriginal() }
-            } else {
-                Modifier
-            }
         )
+
+        if (!article.canonicalUrl.isNullOrBlank()) {
+            OutlinedButton(onClick = onOpenOriginal) {
+                Text("Open original article")
+            }
+        }
 
         article.author?.takeIf { it.isNotBlank() }?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -246,6 +254,8 @@ private fun ArticleDetailView(
                     surfaceColor = surfaceColor,
                     mutedTextColor = mutedTextColor,
                     linkColor = linkColor,
+                    appearance = appearance,
+                    textScale = textScale,
                     documentBaseUrl = documentBaseUrl,
                     onShowFullscreenMedia = showFullscreenMedia,
                     onHideFullscreenMedia = hideFullscreenMedia,
@@ -254,7 +264,11 @@ private fun ArticleDetailView(
             } else {
                 Text(
                     text = article.contentText ?: article.excerpt ?: "No content",
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontFamily = appearance.font.composeFontFamily,
+                        fontSize = appearance.boundedTextSizeSp.sp,
+                        lineHeight = (appearance.boundedTextSizeSp * 1.62f).sp,
+                    ),
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
@@ -527,6 +541,8 @@ private fun SecureHtmlContent(
     surfaceColor: Color,
     mutedTextColor: Color,
     linkColor: Color,
+    appearance: ReaderAppearance,
+    textScale: Float,
     documentBaseUrl: String,
     onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
     onHideFullscreenMedia: (View?) -> Unit,
@@ -541,6 +557,8 @@ private fun SecureHtmlContent(
         surfaceColor,
         mutedTextColor,
         linkColor,
+        appearance,
+        textScale,
     ) {
         buildReaderHtmlDocument(
             html = html,
@@ -551,6 +569,8 @@ private fun SecureHtmlContent(
                 mutedTextColor = mutedTextColor,
                 linkColor = linkColor,
             ),
+            appearance = appearance,
+            textScale = textScale,
         )
     }
 

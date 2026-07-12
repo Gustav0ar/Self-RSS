@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         // for a more controlled dismissal, hook into your VM's
         // `loading` state and call `splash.setKeepOnScreenCondition`.
         var ready = false
-        splash.setKeepOnScreenCondition { ready }
+        splash.setKeepOnScreenCondition { !ready }
         // We dismiss once the very first frame is composed. Compose
         // drives its own readiness; tying this to a frame callback is
         // both simple and reliable.

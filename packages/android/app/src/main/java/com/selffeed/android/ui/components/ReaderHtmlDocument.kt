@@ -2,6 +2,7 @@ package com.selffeed.android.ui.components
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
 import java.net.URI
 import java.util.Locale
@@ -36,12 +37,15 @@ internal fun readerHtmlColors(
 internal fun buildReaderHtmlDocument(
     html: String,
     colors: ReaderHtmlColors,
+    appearance: ReaderAppearance = ReaderAppearance(),
+    textScale: Float = 1f,
 ): String {
     val safeHtml = sanitizeReaderHtml(html)
+    val textSizePx = (appearance.boundedTextSizeSp * textScale).toInt().coerceIn(12, 32)
     return """
         <html>
         <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
             <style>
                 :root {
                     color-scheme: light dark;
@@ -61,8 +65,8 @@ internal fun buildReaderHtmlDocument(
                     word-wrap: break-word;
                 }
                 body {
-                    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
-                    font-size: 16px;
+                    font-family: ${appearance.font.cssFontFamily};
+                    font-size: ${textSizePx}px;
                     line-height: 1.62;
                 }
                 #content-container {
