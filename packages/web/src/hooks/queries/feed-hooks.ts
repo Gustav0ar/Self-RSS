@@ -120,7 +120,6 @@ export function useSyncAllFeeds() {
 		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
 		onSuccess: () => {
 			clearDelayedRefreshTimers();
-			qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
 			// Immediate optimistic refresh of articles for fast UI update
 			qc.invalidateQueries({ queryKey: ['articles'] });
 			// Additional refreshes at staggered intervals for background sync

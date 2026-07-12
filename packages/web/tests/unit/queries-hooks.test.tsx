@@ -348,7 +348,6 @@ describe('useSyncAllFeeds', () => {
 			vi.advanceTimersByTime(15_000);
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feeds', 'sync', 'status'] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
 		expect(invalidateSpy).toHaveBeenCalledTimes(invalidationsBeforeUnmount);
 	});
