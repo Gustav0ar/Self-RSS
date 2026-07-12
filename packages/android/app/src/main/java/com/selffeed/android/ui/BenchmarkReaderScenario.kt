@@ -1,34 +1,28 @@
 package com.selffeed.android.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.paging.PagingData
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
-import com.selffeed.android.ui.components.ArticleReaderPane
-import com.selffeed.android.ui.screens.ArticleCard
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 
 /** Intent extra understood only by baseline-profile target variants. */
 internal const val BenchmarkScenarioExtra = "com.selffeed.android.extra.BENCHMARK_SCENARIO"
 internal const val BenchmarkReaderScenarioName = "reader"
-internal const val BenchmarkArticleCardDescription = "Open benchmark article"
+internal const val BenchmarkArticleCardDescription = "Unread article: Reader navigation performance, from Self Feed"
 internal const val BenchmarkReaderReadyDescription = "Benchmark reader ready"
 
 enum class BenchmarkScenario {
@@ -53,63 +47,74 @@ internal fun benchmarkScenarioFor(
 private val benchmarkBuildTypes = setOf("benchmarkRelease", "nonMinifiedRelease")
 
 /**
- * A local, deterministic article-list → reader journey for Baseline Profile
- * generation. It deliberately renders the production card and reader pane,
- * but never creates a network session or exposes this content in a shipped
- * release build.
+ * A local, deterministic authenticated article-list → reader journey for
+ * Baseline Profile generation. It renders the production app shell,
+ * Navigation 3 list/detail transition, card, and HTML reader pane, but never
+ * creates a network session or exposes this content in a shipped release.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun BenchmarkReaderScenario() {
-    var isReaderOpen by rememberSaveable { mutableStateOf(false) }
+    var selectedArticle by remember { mutableStateOf<ArticleDetail?>(null) }
+    val pagingData = remember { flowOf(PagingData.from(listOf(benchmarkArticle))) }
+    val readStateOverrides = remember { MutableStateFlow<Map<String, Boolean>>(emptyMap()) }
+    val state = SelfFeedAppState(
+        auth = AuthUiState(loading = false, isAuthenticated = true),
+        chrome = AppChromeState(activeTab = HomeTab.ARTICLES),
+        feeds = FeedsUiState(),
+        articles = ArticlesUiState(
+            items = listOf(benchmarkArticle),
+            readerQueue = listOf(benchmarkArticle),
+            selectedArticle = selectedArticle,
+        ),
+        search = SearchUiState(),
+        settings = SettingsUiState(),
+        isOnline = true,
+    )
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(if (isReaderOpen) "Article" else "Articles") },
+    Box(modifier = Modifier.fillMaxSize()) {
+        SelfFeedApp(
+            state = state,
+            readStateOverrides = readStateOverrides,
+            articlePagingData = pagingData,
+            actions = SelfFeedAppActions(
+                onAuthModeChange = {},
+                onLogin = { _, _, _ -> },
+                onRegister = { _, _, _ -> },
+                onLogout = {},
+                onTabSelected = {},
+                onRefreshVisibleData = {},
+                onHideReadChanged = {},
+                onCategorySelected = {},
+                onFeedSelected = {},
+                onRefreshArticles = {},
+                onOpenArticle = { articleId ->
+                    selectedArticle = benchmarkArticleDetail.takeIf { it.id == articleId }
+                },
+                onArticleDisplayed = {},
+                onCloseArticle = { selectedArticle = null },
+                onToggleRead = { _, _ -> },
+                onMarkAllRead = {},
+                onArticleSnapshot = {},
+                onSearchQueryChanged = {},
+                onSearchRequested = {},
+                onLoadMoreSearch = {},
+                onSearchCurrentCategoryOnlyChanged = {},
+                onThemeChanged = {},
+                onSortChanged = {},
+                onDensityChanged = {},
+                onTextSizeChanged = {},
+                onRevokeAuthSession = {},
+                onClearMessages = {},
+            ),
+        )
+
+        if (selectedArticle != null) {
+            Text(
+                text = "Reader ready",
+                modifier = Modifier
+                    .semantics { contentDescription = BenchmarkReaderReadyDescription }
+                    .padding(16.dp),
             )
-        },
-    ) { contentPadding ->
-        AnimatedContent(
-            targetState = isReaderOpen,
-            label = "benchmark-reader-navigation",
-        ) { readerOpen ->
-            if (readerOpen) {
-                Box(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
-                    ArticleReaderPane(
-                        articles = listOf(benchmarkArticle),
-                        selectedArticle = benchmarkArticleDetail,
-                        onOpenOriginal = {},
-                        onBackToList = { isReaderOpen = false },
-                        onArticleSelected = {},
-                    )
-                    Text(
-                        text = "Reader ready",
-                        modifier = Modifier
-                            .semantics { contentDescription = BenchmarkReaderReadyDescription }
-                            .padding(16.dp),
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(contentPadding),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                ) {
-                    item(key = benchmarkArticle.id) {
-                        Box(
-                            modifier = Modifier
-                                .semantics { contentDescription = BenchmarkArticleCardDescription }
-                                .clickable { isReaderOpen = true },
-                        ) {
-                            ArticleCard(
-                                article = benchmarkArticle,
-                                selected = false,
-                                onClick = {},
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

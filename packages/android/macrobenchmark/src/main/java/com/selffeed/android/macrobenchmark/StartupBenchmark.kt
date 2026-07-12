@@ -17,7 +17,7 @@ import org.junit.runner.RunWith
 private const val TARGET_PACKAGE = "com.selffeed.android"
 private const val BenchmarkScenarioExtra = "com.selffeed.android.extra.BENCHMARK_SCENARIO"
 private const val BenchmarkReaderScenarioName = "reader"
-private const val BenchmarkArticleCardDescription = "Open benchmark article"
+private const val BenchmarkArticleCardDescription = "Unread article: Reader navigation performance, from Self Feed"
 private const val BenchmarkReaderReadyDescription = "Benchmark reader ready"
 private const val UiTimeoutMillis = 5_000L
 

@@ -35,6 +35,9 @@ class BenchmarkReaderScenarioTest {
         composeRule
             .onNodeWithContentDescription(BenchmarkReaderReadyDescription)
             .assertIsDisplayed()
+        composeRule
+            .onNodeWithContentDescription("Back to list")
+            .assertIsDisplayed()
     }
 
     @Test
