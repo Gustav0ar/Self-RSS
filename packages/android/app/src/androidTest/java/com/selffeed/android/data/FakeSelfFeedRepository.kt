@@ -169,16 +169,6 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override suspend fun exportOpml(): AppResult<String> = AppResult.Success("")
 
-    override suspend fun articles(
-        feedId: String?,
-        categoryId: String?,
-        unreadOnly: Boolean?,
-        sort: String?,
-        limit: Int?,
-        cursor: String?,
-    ): AppResult<ApiListResponse<ArticleListItem>> =
-        AppResult.Success(ApiListResponse(data = currentArticles(unreadOnly), cursor = null, hasMore = false))
-
     override fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,

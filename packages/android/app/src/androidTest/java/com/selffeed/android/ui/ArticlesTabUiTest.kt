@@ -32,21 +32,17 @@ class ArticlesTabUiTest {
     @Test
     fun articlesTab_showsRowsAndTriggersActions() {
         var openedArticleId: String? = null
-        var loadMoreCount = 0
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = listOf(sampleArticle("article-1", "Visible Article")),
                         selectedArticleId = null,
-                        hasMoreArticles = true,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = { loadMoreCount += 1 },
                         onOpenArticle = { openedArticleId = it },
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -59,13 +55,6 @@ class ArticlesTabUiTest {
         composeRule.runOnIdle {
             assertEquals("article-1", openedArticleId)
         }
-
-        composeRule.waitForIdle()
-        val loadMoreCountBeforeClick = loadMoreCount
-        composeRule.onNodeWithText("Load more").assertIsDisplayed().performClick()
-        composeRule.runOnIdle {
-            assertTrue(loadMoreCount > loadMoreCountBeforeClick)
-        }
     }
 
     @Test
@@ -74,20 +63,17 @@ class ArticlesTabUiTest {
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = listOf(
                             sampleArticle("article-1", "First Article"),
                             sampleArticle("article-2", "Second Article"),
                         ),
                         selectedArticleId = "article-1",
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = { openedArticleId = it },
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -104,20 +90,17 @@ class ArticlesTabUiTest {
     }
 
     @Test
-    fun articlesTab_showsRefreshIndicatorWithoutHidingCurrentRows() {
+    fun articlesTab_showsBackgroundRefreshStatusWithoutHidingCurrentRows() {
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = listOf(sampleArticle("article-1", "Visible Article")),
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = true,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = {},
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -128,7 +111,7 @@ class ArticlesTabUiTest {
 
         composeRule.onNodeWithText("Visible Article").assertIsDisplayed()
         composeRule
-            .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .onNodeWithText("Refreshing feeds in the background. New articles will appear as they arrive.")
             .assertIsDisplayed()
     }
 
@@ -145,8 +128,6 @@ class ArticlesTabUiTest {
                     ArticleTabState(
                         articles = initialArticles,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                 )
@@ -154,7 +135,7 @@ class ArticlesTabUiTest {
             updateState = { state = it }
 
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = state,
                     actions = noOpArticleActions(),
                 )
@@ -168,8 +149,6 @@ class ArticlesTabUiTest {
                 ArticleTabState(
                     articles = initialArticles,
                     selectedArticleId = null,
-                    hasMoreArticles = false,
-                    loadingMoreArticles = false,
                     isSyncingFeeds = true,
                 ),
             )
@@ -180,8 +159,6 @@ class ArticlesTabUiTest {
                 ArticleTabState(
                     articles = listOf(sampleArticle("fresh-1", "Fresh Article")) + initialArticles,
                     selectedArticleId = null,
-                    hasMoreArticles = false,
-                    loadingMoreArticles = false,
                     isSyncingFeeds = false,
                 ),
             )
@@ -193,7 +170,6 @@ class ArticlesTabUiTest {
 
     private fun noOpArticleActions(): ArticleTabActions = ArticleTabActions(
         onRefresh = {},
-        onLoadMore = {},
         onOpenArticle = {},
         onToggleRead = { _, _ -> },
         onArticleSnapshot = {},

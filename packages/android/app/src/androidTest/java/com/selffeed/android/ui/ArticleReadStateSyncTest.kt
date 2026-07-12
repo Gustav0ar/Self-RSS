@@ -70,17 +70,14 @@ class ArticleReadStateSyncTest {
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = articles,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = {},
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -100,17 +97,14 @@ class ArticleReadStateSyncTest {
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = articles,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = {},
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -148,17 +142,14 @@ class ArticleReadStateSyncTest {
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = articlesWithOverrides,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = { openedArticleId = it },
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -196,17 +187,14 @@ class ArticleReadStateSyncTest {
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = articlesWithOverrides,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = {},
                         onToggleRead = { _, _ -> },
                         onArticleSnapshot = {},
@@ -297,17 +285,14 @@ class ArticleReadStateSyncTest {
             }
 
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = currentArticles,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = { articleId ->
                             // Simulate marking article as read
                             readStateOverrides[articleId] = true
@@ -367,17 +352,14 @@ class ArticleReadStateSyncTest {
                         },
                     )
                 } else {
-                    ArticlesTab(
+                    ArticlesTabWithStaticPaging(
                         state = ArticleTabState(
                             articles = articlesWithOverrides,
                             selectedArticleId = null,
-                            hasMoreArticles = false,
-                            loadingMoreArticles = false,
                             isSyncingFeeds = false,
                         ),
                         actions = ArticleTabActions(
                             onRefresh = {},
-                            onLoadMore = {},
                             onOpenArticle = {
                                 inReader = true
                                 inReaderObserved = true
@@ -428,17 +410,14 @@ class ArticleReadStateSyncTest {
             }
 
             SelfFeedTheme {
-                ArticlesTab(
+                ArticlesTabWithStaticPaging(
                     state = ArticleTabState(
                         articles = articlesWithOverrides,
                         selectedArticleId = null,
-                        hasMoreArticles = false,
-                        loadingMoreArticles = false,
                         isSyncingFeeds = false,
                     ),
                     actions = ArticleTabActions(
                         onRefresh = {},
-                        onLoadMore = {},
                         onOpenArticle = { articleId ->
                             // Simulate immediate read state update (as in applyArticleReadStateOptimistic)
                             readStateOverrides[articleId] = true
@@ -498,17 +477,14 @@ class ArticleReadStateSyncTest {
                         },
                     )
                 } else {
-                    ArticlesTab(
+                    ArticlesTabWithStaticPaging(
                         state = ArticleTabState(
                             articles = articlesWithOverrides,
                             selectedArticleId = selectedArticleId,
-                            hasMoreArticles = false,
-                            loadingMoreArticles = false,
                             isSyncingFeeds = false,
                         ),
                         actions = ArticleTabActions(
                             onRefresh = {},
-                            onLoadMore = {},
                             onOpenArticle = { id ->
                                 selectedArticleId = id
                                 readStateOverrides[id] = true

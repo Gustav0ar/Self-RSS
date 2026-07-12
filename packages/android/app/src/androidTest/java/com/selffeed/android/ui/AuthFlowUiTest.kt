@@ -234,7 +234,6 @@ class AuthFlowUiTest {
         onCategorySelected = {},
         onFeedSelected = {},
         onRefreshArticles = {},
-        onLoadMoreArticles = {},
         onOpenArticle = {},
         onArticleDisplayed = {},
         onCloseArticle = {},
