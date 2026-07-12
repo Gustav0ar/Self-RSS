@@ -103,7 +103,7 @@ Install these in Android Studio SDK Manager:
 - Run instrumentation tests with `./gradlew -p packages/android :app:connectedDebugAndroidTest`.
 - Run lint + debug build checks with `./gradlew -p packages/android :app:lintDebug :app:assembleDebug`.
 - Run all local Android pre-release checks from repo root with `bun run android:check`.
-- Generate the release Baseline Profile on the configured managed device with `SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./gradlew -p packages/android :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile`.
+- Generate the release Baseline Profile on the configured managed device with `SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./gradlew -p packages/android :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile`. The generator includes a deterministic local article-card → reader journey, so it does not rely on an account or source-feed latency.
 
 ## CI
 

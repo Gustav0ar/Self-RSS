@@ -29,9 +29,9 @@
 - Removed the obsolete manual cursor `PagingSource`, cursor-page cache, and fallback UI path; Paging 3 `RemoteMediator` plus Room query entries are now the sole article-list implementation.
 - Added `RemoteMediator` characterization coverage for refresh, append, cached initialization, and failed refresh retention.
 - Narrowed the articles ViewModel, warming, enrichment, and read-state managers to `ArticleRepository` rather than the full application repository.
-- Moved screen contracts into a feature-owned file and split Search/Stats into their own destinations; future feature additions no longer need to expand the shared shell contract.
+- Moved screen contracts into feature-owned files and split Search, Settings, and Stats into their own destinations; future feature additions no longer need to expand the shared shell contract.
 - Moved app lifecycle, preference, sync, and article-event workflow policy into a testable `AppWorkflowCoordinator`.
-- Added emulator-backed instrumentation CI and a manually generated release Baseline Profile on a Gradle-managed device.
+- Added emulator-backed instrumentation CI and a manually generated release Baseline Profile on a Gradle-managed device. Its deterministic local article-card → reader fixture exercises the production reader without credentials or a live feed.
 
 ## Remaining Deepening Work
 

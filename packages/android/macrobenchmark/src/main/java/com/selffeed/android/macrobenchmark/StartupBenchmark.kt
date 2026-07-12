@@ -1,5 +1,6 @@
 package com.selffeed.android.macrobenchmark
 
+import android.content.Intent
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.StartupMode
@@ -7,11 +8,18 @@ import androidx.benchmark.macro.StartupTimingMetric
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 private const val TARGET_PACKAGE = "com.selffeed.android"
+private const val BenchmarkScenarioExtra = "com.selffeed.android.extra.BENCHMARK_SCENARIO"
+private const val BenchmarkReaderScenarioName = "reader"
+private const val BenchmarkArticleCardDescription = "Open benchmark article"
+private const val BenchmarkReaderReadyDescription = "Benchmark reader ready"
+private const val UiTimeoutMillis = 5_000L
 
 /**
  * Cold-startup benchmark for manual release-performance investigation. The
@@ -61,28 +69,24 @@ class BaselineProfileGenerator {
         packageName = TARGET_PACKAGE,
         includeInStartupProfile = true,
     ) {
-        // Cover the critical user paths in order: splash → shell →
-        // feed list → article reader → reader back-out.
-        startActivityAndWait()
-        device.waitForIdle()
-
-        // Wait for the auth screen or feed list to render.
-        device.waitForIdle()
-
-        // If the device is logged in (test seeding has a valid session),
-        // exercise the feed → article open path. The benchmark stays
-        // useful when logged out too — the cold-start path is the same.
-        if (device.findObject(
-                androidx.test.uiautomator.By.res(TARGET_PACKAGE),
-            ) != null
-        ) {
-            // Open the first article in the list. The selector is
-            // intentionally loose — the goal is to warm the article
-            // detail + reader code paths, not to assert a specific UI.
-            device.findObject(
-                androidx.test.uiautomator.By.clickable(true),
-            )?.click()
-            device.waitForIdle()
+        // This explicit, benchmark-only intent is recognized only by the
+        // plugin-generated benchmark/non-minified target variants. It avoids
+        // credentials, live feeds, and a flaky "first clickable" selector
+        // while exercising the production ArticleCard and ArticleReaderPane.
+        startActivityAndWait(benchmarkReaderIntent())
+        check(device.wait(Until.hasObject(By.desc(BenchmarkArticleCardDescription)), UiTimeoutMillis)) {
+            "Benchmark article card was not rendered"
         }
+        device.findObject(By.desc(BenchmarkArticleCardDescription)).click()
+        check(device.wait(Until.hasObject(By.desc(BenchmarkReaderReadyDescription)), UiTimeoutMillis)) {
+            "Benchmark reader did not become ready"
+        }
+        device.waitForIdle()
     }
+}
+
+private fun benchmarkReaderIntent(): Intent = Intent(Intent.ACTION_MAIN).apply {
+    addCategory(Intent.CATEGORY_LAUNCHER)
+    setPackage(TARGET_PACKAGE)
+    putExtra(BenchmarkScenarioExtra, BenchmarkReaderScenarioName)
 }

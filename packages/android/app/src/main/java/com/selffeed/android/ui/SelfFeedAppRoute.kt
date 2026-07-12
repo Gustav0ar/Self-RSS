@@ -21,7 +21,15 @@ fun SelfFeedAppRoute(
     searchViewModel: SearchViewModel,
     settingsViewModel: SettingsViewModel,
     performanceMetricsState: PerformanceMetricsState.Holder,
+    benchmarkScenario: BenchmarkScenario? = null,
 ) {
+    if (benchmarkScenario == BenchmarkScenario.READER) {
+        SelfFeedTheme {
+            BenchmarkReaderScenario()
+        }
+        return
+    }
+
     val context = LocalContext.current
     val authState by authViewModel.state.collectAsStateWithLifecycle()
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()

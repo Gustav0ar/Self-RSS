@@ -10,12 +10,15 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.metrics.performance.JankStats
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.AppViewModel
+import com.selffeed.android.ui.BenchmarkScenario
+import com.selffeed.android.ui.BenchmarkScenarioExtra
 import com.selffeed.android.ui.ArticlesViewModel
 import com.selffeed.android.ui.AuthViewModel
 import com.selffeed.android.ui.FeedsViewModel
 import com.selffeed.android.ui.SearchViewModel
 import com.selffeed.android.ui.SelfFeedAppRoute
 import com.selffeed.android.ui.SettingsViewModel
+import com.selffeed.android.ui.benchmarkScenarioFor
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -28,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
     private var jankStats: JankStats? = null
     private lateinit var performanceMetricsState: PerformanceMetricsState.Holder
+    private var benchmarkScenario: BenchmarkScenario? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Install the splash screen *before* `super.onCreate` so the
@@ -38,6 +42,10 @@ class MainActivity : ComponentActivity() {
         val splash = installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        benchmarkScenario = benchmarkScenarioFor(
+            buildType = BuildConfig.BUILD_TYPE,
+            requestedScenario = intent?.getStringExtra(BenchmarkScenarioExtra),
+        )
         // Keep the splash on screen while the cold-start path runs.
         // This is the smallest "frozen frame" the user will ever see;
         // for a more controlled dismissal, hook into your VM's
@@ -70,6 +78,7 @@ class MainActivity : ComponentActivity() {
                 searchViewModel = searchViewModel,
                 settingsViewModel = settingsViewModel,
                 performanceMetricsState = performanceMetricsState,
+                benchmarkScenario = benchmarkScenario,
             )
         }
     }
