@@ -394,22 +394,6 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `first article page returns sqlite data before network refresh`() = runTest {
-        val key = "articles:::null::30:"
-        localStore.writeArticles(
-            key,
-            ApiListResponse(data = listOf(sampleArticle("a-local")), cursor = null, hasMore = false),
-        )
-        coEvery { api.articles(null, null, null, null, 30, null) } returns
-            ApiListResponse(data = listOf(sampleArticle("a-network")), cursor = null, hasMore = false)
-
-        val result = repository.articles(null, null, null, null, 30, null)
-
-        assertTrue(result is AppResult.Success)
-        assertEquals("a-local", (result as AppResult.Success).data.data.first().id)
-    }
-
-    @Test
     fun `restoreSession uses saved access token before refreshing`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns "access-token"

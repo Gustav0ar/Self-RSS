@@ -3,9 +3,7 @@ package com.selffeed.android.data.local
 import android.content.Context
 import android.util.Log
 import com.selffeed.android.BuildConfig
-import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
-import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.squareup.moshi.JsonAdapter
@@ -42,9 +40,6 @@ class OfflineCacheStore(
     private val feedsAdapter: JsonAdapter<List<FeedWithCounts>> = moshi.adapter(
         Types.newParameterizedType(List::class.java, FeedWithCounts::class.java),
     )
-    private val articleListAdapter: JsonAdapter<ApiListResponse<ArticleListItem>> = moshi.adapter(
-        Types.newParameterizedType(ApiListResponse::class.java, ArticleListItem::class.java),
-    )
     private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
 
     suspend fun writeCategories(categories: List<CategoryWithCounts>) = withContext(Dispatchers.IO) {
@@ -63,15 +58,6 @@ class OfflineCacheStore(
 
     suspend fun readFeeds(): List<FeedWithCounts> = withContext(Dispatchers.IO) {
         readIfFresh("feeds.json", feedsAdapter::fromJson) ?: emptyList()
-    }
-
-    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) = withContext(Dispatchers.IO) {
-        atomicWrite(sanitizeKey("articles-$key.json"), articleListAdapter.toJson(payload))
-        pruneCacheFiles()
-    }
-
-    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? = withContext(Dispatchers.IO) {
-        readIfFresh(sanitizeKey("articles-$key.json"), articleListAdapter::fromJson)
     }
 
     suspend fun writeArticleDetail(article: ArticleDetail) = withContext(Dispatchers.IO) {

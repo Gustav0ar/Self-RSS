@@ -1,8 +1,7 @@
 package com.selffeed.android.ui
 
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.RssRepository
-import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
@@ -41,7 +40,7 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ArticlesViewModelTest {
-    private lateinit var repository: RssRepository
+    private lateinit var repository: ArticleRepository
     private lateinit var readStateManager: ReadStateManager
     private lateinit var enrichmentManager: EnrichmentManager
     private lateinit var articleWarmingManager: ArticleWarmingManager
@@ -51,9 +50,6 @@ class ArticlesViewModelTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
-        coEvery { repository.articles(any(), any(), any(), any(), any(), any()) } returns AppResult.Success(
-            ApiListResponse(data = listOf(sampleArticle("a1")), cursor = null, hasMore = false),
-        )
         coEvery { repository.article(any(), any()) } returns AppResult.Success(sampleDetail("a1"))
         coEvery { repository.markRead(any(), any(), any()) } coAnswers {
             AppResult.Success(secondArg<Boolean>())
@@ -96,57 +92,19 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `loadArticles populates the list snapshot`() = runTest {
+    fun `setScope clears the retained visible queue`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
-        val s = viewModel.state.value
-        assertEquals(1, s.items.size)
-    }
-
-    @Test
-    fun `loadArticles keeps loading true until fetch completes`() = runTest {
-        val articlesResult = CompletableDeferred<AppResult<ApiListResponse<ArticleListItem>>>()
-        coEvery { repository.articles(any(), any(), any(), any(), any(), any()) } coAnswers {
-            articlesResult.await()
-        }
-        val viewModel = createViewModel()
-
-        viewModel.loadArticles()
-        runCurrent()
-
-        assertEquals(true, viewModel.state.value.loading)
-
-        articlesResult.complete(
-            AppResult.Success(
-                ApiListResponse(data = listOf(sampleArticle("a2")), cursor = null, hasMore = false),
-            ),
-        )
-        runCurrent()
-
-        assertEquals(false, viewModel.state.value.loading)
-        assertEquals("a2", viewModel.state.value.items.single().id)
-    }
-
-    @Test
-    fun `setScope updates selected ids and refreshes paging without legacy page fetch`() = runTest {
-        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
         viewModel.setScope(feedId = "f-1", categoryId = null)
         assertEquals("f-1", viewModel.state.value.selectedFeedId)
         assertNull(viewModel.state.value.selectedCategoryId)
-        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
-    }
-
-    @Test
-    fun `loadMoreArticles is a no-op when hasMore is false`() = runTest {
-        val viewModel = createViewModel()
-        viewModel.loadMoreArticles()
-        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
+        assertTrue(viewModel.state.value.items.isEmpty())
     }
 
     @Test
     fun `openArticle marks unread article when auto-mark is set to navigate`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
         viewModel.openArticle("a1")
         val s = viewModel.state.value
         assertNotNull(s.selectedArticle)
@@ -159,7 +117,7 @@ class ArticlesViewModelTest {
     fun `onArticleDisplayed marks selected unread article only in on-open mode`() = runTest {
         val viewModel = createViewModel()
         viewModel.setAutoMarkReadMode(AutoMarkReadPreference.ON_OPEN.apiValue)
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
         viewModel.openArticle("a1")
         runCurrent()
 
@@ -269,7 +227,7 @@ class ArticlesViewModelTest {
     @Test
     fun `closeArticle clears the selected article`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
         viewModel.openArticle("a1")
         viewModel.closeArticle()
         assertNull(viewModel.state.value.selectedArticle)
@@ -278,7 +236,7 @@ class ArticlesViewModelTest {
     @Test
     fun `markRead updates the local list optimistically`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
         viewModel.markRead("a1", true)
         val s = viewModel.state.value
         assertTrue(s.items.first().isRead)
@@ -288,7 +246,7 @@ class ArticlesViewModelTest {
     fun `manual unread is preserved when opening the article again`() = runTest {
         val viewModel = createViewModel()
         viewModel.setAutoMarkReadMode(AutoMarkReadPreference.DISABLED.apiValue)
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         viewModel.markRead("a1", false)
         runCurrent()
@@ -305,7 +263,7 @@ class ArticlesViewModelTest {
     fun `markRead failure rolls back the visible override`() = runTest {
         coEvery { repository.markRead(any(), any(), any()) } returns AppResult.Error("nope")
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         viewModel.markRead("a1", true)
         runCurrent()
@@ -317,7 +275,7 @@ class ArticlesViewModelTest {
     @Test
     fun `markRead emits unread and read deltas for sidebar and stats sync`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         val event = backgroundScope.async { viewModel.events.first() }
         runCurrent()
@@ -345,7 +303,7 @@ class ArticlesViewModelTest {
             updatedAt = "2026-06-21T00:00:00.000Z",
         )
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         viewModel.startReadStateSync()
         runCurrent()
@@ -371,7 +329,7 @@ class ArticlesViewModelTest {
             updatedAt = "2026-06-21T00:00:00.000Z",
         )
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         viewModel.startReadStateSync()
         runCurrent()
@@ -382,18 +340,16 @@ class ArticlesViewModelTest {
         assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
         assertEquals(true, viewModel.state.value.items.first().isRead)
         assertEquals(true, viewModel.readStateOverrides.value["a1"])
-        coVerify(exactly = 1) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
     fun `markAllRead marks loaded articles without reloading`() = runTest {
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
         viewModel.markAllRead()
         val s = viewModel.state.value
         assertTrue(s.items.first().isRead)
         coVerify { repository.markAllRead(null, null) }
-        coVerify(exactly = 1) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -402,7 +358,7 @@ class ArticlesViewModelTest {
             MarkAllReadResponse(markedCount = 4),
         )
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        primeArticleQueue(viewModel)
 
         val event = backgroundScope.async { viewModel.events.first() }
         runCurrent()
@@ -420,15 +376,10 @@ class ArticlesViewModelTest {
         coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
             MarkAllReadResponse(markedCount = 2, feedIds = listOf("f-child")),
         )
-        coEvery { repository.articles(any(), any(), any(), any(), any(), any()) } returns AppResult.Success(
-            ApiListResponse(
-                data = listOf(sampleArticle("a1", feedId = "f-1"), sampleArticle("a2", feedId = "f-child")),
-                cursor = null,
-                hasMore = false,
-            ),
-        )
         val viewModel = createViewModel()
-        viewModel.loadArticles()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(sampleArticle("a1", feedId = "f-1"), sampleArticle("a2", feedId = "f-child")),
+        )
 
         val event = backgroundScope.async { viewModel.events.first() }
         runCurrent()
@@ -441,23 +392,24 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `setFilter updates state and refreshes paging without legacy page fetch`() = runTest {
+    fun `setFilter updates state and invalidates the Room-backed pager`() = runTest {
         val viewModel = createViewModel()
 
         viewModel.setFilter(sort = "oldest", hideRead = true)
 
         assertEquals("oldest", viewModel.state.value.sort)
         assertEquals(true, viewModel.state.value.hideRead)
-        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
-    fun `refreshArticles refreshes paging without legacy page fetch`() = runTest {
+    fun `refreshArticles refreshes the Room-backed pager`() = runTest {
         val viewModel = createViewModel()
 
         viewModel.refreshArticles()
+    }
 
-        coVerify(exactly = 0) { repository.articles(any(), any(), any(), any(), any(), any()) }
+    private fun primeArticleQueue(viewModel: ArticlesViewModel) {
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a1")))
     }
 
     private fun sampleArticle(id: String, feedId: String = "f-1", title: String = "T"): ArticleListItem = ArticleListItem(

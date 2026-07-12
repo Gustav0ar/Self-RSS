@@ -35,6 +35,26 @@ class LocalDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 3 migration removes the obsolete cursor page table`() {
+        helper.createDatabase(TEST_DB_V3, 3).use { database ->
+            database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'article_pages'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+            }
+        }
+
+        helper.runMigrationsAndValidate(
+            TEST_DB_V3,
+            4,
+            true,
+            *LOCAL_DATABASE_MIGRATIONS,
+        ).use { database ->
+            database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'article_pages'").use { cursor ->
+                assertTrue(!cursor.moveToFirst())
+            }
+        }
+    }
+
+    @Test
     fun `migration registry is updated when database version increases`() {
         assertTrue(
             "Add and register MIGRATION_1_2 before increasing LOCAL_DATABASE_VERSION.",
@@ -44,5 +64,6 @@ class LocalDatabaseMigrationTest {
 
     private companion object {
         const val TEST_DB = "local-database-migration-test"
+        const val TEST_DB_V3 = "local-database-migration-v3-test"
     }
 }

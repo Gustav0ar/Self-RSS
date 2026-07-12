@@ -14,8 +14,8 @@ import org.junit.runner.RunWith
 private const val TARGET_PACKAGE = "com.selffeed.android"
 
 /**
- * Cold-startup benchmark. The CI runner uses this to flag regressions in
- * the time-to-first-frame budget. The BaselineProfileGenerator (below)
+ * Cold-startup benchmark for manual release-performance investigation. The
+ * BaselineProfileGenerator (below)
  * also calls `startActivityAndWait`, so this benchmark's compilation mode
  * is a reasonable proxy for what the production app will see once the
  * profile is applied.
@@ -48,9 +48,8 @@ class StartupBenchmark {
  *   ./gradlew :macrobenchmark:pixel6Api31BenchmarkAndroidTest \
  *     -Pandroid.testInstrumentationRunnerArguments.class=com.selffeed.android.macrobenchmark.BaselineProfileGenerator
  *
- * The generated profile is written to
- * `macrobenchmark/build/outputs/managed_device_and_test_results/.../baseline-prof.txt`
- * and should be copied to `app/src/main/baseline-prof.txt`.
+ * The Baseline Profile Gradle plugin copies the generated profile into the
+ * target app's release source set; do not copy artifacts by hand.
  */
 @RunWith(AndroidJUnit4::class)
 class BaselineProfileGenerator {
@@ -60,6 +59,7 @@ class BaselineProfileGenerator {
     @Test
     fun generateBaselineProfile() = baselineProfileRule.collect(
         packageName = TARGET_PACKAGE,
+        includeInStartupProfile = true,
     ) {
         // Cover the critical user paths in order: splash → shell →
         // feed list → article reader → reader back-out.

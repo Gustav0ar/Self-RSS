@@ -77,16 +77,6 @@ class FeedRepositoryImpl @Inject constructor(
 class ArticleRepositoryImpl @Inject constructor(
     private val delegate: SelfFeedRepository,
 ) : ArticleRepository {
-    override suspend fun articles(
-        feedId: String?,
-        categoryId: String?,
-        unreadOnly: Boolean?,
-        sort: String?,
-        limit: Int?,
-        cursor: String?,
-    ): AppResult<ApiListResponse<ArticleListItem>> =
-        delegate.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
-
     override fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,

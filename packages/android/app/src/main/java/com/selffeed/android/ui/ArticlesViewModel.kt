@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.cachedIn
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
-import com.selffeed.android.data.repository.SelfFeedRepository
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
@@ -62,7 +62,7 @@ sealed interface ArticleFeatureEvent {
 
 @HiltViewModel
 class ArticlesViewModel @Inject constructor(
-    private val repository: SelfFeedRepository,
+    private val repository: ArticleRepository,
     private val readStateManager: ReadStateManager,
     private val enrichmentManager: EnrichmentManager,
     private val articleWarmingManager: ArticleWarmingManager,
@@ -83,7 +83,6 @@ class ArticlesViewModel @Inject constructor(
         .flatMapLatest { query -> repository.articlePagingData(query, ::knownArticleReadStates) }
         .cachedIn(viewModelScope)
 
-    private val requestSequence = AtomicLong(0)
     private val openArticleSequence = AtomicLong(0)
     private var articlePagingGeneration = 0L
 
@@ -117,6 +116,7 @@ class ArticlesViewModel @Inject constructor(
                 selectedFeedId = feedId,
                 selectedCategoryId = categoryId,
                 selectedArticle = null,
+                items = emptyList(),
                 readerQueue = emptyList(),
                 errorMessage = null,
             )
@@ -154,53 +154,11 @@ class ArticlesViewModel @Inject constructor(
         refreshArticlePager()
     }
 
-    fun loadArticles() {
-        val query = _state.value.articleQuery()
-        val requestId = requestSequence.incrementAndGet()
-        _state.update {
-            it.copy(
-                loading = true,
-                errorMessage = null,
-            )
-        }
-        viewModelScope.launch {
-            when (
-                val result = repository.articles(
-                    feedId = query.feedId,
-                    categoryId = query.categoryId,
-                    unreadOnly = query.unreadOnly,
-                    sort = query.sort,
-                    limit = ARTICLE_PAGE_SIZE,
-                    cursor = null,
-                )
-            ) {
-                is AppResult.Success -> {
-                    if (!isCurrentArticleRequest(requestId) || _state.value.articleQuery() != query) return@launch
-                    val readStates = knownArticleReadStates()
-                    val itemsWithReadStates = result.data.data.withReadStates(readStates)
-                    _state.update {
-                        it.copy(
-                            items = itemsWithReadStates,
-                            loading = false,
-                        )
-                    }
-                    readStateManager.updateItems(itemsWithReadStates)
-                    publishReadStateOverrides()
-                    repository.prefetchHeroImages(result.data.data.map { it.heroImageUrl })
-                }
-                is AppResult.Error -> {
-                    if (!isCurrentArticleRequest(requestId) || _state.value.articleQuery() != query) return@launch
-                    _state.update { it.copy(errorMessage = result.message, loading = false) }
-                }
-            }
-        }
-    }
-
-    fun loadMoreArticles() {
-        // Article pagination is owned by Paging 3. This method remains as a
-        // compatibility no-op for the fallback article tab contract.
-    }
-
+    /**
+     * Keeps the currently materialized Paging window for reader navigation
+     * and optimistic read-state updates. Paging/Room remains the only source
+     * of article-list data; this is not a second list cache.
+     */
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
         if (articles.isEmpty()) return
         val itemsWithReadStates = articles.withReadStates(knownArticleReadStates())
@@ -478,9 +436,6 @@ class ArticlesViewModel @Inject constructor(
         articlePagingQuery.value = _state.value.articleQuery().toArticlePageQuery(articlePagingGeneration)
     }
 
-    private fun isCurrentArticleRequest(requestId: Long): Boolean =
-        requestId == requestSequence.get()
-
     /**
      * Returns the current read state overrides for articles.
      * Used by ArticleReaderPane to sync read state when navigating between articles.
@@ -580,6 +535,5 @@ class ArticlesViewModel @Inject constructor(
     )
 
     private companion object {
-        const val ARTICLE_PAGE_SIZE = 30
     }
 }

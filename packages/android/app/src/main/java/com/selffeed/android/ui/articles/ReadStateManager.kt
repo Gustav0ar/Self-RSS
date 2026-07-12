@@ -2,7 +2,7 @@ package com.selffeed.android.ui.articles
 
 import android.util.Log
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.repository.SelfFeedRepository
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
@@ -38,7 +38,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ReadStateManager @Inject constructor(
-    private val repository: SelfFeedRepository,
+    private val repository: ArticleRepository,
 ) {
     private var scope: CoroutineScope? = null
 

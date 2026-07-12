@@ -19,7 +19,6 @@ object LocalTables {
     const val ARTICLE_QUERY_ENTRIES = "article_query_entries"
     const val ARTICLE_REMOTE_KEYS = "article_remote_keys"
     const val PENDING_READ_STATE_MUTATIONS = "pending_read_state_mutations"
-    const val ARTICLE_PAGES = "article_pages"
     const val ARTICLE_DETAILS = "article_details"
 }
 
@@ -112,15 +111,6 @@ data class PendingReadStateMutationEntity(
     val updatedAt: Long,
 )
 
-@Entity(tableName = LocalTables.ARTICLE_PAGES)
-data class ArticlePageEntity(
-    @PrimaryKey val cacheKey: String,
-    val articleIdsJson: String,
-    val cursor: String?,
-    val hasMore: Boolean,
-    val writtenAt: Long,
-)
-
 @Entity(
     tableName = LocalTables.ARTICLE_DETAILS,
     indices = [Index("feedId"), Index("writtenAt")],
@@ -148,9 +138,6 @@ interface LocalStoreDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticles(articles: List<ArticleEntity>)
-
-    @Query("SELECT * FROM articles WHERE id IN (:ids)")
-    suspend fun readArticlesByIds(ids: List<String>): List<ArticleEntity>
 
     @Query(
         """
@@ -196,12 +183,6 @@ interface LocalStoreDao {
     suspend fun markArticlesReadByFeeds(feedIds: List<String>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertArticlePage(page: ArticlePageEntity)
-
-    @Query("SELECT * FROM article_pages WHERE cacheKey = :key LIMIT 1")
-    suspend fun readArticlePage(key: String): ArticlePageEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleDetail(detail: ArticleDetailEntity)
 
     @Query("SELECT * FROM article_details WHERE id = :articleId LIMIT 1")
@@ -228,9 +209,6 @@ interface LocalStoreDao {
     @Query("DELETE FROM pending_read_state_mutations")
     suspend fun clearPendingReadStateMutations()
 
-    @Query("DELETE FROM article_pages")
-    suspend fun clearArticlePages()
-
     @Query("DELETE FROM article_details")
     suspend fun clearArticleDetails()
 }
@@ -243,7 +221,6 @@ interface LocalStoreDao {
         ArticleQueryEntryEntity::class,
         ArticleRemoteKeyEntity::class,
         PendingReadStateMutationEntity::class,
-        ArticlePageEntity::class,
         ArticleDetailEntity::class,
     ],
     version = LOCAL_DATABASE_VERSION,

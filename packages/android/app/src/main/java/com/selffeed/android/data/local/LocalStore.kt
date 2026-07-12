@@ -21,9 +21,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Room-backed local source for offline reads and stale-while-revalidate flows.
  *
  * Categories and feeds are stored as typed rows so they can become the durable
- * source of truth for navigation and unread counts. Article pages and details
- * still retain their network payloads because the API is cursor-based and the
- * reader body is already a complete immutable document.
+ * source of truth for navigation and unread counts. Article queries use
+ * Paging 3's typed query entries, while reader details retain complete
+ * immutable documents for instant offline reopening.
  */
 class LocalStore(
     context: Context,
@@ -40,9 +40,6 @@ class LocalStore(
 
     private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
         Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
-    )
-    private val articleIdsAdapter: JsonAdapter<List<String>> = moshi.adapter(
-        Types.newParameterizedType(List::class.java, String::class.java),
     )
     private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
 
@@ -71,24 +68,6 @@ class LocalStore(
 
     suspend fun readFeeds(): List<FeedWithCounts> =
         dao.readFeeds().map { it.toModel() }
-
-    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) {
-        database.withTransaction {
-            if (payload.data.isNotEmpty()) {
-                dao.upsertArticles(payload.data.map { it.toEntity() })
-            }
-            dao.upsertArticlePage(
-                ArticlePageEntity(
-                    cacheKey = key,
-                    articleIdsJson = articleIdsAdapter.toJson(payload.data.map { it.id }),
-                    cursor = payload.cursor,
-                    hasMore = payload.hasMore,
-                    writtenAt = System.currentTimeMillis(),
-                ),
-            )
-        }
-        notifyInvalidation(TABLE_ARTICLE_PAGES)
-    }
 
     fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem> =
         dao.articlePagingSource(queryKey)
@@ -164,26 +143,6 @@ class LocalStore(
         dao.deletePendingReadStateMutation(articleId)
     }
 
-    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? {
-        val page = dao.readArticlePage(key) ?: return null
-        if (System.currentTimeMillis() - page.writtenAt > MAX_ARTICLE_PAGE_AGE_MS) {
-            return null
-        }
-        val ids = runCatching { articleIdsAdapter.fromJson(page.articleIdsJson) }.getOrNull()
-            ?: return null
-        if (ids.isEmpty()) {
-            return ApiListResponse(data = emptyList(), cursor = page.cursor, hasMore = page.hasMore)
-        }
-        val rowsById = dao.readArticlesByIds(ids).associateBy { it.id }
-        val orderedRows = ids.mapNotNull(rowsById::get)
-        if (orderedRows.size != ids.size) return null
-        return ApiListResponse(
-            data = orderedRows.map { it.toModel() },
-            cursor = page.cursor,
-            hasMore = page.hasMore,
-        )
-    }
-
     suspend fun writeArticleDetail(detail: ArticleDetail) {
         dao.upsertArticleDetail(
             ArticleDetailEntity(
@@ -221,7 +180,6 @@ class LocalStore(
         dao.clearArticleQueryEntries()
         dao.clearArticleRemoteKeys()
         dao.clearPendingReadStateMutations()
-        dao.clearArticlePages()
         dao.clearArticleDetails()
         notifyInvalidation("all")
     }
@@ -235,7 +193,6 @@ class LocalStore(
                 dao.clearArticleQueryEntries()
                 dao.clearArticleRemoteKeys()
             }
-            TABLE_ARTICLE_PAGES -> dao.clearArticlePages()
             TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
             else -> return
         }
@@ -359,10 +316,8 @@ class LocalStore(
         const val TABLE_CATEGORIES = LocalTables.CATEGORIES
         const val TABLE_FEEDS = LocalTables.FEEDS
         const val TABLE_ARTICLES = LocalTables.ARTICLES
-        const val TABLE_ARTICLE_PAGES = LocalTables.ARTICLE_PAGES
         const val TABLE_ARTICLE_DETAILS = LocalTables.ARTICLE_DETAILS
 
-        private const val MAX_ARTICLE_PAGE_AGE_MS = 7L * 24 * 60 * 60 * 1000
         private const val MAX_ARTICLE_DETAIL_AGE_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

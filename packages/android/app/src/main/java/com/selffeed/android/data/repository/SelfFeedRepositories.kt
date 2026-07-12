@@ -58,15 +58,6 @@ interface FeedRepository {
 }
 
 interface ArticleRepository {
-    suspend fun articles(
-        feedId: String? = null,
-        categoryId: String? = null,
-        unreadOnly: Boolean? = null,
-        sort: String? = null,
-        limit: Int? = 30,
-        cursor: String? = null,
-    ): AppResult<ApiListResponse<ArticleListItem>>
-
     fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },

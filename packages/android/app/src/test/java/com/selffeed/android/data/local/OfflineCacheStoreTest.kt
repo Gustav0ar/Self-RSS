@@ -1,7 +1,6 @@
 package com.selffeed.android.data.local
 
 import androidx.test.core.app.ApplicationProvider
-import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
@@ -69,21 +68,6 @@ class OfflineCacheStoreTest {
         val read = store.readFeeds()
         assertEquals(1, read.size)
         assertEquals("f-1", read[0].id)
-    }
-
-    @Test
-    fun `write and read round-trips articles`() = runBlocking {
-        val payload = ApiListResponse(
-            data = listOf(sampleArticle(id = "a-1")),
-            cursor = "next",
-            hasMore = true,
-        )
-        store.writeArticles("key-1", payload)
-        val read = store.readArticles("key-1")
-        assertNotNull(read)
-        assertEquals(1, read!!.data.size)
-        assertEquals("next", read.cursor)
-        assertTrue(read.hasMore)
     }
 
     @Test

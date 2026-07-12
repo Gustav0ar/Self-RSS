@@ -1,7 +1,7 @@
 package com.selffeed.android.ui.articles
 
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.repository.SelfFeedRepository
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -18,7 +18,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ArticleWarmingManager @Inject constructor(
-    private val repository: SelfFeedRepository,
+    private val repository: ArticleRepository,
 ) {
     private var scope: CoroutineScope? = null
     private var warmNextArticlesJob: Job? = null

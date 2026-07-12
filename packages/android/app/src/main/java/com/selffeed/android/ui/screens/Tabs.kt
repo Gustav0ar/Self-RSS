@@ -122,84 +122,12 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.ByteArrayOutputStream
 
-data class FeedTabState(
-    val categories: List<CategoryWithCounts>,
-    val feeds: List<FeedWithCounts>,
-    val hideRead: Boolean,
-    val totalUnread: Int,
-    val selectedCategoryId: String?,
-    val selectedFeedId: String?,
-    val loading: Boolean = false,
-    val lastImportSummary: OpmlImportSummary? = null,
-)
-
-data class ArticleTabState(
-    val articles: List<ArticleListItem>,
-    val selectedArticleId: String?,
-    val hasMoreArticles: Boolean,
-    val loadingMoreArticles: Boolean,
-    val isSyncingFeeds: Boolean,
-    val density: DensityPreference = DensityPreference.COMFORTABLE,
-    val isOffline: Boolean = false,
-    val feedCount: Int = 0,
-)
-
-data class SearchTabState(
-    val query: String,
-    val results: List<ArticleListItem>,
-    val selectedArticleId: String?,
-    val hasMoreResults: Boolean,
-    val loadingResults: Boolean,
-    val loadingMoreResults: Boolean,
-    val currentCategoryAvailable: Boolean,
-    val currentCategoryOnly: Boolean,
-    val resultLimitReached: Boolean,
-)
-
-data class SettingsTabState(
-    val preferences: UserPreferences?,
-    val stats: StatsResponse?,
-    val authSessions: List<AuthSession>,
-)
-
-data class FeedTabActions(
-    val onHideReadChanged: (Boolean) -> Unit,
-    val onCategorySelected: (String?) -> Unit,
-    val onFeedSelected: (String?) -> Unit,
-    val onCreateCategory: (String, String?) -> Unit = { _, _ -> },
-    val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
-    val onDeleteCategory: (String) -> Unit = {},
-    val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
-    val onUpdateFeed: (String, String?, String?, Int?) -> Unit = { _, _, _, _ -> },
-    val onDeleteFeed: (String) -> Unit = {},
-    val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
-    val onExportOpml: () -> Unit = {},
-    val onDismissImportSummary: () -> Unit = {},
-)
-
 private sealed interface FeedManagementDialog {
     data class CategoryEditor(val category: CategoryWithCounts?) : FeedManagementDialog
     data class FeedEditor(val feed: FeedWithCounts?) : FeedManagementDialog
     data class DeleteCategory(val category: CategoryWithCounts) : FeedManagementDialog
     data class DeleteFeed(val feed: FeedWithCounts) : FeedManagementDialog
 }
-
-data class ArticleTabActions(
-    val onRefresh: () -> Unit,
-    val onLoadMore: () -> Unit,
-    val onOpenArticle: (String) -> Unit,
-    val onToggleRead: (String, Boolean) -> Unit,
-    val onReadStateChanged: (String, Boolean) -> Unit = { _, _ -> },
-    val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
-)
-
-data class SearchTabActions(
-    val onQueryChanged: (String) -> Unit,
-    val onSearchRequested: () -> Unit,
-    val onOpenArticle: (String) -> Unit,
-    val onLoadMore: () -> Unit,
-    val onCurrentCategoryOnlyChanged: (Boolean) -> Unit,
-)
 
 internal sealed interface FeedDrawerRow {
     val depth: Int
@@ -242,18 +170,6 @@ internal fun buildFeedDrawerRows(
 
     categories.forEach { category -> addCategory(category, depth = 0) }
 }
-
-data class SettingsTabActions(
-    val onThemeChanged: (ThemePreference) -> Unit,
-    val onHideReadChanged: (Boolean) -> Unit,
-    val onSortChanged: (ArticleSortPreference) -> Unit,
-    val onDensityChanged: (DensityPreference) -> Unit,
-    val onTextSizeChanged: (Int) -> Unit,
-    val onFontChanged: (ReaderFontPreference) -> Unit = {},
-    val onAutoMarkReadModeChanged: (AutoMarkReadPreference) -> Unit = {},
-    val onRevokeAuthSession: (String) -> Unit,
-    val onLogout: () -> Unit,
-)
 
 @Composable
 fun FeedsTab(
@@ -942,7 +858,7 @@ internal fun feedSyncWarning(feed: FeedWithCounts): String? {
 fun ArticlesTab(
     state: ArticleTabState,
     actions: ArticleTabActions,
-    pagedArticles: LazyPagingItems<ArticleListItem>? = null,
+    pagedArticles: LazyPagingItems<ArticleListItem>,
 ) {
     val listState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
@@ -953,31 +869,8 @@ fun ArticlesTab(
         state.articles.associate { it.id to it.isRead }
     }
 
-    LaunchedEffect(
-        listState,
-        pagedArticles,
-        state.articles.size,
-        state.hasMoreArticles,
-        state.loadingMoreArticles,
-    ) {
-        if (pagedArticles != null) return@LaunchedEffect
-        snapshotFlow {
-            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            state.hasMoreArticles &&
-                !state.loadingMoreArticles &&
-                state.articles.isNotEmpty() &&
-                lastVisibleIndex >= state.articles.lastIndex - AUTO_LOAD_MORE_THRESHOLD
-        }
-            .distinctUntilChanged()
-            .collect { shouldLoadMore ->
-                if (shouldLoadMore) {
-                    actions.onLoadMore()
-                }
-            }
-    }
-
-    val isPagingInitialLoad = pagedArticles?.loadState?.refresh is LoadState.Loading
-    val articleCount = pagedArticles?.itemCount ?: state.articles.size
+    val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
+    val articleCount = pagedArticles.itemCount
     val isRefreshing = isPagingInitialLoad && articleCount > 0
     val isEmpty = articleCount == 0 && !isPagingInitialLoad && !isRefreshing && !state.isSyncingFeeds
 
@@ -1109,8 +1002,7 @@ fun ArticlesTab(
                 }
             }
 
-            if (pagedArticles != null) {
-                items(
+            items(
                     count = pagedArticles.itemCount,
                     // `peek` does not trigger a load on the paging source;
                     // calling `pagedArticles[index]` instead forces a load
@@ -1144,74 +1036,40 @@ fun ArticlesTab(
                     }
                 }
 
-                val appendLoadState = pagedArticles.loadState.append
-                if (appendLoadState is LoadState.Loading || appendLoadState is LoadState.Error) {
-                    item(key = "articles-paging-footer") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (appendLoadState is LoadState.Loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                            } else if (appendLoadState is LoadState.Error) {
-                                AssistChip(
-                                    onClick = pagedArticles::retry,
-                                    label = { Text(appendLoadState.error.message ?: "Retry loading") },
-                                )
-                            }
-                        }
-                    }
-                }
-
-                val refreshLoadState = pagedArticles.loadState.refresh
-                if (refreshLoadState is LoadState.Error && pagedArticles.itemCount == 0) {
-                    item(key = "articles-refresh-error") {
-                        Box(
-                            modifier = Modifier
-                                .fillParentMaxSize()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
+            val appendLoadState = pagedArticles.loadState.append
+            if (appendLoadState is LoadState.Loading || appendLoadState is LoadState.Error) {
+                item(key = "articles-paging-footer") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (appendLoadState is LoadState.Loading) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else if (appendLoadState is LoadState.Error) {
                             AssistChip(
                                 onClick = pagedArticles::retry,
-                                label = { Text(refreshLoadState.error.message ?: "Retry") },
+                                label = { Text(appendLoadState.error.message ?: "Retry loading") },
                             )
                         }
                     }
                 }
-            } else {
-                items(
-                    items = state.articles,
-                    key = { it.id },
-                    contentType = { "article-row" },
-                ) { article ->
-                    ArticleListRow(
-                        article = article,
-                        isRead = article.isRead,
-                        selected = state.selectedArticleId == article.id,
-                        onClick = { actions.onOpenArticle(article.id) },
-                        onToggleRead = { read ->
-                            actions.onToggleRead(article.id, read)
-                            actions.onReadStateChanged(article.id, !read)
-                        },
-                        density = state.density,
-                    )
-                }
+            }
 
-                if (state.hasMoreArticles) {
-                    item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                            if (state.loadingMoreArticles) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                            } else {
-                                AssistChip(
-                                    onClick = actions.onLoadMore,
-                                    label = { Text("Load more") },
-                                )
-                            }
-                        }
+            val refreshLoadState = pagedArticles.loadState.refresh
+            if (refreshLoadState is LoadState.Error && pagedArticles.itemCount == 0) {
+                item(key = "articles-refresh-error") {
+                    Box(
+                        modifier = Modifier
+                            .fillParentMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AssistChip(
+                            onClick = pagedArticles::retry,
+                            label = { Text(refreshLoadState.error.message ?: "Retry") },
+                        )
                     }
                 }
             }
@@ -1400,7 +1258,7 @@ private fun ArticlePlaceholderRow() {
 }
 
 @Composable
-private fun ArticleCard(
+internal fun ArticleCard(
     article: ArticleListItem,
     selected: Boolean,
     onClick: () -> Unit,
@@ -1506,108 +1364,6 @@ private fun ArticleCard(
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentScale = ContentScale.Crop,
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            FeedSurfaceCard {
-                OutlinedTextField(
-                    value = state.query,
-                    onValueChange = {
-                        actions.onQueryChanged(it)
-                        if (it.length >= 2) actions.onSearchRequested()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search titles and article content") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search articles") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(20.dp),
-                )
-                if (state.currentCategoryAvailable) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = !state.currentCategoryOnly,
-                            onClick = { actions.onCurrentCategoryOnlyChanged(false) },
-                            label = { Text("All") },
-                        )
-                        FilterChip(
-                            selected = state.currentCategoryOnly,
-                            onClick = { actions.onCurrentCategoryOnlyChanged(true) },
-                            label = { Text("Current") },
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            if (state.query.length >= 2) {
-                Text(
-                    text = "${state.results.size} results",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-            }
-        }
-
-        if (state.loadingResults && state.results.isEmpty()) {
-            item(key = "search-loading") {
-                Box(
-                    modifier = Modifier
-                        .fillParentMaxWidth()
-                        .padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                }
-            }
-        }
-
-        items(
-            items = state.results,
-            key = { it.id },
-            contentType = { "search-result-row" },
-        ) { article ->
-            Column(modifier = Modifier.clickable { actions.onOpenArticle(article.id) }) {
-                ArticleCard(
-                    article = article,
-                    selected = state.selectedArticleId == article.id,
-                    onClick = {},
-                )
-            }
-        }
-
-        if (state.resultLimitReached) {
-            item(key = "search-result-limit") {
-                Text(
-                    text = "Showing first ${state.results.size} results. Refine the search to narrow them.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-            }
-        }
-
-        if (state.hasMoreResults) {
-            item {
-                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    if (state.loadingMoreResults) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    } else {
-                        AssistChip(onClick = actions.onLoadMore, label = { Text("Load more results") })
-                    }
-                }
             }
         }
     }
@@ -1791,13 +1547,6 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
             }
         }
     }
-}
-
-private const val AUTO_LOAD_MORE_THRESHOLD = 5
-
-@Composable
-fun StatsTab(state: SettingsTabState, actions: SettingsTabActions) {
-    SettingsTab(state, actions)
 }
 
 @Composable

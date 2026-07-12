@@ -277,54 +277,6 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun articles(
-        feedId: String?,
-        categoryId: String?,
-        unreadOnly: Boolean?,
-        sort: String?,
-        limit: Int?,
-        cursor: String?,
-    ): AppResult<ApiListResponse<ArticleListItem>> = safeReadCall {
-        flushPendingReadStateMutations()
-        if (!cursor.isNullOrBlank()) {
-            return@safeReadCall runtime.withRetry {
-                articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
-            }
-        }
-
-        val key = "articles:${feedId.orEmpty()}:${categoryId.orEmpty()}:${unreadOnly ?: "null"}:${sort.orEmpty()}:${limit ?: 0}:"
-        runtime.getCached<ApiListResponse<ArticleListItem>>(key)?.let {
-            runtime.recordCacheHit()
-            return@safeReadCall it
-        }
-
-        val cachedPage = offlineReadStore.readArticles(key)
-        if (cachedPage != null) {
-            runtime.putCached(key, ARTICLES_TTL_MS, cachedPage)
-            refreshArticlePageInBackground(
-                key = key,
-                feedId = feedId,
-                categoryId = categoryId,
-                unreadOnly = unreadOnly,
-                sort = sort,
-                limit = limit,
-            )
-            return@safeReadCall cachedPage
-        }
-
-        try {
-            runtime.cachedGet(key = key, ttlMs = ARTICLES_TTL_MS) {
-                runtime.withRetry {
-                    articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor)
-                }.also { response ->
-                    offlineReadStore.writeArticles(key, response)
-                }
-            }
-        } catch (e: Exception) {
-            offlineReadStore.readArticles(key) ?: throw e
-        }
-    }
-
     @OptIn(ExperimentalPagingApi::class)
     override fun articlePagingData(
         query: ArticlePageQuery,
@@ -434,25 +386,6 @@ class RssRepository @Inject constructor(
                     runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
                     offlineReadStore.writeFeeds(feeds)
                 }
-            }
-        }
-    }
-
-    private fun refreshArticlePageInBackground(
-        key: String,
-        feedId: String?,
-        categoryId: String?,
-        unreadOnly: Boolean?,
-        sort: String?,
-        limit: Int?,
-    ) {
-        refreshScope.launch {
-            runCatching {
-                runtime.withRetry { articleRemote.articles(feedId, categoryId, unreadOnly, sort, limit, cursor = null) }
-                    .also { response ->
-                        runtime.putCached(key, ARTICLES_TTL_MS, response)
-                        offlineReadStore.writeArticles(key, response)
-                    }
             }
         }
     }
@@ -697,7 +630,7 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("feeds")
         runtime.invalidateByPrefix("categories")
         runtime.invalidateByPrefix("stats")
-        offlineReadStore.clearArticlePages()
+        offlineReadStore.clearArticleLists()
     }
 
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
@@ -753,7 +686,6 @@ class RssRepository @Inject constructor(
         const val USER_TTL_MS = 30_000L
         const val CATEGORIES_TTL_MS = 60_000L
         const val FEEDS_TTL_MS = 60_000L
-        const val ARTICLES_TTL_MS = 30_000L
         // Article details change rarely once published (only on enrichment
         // or read-state flip, both of which invalidate explicitly). Keep
         // them in the in-memory cache for a full day so reopening an old

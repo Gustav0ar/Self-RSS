@@ -1,7 +1,7 @@
 package com.selffeed.android.ui.articles
 
 import com.selffeed.android.data.AppResult
-import com.selffeed.android.data.repository.SelfFeedRepository
+import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.EnrichArticleResponse
 import kotlinx.coroutines.CoroutineScope
@@ -17,7 +17,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class EnrichmentManager @Inject constructor(
-    private val repository: SelfFeedRepository,
+    private val repository: ArticleRepository,
 ) {
     private var scope: CoroutineScope? = null
     private var enrichArticleJob: Job? = null

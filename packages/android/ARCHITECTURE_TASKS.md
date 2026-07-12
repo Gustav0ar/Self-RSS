@@ -26,17 +26,24 @@
 - Added a database-version guard so future Room version bumps require registered migrations and migration tests.
 - Added a Hilt androidTest runner, fake repository graph, and replacement module for device UI tests.
 - Replaced placeholder Android UI coverage with real `ArticlesTab` behavior coverage and a Hilt-backed `MainActivity` smoke test.
+- Removed the obsolete manual cursor `PagingSource`, cursor-page cache, and fallback UI path; Paging 3 `RemoteMediator` plus Room query entries are now the sole article-list implementation.
+- Added `RemoteMediator` characterization coverage for refresh, append, cached initialization, and failed refresh retention.
+- Narrowed the articles ViewModel, warming, enrichment, and read-state managers to `ArticleRepository` rather than the full application repository.
+- Moved screen contracts into a feature-owned file and split Search/Stats into their own destinations; future feature additions no longer need to expand the shared shell contract.
+- Moved app lifecycle, preference, sync, and article-event workflow policy into a testable `AppWorkflowCoordinator`.
+- Added emulator-backed instrumentation CI and a manually generated release Baseline Profile on a Gradle-managed device.
 
 ## Remaining Deepening Work
 
-1. Run connected Android UI tests in CI once emulator/device infrastructure is available.
-2. Introduce use-case classes only if multiple ViewModels start sharing the same multi-step workflows.
+1. Keep macrobenchmarks manual and investigate timing regressions with a physical device before introducing numeric CI thresholds.
+2. Introduce use-case classes only if a workflow is shared outside the app-shell coordinator or requires independent reuse.
 
 ## Target Shape
 
 ```text
 MainActivity
   -> SelfFeedAppRoute
+    -> AppWorkflowCoordinator
     -> feature ViewModels
       -> optional use cases for shared workflows
         -> feature repositories

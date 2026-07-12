@@ -137,7 +137,6 @@ data class SelfFeedAppActions(
     val onExportOpml: () -> Unit = {},
     val onDismissImportSummary: () -> Unit = {},
     val onRefreshArticles: () -> Unit,
-    val onLoadMoreArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
     val onArticleDisplayed: (String) -> Unit,
     val onCloseArticle: () -> Unit,
@@ -300,8 +299,6 @@ fun SelfFeedApp(
         ArticleTabState(
             articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
-            hasMoreArticles = false,
-            loadingMoreArticles = false,
             isSyncingFeeds = state.feeds.syncInBackground,
             density = DensityPreference.fromApiValue(state.settings.preferences?.density),
             isOffline = !state.isOnline,
@@ -361,7 +358,6 @@ fun SelfFeedApp(
     val articleActions = remember(actions, snackbarHostState, scope) {
         ArticleTabActions(
             onRefresh = actions.onRefreshArticles,
-            onLoadMore = actions.onLoadMoreArticles,
             onOpenArticle = actions.onOpenArticle,
             onToggleRead = actions.onToggleRead,
             onReadStateChanged = { articleId, previousRead ->

@@ -19,6 +19,7 @@ Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and t
   - OPML import/export from the subscription UI (exported as attached `.opml` file via share sheet)
   - OPML import summary + warning details dialog
 - Performance-oriented UI with lazy lists, stateflow-driven rendering, background refresh status, Navigation 3 responsive list-detail reading, and origin-preserving search navigation
+- Paging 3 is the only article-list source of truth; Room query entries retain the current queue offline while a bounded snapshot supports instant reader navigation
 - Repository-level resilience for read APIs (retry with bounded backoff/jitter), Room-backed offline detail caching, parallel adjacent-article warming, and realtime content-version invalidation
 
 ## Project Layout
@@ -102,11 +103,13 @@ Install these in Android Studio SDK Manager:
 - Run instrumentation tests with `./gradlew -p packages/android :app:connectedDebugAndroidTest`.
 - Run lint + debug build checks with `./gradlew -p packages/android :app:lintDebug :app:assembleDebug`.
 - Run all local Android pre-release checks from repo root with `bun run android:check`.
+- Generate the release Baseline Profile on the configured managed device with `SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./gradlew -p packages/android :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile`.
 
 ## CI
 
 - Android checks run in the dedicated `.github/workflows/android-ci.yml` workflow.
-- Dedicated workflow triggers on Android path changes and supports manual runs (`workflow_dispatch`).
+- The workflow runs unit, lint/build, and Hilt-backed Compose instrumentation tests. A manual run also generates and uploads the release Baseline Profile from a Gradle-managed AOSP device.
+- Macrobenchmarks remain manual because absolute timing thresholds are not reliable on shared CI hardware; use them to investigate a suspected cold-start or reader-navigation regression.
 
 ## UX Notes
 

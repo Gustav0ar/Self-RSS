@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("androidx.baselineprofile")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.dagger.hilt.android")
@@ -191,6 +192,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("androidx.metrics:metrics-performance:1.0.0")
+    // Installs the packaged Baseline Profile for sideloaded builds on devices
+    // where the package installer does not do so automatically.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.navigation3:navigation3-runtime:1.1.4")
     implementation("androidx.navigation3:navigation3-ui:1.1.4")
     implementation("androidx.compose.material3.adaptive:adaptive-navigation3:1.3.0-rc01")
@@ -251,4 +255,6 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("com.google.dagger:hilt-android-testing:2.59.2")
     kspAndroidTest("com.google.dagger:hilt-compiler:2.59.2")
+
+    baselineProfile(project(":macrobenchmark"))
 }

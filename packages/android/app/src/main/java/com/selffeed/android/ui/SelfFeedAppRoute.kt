@@ -38,9 +38,74 @@ fun SelfFeedAppRoute(
     }
 
     SelfFeedTheme(darkTheme = darkTheme) {
-        val latestFeedsState by rememberUpdatedState(feedsState)
-        val latestSearchState by rememberUpdatedState(searchState)
-        val articleEventCoordinator = remember { ArticleFeatureEventCoordinator() }
+        val latestFeedsState = rememberUpdatedState(feedsState)
+        val latestSearchState = rememberUpdatedState(searchState)
+        val workflowCoordinator = remember { AppWorkflowCoordinator() }
+        val workflowSink = object : AppWorkflowSink {
+            override fun refreshAuthenticatedSession() {
+                articlesViewModel.clearSessionReadStateMemory()
+                feedsViewModel.loadCategories()
+                feedsViewModel.loadFeeds()
+                settingsViewModel.loadPreferences()
+                settingsViewModel.loadStats()
+                settingsViewModel.loadAuthSessions()
+                settingsViewModel.loadAdminSettings()
+                articlesViewModel.refreshArticles()
+                articlesViewModel.startReadStateSync()
+            }
+
+            override fun clearUnauthenticatedSession() {
+                articlesViewModel.stopReadStateSync()
+                articlesViewModel.clearSessionReadStateMemory()
+            }
+
+            override fun applyArticlePreferences(defaultSort: String, hideRead: Boolean, autoMarkReadMode: String) {
+                articlesViewModel.setFilter(sort = defaultSort, hideRead = hideRead)
+                articlesViewModel.setAutoMarkReadMode(autoMarkReadMode)
+            }
+
+            override fun refreshAfterFeedSync() {
+                feedsViewModel.loadCategories()
+                feedsViewModel.loadFeeds()
+                settingsViewModel.loadStats()
+                articlesViewModel.refreshArticles()
+            }
+
+            override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
+                feedsViewModel.applyUnreadDelta(feedId, unreadDelta)
+            }
+
+            override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
+                settingsViewModel.applyStatsDelta(unreadDelta, readDelta)
+            }
+
+            override fun applyArticleReadState(articleId: String, read: Boolean) {
+                searchViewModel.applyArticleReadState(articleId, read)
+            }
+
+            override fun applyScopeMarkedRead(
+                feedId: String?,
+                categoryId: String?,
+                affectedFeedIds: Set<String>,
+            ) {
+                feedsViewModel.applyScopeMarkedRead(feedId, categoryId, affectedFeedIds)
+            }
+
+            override fun applySearchScopeMarkedRead(feedIds: Set<String>) {
+                searchViewModel.applyScopeMarkedRead(feedIds)
+            }
+
+            override fun applyAllSearchMarkedRead() {
+                searchViewModel.applyAllMarkedRead()
+            }
+
+            override fun refreshArticleContent() {
+                feedsViewModel.loadCategories()
+                feedsViewModel.loadFeeds()
+                settingsViewModel.loadStats()
+                if (latestSearchState.value.query.length >= 2) searchViewModel.search(debounceMs = 0)
+            }
+        }
 
         LaunchedEffect(Unit) {
             authViewModel.bootstrap()
@@ -53,20 +118,7 @@ fun SelfFeedAppRoute(
         }
 
         LaunchedEffect(authState.isAuthenticated) {
-            if (authState.isAuthenticated) {
-                articlesViewModel.clearSessionReadStateMemory()
-                feedsViewModel.loadCategories()
-                feedsViewModel.loadFeeds()
-                settingsViewModel.loadPreferences()
-                settingsViewModel.loadStats()
-                settingsViewModel.loadAuthSessions()
-                settingsViewModel.loadAdminSettings()
-                articlesViewModel.refreshArticles()
-                articlesViewModel.startReadStateSync()
-            } else {
-                articlesViewModel.stopReadStateSync()
-                articlesViewModel.clearSessionReadStateMemory()
-            }
+            workflowCoordinator.onAuthenticationChanged(authState.isAuthenticated, workflowSink)
         }
 
         LaunchedEffect(
@@ -74,10 +126,7 @@ fun SelfFeedAppRoute(
             settingsState.preferences?.hideRead,
             settingsState.preferences?.autoMarkReadMode,
         ) {
-            settingsState.preferences?.let {
-                articlesViewModel.setFilter(sort = it.defaultSort, hideRead = it.hideRead)
-                articlesViewModel.setAutoMarkReadMode(it.autoMarkReadMode)
-            }
+            workflowCoordinator.onPreferencesChanged(settingsState.preferences, workflowSink)
         }
 
         LaunchedEffect(articlesState.selectedCategoryId) {
@@ -85,59 +134,15 @@ fun SelfFeedAppRoute(
         }
 
         LaunchedEffect(feedsState.syncRevision) {
-            if (feedsState.syncRevision > 0L) {
-                feedsViewModel.loadCategories()
-                feedsViewModel.loadFeeds()
-                settingsViewModel.loadStats()
-                articlesViewModel.refreshArticles()
-            }
+            workflowCoordinator.onFeedSyncRevisionChanged(feedsState.syncRevision, workflowSink)
         }
 
         LaunchedEffect(Unit) {
             articlesViewModel.events.collect { event ->
-                articleEventCoordinator.handle(
+                workflowCoordinator.onArticleEvent(
                     event = event,
-                    latestFeedsState = latestFeedsState,
-                    sink = object : ArticleFeatureEventSink {
-                        override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
-                            feedsViewModel.applyUnreadDelta(feedId, unreadDelta)
-                        }
-
-                        override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
-                            settingsViewModel.applyStatsDelta(unreadDelta, readDelta)
-                        }
-
-                        override fun applyArticleReadState(articleId: String, read: Boolean) {
-                            searchViewModel.applyArticleReadState(articleId, read)
-                        }
-
-                        override fun applyScopeMarkedRead(
-                            feedId: String?,
-                            categoryId: String?,
-                            affectedFeedIds: Set<String>,
-                        ) {
-                            feedsViewModel.applyScopeMarkedRead(
-                                feedId = feedId,
-                                categoryId = categoryId,
-                                affectedFeedIds = affectedFeedIds,
-                            )
-                        }
-
-                        override fun applySearchScopeMarkedRead(feedIds: Set<String>) {
-                            searchViewModel.applyScopeMarkedRead(feedIds)
-                        }
-
-                        override fun applyAllSearchMarkedRead() {
-                            searchViewModel.applyAllMarkedRead()
-                        }
-
-                        override fun refreshArticleContent() {
-                            feedsViewModel.loadCategories()
-                            feedsViewModel.loadFeeds()
-                            settingsViewModel.loadStats()
-                            if (latestSearchState.query.length >= 2) searchViewModel.search(debounceMs = 0)
-                        }
-                    },
+                    latestFeedsState = latestFeedsState.value,
+                    sink = workflowSink,
                 )
             }
         }
@@ -201,7 +206,6 @@ fun SelfFeedAppRoute(
                 onRefreshArticles = {
                     feedsViewModel.syncAllFeeds()
                 },
-                onLoadMoreArticles = articlesViewModel::loadMoreArticles,
                 onOpenArticle = {
                     val origin = if (chromeState.activeTab == HomeTab.SEARCH) HomeTab.SEARCH else HomeTab.ARTICLES
                     if (origin == HomeTab.SEARCH) {

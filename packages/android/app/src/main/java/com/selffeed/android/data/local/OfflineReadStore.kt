@@ -1,8 +1,6 @@
 package com.selffeed.android.data.local
 
-import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
-import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 
@@ -15,9 +13,7 @@ interface OfflineReadStore {
     suspend fun readFeeds(): List<FeedWithCounts>
     suspend fun clearFeeds()
 
-    suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>)
-    suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>?
-    suspend fun clearArticlePages()
+    suspend fun clearArticleLists()
 
     suspend fun writeArticleDetail(detail: ArticleDetail)
     suspend fun readArticleDetail(articleId: String): ArticleDetail?
@@ -58,17 +54,10 @@ class CompositeOfflineReadStore(
         fileCacheStore.clearByPrefix("feeds")
     }
 
-    override suspend fun writeArticles(key: String, payload: ApiListResponse<ArticleListItem>) {
-        localStore.writeArticles(key, payload)
-        fileCacheStore.writeArticles(key, payload)
-    }
-
-    override suspend fun readArticles(key: String): ApiListResponse<ArticleListItem>? =
-        localStore.readArticles(key) ?: fileCacheStore.readArticles(key)
-
-    override suspend fun clearArticlePages() {
+    override suspend fun clearArticleLists() {
         localStore.clearTable(LocalStore.TABLE_ARTICLES)
-        localStore.clearTable(LocalStore.TABLE_ARTICLE_PAGES)
+        // Remove cursor-page files left by older versions. New builds keep
+        // article lists exclusively in Room query entries.
         fileCacheStore.clearByPrefix("articles-")
     }
 
@@ -98,7 +87,7 @@ class CompositeOfflineReadStore(
     override suspend fun clearFeedAndArticleData() {
         clearFeeds()
         clearCategories()
-        clearArticlePages()
+        clearArticleLists()
         clearArticleDetails()
     }
 }

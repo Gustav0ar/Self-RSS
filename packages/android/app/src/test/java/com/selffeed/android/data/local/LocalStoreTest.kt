@@ -80,21 +80,6 @@ class LocalStoreTest {
     }
 
     @Test
-    fun `articles write and read round-trip`() = runBlocking {
-        val payload = ApiListResponse(
-            data = listOf(sampleArticle("a-1")),
-            cursor = "next-cursor",
-            hasMore = true,
-        )
-        store.writeArticles("key-1", payload)
-        val read = store.readArticles("key-1")
-        assertNotNull(read)
-        assertEquals(1, read!!.data.size)
-        assertEquals("next-cursor", read.cursor)
-        assertTrue(read.hasMore)
-    }
-
-    @Test
     fun `article remote page writes query entries and remote key`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1"), sampleArticle("a-2")),
