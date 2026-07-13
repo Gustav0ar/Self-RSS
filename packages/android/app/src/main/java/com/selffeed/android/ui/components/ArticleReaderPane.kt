@@ -18,6 +18,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +65,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
@@ -290,46 +294,45 @@ private fun ArticleDetailView(
                     Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(12.dp))
                     retainedContent.media.take(24).forEach { media ->
-                        if (media.type == "image") {
-                            AsyncImage(
-                                model = media.url,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { openExternalUrl(context, media.url) },
-                                contentScale = ContentScale.Fit,
-                            )
-                        }
-                        media.embedUrl?.let { url ->
-                            if (canPreviewMedia(media.provider, url)) {
-                                EmbedPlayer(
-                                    embedUrl = url,
-                                    backgroundColor = backgroundColor,
-                                    documentBaseUrl = documentBaseUrl,
-                                    onShowFullscreenMedia = showFullscreenMedia,
-                                    onHideFullscreenMedia = hideFullscreenMedia,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp)
-                                        .clip(RoundedCornerShape(16.dp))
+                        // An enrichment refresh can recreate ArticleMedia objects
+                        // while preserving their URL. Keeping a URL-based key
+                        // prevents the image painter from being disposed and
+                        // flashing back to its loading state.
+                        key(media.readerRenderKey()) {
+                            if (media.type == "image") {
+                                ReaderImageMedia(
+                                    media = media,
+                                    onClick = { openExternalUrl(context, media.url) },
                                 )
-                            } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    val label = when {
-                                        media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
-                                        media.type == "embed" -> "Embedded Content"
-                                        media.type == "video" -> "Video"
-                                        else -> "Media Link"
-                                    }
-                                    androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
-                                        Text(label)
+                            }
+                            media.embedUrl?.let { url ->
+                                if (canPreviewMedia(media.provider, url)) {
+                                    EmbedPlayer(
+                                        embedUrl = url,
+                                        backgroundColor = backgroundColor,
+                                        documentBaseUrl = documentBaseUrl,
+                                        onShowFullscreenMedia = showFullscreenMedia,
+                                        onHideFullscreenMedia = hideFullscreenMedia,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 8.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                    )
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val label = when {
+                                            media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
+                                            media.type == "embed" -> "Embedded Content"
+                                            media.type == "video" -> "Video"
+                                            else -> "Media Link"
+                                        }
+                                        androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
+                                            Text(label)
+                                        }
                                     }
                                 }
                             }
@@ -351,6 +354,35 @@ private fun ArticleDetailView(
                 fullscreenMedia = null
             }
         },
+    )
+}
+
+@Composable
+private fun ReaderImageMedia(
+    media: com.selffeed.android.network.ArticleMedia,
+    onClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    // Keep the request object stable across unrelated reader recompositions.
+    val imageRequest = remember(context, media.url) {
+        ImageRequest.Builder(context)
+            .data(media.url)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
+
+    AsyncImage(
+        model = imageRequest,
+        contentDescription = "Article image",
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .aspectRatio(media.readerImageAspectRatio())
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick),
+        contentScale = ContentScale.Fit,
     )
 }
 

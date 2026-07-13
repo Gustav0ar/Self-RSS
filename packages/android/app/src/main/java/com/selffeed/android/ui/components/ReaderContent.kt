@@ -30,9 +30,31 @@ internal fun ReaderContent.mergeNonRegressive(incoming: ArticleDetail): ReaderCo
     return ReaderContent(
         html = preferCompleteContent(html, next.html),
         text = preferCompleteContent(text, next.text),
-        media = (media + next.media).distinctBy { media -> media.id.ifBlank { media.url } },
+        // Extraction can assign a fresh database id to the same URL after an
+        // article refresh. Use the actual render source as identity so that
+        // update cannot add a second image (and force a visible relayout).
+        media = (media + next.media).distinctBy(ArticleMedia::readerRenderKey),
         contentVersion = maxOf(contentVersion, next.contentVersion),
     )
+}
+
+/** Stable Compose identity for an article-media renderer. */
+internal fun ArticleMedia.readerRenderKey(): String = when {
+    type == "image" && url.isNotBlank() -> "image:$url"
+    !embedUrl.isNullOrBlank() -> "$type:$embedUrl"
+    url.isNotBlank() -> "$type:$url"
+    else -> "$type:$id"
+}
+
+/**
+ * Reserving the known image geometry prevents AsyncImage's loading and
+ * success painters from changing the reader's layout. Media without usable
+ * dimensions gets a conventional landscape placeholder.
+ */
+internal fun ArticleMedia.readerImageAspectRatio(): Float {
+    val imageWidth = width?.takeIf { it > 0 } ?: return 16f / 9f
+    val imageHeight = height?.takeIf { it > 0 } ?: return 16f / 9f
+    return imageWidth.toFloat() / imageHeight
 }
 
 /** Applies the reader-safe content merge while retaining fresh article metadata. */

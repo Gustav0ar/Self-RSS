@@ -5,7 +5,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -13,6 +15,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.ArticleMedia
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -140,6 +143,41 @@ class ArticleReaderPaneNavigationTest {
         composeRule.onNodeWithText(completeBody).assertIsDisplayed()
     }
 
+    @Test
+    fun refreshedImageWithANewMediaIdKeepsASingleStableRenderer() {
+        val imageUrl = "https://example.com/hero.jpg"
+        val initial = sampleDetail(
+            id = "article-1",
+            title = "First Article",
+            isRead = false,
+            media = listOf(sampleMedia("initial-media", imageUrl)),
+        )
+        val refreshed = sampleDetail(
+            id = "article-1",
+            title = "First Article",
+            isRead = false,
+            contentVersion = 2,
+            media = listOf(sampleMedia("refreshed-media", imageUrl)),
+        )
+        var displayedArticle by mutableStateOf(initial)
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = listOf(sampleArticle("article-1", "First Article")),
+                    selectedArticle = displayedArticle,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = {},
+                )
+            }
+        }
+
+        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(1)
+        composeRule.runOnUiThread { displayedArticle = refreshed }
+        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(1)
+    }
+
     private fun sampleArticle(id: String, title: String): ArticleListItem =
         ArticleListItem(
             id = id,
@@ -157,6 +195,7 @@ class ArticleReaderPaneNavigationTest {
         canonicalUrl: String? = null,
         contentText: String = "Body for $title",
         contentVersion: Int = 1,
+        media: List<ArticleMedia> = emptyList(),
     ): ArticleDetail =
         ArticleDetail(
             id = id,
@@ -174,9 +213,18 @@ class ArticleReaderPaneNavigationTest {
             feedTitle = "Test Feed",
             feedFaviconUrl = null,
             feedSiteUrl = null,
-            media = emptyList(),
+            media = media,
             isRead = isRead,
             isEnriched = false,
             contentVersion = contentVersion,
         )
+
+    private fun sampleMedia(id: String, url: String) = ArticleMedia(
+        id = id,
+        articleId = "article-1",
+        type = "image",
+        provider = "unknown",
+        url = url,
+        position = 0,
+    )
 }

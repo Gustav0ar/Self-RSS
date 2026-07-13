@@ -36,6 +36,9 @@ class ReaderHtmlDocumentTest {
         assertTrue(document.contains("picture-in-picture; web-share"))
         assertTrue(document.contains("fallbackChecks >= 10"))
         assertTrue(document.contains("clearInterval(fallbackTimer)"))
+        assertTrue(document.contains("let pendingHeightUpdate = null"))
+        assertTrue(document.contains("setTimeout(() =>"))
+        assertTrue(document.contains("}, 120)"))
         assertTrue(document.contains("maximum-scale=5.0, user-scalable=yes"))
     }
 

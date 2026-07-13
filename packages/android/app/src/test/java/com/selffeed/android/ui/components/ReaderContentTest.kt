@@ -47,6 +47,32 @@ class ReaderContentTest {
         assertTrue(merged.isEnriched)
     }
 
+    @Test
+    fun `same image URL from a refresh keeps one stable renderer`() {
+        val initial = article(
+            text = "Article body",
+            media = listOf(media("first-id", "https://example.com/hero.jpg")),
+            contentVersion = 1,
+        )
+        val refreshed = article(
+            text = "Article body with more content",
+            media = listOf(media("replacement-id", "https://example.com/hero.jpg")),
+            contentVersion = 2,
+        )
+
+        val merged = initial.readerContent().mergeNonRegressive(refreshed)
+
+        assertEquals(1, merged.media.size)
+        assertEquals("first-id", merged.media.single().id)
+        assertEquals("image:https://example.com/hero.jpg", merged.media.single().readerRenderKey())
+    }
+
+    @Test
+    fun `reader image aspect ratio uses metadata and has stable fallback`() {
+        assertEquals(4f / 3f, media("landscape", "https://example.com/a.jpg", width = 1200, height = 900).readerImageAspectRatio())
+        assertEquals(16f / 9f, media("unknown", "https://example.com/b.jpg").readerImageAspectRatio())
+    }
+
     private fun article(
         text: String,
         media: List<ArticleMedia>,
@@ -65,12 +91,14 @@ class ReaderContentTest {
         contentVersion = contentVersion,
     )
 
-    private fun media(id: String, url: String) = ArticleMedia(
+    private fun media(id: String, url: String, width: Int? = null, height: Int? = null) = ArticleMedia(
         id = id,
         articleId = "article-1",
         type = "image",
         provider = "unknown",
         url = url,
+        width = width,
+        height = height,
         position = 0,
     )
 }

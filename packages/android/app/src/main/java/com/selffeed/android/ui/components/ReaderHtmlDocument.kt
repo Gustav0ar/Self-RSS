@@ -359,8 +359,20 @@ internal fun buildReaderHtmlDocument(
                     }
                 }
 
+                let pendingHeightUpdate = null;
+
                 function scheduleReaderUpdate() {
-                    window.requestAnimationFrame(postHeight);
+                    // Images can report several intermediate intrinsic sizes.
+                    // Wait for layout to settle instead of resizing the native
+                    // WebView for every frame, which otherwise flashes its
+                    // compositor surface while an article is opening.
+                    if (pendingHeightUpdate !== null) {
+                        clearTimeout(pendingHeightUpdate);
+                    }
+                    pendingHeightUpdate = setTimeout(() => {
+                        pendingHeightUpdate = null;
+                        postHeight();
+                    }, 120);
                 }
 
                 // Named handlers so they can be removed during cleanup
@@ -409,6 +421,10 @@ internal fun buildReaderHtmlDocument(
                         window.removeEventListener('load', handleLoad);
                         window.removeEventListener('resize', handleResize);
                         document.removeEventListener('DOMContentLoaded', handleDomContentLoaded);
+                        if (pendingHeightUpdate !== null) {
+                            clearTimeout(pendingHeightUpdate);
+                            pendingHeightUpdate = null;
+                        }
                         if (resizeObserver) resizeObserver.disconnect();
                         if (mutationObserver) mutationObserver.disconnect();
                         if (fallbackTimer) clearInterval(fallbackTimer);
