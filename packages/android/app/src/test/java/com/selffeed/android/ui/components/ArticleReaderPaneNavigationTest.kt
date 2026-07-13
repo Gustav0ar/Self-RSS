@@ -146,38 +146,61 @@ class ArticleReaderPaneNavigationTest {
     }
 
     @Test
-    fun refreshedImageWithANewMediaIdKeepsASingleStableRenderer() {
+    fun textModeDoesNotRenderExtractedMedia() {
         val imageUrl = "https://example.com/hero.jpg"
         val initial = sampleDetail(
             id = "article-1",
             title = "First Article",
             isRead = false,
+            contentHtml = "<p>Text mode body.</p><img src=\"$imageUrl\" />",
+            contentText = "Text mode body.",
             media = listOf(sampleMedia("initial-media", imageUrl)),
         )
-        val refreshed = sampleDetail(
-            id = "article-1",
-            title = "First Article",
-            isRead = false,
-            contentVersion = 2,
-            media = listOf(sampleMedia("refreshed-media", imageUrl)),
-        )
-        var displayedArticle by mutableStateOf(initial)
 
         composeRule.setContent {
             SelfFeedTheme {
                 ArticleReaderPane(
                     articles = listOf(sampleArticle("article-1", "First Article")),
-                    selectedArticle = displayedArticle,
+                    selectedArticle = initial,
                     onOpenOriginal = {},
                     onBackToList = {},
                     onArticleSelected = {},
+                    preferHtml = false,
                 )
             }
         }
 
-        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(1)
-        composeRule.runOnUiThread { displayedArticle = refreshed }
-        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(1)
+        composeRule.onNodeWithTag("reader-text-content").assertIsDisplayed()
+        composeRule.onNodeWithText("Text mode body.").assertIsDisplayed()
+        composeRule.onNodeWithText("Media").assertDoesNotExist()
+        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(0)
+    }
+
+    @Test
+    fun htmlOnlyArticleStillOffersCleanTextMode() {
+        val article = sampleDetail(
+            id = "article-1",
+            title = "HTML-only Article",
+            isRead = false,
+            contentHtml = "<p>HTML-only text remains available in Text mode.</p>",
+            contentText = null,
+        )
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = listOf(sampleArticle("article-1", "HTML-only Article")),
+                    selectedArticle = article,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = {},
+                    preferHtml = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Text").assertIsDisplayed().assertIsSelected()
+        composeRule.onNodeWithText("HTML-only text remains available in Text mode.").assertIsDisplayed()
     }
 
     @Test
@@ -234,7 +257,7 @@ class ArticleReaderPaneNavigationTest {
         isRead: Boolean,
         canonicalUrl: String? = null,
         contentHtml: String? = null,
-        contentText: String = "Body for $title",
+        contentText: String? = "Body for $title",
         contentVersion: Int = 1,
         media: List<ArticleMedia> = emptyList(),
     ): ArticleDetail =

@@ -119,7 +119,7 @@ fun ArticleReaderDialog(
                     )
                 }
 
-                if (article.contentHtml != null && article.contentText != null) {
+                if (article.contentHtml != null) {
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(
@@ -154,17 +154,19 @@ fun ArticleReaderDialog(
                                     documentBaseUrl = documentBaseUrl,
                                 )
                             } else {
-                                Text(
-                                    text = article.contentText ?: article.excerpt ?: "No content",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                ReaderTextContent(
+                                    html = article.contentHtml,
+                                    text = article.contentText,
+                                    fallback = article.excerpt,
                                 )
                             }
                         }
                     }
                 }
 
-                if (article.media.isNotEmpty()) {
+                // Text mode intentionally contains article text only. Media is
+                // available in Rich mode, where its inline context is intact.
+                if (showHtml && article.media.isNotEmpty()) {
                     item {
                         Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     }

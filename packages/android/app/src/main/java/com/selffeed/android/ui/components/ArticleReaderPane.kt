@@ -18,7 +18,6 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,7 +34,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,18 +44,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -65,13 +60,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import coil3.compose.AsyncImage
-import coil3.request.CachePolicy
-import coil3.request.ImageRequest
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
-import com.selffeed.android.ui.utils.canPreviewMedia
 import com.selffeed.android.ui.utils.formatPublishedAt
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
 
@@ -166,7 +157,6 @@ private fun ArticleDetailView(
     onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
 ) {
-    val context = LocalContext.current
     // Detail refreshes/enrichment can arrive out of order. Keep the rendered
     // snapshot monotonic so a late partial response cannot remove paragraphs,
     // reload the WebView, or make already-visible media disappear.
@@ -253,7 +243,7 @@ private fun ArticleDetailView(
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if (retainedContent.html != null && retainedContent.text != null) {
+        if (retainedContent.html != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = preferHtml,
@@ -300,66 +290,15 @@ private fun ArticleDetailView(
                 // look like an unwanted mode switch before HTML arrived.
                 ArticleHtmlSkeleton(modifier = Modifier.testTag("reader-rich-loading"))
             } else {
-                Text(
-                    text = retainedContent.text ?: article.excerpt ?: "No content",
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontFamily = appearance.font.composeFontFamily,
-                        fontSize = appearance.boundedTextSizeSp.sp,
-                        lineHeight = (appearance.boundedTextSizeSp * 1.62f).sp,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface,
+                // Text mode is deliberately article-only. It uses the HTML
+                // only to retain headings, paragraphs, and lists; embedded
+                // images and video are removed before the text is rendered.
+                ReaderTextContent(
+                    html = retainedContent.html,
+                    text = retainedContent.text,
+                    fallback = article.excerpt,
+                    appearance = appearance,
                 )
-
-                if (retainedContent.media.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    retainedContent.media.take(24).forEach { media ->
-                        // An enrichment refresh can recreate ArticleMedia objects
-                        // while preserving their URL. Keeping a URL-based key
-                        // prevents the image painter from being disposed and
-                        // flashing back to its loading state.
-                        key(media.readerRenderKey()) {
-                            if (media.type == "image") {
-                                ReaderImageMedia(
-                                    media = media,
-                                    onClick = { openExternalUrl(context, media.url) },
-                                )
-                            }
-                            media.embedUrl?.let { url ->
-                                if (canPreviewMedia(media.provider, url)) {
-                                    EmbedPlayer(
-                                        embedUrl = url,
-                                        backgroundColor = backgroundColor,
-                                        documentBaseUrl = documentBaseUrl,
-                                        onShowFullscreenMedia = showFullscreenMedia,
-                                        onHideFullscreenMedia = hideFullscreenMedia,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 8.dp)
-                                            .clip(RoundedCornerShape(16.dp))
-                                    )
-                                } else {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        val label = when {
-                                            media.provider.isNotBlank() && media.provider != "unknown" -> media.provider
-                                            media.type == "embed" -> "Embedded Content"
-                                            media.type == "video" -> "Video"
-                                            else -> "Media Link"
-                                        }
-                                        androidx.compose.material3.TextButton(onClick = { openExternalUrl(context, media.url) }) {
-                                            Text(label)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -382,35 +321,6 @@ private fun ArticleDetail.isRichContentPending(): Boolean =
     contentHtml.isNullOrBlank() &&
         (fetchedAt == null || contentStatus == "enrichment_pending")
 
-@Composable
-private fun ReaderImageMedia(
-    media: com.selffeed.android.network.ArticleMedia,
-    onClick: () -> Unit,
-) {
-    val context = LocalContext.current
-    // Keep the request object stable across unrelated reader recompositions.
-    val imageRequest = remember(context, media.url) {
-        ImageRequest.Builder(context)
-            .data(media.url)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
-
-    AsyncImage(
-        model = imageRequest,
-        contentDescription = "Article image",
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-            .aspectRatio(media.readerImageAspectRatio())
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
-        contentScale = ContentScale.Fit,
-    )
-}
-
 private fun List<ArticleListItem>.withSelectedArticle(selectedArticle: ArticleDetail): List<ArticleListItem> {
     if (isEmpty() || any { it.id == selectedArticle.id }) return this
     return listOf(selectedArticle.toArticleListItem()) + this
@@ -431,127 +341,6 @@ private fun ArticleDetail.toArticleListItem(): ArticleListItem =
         contentStatus = contentStatus,
         contentVersion = contentVersion,
     )
-
-@Composable
-private fun EmbedPlayer(
-    embedUrl: String,
-    backgroundColor: Color,
-    documentBaseUrl: String,
-    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
-    onHideFullscreenMedia: (View?) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var heightDp by remember(embedUrl) { mutableIntStateOf(300) }
-    var loadEmbed by rememberSaveable(embedUrl) { mutableStateOf(false) }
-    val hexBackground = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
-    val youtubeShellHtml = remember(embedUrl, hexBackground) {
-        if (isYouTubeEmbedUrl(embedUrl)) {
-            youtubeEmbedHtml(embedUrl = embedUrl, background = hexBackground)
-        } else {
-            null
-        }
-    }
-
-    if (!loadEmbed) {
-        DeferredEmbedPlaceholder(
-            modifier = modifier,
-            onLoad = { loadEmbed = true },
-        )
-        return
-    }
-
-    AndroidView(
-        modifier = modifier.height(heightDp.dp),
-        factory = { context ->
-            WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.domStorageEnabled = true
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.safeBrowsingEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                setBackgroundColor(backgroundColor.toArgb())
-                webChromeClient = readerWebChromeClient(
-                    onShowFullscreenMedia = onShowFullscreenMedia,
-                    onHideFullscreenMedia = onHideFullscreenMedia,
-                )
-
-                if (youtubeShellHtml != null) {
-                    addJavascriptInterface(object {
-                        @android.webkit.JavascriptInterface
-                        fun updateHeight(h: Float) {
-                            post {
-                                val newHeightDp = h.toInt()
-                                if (newHeightDp > 0 && newHeightDp != heightDp) {
-                                    heightDp = newHeightDp
-                                }
-                            }
-                        }
-                    }, "Android")
-                }
-
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val url = request?.url?.toString() ?: return true
-                        if (isTrustedEmbedUrl(url)) return false
-                        openExternalUrl(context, url)
-                        return true
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        if (youtubeShellHtml != null) {
-                            view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
-                        }
-                    }
-                }
-            }
-        },
-        update = { webView ->
-            val contentKey = "$documentBaseUrl\n${youtubeShellHtml ?: embedUrl}"
-            if (webView.tag != contentKey) {
-                webView.tag = contentKey
-                if (youtubeShellHtml != null) {
-                    webView.loadDataWithBaseURL(
-                        documentBaseUrl,
-                        youtubeShellHtml,
-                        "text/html",
-                        "utf-8",
-                        documentBaseUrl,
-                    )
-                } else {
-                    webView.loadUrl(embedUrl)
-                }
-            }
-        },
-        onRelease = { webView ->
-            webView.releaseReaderResources()
-        },
-    )
-}
-
-@Composable
-private fun DeferredEmbedPlaceholder(
-    modifier: Modifier,
-    onLoad: () -> Unit,
-) {
-    Surface(
-        modifier = modifier.height(220.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            OutlinedButton(onClick = onLoad) {
-                Text("Load media")
-            }
-        }
-    }
-}
 
 @Composable
 private fun ArticlePlaceholderView(article: ArticleListItem) {
@@ -835,82 +624,3 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
-
-private fun isYouTubeEmbedUrl(url: String): Boolean {
-    val host = runCatching { java.net.URI(url).host?.lowercase() }.getOrNull() ?: return false
-    return host == "youtube.com" ||
-        host.endsWith(".youtube.com") ||
-        host == "youtube-nocookie.com" ||
-        host.endsWith(".youtube-nocookie.com")
-}
-
-private fun youtubeEmbedHtml(embedUrl: String, background: String): String {
-    val safeEmbedUrl = htmlAttribute(embedUrl)
-    return """
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <style>
-                html, body {
-                    background: $background;
-                    margin: 0;
-                    padding: 0;
-                    overflow: hidden;
-                }
-                #embed-container {
-                    aspect-ratio: 16 / 9;
-                    background: $background;
-                    width: 100%;
-                }
-                iframe {
-                    border: 0;
-                    display: block;
-                    height: 100%;
-                    width: 100%;
-                }
-            </style>
-        </head>
-        <body>
-            <div id="embed-container">
-                <iframe
-                    src="$safeEmbedUrl"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
-                    allowfullscreen
-                    referrerpolicy="strict-origin-when-cross-origin"></iframe>
-            </div>
-            <script>
-                function postHeight() {
-                    const container = document.getElementById('embed-container');
-                    if (container) {
-                        window.Android.updateHeight(Math.ceil(container.getBoundingClientRect().height));
-                    }
-                }
-                function handleEmbedLoad() { postHeight(); }
-                function handleEmbedResize() { postHeight(); }
-                window.addEventListener('load', handleEmbedLoad);
-                window.addEventListener('resize', handleEmbedResize);
-                const embedContainer = document.getElementById('embed-container');
-                const embedResizeObserver = new ResizeObserver(handleEmbedResize);
-                if (embedContainer) {
-                    embedResizeObserver.observe(embedContainer);
-                }
-                window.SelfFeedApp = {
-                    cleanup: function() {
-                        window.removeEventListener('load', handleEmbedLoad);
-                        window.removeEventListener('resize', handleEmbedResize);
-                        if (embedResizeObserver) embedResizeObserver.disconnect();
-                    }
-                };
-                postHeight();
-            </script>
-        </body>
-        </html>
-    """.trimIndent()
-}
-
-private fun htmlAttribute(value: String): String =
-    value
-        .replace("&", "&amp;")
-        .replace("\"", "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")

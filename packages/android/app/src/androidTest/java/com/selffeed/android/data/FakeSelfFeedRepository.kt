@@ -6,6 +6,7 @@ import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.ArticleMedia
 import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
@@ -36,6 +37,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private var preferences = defaultPreferences
     private var articleDetailDelayMs = 0L
     private val articleReadStates = mutableMapOf<String, Boolean>()
+    private val articleDetailOverrides = mutableMapOf<String, ArticleDetail>()
     private val fakeArticles = listOf(
         ArticleListItem(
             id = "article-1",
@@ -78,10 +80,25 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         preferences = defaultPreferences.copy(hideRead = hideRead)
         articleDetailDelayMs = 0L
         articleReadStates.clear()
+        articleDetailOverrides.clear()
     }
 
     fun delayArticleDetailsBy(delayMs: Long) {
         articleDetailDelayMs = delayMs
+    }
+
+    fun overrideArticleDetail(
+        articleId: String,
+        contentHtml: String?,
+        contentText: String?,
+        media: List<ArticleMedia>,
+    ) {
+        val base = fakeArticleDetail(articleId)
+        articleDetailOverrides[articleId] = base.copy(
+            contentHtml = contentHtml,
+            contentText = contentText,
+            media = media,
+        )
     }
 
     override suspend fun login(email: String, password: String): AppResult<User> {
@@ -272,6 +289,10 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private fun unreadCount(): Int = fakeArticles.count { articleReadStates[it.id] != true }
 
     private fun fakeArticleDetail(articleId: String): ArticleDetail {
+        articleDetailOverrides[articleId]?.let { detail ->
+            return detail.copy(isRead = articleReadStates[articleId] ?: detail.isRead)
+        }
+
         val article = fakeArticles.firstOrNull { it.id == articleId }
         return ArticleDetail(
             id = articleId,

@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -15,6 +16,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.test.core.app.ActivityScenario
 import com.selffeed.android.MainActivity
 import com.selffeed.android.data.FakeSelfFeedRepository
+import com.selffeed.android.network.ArticleMedia
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import org.junit.After
@@ -84,6 +86,38 @@ class MainActivityHiltUiTest {
     }
 
     @Test
+    fun readerTextModeHidesArticleMedia() {
+        val imageUrl = "https://example.com/article-image.jpg"
+        repository.reset(authenticated = true)
+        repository.overrideArticleDetail(
+            articleId = "article-1",
+            contentHtml = "<p>Text mode keeps this paragraph.</p><img src=\"$imageUrl\" />",
+            contentText = "Text mode keeps this paragraph.",
+            media = listOf(
+                ArticleMedia(
+                    id = "image-1",
+                    articleId = "article-1",
+                    type = "image",
+                    provider = "unknown",
+                    url = imageUrl,
+                    position = 0,
+                ),
+            ),
+        )
+        launchActivity()
+
+        waitForText("Injected Article")
+        composeRule.onNodeWithText("Injected Article").performClick()
+        waitForContentDescription("Back to list")
+        composeRule.onNodeWithText("Text").performClick()
+
+        waitForText("Text mode keeps this paragraph.")
+        composeRule.onNodeWithText("Text mode keeps this paragraph.").assertIsDisplayed()
+        composeRule.onNodeWithText("Media").assertDoesNotExist()
+        composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(0)
+    }
+
+    @Test
     fun readerSwipeNavigatesToNextArticleInUnreadOnlyMode() {
         repository.reset(authenticated = true, hideRead = true)
         launchActivity()
@@ -122,13 +156,17 @@ class MainActivityHiltUiTest {
 
     private fun waitForText(text: String, timeoutMillis: Long = 5_000) {
         composeRule.waitUntil(timeoutMillis = timeoutMillis) {
-            composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+            runCatching {
+                composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
         }
     }
 
     private fun waitForContentDescription(contentDescription: String, timeoutMillis: Long = 5_000) {
         composeRule.waitUntil(timeoutMillis = timeoutMillis) {
-            composeRule.onAllNodesWithContentDescription(contentDescription).fetchSemanticsNodes().isNotEmpty()
+            runCatching {
+                composeRule.onAllNodesWithContentDescription(contentDescription).fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
         }
     }
 }
