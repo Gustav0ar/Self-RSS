@@ -1,6 +1,9 @@
 package com.selffeed.android.ui.components
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -101,6 +104,42 @@ class ArticleReaderPaneNavigationTest {
         assertEquals("article-1", openedArticleId)
     }
 
+    @Test
+    fun latePartialDetailUpdateDoesNotRemoveRenderedBody() {
+        val completeBody = "The complete reader body remains visible after a late partial refresh."
+        val complete = sampleDetail(
+            id = "article-1",
+            title = "First Article",
+            isRead = false,
+            contentText = completeBody,
+            contentVersion = 2,
+        )
+        val partial = sampleDetail(
+            id = "article-1",
+            title = "First Article",
+            isRead = false,
+            contentText = "The complete reader body",
+            contentVersion = 1,
+        )
+        var displayedArticle by mutableStateOf(complete)
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = listOf(sampleArticle("article-1", "First Article")),
+                    selectedArticle = displayedArticle,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(completeBody).assertIsDisplayed()
+        composeRule.runOnUiThread { displayedArticle = partial }
+        composeRule.onNodeWithText(completeBody).assertIsDisplayed()
+    }
+
     private fun sampleArticle(id: String, title: String): ArticleListItem =
         ArticleListItem(
             id = id,
@@ -116,6 +155,8 @@ class ArticleReaderPaneNavigationTest {
         title: String,
         isRead: Boolean,
         canonicalUrl: String? = null,
+        contentText: String = "Body for $title",
+        contentVersion: Int = 1,
     ): ArticleDetail =
         ArticleDetail(
             id = id,
@@ -125,7 +166,7 @@ class ArticleReaderPaneNavigationTest {
             title = title,
             excerpt = "Excerpt for $title",
             contentHtml = null,
-            contentText = "Body for $title",
+            contentText = contentText,
             heroImageUrl = null,
             publishedAt = null,
             fetchedAt = null,
@@ -136,5 +177,6 @@ class ArticleReaderPaneNavigationTest {
             media = emptyList(),
             isRead = isRead,
             isEnriched = false,
+            contentVersion = contentVersion,
         )
 }

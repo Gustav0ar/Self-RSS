@@ -13,6 +13,7 @@ import com.selffeed.android.ui.articles.ArticleWarmingManager
 import com.selffeed.android.ui.articles.EnrichmentManager
 import com.selffeed.android.ui.articles.ReadStateChangeSource
 import com.selffeed.android.ui.articles.ReadStateManager
+import com.selffeed.android.ui.components.withNonRegressiveReaderContent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -93,7 +94,8 @@ class ArticlesViewModel @Inject constructor(
         enrichmentManager.setOnArticleRefreshed { refreshed ->
             _state.update { current ->
                 if (current.selectedArticle?.id == refreshed.id) {
-                    current.copy(selectedArticle = refreshed.withReadState(knownArticleReadStates()[refreshed.id]))
+                    val displayed = current.selectedArticle.withNonRegressiveReaderContent(refreshed)
+                    current.copy(selectedArticle = displayed.withReadState(knownArticleReadStates()[refreshed.id]))
                 } else {
                     current
                 }
@@ -353,10 +355,15 @@ class ArticlesViewModel @Inject constructor(
 
     private fun selectArticle(article: ArticleDetail) {
         _state.update { current ->
-            current.copy(selectedArticle = article)
+            val selectedArticle = current.selectedArticle
+                ?.takeIf { it.id == article.id }
+                ?.withNonRegressiveReaderContent(article)
+                ?: article
+            current.copy(selectedArticle = selectedArticle)
         }
-        enrichmentManager.updateSelectedArticle(article)
-        readStateManager.updateSelectedArticle(article)
+        val selectedArticle = _state.value.selectedArticle ?: return
+        enrichmentManager.updateSelectedArticle(selectedArticle)
+        readStateManager.updateSelectedArticle(selectedArticle)
     }
 
     private fun applyArticleReadStateConfirmed(

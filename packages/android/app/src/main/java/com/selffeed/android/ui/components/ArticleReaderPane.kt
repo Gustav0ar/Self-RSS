@@ -154,15 +154,13 @@ private fun ArticleDetailView(
     appearance: ReaderAppearance,
 ) {
     val context = LocalContext.current
-    // Detail refreshes/enrichment can transiently omit one content representation.
-    // Keep the last usable payload for this reader session so a refresh never
-    // flips the reader between Rich and Text (or briefly to "No content").
-    var retainedHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml?.takeIf(String::isNotBlank)) }
-    var retainedText by rememberSaveable(article.id) { mutableStateOf(article.contentText?.takeIf(String::isNotBlank)) }
-    var showHtml by rememberSaveable(article.id) { mutableStateOf(retainedHtml != null) }
-    LaunchedEffect(article.contentHtml, article.contentText) {
-        article.contentHtml?.takeIf(String::isNotBlank)?.let { retainedHtml = it }
-        article.contentText?.takeIf(String::isNotBlank)?.let { retainedText = it }
+    // Detail refreshes/enrichment can arrive out of order. Keep the rendered
+    // snapshot monotonic so a late partial response cannot remove paragraphs,
+    // reload the WebView, or make already-visible media disappear.
+    var retainedContent by remember(article.id) { mutableStateOf(article.readerContent()) }
+    var showHtml by rememberSaveable(article.id) { mutableStateOf(retainedContent.html != null) }
+    LaunchedEffect(article.contentVersion, article.contentHtml, article.contentText, article.media) {
+        retainedContent = retainedContent.mergeNonRegressive(article)
     }
     val scrollState = rememberSaveable(article.id, saver = ScrollState.Saver) {
         ScrollState(initial = 0)
@@ -243,7 +241,7 @@ private fun ArticleDetailView(
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if (retainedHtml != null && retainedText != null) {
+        if (retainedContent.html != null && retainedContent.text != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = showHtml, onClick = { showHtml = true }, label = { Text("Rich") })
                 FilterChip(selected = !showHtml, onClick = { showHtml = false }, label = { Text("Text") })
@@ -251,7 +249,7 @@ private fun ArticleDetailView(
         }
 
         Column(modifier = Modifier.fillMaxWidth()) {
-            val html = retainedHtml
+            val html = retainedContent.html
             if (showHtml && html != null) {
                 // Show a skeleton placeholder first so the reader opens
                 // instantly. The WebView (which does the HTML load +
@@ -278,7 +276,7 @@ private fun ArticleDetailView(
                 )
             } else {
                 Text(
-                    text = retainedText ?: article.excerpt ?: "No content",
+                    text = retainedContent.text ?: article.excerpt ?: "No content",
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontFamily = appearance.font.composeFontFamily,
                         fontSize = appearance.boundedTextSizeSp.sp,
@@ -287,11 +285,11 @@ private fun ArticleDetailView(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
 
-                if (article.media.isNotEmpty()) {
+                if (retainedContent.media.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(12.dp))
-                    article.media.take(24).forEach { media ->
+                    retainedContent.media.take(24).forEach { media ->
                         if (media.type == "image") {
                             AsyncImage(
                                 model = media.url,

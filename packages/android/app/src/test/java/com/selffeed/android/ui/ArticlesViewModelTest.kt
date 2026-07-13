@@ -4,6 +4,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.ArticleMedia
 import com.selffeed.android.network.ArticleReadStateChangedEvent
 import com.selffeed.android.network.ArticlesMarkedReadEvent
 import com.selffeed.android.network.MarkAllReadResponse
@@ -179,6 +180,36 @@ class ArticlesViewModelTest {
 
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Fetched Second", viewModel.state.value.selectedArticle?.title)
+    }
+
+    @Test
+    fun `late partial detail refresh does not regress the open reader content`() = runTest {
+        val complete = sampleDetail(
+            "a1",
+            contentText = "The complete article body must remain visible while refreshes finish.",
+            media = listOf(sampleMedia("hero")),
+            contentVersion = 2,
+        )
+        val partial = sampleDetail(
+            "a1",
+            contentText = "The complete article body",
+            media = emptyList(),
+            contentVersion = 1,
+        )
+        coEvery { repository.article("a1", false) } returns AppResult.Success(complete)
+        coEvery { repository.article("a1", true) } returns AppResult.Success(partial)
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+
+        viewModel.openArticle("a1")
+        runCurrent()
+        viewModel.openArticle("a1", forceRefresh = true)
+        runCurrent()
+
+        val displayed = viewModel.state.value.selectedArticle
+        assertEquals(complete.contentText, displayed?.contentText)
+        assertEquals(listOf("hero"), displayed?.media?.map { it.id })
+        assertEquals(2, displayed?.contentVersion)
     }
 
     @Test
@@ -420,7 +451,13 @@ class ArticlesViewModelTest {
         isRead = false,
     )
 
-    private fun sampleDetail(id: String, title: String = "T"): ArticleDetail = ArticleDetail(
+    private fun sampleDetail(
+        id: String,
+        title: String = "T",
+        contentText: String? = null,
+        media: List<ArticleMedia> = emptyList(),
+        contentVersion: Int = 1,
+    ): ArticleDetail = ArticleDetail(
         id = id,
         feedId = "f-1",
         guid = id,
@@ -429,7 +466,7 @@ class ArticlesViewModelTest {
         author = null,
         excerpt = null,
         contentHtml = null,
-        contentText = null,
+        contentText = contentText,
         heroImageUrl = null,
         publishedAt = null,
         fetchedAt = null,
@@ -437,8 +474,18 @@ class ArticlesViewModelTest {
         feedTitle = "F",
         feedFaviconUrl = null,
         feedSiteUrl = null,
-        media = emptyList(),
+        media = media,
         isRead = false,
-        isEnriched = false,
+        isEnriched = contentVersion > 1,
+        contentVersion = contentVersion,
+    )
+
+    private fun sampleMedia(id: String) = ArticleMedia(
+        id = id,
+        articleId = "a1",
+        type = "image",
+        provider = "unknown",
+        url = "https://example.com/$id.jpg",
+        position = 0,
     )
 }
