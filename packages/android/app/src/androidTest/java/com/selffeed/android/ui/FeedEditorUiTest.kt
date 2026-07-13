@@ -27,7 +27,7 @@ class FeedEditorUiTest {
 
         composeRule.onNodeWithText("Add feed").performClick()
         composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Work").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("feed-category-option-work").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Category: Work").assertIsDisplayed()
     }
 
@@ -68,7 +68,7 @@ class FeedEditorUiTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Blogs").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("feed-category-option-blogs").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Category: Blogs").assertIsDisplayed()
     }
 

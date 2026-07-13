@@ -147,17 +147,11 @@ class ArticlesTabUiTest {
 
         composeRule.onNodeWithText("Old Article 1").assertIsDisplayed()
 
-        composeRule.runOnIdle {
-            updateState(
-                ArticleTabState(
-                    articles = initialArticles,
-                    selectedArticleId = null,
-                    isSyncingFeeds = true,
-                ),
-            )
-        }
-        composeRule.waitForIdle()
-        composeRule.runOnIdle {
+        // A Material progress indicator intentionally animates while syncing,
+        // so waitForIdle() is not a valid synchronization primitive here.
+        // Schedule the completed refresh directly and wait for the settled
+        // non-animated state below.
+        composeRule.runOnUiThread {
             updateState(
                 ArticleTabState(
                     articles = listOf(sampleArticle("fresh-1", "Fresh Article")) + initialArticles,

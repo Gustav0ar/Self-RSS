@@ -647,6 +647,7 @@ private fun CategoryPicker(
             categories.forEach { category ->
                 DropdownMenuItem(
                     text = { Text(category.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.testTag("feed-category-option-${category.id}"),
                     onClick = {
                         onCategorySelected(category.id)
                         expanded = false
