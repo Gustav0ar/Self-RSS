@@ -3,6 +3,7 @@ package com.selffeed.android.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -24,7 +25,7 @@ class FeedEditorUiTest {
         composeRule.setContent { SelfFeedTheme { FeedsTab(feedState(), noOpActions()) } }
 
         composeRule.onNodeWithText("Add feed").performClick()
-        composeRule.onNodeWithText("Category: News").performClick()
+        composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Work").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Category: Work").assertIsDisplayed()
     }
@@ -42,7 +43,7 @@ class FeedEditorUiTest {
         }
 
         composeRule.onNodeWithText("Add feed").performClick()
-        composeRule.onNodeWithText("Category: News").performClick()
+        composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Create new category").performClick()
         composeRule.onNodeWithText("Category name").performTextInput("Reading")
         composeRule.onNodeWithText("Create").performClick()

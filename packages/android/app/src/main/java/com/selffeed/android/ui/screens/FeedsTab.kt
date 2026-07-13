@@ -88,6 +88,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -544,6 +545,7 @@ private fun FeedEditorDialog(
                     categories = categories,
                     onCategorySelected = { categoryId = it.orEmpty() },
                     onCreateCategory = { showCreateCategory = true },
+                    modifier = Modifier.testTag("feed-category-picker"),
                 )
                 if (feed != null) {
                     OutlinedTextField(
@@ -602,12 +604,13 @@ private fun CategoryPicker(
     includeRoot: Boolean = false,
     onCategorySelected: (String?) -> Unit,
     onCreateCategory: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = categories.firstOrNull { it.id == categoryId }?.name
         ?: if (includeRoot) "No parent (top level)" else "Choose a category"
     Box {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { expanded = true }, modifier = modifier.fillMaxWidth()) {
             Text("$label: $selectedLabel", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {

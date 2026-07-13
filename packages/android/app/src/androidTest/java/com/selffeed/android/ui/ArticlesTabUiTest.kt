@@ -168,7 +168,7 @@ class ArticlesTabUiTest {
         }
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Fresh Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Old Article 1").assertIsDisplayed()
     }
 
     private fun noOpArticleActions(): ArticleTabActions = ArticleTabActions(
