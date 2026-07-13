@@ -72,8 +72,8 @@ Do not install Playwright browsers in CI with root-level `bun x playwright ...`;
 ### Android
 Android is not part of the root Bun workspace. Build and test it with the Gradle wrapper under `packages/android`.
 
-- Run Android unit tests: `./packages/android/gradlew -p packages/android :app:testDebugUnitTest`
-- Run Android instrumentation tests: `./packages/android/gradlew -p packages/android :app:connectedDebugAndroidTest`
+- Run Android unit tests: `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest`
+- Run Android instrumentation tests: `./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest`
 - Run Android lint + debug build: `./packages/android/gradlew -p packages/android :app:lintDebug :app:assembleDebug`
 - Run the repo’s Android check script: `bun run android:check`
 

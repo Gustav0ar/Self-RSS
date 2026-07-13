@@ -108,7 +108,21 @@ android {
         debug {
             isMinifyEnabled = false
         }
+        // Use this variant for tests on a developer's physical device. Its
+        // distinct package installs alongside the normal app, so connected
+        // tests never replace, clear, or sign out the user's installation.
+        create("deviceTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".devicetest"
+            versionNameSuffix = "-device-test"
+            matchingFallbacks += listOf("debug")
+        }
     }
+
+    // All connected instrumentation tests target the isolated deviceTest app
+    // instead of the normal debug package. This keeps physical-device tests
+    // from replacing or clearing the user's installed application.
+    testBuildType = "deviceTest"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -128,6 +142,9 @@ android {
 
     sourceSets {
         getByName("debug").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        // `testBuildType` uses this variant for both connected and local
+        // tests, so Room's migration fixtures must be packaged here too.
+        getByName("deviceTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
         getByName("test").assets.setSrcDirs(listOf("$projectDir/schemas"))
         getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
     }
@@ -173,6 +190,12 @@ tasks.withType<JacocoReport>().configureEach {
         xml.required.set(true)
         html.required.set(true)
     }
+}
+
+tasks.register("connectedNonDisruptiveDeviceTest") {
+    group = "verification"
+    description = "Runs instrumentation tests in the side-by-side deviceTest app variant."
+    dependsOn("connectedDeviceTestAndroidTest")
 }
 
 ksp {
@@ -239,6 +262,7 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    add("deviceTestImplementation", "androidx.compose.ui:ui-test-manifest")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

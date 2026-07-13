@@ -30,7 +30,8 @@
 		"dev:down": "bun scripts/compose.ts down",
 		"seed:review": "bun scripts/seed-local-review.ts",
 		"build": "bun run --filter '*' build",
-		"android:check": "bash ./scripts/android-check.sh"
+		"android:check": "bash ./scripts/android-check.sh",
+		"android:test:device": "bash ./scripts/android-device-test.sh"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.16",

@@ -99,8 +99,9 @@ Install these in Android Studio SDK Manager:
 - ViewModel tests cover auth/bootstrap, feed sync completion, article/search queues, pagination, caching, and realtime invalidation.
 - Article warming and enrichment-manager tests verify bounded parallel prefetch and selected-reader refresh behavior.
 - Instrumentation coverage exercises the root Hilt activity and major Compose flows.
-- Run unit tests with `./gradlew -p packages/android :app:testDebugUnitTest`.
-- Run instrumentation tests with `./gradlew -p packages/android :app:connectedDebugAndroidTest`.
+- Run unit tests with `./gradlew -p packages/android :app:testDeviceTestUnitTest`.
+- Run instrumentation tests with `./gradlew -p packages/android :app:connectedDeviceTestAndroidTest`. They use the isolated `com.selffeed.android.devicetest` package and therefore do not replace the normal app.
+- Run the same non-disruptive test suite on a physical development device with `bun run android:test:device`.
 - Run lint + debug build checks with `./gradlew -p packages/android :app:lintDebug :app:assembleDebug`.
 - Run all local Android pre-release checks from repo root with `bun run android:check`.
 - Generate the release Baseline Profile on the configured managed device with `SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./gradlew -p packages/android :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile`. The generator includes a deterministic authenticated app-shell article-card → reader journey, so it does not rely on real credentials or source-feed latency.
@@ -126,7 +127,7 @@ Before shipping a production build:
 - Confirm release network policy keeps cleartext disabled (`src/release/res/xml/network_security_config.xml`).
 - Ensure signing config/keystore is configured in Android Studio or CI secrets.
 - Run full Android checks:
-  - `./gradlew -p packages/android :app:testDebugUnitTest`
+  - `./gradlew -p packages/android :app:testDeviceTestUnitTest`
   - `./gradlew -p packages/android :app:lintDebug :app:assembleDebug`
 - Verify CI jobs are green (`android-unit-tests`, `android-build-check`).
 - Smoke-test auth, feed sync, article read/unread, search, and OPML import/export on device/emulator.
