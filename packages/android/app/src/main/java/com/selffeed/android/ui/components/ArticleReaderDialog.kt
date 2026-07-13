@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -62,16 +64,23 @@ fun ArticleReaderDialog(
                 Text("Close")
             }
         },
-        dismissButton = {
-            if (!article.canonicalUrl.isNullOrBlank()) {
-                TextButton(onClick = { openExternalUrl(context, article.canonicalUrl) }) {
-                    Text("Open original")
-                }
-            }
-        },
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(article.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                val titleModifier = if (article.canonicalUrl.isNullOrBlank()) {
+                    Modifier
+                } else {
+                    Modifier.clickable(
+                        role = Role.Button,
+                        onClickLabel = "Open original article",
+                        onClick = { openExternalUrl(context, article.canonicalUrl) },
+                    )
+                }
+                Text(
+                    text = article.title,
+                    modifier = titleModifier,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(999.dp),

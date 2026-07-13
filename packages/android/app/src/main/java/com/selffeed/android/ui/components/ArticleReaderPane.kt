@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
@@ -222,17 +223,21 @@ private fun ArticleDetailView(
             }
         }
 
+        val titleModifier = if (article.canonicalUrl.isNullOrBlank()) {
+            Modifier
+        } else {
+            Modifier.clickable(
+                role = Role.Button,
+                onClickLabel = "Open original article",
+                onClick = onOpenOriginal,
+            )
+        }
         Text(
             text = article.title,
+            modifier = titleModifier,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
         )
-
-        if (!article.canonicalUrl.isNullOrBlank()) {
-            OutlinedButton(onClick = onOpenOriginal) {
-                Text("Open original article")
-            }
-        }
 
         article.author?.takeIf { it.isNotBlank() }?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

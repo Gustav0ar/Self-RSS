@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import com.selffeed.android.network.ArticleDetail
@@ -73,6 +74,33 @@ class ArticleReaderPaneNavigationTest {
         assertEquals("article-1", displayedArticleId)
     }
 
+    @Test
+    fun titleOpensOriginalArticleWithoutDedicatedButton() {
+        var openedArticleId: String? = null
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = listOf(sampleArticle("article-1", "First Article")),
+                    selectedArticle = sampleDetail(
+                        id = "article-1",
+                        title = "First Article",
+                        isRead = false,
+                        canonicalUrl = "https://example.com/articles/first",
+                    ),
+                    onOpenOriginal = { openedArticleId = it.id },
+                    onBackToList = {},
+                    onArticleSelected = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Open original article").assertDoesNotExist()
+        composeRule.onNodeWithText("First Article").performClick()
+
+        assertEquals("article-1", openedArticleId)
+    }
+
     private fun sampleArticle(id: String, title: String): ArticleListItem =
         ArticleListItem(
             id = id,
@@ -83,12 +111,17 @@ class ArticleReaderPaneNavigationTest {
             isRead = false,
         )
 
-    private fun sampleDetail(id: String, title: String, isRead: Boolean): ArticleDetail =
+    private fun sampleDetail(
+        id: String,
+        title: String,
+        isRead: Boolean,
+        canonicalUrl: String? = null,
+    ): ArticleDetail =
         ArticleDetail(
             id = id,
             feedId = "feed-1",
             guid = id,
-            canonicalUrl = null,
+            canonicalUrl = canonicalUrl,
             title = title,
             excerpt = "Excerpt for $title",
             contentHtml = null,
