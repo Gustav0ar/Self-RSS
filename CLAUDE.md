@@ -72,8 +72,11 @@ Do not install Playwright browsers in CI with root-level `bun x playwright ...`;
 ### Android
 Android is not part of the root Bun workspace. Build and test it with the Gradle wrapper under `packages/android`.
 
+- Run the local API before launching a debug Android client: `bun run dev:api` (or `bun run dev` for the complete stack). The debug APK defaults to `http://10.0.2.2:3000/api/v1/`, which reaches the host machine only from an Android emulator. A physical device must use a reachable API server URL configured in the app; do not use `10.0.2.2` for it.
+- Install or update the normal debug app: `./packages/android/gradlew -p packages/android :app:installDebug`. Confirm the target first with `adb devices -l` when more than one device is connected.
 - Run Android unit tests: `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest`
 - Run Android instrumentation tests: `./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest`
+- For instrumentation tests on a physical device, use `./packages/android/gradlew -p packages/android :app:connectedNonDisruptiveDeviceTest`. It targets the isolated `com.selffeed.android.devicetest` variant and test package, so it installs alongside the normal app and never replaces, clears, or signs out the user's normal installation.
 - Run Android lint + debug build: `./packages/android/gradlew -p packages/android :app:lintDebug :app:assembleDebug`
 - Run the repo’s Android check script: `bun run android:check`
 
