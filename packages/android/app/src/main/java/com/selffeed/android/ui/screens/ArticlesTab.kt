@@ -140,7 +140,11 @@ fun ArticlesTab(
 
     val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
     val articleCount = pagedArticles.itemCount
-    val isRefreshing = isPagingInitialLoad && articleCount > 0
+    // A pull starts feed synchronization first; the Paging refresh only
+    // begins after that background job publishes new data. Treat both phases
+    // as one refresh so Material switches from the stationary pull arrow to
+    // its indeterminate animated spinner immediately and keeps it moving.
+    val isRefreshing = state.isSyncingFeeds || (isPagingInitialLoad && articleCount > 0)
     val isEmpty = articleCount == 0 && !isPagingInitialLoad && !isRefreshing && !state.isSyncingFeeds
 
     LaunchedEffect(isRefreshing, articleCount) {

@@ -113,6 +113,9 @@ class ArticlesTabUiTest {
         composeRule
             .onNodeWithText("Refreshing feeds in the background. New articles will appear as they arrive.")
             .assertIsDisplayed()
+        composeRule
+            .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertIsDisplayed()
     }
 
     @Test
