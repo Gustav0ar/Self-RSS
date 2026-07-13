@@ -235,7 +235,7 @@ class SearchTabUiTest {
 
     @Test
     fun searchTab_doesNotOpenArticleWhenNoResults() {
-        var openedArticleId: String? = "initial-value"
+        var openedArticleId: String? = null
 
         composeRule.setContent {
             SelfFeedTheme {

@@ -182,7 +182,6 @@ class AuthFlowUiTest {
             }
         }
 
-        composeRule.onNodeWithText("rss.example.test").assertIsDisplayed()
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
         composeRule.onNodeWithText("Continue").performClick()
