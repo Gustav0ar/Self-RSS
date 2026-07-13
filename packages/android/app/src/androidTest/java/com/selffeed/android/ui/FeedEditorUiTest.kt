@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -52,8 +53,29 @@ class FeedEditorUiTest {
         composeRule.onNodeWithText("Feed or website URL").assertIsDisplayed()
     }
 
-    private fun feedState() = FeedTabState(
-        categories = listOf(category("news", "News"), category("work", "Work")),
+    @Test
+    fun addFeedCategoryPickerReflectsCategoriesLoadedAfterDialogOpens() {
+        val categories = mutableStateListOf<CategoryWithCounts>()
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                FeedsTab(feedState(categories = categories), noOpActions())
+            }
+        }
+
+        composeRule.onNodeWithText("Add feed").performClick()
+        composeRule.runOnIdle { categories += category("blogs", "Blogs") }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Blogs").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Category: Blogs").assertIsDisplayed()
+    }
+
+    private fun feedState(
+        categories: List<CategoryWithCounts> = listOf(category("news", "News"), category("work", "Work")),
+    ) = FeedTabState(
+        categories = categories,
         feeds = emptyList(),
         hideRead = false,
         totalUnread = 0,

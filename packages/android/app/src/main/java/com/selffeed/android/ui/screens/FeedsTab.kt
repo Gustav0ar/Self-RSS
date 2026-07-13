@@ -195,7 +195,11 @@ fun FeedsTab(
     val feedsByCategory = remember(state.feeds) {
         state.feeds.groupBy { it.categoryId }
     }
-    val allCategories = remember(state.categories) { state.categories.flattenCategories() }
+    // Categories can be populated into the same snapshot-backed list after this
+    // screen is composed. Do not cache the flattened result by list identity or
+    // the add-feed dialog can keep an empty category menu while the sidebar is
+    // already showing the newly loaded categories.
+    val allCategories = state.categories.flattenCategories()
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         val contents = readBoundedOpml(context, uri)
@@ -506,6 +510,12 @@ private fun FeedEditorDialog(
     var categoryId by remember(feed?.id) { mutableStateOf(feed?.categoryId ?: categories.firstOrNull()?.id.orEmpty()) }
     var pollingInterval by remember(feed?.id) { mutableStateOf(feed?.pollingIntervalMinutes?.toString().orEmpty()) }
     var showCreateCategory by remember(feed?.id) { mutableStateOf(false) }
+    val firstCategoryId = categories.firstOrNull()?.id
+    LaunchedEffect(feed?.id, firstCategoryId) {
+        if (feed == null && categoryId.isBlank()) {
+            categoryId = firstCategoryId.orEmpty()
+        }
+    }
     val validInterval = pollingInterval.toIntOrNull()?.takeIf { it in 5..1440 }
     val canSave = if (feed == null) url.trim().isNotEmpty() else categoryId.isNotBlank() && validInterval != null
 
@@ -687,12 +697,12 @@ private fun OpmlImportSummaryDialog(summary: OpmlImportSummary, onDismiss: () ->
     )
 }
 
-private fun List<CategoryWithCounts>.flattenCategories(): List<CategoryWithCounts> = buildList {
+internal fun List<CategoryWithCounts>.flattenCategories(): List<CategoryWithCounts> = buildList {
     fun visit(category: CategoryWithCounts) {
         add(category)
         category.children.orEmpty().forEach(::visit)
     }
-    forEach(::visit)
+    this@flattenCategories.forEach(::visit)
 }
 
 private fun CategoryWithCounts.descendantIds(): Set<String> = buildSet {
