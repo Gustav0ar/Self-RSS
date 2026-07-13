@@ -90,6 +90,39 @@ internal fun buildReaderHtmlDocument(
                 blockquote, aside, section, article, details, table, pre {
                     border-color: color-mix(in srgb, var(--reader-muted-text) 36%, transparent);
                 }
+                /*
+                 * Publishers frequently ship TL;DR cards with a hard-coded
+                 * white background. Keep the summary visually separate from
+                 * the article while making it part of the active reader theme.
+                 */
+                .reader-summary-block {
+                    background: var(--reader-surface) !important;
+                    color: var(--reader-text) !important;
+                    border: 1px solid color-mix(in srgb, var(--reader-muted-text) 42%, transparent);
+                    border-left: 3px solid var(--reader-link);
+                    border-radius: 12px;
+                    margin: 16px 0;
+                    padding: 16px;
+                }
+                .reader-summary-block,
+                .reader-summary-block p,
+                .reader-summary-block li,
+                .reader-summary-block h1,
+                .reader-summary-block h2,
+                .reader-summary-block h3,
+                .reader-summary-block h4,
+                .reader-summary-block h5,
+                .reader-summary-block h6 {
+                    color: var(--reader-text) !important;
+                    -webkit-text-fill-color: var(--reader-text) !important;
+                }
+                .reader-summary-block a {
+                    color: var(--reader-link) !important;
+                    -webkit-text-fill-color: var(--reader-link) !important;
+                }
+                .reader-summary-block * {
+                    background-color: transparent !important;
+                }
                 table {
                     border-collapse: collapse;
                     margin: 12px 0;
@@ -270,12 +303,53 @@ internal fun buildReaderHtmlDocument(
                         : readerColors.textOnDarkBackground;
                 }
 
+                function summaryBlockFor(heading, container) {
+                    let candidate = heading.parentElement;
+                    while (candidate && candidate !== container) {
+                        const background = parseCssColor(window.getComputedStyle(candidate).backgroundColor);
+                        if (background && background.a > 0) {
+                            return candidate;
+                        }
+                        candidate = candidate.parentElement;
+                    }
+
+                    return heading.parentElement === container ? null : heading.parentElement;
+                }
+
+                function markReaderSummaryBlocks(container) {
+                    const summaryLabel = /^(?:tl\s*;?\s*dr|summary|key\s+takeaways?)\b/i;
+                    const summaryClass = /(?:tldr|tl-dr|summary|key[-_ ]?takeaways?)/i;
+                    const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+
+                    headings.forEach(heading => {
+                        const label = (heading.textContent || '').trim().replace(/\s+/g, ' ');
+                        if (!summaryLabel.test(label)) {
+                            return;
+                        }
+
+                        summaryBlockFor(heading, container)?.classList.add('reader-summary-block');
+                    });
+
+                    container.querySelectorAll('aside, section, div, blockquote').forEach(element => {
+                        const descriptor = [
+                            element.id,
+                            element.className,
+                            element.getAttribute('data-component'),
+                            element.getAttribute('data-testid')
+                        ].filter(Boolean).join(' ');
+                        if (summaryClass.test(descriptor)) {
+                            element.classList.add('reader-summary-block');
+                        }
+                    });
+                }
+
                 function normalizeReadableColors() {
                     const container = document.getElementById('content-container');
                     if (!container) {
                         return;
                     }
 
+                    markReaderSummaryBlocks(container);
                     const candidates = [container, ...container.querySelectorAll('*')];
                     candidates.forEach(element => {
                         if (!hasReadableText(element)) {
