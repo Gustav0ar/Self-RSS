@@ -110,9 +110,18 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun createFeed(feedUrl: String, categoryId: String, title: String?) {
-        if (feedUrl.isBlank() || categoryId.isBlank()) return
+        if (feedUrl.isBlank()) return
         viewModelScope.launch {
-            when (val result = repository.createFeed(feedUrl.trim(), categoryId, title?.trim()?.ifBlank { null })) {
+            val destinationCategoryId = if (categoryId.isBlank()) {
+                when (val result = repository.createCategory("Uncategorized", null)) {
+                    is AppResult.Success -> result.data.id
+                    is AppResult.Error -> {
+                        _state.update { it.copy(errorMessage = result.message) }
+                        return@launch
+                    }
+                }
+            } else categoryId
+            when (val result = repository.createFeed(feedUrl.trim(), destinationCategoryId, title?.trim()?.ifBlank { null })) {
                 is AppResult.Success -> {
                     _state.update { it.copy(statusMessage = "Feed added") }
                     loadFeeds()

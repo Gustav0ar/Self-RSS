@@ -241,7 +241,7 @@ fun FeedsTab(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { managementDialog = FeedManagementDialog.FeedEditor(feed = null) },
-                        enabled = allCategories.isNotEmpty() && !state.loading,
+                        enabled = !state.loading,
                         modifier = Modifier.weight(1f),
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -261,7 +261,7 @@ fun FeedsTab(
                 if (allCategories.isEmpty()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Create a category before adding a feed.",
+                        text = "Your first feed will be placed in an Uncategorized category.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -384,6 +384,7 @@ fun FeedsTab(
             feed = dialog.feed,
             categories = allCategories,
             onDismiss = { managementDialog = null },
+            onCreateCategory = { name -> actions.onCreateCategory(name, null) },
             onSave = { url, title, categoryId, pollingIntervalMinutes ->
                 val feed = dialog.feed
                 if (feed == null) {
@@ -496,14 +497,16 @@ private fun FeedEditorDialog(
     feed: FeedWithCounts?,
     categories: List<CategoryWithCounts>,
     onDismiss: () -> Unit,
+    onCreateCategory: (String) -> Unit,
     onSave: (url: String, title: String?, categoryId: String, pollingIntervalMinutes: Int?) -> Unit,
 ) {
     var url by remember(feed?.id) { mutableStateOf(feed?.feedUrl.orEmpty()) }
     var title by remember(feed?.id) { mutableStateOf(feed?.title.orEmpty()) }
     var categoryId by remember(feed?.id) { mutableStateOf(feed?.categoryId ?: categories.firstOrNull()?.id.orEmpty()) }
     var pollingInterval by remember(feed?.id) { mutableStateOf(feed?.pollingIntervalMinutes?.toString().orEmpty()) }
+    var showCreateCategory by remember(feed?.id) { mutableStateOf(false) }
     val validInterval = pollingInterval.toIntOrNull()?.takeIf { it in 5..1440 }
-    val canSave = categoryId.isNotBlank() && if (feed == null) url.trim().isNotEmpty() else validInterval != null
+    val canSave = if (feed == null) url.trim().isNotEmpty() else categoryId.isNotBlank() && validInterval != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -514,8 +517,8 @@ private fun FeedEditorDialog(
                     OutlinedTextField(
                         value = url,
                         onValueChange = { url = it },
-                        label = { Text("Feed URL") },
-                        supportingText = { Text("Paste an RSS, Atom, or JSON Feed URL") },
+                        label = { Text("Feed or website URL") },
+                        supportingText = { Text("Paste a feed URL or a site such as example.com") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -540,6 +543,7 @@ private fun FeedEditorDialog(
                     categoryId = categoryId,
                     categories = categories,
                     onCategorySelected = { categoryId = it.orEmpty() },
+                    onCreateCategory = { showCreateCategory = true },
                 )
                 if (feed != null) {
                     OutlinedTextField(
@@ -562,6 +566,32 @@ private fun FeedEditorDialog(
             ) { Text(if (feed == null) "Add" else "Save") }
         },
     )
+
+    if (showCreateCategory) {
+        var categoryName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreateCategory = false },
+            title = { Text("Create category") },
+            text = {
+                OutlinedTextField(
+                    value = categoryName,
+                    onValueChange = { categoryName = it },
+                    label = { Text("Category name") },
+                    singleLine = true,
+                )
+            },
+            dismissButton = { TextButton(onClick = { showCreateCategory = false }) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(
+                    enabled = categoryName.trim().isNotEmpty(),
+                    onClick = {
+                        onCreateCategory(categoryName.trim())
+                        showCreateCategory = false
+                    },
+                ) { Text("Create") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -571,6 +601,7 @@ private fun CategoryPicker(
     categories: List<CategoryWithCounts>,
     includeRoot: Boolean = false,
     onCategorySelected: (String?) -> Unit,
+    onCreateCategory: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = categories.firstOrNull { it.id == categoryId }?.name
@@ -588,6 +619,17 @@ private fun CategoryPicker(
                         expanded = false
                     },
                 )
+            }
+            onCreateCategory?.let { createCategory ->
+                DropdownMenuItem(
+                    text = { Text("Create new category") },
+                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        createCategory()
+                    },
+                )
+                HorizontalDivider()
             }
             categories.forEach { category ->
                 DropdownMenuItem(
