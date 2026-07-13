@@ -253,6 +253,10 @@ fun SelfFeedApp(
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
+    LaunchedEffect(articlePagingItems.itemSnapshotList.items) {
+        val snapshot = articlePagingItems.itemSnapshotList.items
+        if (snapshot.isNotEmpty()) actions.onArticleSnapshot(snapshot)
+    }
     // Use paging items if available, otherwise fall back to state items
     val rawArticleQueue = if (selectedArticle != null && state.articles.readerQueue.isNotEmpty()) {
         state.articles.readerQueue

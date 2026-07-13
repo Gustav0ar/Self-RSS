@@ -271,7 +271,24 @@ fun ArticlesTab(
                 }
             }
 
-            items(
+            val retainedArticles = state.articles.takeIf { articleCount == 0 && it.isNotEmpty() }
+            if (retainedArticles != null) {
+                items(retainedArticles, key = { it.id }, contentType = { "retained-article-row" }) { article ->
+                    val isRead = readStateOverrides[article.id] ?: article.isRead
+                    ArticleListRow(
+                        article = article,
+                        isRead = isRead,
+                        selected = state.selectedArticleId == article.id,
+                        onClick = { actions.onOpenArticle(article.id) },
+                        onToggleRead = { read ->
+                            actions.onToggleRead(article.id, read)
+                            actions.onReadStateChanged(article.id, !read)
+                        },
+                        density = state.density,
+                    )
+                }
+            } else {
+                items(
                     count = pagedArticles.itemCount,
                     // `peek` does not trigger a load on the paging source;
                     // calling `pagedArticles[index]` instead forces a load
@@ -304,6 +321,7 @@ fun ArticlesTab(
                         )
                     }
                 }
+            }
 
             val appendLoadState = pagedArticles.loadState.append
             if (appendLoadState is LoadState.Loading || appendLoadState is LoadState.Error) {
