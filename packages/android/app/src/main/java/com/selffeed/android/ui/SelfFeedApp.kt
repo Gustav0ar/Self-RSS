@@ -392,7 +392,7 @@ fun SelfFeedApp(
             onLogout = actions.onLogout,
         )
     }
-    val readerContent: @Composable () -> Unit = {
+    val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit = { preferHtml, onPreferHtmlChanged ->
         selectedArticle?.let { article ->
             ArticleReaderPane(
                 articles = articleQueue,
@@ -406,6 +406,8 @@ fun SelfFeedApp(
                 onArticleSelected = actions.onOpenArticle,
                 onArticleDisplayed = actions.onArticleDisplayed,
                 appearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance(),
+                preferHtml = preferHtml,
+                onPreferHtmlChanged = onPreferHtmlChanged,
             )
         }
     }
@@ -474,6 +476,7 @@ fun SelfFeedApp(
                         HomeTab.ARTICLES -> {
                             ArticleListDetailNavigation(
                                 selectedArticleId = selectedArticle?.id,
+                                initialPreferHtml = selectedArticle?.contentHtml?.isNotBlank() == true,
                                 onCloseArticle = actions.onCloseArticle,
                                 listContent = { ArticlesTab(articleTabState, articleActions, articlePagingItems) },
                                 detailContent = readerContent,

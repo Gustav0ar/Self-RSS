@@ -12,6 +12,10 @@ import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneSt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -36,14 +40,25 @@ data class ArticleDetailDestination(val articleId: String) : NavKey
 @Composable
 fun ArticleListDetailNavigation(
     selectedArticleId: String?,
+    initialPreferHtml: Boolean,
     onCloseArticle: () -> Unit,
     listContent: @Composable () -> Unit,
-    detailContent: @Composable () -> Unit,
+    detailContent: @Composable (preferHtml: Boolean, onPreferHtmlChanged: (Boolean) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val backStack = rememberNavBackStack(ArticleListDestination)
+    // Navigation 3 replaces the detail entry when the selected id changes.
+    // Keep this session preference above that entry so Rich mode stays chosen
+    // while the next article's detail payload is loading.
+    var preferredHtml: Boolean? by rememberSaveable { mutableStateOf(null) }
+    val preferHtml = preferredHtml ?: initialPreferHtml
 
     LaunchedEffect(selectedArticleId) {
+        if (selectedArticleId == null) {
+            preferredHtml = null
+        } else if (preferredHtml == null) {
+            preferredHtml = initialPreferHtml
+        }
         val detailDestination = selectedArticleId?.let(::ArticleDetailDestination)
         val currentDetail = backStack.lastOrNull() as? ArticleDetailDestination
         if (detailDestination == currentDetail) return@LaunchedEffect
@@ -71,7 +86,7 @@ fun ArticleListDetailNavigation(
             entry<ArticleDetailDestination>(
                 metadata = ListDetailSceneStrategy.detailPane(),
             ) {
-                detailContent()
+                detailContent(preferHtml) { preferredHtml = it }
             }
         },
         modifier = modifier,

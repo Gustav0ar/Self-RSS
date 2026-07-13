@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -84,6 +85,8 @@ fun ArticleReaderPane(
     onArticleSelected: (String) -> Unit,
     onArticleDisplayed: (String) -> Unit = {},
     appearance: ReaderAppearance = ReaderAppearance(),
+    preferHtml: Boolean = selectedArticle.contentHtml?.isNotBlank() == true,
+    onPreferHtmlChanged: (Boolean) -> Unit = {},
 ) {
     val readerArticles = remember(articles, selectedArticle) {
         articles.withSelectedArticle(selectedArticle)
@@ -99,6 +102,8 @@ fun ArticleReaderPane(
             article = selectedArticle,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+            preferHtml = preferHtml,
+            onPreferHtmlChanged = onPreferHtmlChanged,
             appearance = appearance,
         )
         return
@@ -140,6 +145,8 @@ fun ArticleReaderPane(
                 article = selectedArticle,
                 onOpenOriginal = { onOpenOriginal(selectedArticle) },
                 onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+                preferHtml = preferHtml,
+                onPreferHtmlChanged = onPreferHtmlChanged,
                 appearance = appearance,
             )
         } else {
@@ -155,6 +162,8 @@ private fun ArticleDetailView(
     article: ArticleDetail,
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
+    preferHtml: Boolean,
+    onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
 ) {
     val context = LocalContext.current
@@ -162,7 +171,6 @@ private fun ArticleDetailView(
     // snapshot monotonic so a late partial response cannot remove paragraphs,
     // reload the WebView, or make already-visible media disappear.
     var retainedContent by remember(article.id) { mutableStateOf(article.readerContent()) }
-    var showHtml by rememberSaveable(article.id) { mutableStateOf(retainedContent.html != null) }
     LaunchedEffect(article.contentVersion, article.contentHtml, article.contentText, article.media) {
         retainedContent = retainedContent.mergeNonRegressive(article)
     }
@@ -247,14 +255,22 @@ private fun ArticleDetailView(
 
         if (retainedContent.html != null && retainedContent.text != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = showHtml, onClick = { showHtml = true }, label = { Text("Rich") })
-                FilterChip(selected = !showHtml, onClick = { showHtml = false }, label = { Text("Text") })
+                FilterChip(
+                    selected = preferHtml,
+                    onClick = { onPreferHtmlChanged(true) },
+                    label = { Text("Rich") },
+                )
+                FilterChip(
+                    selected = !preferHtml,
+                    onClick = { onPreferHtmlChanged(false) },
+                    label = { Text("Text") },
+                )
             }
         }
 
         Column(modifier = Modifier.fillMaxWidth()) {
             val html = retainedContent.html
-            if (showHtml && html != null) {
+            if (preferHtml && html != null) {
                 // Show a skeleton placeholder first so the reader opens
                 // instantly. The WebView (which does the HTML load +
                 // layout + JS height callback) swaps in once it has a
@@ -278,6 +294,11 @@ private fun ArticleDetailView(
                     onHideFullscreenMedia = hideFullscreenMedia,
                     onReady = { htmlReady = true },
                 )
+            } else if (preferHtml && article.isRichContentPending()) {
+                // Keep Rich selected while the next article's detail request
+                // completes. Showing the text snapshot here made navigation
+                // look like an unwanted mode switch before HTML arrived.
+                ArticleHtmlSkeleton(modifier = Modifier.testTag("reader-rich-loading"))
             } else {
                 Text(
                     text = retainedContent.text ?: article.excerpt ?: "No content",
@@ -356,6 +377,10 @@ private fun ArticleDetailView(
         },
     )
 }
+
+private fun ArticleDetail.isRichContentPending(): Boolean =
+    contentHtml.isNullOrBlank() &&
+        (fetchedAt == null || contentStatus == "enrichment_pending")
 
 @Composable
 private fun ReaderImageMedia(
@@ -555,10 +580,11 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
  * WebView (see [SecureHtmlContent]'s `onReady` callback).
  */
 @Composable
-private fun ArticleHtmlSkeleton() {
+private fun ArticleHtmlSkeleton(modifier: Modifier = Modifier) {
     val placeholder = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
     Column(
         modifier = Modifier
+            .then(modifier)
             .fillMaxWidth()
             .padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),

@@ -34,6 +34,7 @@ class ArticleListDetailNavigationTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selectedArticleId,
+                    initialPreferHtml = false,
                     onCloseArticle = {
                         readerClosed = true
                         selectedArticleId = null
@@ -41,7 +42,7 @@ class ArticleListDetailNavigationTest {
                     listContent = {
                         Button(onClick = { selectedArticleId = "article-1" }) { Text("Open article") }
                     },
-                    detailContent = { Text("Article detail") },
+                    detailContent = { _, _ -> Text("Article detail") },
                 )
             }
         }
@@ -53,5 +54,30 @@ class ArticleListDetailNavigationTest {
         composeRule.waitUntil(timeoutMillis = 5_000) { readerClosed }
         assertTrue(readerClosed)
         composeRule.onNodeWithText("Open article").assertIsDisplayed()
+    }
+
+    @Test
+    fun richModeSurvivesReplacingTheDetailDestination() {
+        composeRule.setContent {
+            var selectedArticleId by remember { mutableStateOf<String?>("article-1") }
+            SelfFeedTheme {
+                ArticleListDetailNavigation(
+                    selectedArticleId = selectedArticleId,
+                    initialPreferHtml = selectedArticleId == "article-1",
+                    onCloseArticle = { selectedArticleId = null },
+                    listContent = { Text("Article list") },
+                    detailContent = { preferHtml, _ ->
+                        Text(if (preferHtml) "Rich mode" else "Text mode")
+                        Button(onClick = { selectedArticleId = "article-2" }) {
+                            Text("Next article")
+                        }
+                    },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
+        composeRule.onNodeWithText("Next article").performClick()
+        composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
     }
 }

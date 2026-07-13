@@ -6,8 +6,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -178,6 +180,44 @@ class ArticleReaderPaneNavigationTest {
         composeRule.onAllNodesWithContentDescription("Article image").assertCountEquals(1)
     }
 
+    @Test
+    fun richPreferenceWaitsForTheNextArticleHtmlInsteadOfShowingTextMode() {
+        val pendingText = "This text must not flash while Rich is selected."
+        val pending = sampleDetail(
+            id = "article-2",
+            title = "Second Article",
+            isRead = false,
+            contentText = pendingText,
+        )
+        var displayedArticle by mutableStateOf(pending)
+        var preferHtml by mutableStateOf(true)
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = listOf(sampleArticle("article-2", "Second Article")),
+                    selectedArticle = displayedArticle,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = {},
+                    preferHtml = preferHtml,
+                    onPreferHtmlChanged = { preferHtml = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("reader-rich-loading").assertIsDisplayed()
+        composeRule.onNodeWithText(pendingText).assertDoesNotExist()
+        composeRule.runOnUiThread {
+            displayedArticle = pending.copy(
+                contentHtml = "<p>Rich content is ready.</p>",
+                contentVersion = 2,
+                fetchedAt = "2026-07-13T00:00:00Z",
+            )
+        }
+        composeRule.onNodeWithText("Rich").assertIsDisplayed().assertIsSelected()
+    }
+
     private fun sampleArticle(id: String, title: String): ArticleListItem =
         ArticleListItem(
             id = id,
@@ -193,6 +233,7 @@ class ArticleReaderPaneNavigationTest {
         title: String,
         isRead: Boolean,
         canonicalUrl: String? = null,
+        contentHtml: String? = null,
         contentText: String = "Body for $title",
         contentVersion: Int = 1,
         media: List<ArticleMedia> = emptyList(),
@@ -204,7 +245,7 @@ class ArticleReaderPaneNavigationTest {
             canonicalUrl = canonicalUrl,
             title = title,
             excerpt = "Excerpt for $title",
-            contentHtml = null,
+            contentHtml = contentHtml,
             contentText = contentText,
             heroImageUrl = null,
             publishedAt = null,
