@@ -66,6 +66,7 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
+          emulator-boot-timeout: 1200
           disable-animations: true
           script: |
             ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.selffeed.android.ui.components.ReaderHtmlMediaStabilityTest
