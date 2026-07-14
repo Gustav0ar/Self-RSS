@@ -81,7 +81,7 @@ fun ArticleReaderPane(
     onVisibleArticleChanged: (String) -> Unit = {},
     onArticleDisplayed: (String) -> Unit = {},
     appearance: ReaderAppearance = ReaderAppearance(),
-    preferHtml: Boolean = selectedArticle.contentHtml?.isNotBlank() == true,
+    preferHtml: Boolean = true,
     onPreferHtmlChanged: (Boolean) -> Unit = {},
 ) {
     val readerArticles = remember(articles, selectedArticle) {

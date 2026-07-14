@@ -11,8 +11,8 @@ import androidx.compose.material3.adaptive.navigation3.ListDetailSceneStrategy
 import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -40,7 +40,6 @@ data object ArticleDetailDestination : NavKey
 @Composable
 fun ArticleListDetailNavigation(
     selectedArticleId: String?,
-    initialPreferHtml: Boolean,
     onCloseArticle: () -> Unit,
     listContent: @Composable (openReaderImmediately: () -> Unit) -> Unit,
     detailContent: @Composable (preferHtml: Boolean, onPreferHtmlChanged: (Boolean) -> Unit) -> Unit,
@@ -51,8 +50,6 @@ fun ArticleListDetailNavigation(
     // Keeping this destination stable is essential: replacing its key after a
     // pager swipe disposes the pager and its WebViews, producing a visible
     // one-frame flash after the swipe has already settled.
-    var preferredHtml: Boolean? by rememberSaveable { mutableStateOf(null) }
-    val preferHtml = preferredHtml ?: initialPreferHtml
     val isReaderOpen = selectedArticleId != null
     val openReaderImmediately: () -> Unit = remember(backStack) {
         {
@@ -63,11 +60,6 @@ fun ArticleListDetailNavigation(
     }
 
     LaunchedEffect(isReaderOpen) {
-        if (!isReaderOpen) {
-            preferredHtml = null
-        } else if (preferredHtml == null) {
-            preferredHtml = initialPreferHtml
-        }
         val hasDetailDestination = backStack.lastOrNull() == ArticleDetailDestination
         if (isReaderOpen == hasDetailDestination) return@LaunchedEffect
 
@@ -94,11 +86,22 @@ fun ArticleListDetailNavigation(
             entry<ArticleDetailDestination>(
                 metadata = ListDetailSceneStrategy.detailPane(),
             ) {
-                detailContent(preferHtml) { preferredHtml = it }
+                ArticleReaderSession(detailContent)
             }
         },
         modifier = modifier,
     )
+}
+
+@Composable
+private fun ArticleReaderSession(
+    content: @Composable (preferHtml: Boolean, onPreferHtmlChanged: (Boolean) -> Unit) -> Unit,
+) {
+    // The mode belongs to this detail destination's lifetime. Rich is always
+    // the default, a manual Text selection survives adjacent-article swipes,
+    // and closing the destination naturally resets the next session to Rich.
+    var preferHtml by rememberSaveable { mutableStateOf(true) }
+    content(preferHtml) { preferHtml = it }
 }
 
 @Composable

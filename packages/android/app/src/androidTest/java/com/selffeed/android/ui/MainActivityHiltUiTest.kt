@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -83,6 +84,24 @@ class MainActivityHiltUiTest {
 
         waitForContentDescription("Back to list", timeoutMillis = 1_200)
         composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
+    }
+
+    @Test
+    fun articleDetailOpensInRichModeByDefault() {
+        repository.reset(authenticated = true)
+        repository.overrideArticleDetail(
+            articleId = "article-1",
+            contentHtml = "<p>Rich article body.</p>",
+            contentText = "Rich article body.",
+            media = emptyList(),
+        )
+        launchActivity()
+
+        waitForText("Injected Article")
+        composeRule.onNodeWithText("Injected Article").performClick()
+
+        waitForText("Rich")
+        composeRule.onNodeWithText("Rich").assertIsSelected()
     }
 
     @Test

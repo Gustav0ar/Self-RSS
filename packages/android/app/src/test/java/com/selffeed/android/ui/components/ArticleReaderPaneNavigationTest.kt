@@ -107,6 +107,7 @@ class ArticleReaderPaneNavigationTest {
                     onOpenOriginal = {},
                     onBackToList = {},
                     onArticleSelected = { id -> selectedArticle = details.getValue(id) },
+                    preferHtml = false,
                 )
             }
         }
@@ -261,6 +262,7 @@ class ArticleReaderPaneNavigationTest {
                     onOpenOriginal = {},
                     onBackToList = {},
                     onArticleSelected = {},
+                    preferHtml = false,
                 )
             }
         }

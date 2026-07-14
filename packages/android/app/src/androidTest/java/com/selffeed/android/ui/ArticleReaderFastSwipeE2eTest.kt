@@ -46,7 +46,6 @@ class ArticleReaderFastSwipeE2eTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selected.id,
-                    initialPreferHtml = false,
                     onCloseArticle = {},
                     listContent = { androidx.compose.material3.Text("Article list") },
                     detailContent = { preferHtml, onPreferHtmlChanged ->

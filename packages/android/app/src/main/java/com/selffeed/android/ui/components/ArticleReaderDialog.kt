@@ -48,7 +48,7 @@ fun ArticleReaderDialog(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    var showHtml by rememberSaveable(article.id) { mutableStateOf(article.contentHtml != null) }
+    var showHtml by rememberSaveable(article.id) { mutableStateOf(true) }
     var previewEmbedUrl by rememberSaveable(article.id) { mutableStateOf<String?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
     val readerBackgroundColor = MaterialTheme.colorScheme.surface

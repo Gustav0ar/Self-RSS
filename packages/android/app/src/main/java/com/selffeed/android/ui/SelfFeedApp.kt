@@ -504,7 +504,6 @@ fun SelfFeedApp(
                         HomeTab.ARTICLES -> {
                             ArticleListDetailNavigation(
                                 selectedArticleId = selectedArticle?.id,
-                                initialPreferHtml = selectedArticle?.contentHtml?.isNotBlank() == true,
                                 onCloseArticle = actions.onCloseArticle,
                                 listContent = { openReaderImmediately ->
                                     val immediateArticleActions = remember(articleActions, openReaderImmediately) {

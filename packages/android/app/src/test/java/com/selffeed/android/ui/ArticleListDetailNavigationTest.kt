@@ -45,7 +45,6 @@ class ArticleListDetailNavigationTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selectedArticleId,
-                    initialPreferHtml = false,
                     onCloseArticle = {
                         readerClosed = true
                         selectedArticleId = null
@@ -78,7 +77,6 @@ class ArticleListDetailNavigationTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selectedArticleId,
-                    initialPreferHtml = false,
                     onCloseArticle = { selectedArticleId = null },
                     listContent = { openReaderImmediately ->
                         LazyColumn(state = listState) {
@@ -108,13 +106,12 @@ class ArticleListDetailNavigationTest {
     }
 
     @Test
-    fun richModeSurvivesChangingTheSelectedArticle() {
+    fun articlesOpenInRichModeEvenBeforeHtmlHasLoaded() {
         composeRule.setContent {
             var selectedArticleId by remember { mutableStateOf<String?>("article-1") }
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selectedArticleId,
-                    initialPreferHtml = selectedArticleId == "article-1",
                     onCloseArticle = { selectedArticleId = null },
                     listContent = { Text("Article list") },
                     detailContent = { preferHtml, _ ->
@@ -129,6 +126,57 @@ class ArticleListDetailNavigationTest {
 
         composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
         composeRule.onNodeWithText("Next article").performClick()
+        composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
+    }
+
+    @Test
+    fun manuallySelectedTextModeSurvivesChangingTheSelectedArticle() {
+        var selectedArticleId by mutableStateOf<String?>("article-1")
+        lateinit var changeMode: (Boolean) -> Unit
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleListDetailNavigation(
+                    selectedArticleId = selectedArticleId,
+                    onCloseArticle = { selectedArticleId = null },
+                    listContent = { Text("Article list") },
+                    detailContent = { preferHtml, onPreferHtmlChanged ->
+                        changeMode = onPreferHtmlChanged
+                        Text(if (preferHtml) "Rich mode" else "Text mode")
+                    },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
+        composeRule.runOnIdle { changeMode(false) }
+        composeRule.onNodeWithText("Text mode").assertIsDisplayed()
+        composeRule.runOnIdle { selectedArticleId = "article-2" }
+        composeRule.onNodeWithText("Text mode").assertIsDisplayed()
+    }
+
+    @Test
+    fun aNewReaderSessionResetsManualTextModeBackToRich() {
+        var selectedArticleId by mutableStateOf<String?>("article-1")
+        lateinit var changeMode: (Boolean) -> Unit
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleListDetailNavigation(
+                    selectedArticleId = selectedArticleId,
+                    onCloseArticle = { selectedArticleId = null },
+                    listContent = { Text("Article list") },
+                    detailContent = { preferHtml, onPreferHtmlChanged ->
+                        changeMode = onPreferHtmlChanged
+                        Text(if (preferHtml) "Rich mode" else "Text mode")
+                    },
+                )
+            }
+        }
+
+        composeRule.runOnIdle { changeMode(false) }
+        composeRule.onNodeWithText("Text mode").assertIsDisplayed()
+        composeRule.runOnIdle { selectedArticleId = null }
+        composeRule.onNodeWithText("Article list").assertIsDisplayed()
+        composeRule.runOnIdle { selectedArticleId = "article-2" }
         composeRule.onNodeWithText("Rich mode").assertIsDisplayed()
     }
 
@@ -148,7 +196,6 @@ class ArticleListDetailNavigationTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = selectedArticle.id,
-                    initialPreferHtml = false,
                     onCloseArticle = {},
                     listContent = { Text("Article list") },
                     detailContent = { preferHtml, onPreferHtmlChanged ->
@@ -187,7 +234,6 @@ class ArticleListDetailNavigationTest {
             SelfFeedTheme {
                 ArticleListDetailNavigation(
                     selectedArticleId = null,
-                    initialPreferHtml = false,
                     onCloseArticle = {},
                     listContent = { openReaderImmediately ->
                         Button(onClick = openReaderImmediately) { Text("Open immediately") }
