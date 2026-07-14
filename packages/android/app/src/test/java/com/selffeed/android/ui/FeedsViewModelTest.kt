@@ -130,6 +130,43 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `syncAllFeeds forwards the selected scope`() = runTest {
+        coEvery { repository.syncAllFeeds("feed-1", "category-1") } returns
+            AppResult.Success(SyncResponse(status = "queued"))
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds(feedId = "feed-1", categoryId = "category-1")
+
+        coVerify { repository.syncAllFeeds("feed-1", "category-1") }
+    }
+
+    @Test
+    fun `active sync publishes article revision before bulk completion`() = runTest {
+        coEvery { repository.syncAllFeedsStatus() } returnsMany listOf(
+            AppResult.Success(
+                FeedSyncAllStatus(
+                    queued = false,
+                    running = true,
+                    active = true,
+                    stale = false,
+                    totalFeeds = 4,
+                    completedFeeds = 1,
+                    newArticles = 2,
+                    articleRevision = 7,
+                ),
+            ),
+            AppResult.Success(completedSyncStatus().copy(articleRevision = 7)),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+
+        assertEquals(7L, viewModel.state.value.articleRevision)
+        assertTrue(viewModel.state.value.syncInBackground)
+        assertEquals(0L, viewModel.state.value.syncRevision)
+    }
+
+    @Test
     fun `importOpml exposes a result summary and refreshes subscription data`() = runTest {
         coEvery { repository.importOpml(any(), any()) } returns AppResult.Success(
             OpmlImportSummary(

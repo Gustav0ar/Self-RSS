@@ -32,6 +32,7 @@ data class FeedsUiState(
     val feeds: List<FeedWithCounts> = emptyList(),
     val lastSyncSummary: SyncResponse? = null,
     val syncRevision: Long = 0L,
+    val articleRevision: Long = 0L,
     val syncInBackground: Boolean = false,
     val lastImportSummary: OpmlImportSummary? = null,
     val errorMessage: String? = null,
@@ -162,11 +163,11 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    fun syncAllFeeds() {
+    fun syncAllFeeds(feedId: String? = null, categoryId: String? = null) {
         if (_state.value.loading || _state.value.syncInBackground) return
         viewModelScope.launch {
             _state.update { it.copy(loading = true, errorMessage = null) }
-            when (val result = repository.syncAllFeeds()) {
+            when (val result = repository.syncAllFeeds(feedId, categoryId)) {
                 is AppResult.Success -> {
                     _state.update {
                         it.copy(
@@ -189,6 +190,9 @@ class FeedsViewModel @Inject constructor(
         while (currentCoroutineContext().isActive) {
             when (val status = repository.syncAllFeedsStatus()) {
                 is AppResult.Success -> {
+                    if (status.data.articleRevision > _state.value.articleRevision) {
+                        _state.update { it.copy(articleRevision = status.data.articleRevision) }
+                    }
                     if (!status.data.active) {
                         _state.update {
                             it.copy(

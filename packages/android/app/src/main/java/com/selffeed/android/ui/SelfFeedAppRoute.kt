@@ -145,6 +145,10 @@ fun SelfFeedAppRoute(
             workflowCoordinator.onFeedSyncRevisionChanged(feedsState.syncRevision, workflowSink)
         }
 
+        LaunchedEffect(feedsState.articleRevision) {
+            if (feedsState.articleRevision > 0L) articlesViewModel.refreshArticles()
+        }
+
         LaunchedEffect(Unit) {
             articlesViewModel.events.collect { event ->
                 workflowCoordinator.onArticleEvent(
@@ -212,7 +216,10 @@ fun SelfFeedAppRoute(
                 onExportOpml = feedsViewModel::exportOpml,
                 onDismissImportSummary = feedsViewModel::dismissImportSummary,
                 onRefreshArticles = {
-                    feedsViewModel.syncAllFeeds()
+                    feedsViewModel.syncAllFeeds(
+                        feedId = articlesState.selectedFeedId,
+                        categoryId = articlesState.selectedCategoryId,
+                    )
                 },
                 onOpenArticle = {
                     val origin = if (chromeState.activeTab == HomeTab.SEARCH) HomeTab.SEARCH else HomeTab.ARTICLES
@@ -231,6 +238,7 @@ fun SelfFeedAppRoute(
                 onToggleRead = articlesViewModel::markRead,
                 onMarkAllRead = articlesViewModel::markAllRead,
                 onArticleSnapshot = articlesViewModel::updateArticleQueueSnapshot,
+                onVisibleArticles = articlesViewModel::warmVisibleArticles,
                 onSearchQueryChanged = searchViewModel::setQuery,
                 onSearchRequested = searchViewModel::search,
                 onLoadMoreSearch = searchViewModel::loadMore,

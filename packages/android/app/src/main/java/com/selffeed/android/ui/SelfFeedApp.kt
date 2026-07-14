@@ -145,6 +145,7 @@ data class SelfFeedAppActions(
     val onToggleRead: (String, Boolean) -> Unit,
     val onMarkAllRead: () -> Unit,
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
+    val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
     val onSearchQueryChanged: (String) -> Unit,
     val onSearchRequested: () -> Unit,
     val onLoadMoreSearch: () -> Unit,
@@ -377,6 +378,7 @@ fun SelfFeedApp(
                 offerReadUndo(articleId, previousRead, !previousRead)
             },
             onArticleSnapshot = actions.onArticleSnapshot,
+            onVisibleArticles = actions.onVisibleArticles,
         )
     }
     val searchActions = remember(actions) {

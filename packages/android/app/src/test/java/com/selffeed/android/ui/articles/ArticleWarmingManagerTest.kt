@@ -39,6 +39,34 @@ class ArticleWarmingManagerTest {
         coVerify(exactly = 0) { repository.enrichArticle(any(), any()) }
     }
 
+    @Test
+    fun `visible warming prefetches only the first four and prioritizes pending enrichment`() = runTest {
+        val repository = mockk<SelfFeedRepository>()
+        every { repository.cachedArticleDetail(any()) } returns null
+        every { repository.prefetchHeroImages(any()) } just Runs
+        coEvery { repository.prefetchArticle(any()) } answers {
+            AppResult.Success(detail(firstArg(), contentStatus = "enrichment_pending"))
+        }
+        coEvery { repository.enrichArticle(any(), any()) } returns AppResult.Success(
+            com.selffeed.android.network.EnrichArticleResponse(success = true, queued = true),
+        )
+        val manager = ArticleWarmingManager(repository)
+        manager.setScope(this)
+        val items = (0..5).map { item("a$it") }
+
+        manager.warmVisibleArticles(items)
+        advanceUntilIdle()
+        manager.warmVisibleArticles(items)
+        advanceUntilIdle()
+
+        (0..3).forEach { index ->
+            coVerify(exactly = 1) { repository.prefetchArticle("a$index") }
+            coVerify(exactly = 1) { repository.enrichArticle("a$index", false) }
+        }
+        coVerify(exactly = 0) { repository.prefetchArticle("a4") }
+        coVerify(exactly = 0) { repository.prefetchArticle("a5") }
+    }
+
     private fun item(id: String) = ArticleListItem(
         id = id,
         feedId = "feed-1",
@@ -48,7 +76,7 @@ class ArticleWarmingManagerTest {
         isRead = false,
     )
 
-    private fun detail(id: String) = ArticleDetail(
+    private fun detail(id: String, contentStatus: String = "feed_ready") = ArticleDetail(
         id = id,
         feedId = "feed-1",
         guid = id,
@@ -56,5 +84,6 @@ class ArticleWarmingManagerTest {
         hash = id,
         feedTitle = "Feed",
         isRead = false,
+        contentStatus = contentStatus,
     )
 }

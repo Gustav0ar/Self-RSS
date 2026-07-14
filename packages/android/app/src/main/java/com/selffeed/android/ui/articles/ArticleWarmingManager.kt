@@ -22,6 +22,8 @@ class ArticleWarmingManager @Inject constructor(
 ) {
     private var scope: CoroutineScope? = null
     private var warmNextArticlesJob: Job? = null
+    private var warmVisibleArticlesJob: Job? = null
+    private var lastVisibleArticleIds: List<String> = emptyList()
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
@@ -68,15 +70,49 @@ class ArticleWarmingManager @Inject constructor(
     }
 
     /**
+     * Warms the first articles the user can act on before the first tap.
+     * Canonical enrichment is merely prioritized; detail and image caching
+     * remain useful immediately with feed-provided content.
+     */
+    fun warmVisibleArticles(items: List<ArticleListItem>) {
+        val candidates = items.take(VISIBLE_ARTICLE_WARM_LIMIT).distinctBy { it.id }
+        val candidateIds = candidates.map { it.id }
+        if (candidateIds.isEmpty() || candidateIds == lastVisibleArticleIds) return
+        lastVisibleArticleIds = candidateIds
+
+        repository.prefetchHeroImages(candidates.map { it.heroImageUrl })
+        warmVisibleArticlesJob?.cancel()
+        warmVisibleArticlesJob = scope?.launch {
+            val details = candidates.map { article ->
+                async {
+                    repository.cachedArticleDetail(article.id)
+                        ?: when (val prefetched = repository.prefetchArticle(article.id)) {
+                            is AppResult.Success -> prefetched.data
+                            is AppResult.Error -> null
+                        }
+                }
+            }.awaitAll()
+            repository.prefetchHeroImages(details.map { it?.heroImageUrl })
+            details
+                .filter { it?.contentStatus == "enrichment_pending" }
+                .forEach { detail -> repository.enrichArticle(detail!!.id, invalidateCaches = false) }
+        }
+    }
+
+    /**
      * Cancels any pending warming job.
      */
     fun cancelWarming() {
         warmNextArticlesJob?.cancel()
         warmNextArticlesJob = null
+        warmVisibleArticlesJob?.cancel()
+        warmVisibleArticlesJob = null
+        lastVisibleArticleIds = emptyList()
     }
 
     private companion object {
         const val NEXT_ARTICLE_WARM_LIMIT = 2
         const val PREVIOUS_ARTICLE_WARM_LIMIT = 1
+        const val VISIBLE_ARTICLE_WARM_LIMIT = 4
     }
 }

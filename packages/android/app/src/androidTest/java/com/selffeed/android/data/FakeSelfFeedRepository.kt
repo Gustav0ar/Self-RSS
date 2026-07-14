@@ -172,7 +172,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override suspend fun deleteFeed(id: String): AppResult<Boolean> = AppResult.Error("Not supported in fake")
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
-    override suspend fun syncAllFeeds(): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
+    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?): AppResult<SyncResponse> =
+        AppResult.Success(SyncResponse(syncedFeeds = 1))
     override suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus> = AppResult.Success(
         FeedSyncAllStatus(
             queued = false,

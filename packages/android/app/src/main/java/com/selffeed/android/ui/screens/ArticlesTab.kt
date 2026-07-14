@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,6 +71,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +90,19 @@ fun ArticlesTab(
 
     val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
     val articleCount = pagedArticles.itemCount
+
+    LaunchedEffect(listState, pagedArticles) {
+        snapshotFlow {
+            val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
+            listState.layoutInfo.visibleItemsInfo
+                .mapNotNull { item -> loadedArticlesById[item.key as? String] }
+                .take(VISIBLE_ARTICLE_PREFETCH_LIMIT)
+        }
+            .distinctUntilChanged { previous, current ->
+                previous.map { it.id } == current.map { it.id }
+            }
+            .collect(actions.onVisibleArticles)
+    }
     // A pull starts feed synchronization first; the Paging refresh only
     // begins after that background job publishes new data. Treat both phases
     // as one refresh so Material switches from the stationary pull arrow to
@@ -266,6 +281,8 @@ fun ArticlesTab(
         }
     }
 }
+
+private const val VISIBLE_ARTICLE_PREFETCH_LIMIT = 4
 
 @Composable
 private fun OfflineArticlesBanner() {

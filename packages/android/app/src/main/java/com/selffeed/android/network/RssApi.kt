@@ -66,7 +66,10 @@ interface RssApi {
     suspend fun syncFeed(@Path("id") id: String): ApiEnvelope<SyncResponse>
 
     @POST("feeds/sync")
-    suspend fun syncAllFeeds(): ApiEnvelope<SyncResponse>
+    suspend fun syncAllFeeds(
+        @Query("feedId") feedId: String? = null,
+        @Query("categoryId") categoryId: String? = null,
+    ): ApiEnvelope<SyncResponse>
 
     @GET("feeds/sync/status")
     suspend fun syncAllFeedsStatus(): ApiEnvelope<FeedSyncAllStatus>

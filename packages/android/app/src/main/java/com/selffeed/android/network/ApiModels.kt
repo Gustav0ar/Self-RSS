@@ -394,6 +394,10 @@ data class FeedSyncAllStatus(
     val queuedAt: String? = null,
     val startedAt: String? = null,
     val heartbeatAt: String? = null,
+    val totalFeeds: Int = 0,
+    val completedFeeds: Int = 0,
+    val newArticles: Int = 0,
+    val articleRevision: Long = 0L,
 )
 
 @JsonClass(generateAdapter = true)

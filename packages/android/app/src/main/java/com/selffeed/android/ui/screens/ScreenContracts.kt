@@ -52,6 +52,7 @@ data class ArticleTabActions(
     val onToggleRead: (String, Boolean) -> Unit,
     val onReadStateChanged: (String, Boolean) -> Unit = { _, _ -> },
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
+    val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
 )
 
 data class SearchTabState(

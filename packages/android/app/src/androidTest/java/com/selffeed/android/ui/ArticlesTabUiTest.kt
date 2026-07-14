@@ -28,6 +28,7 @@ import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicReference
 
 class ArticlesTabUiTest {
     @get:Rule
@@ -228,6 +229,34 @@ class ArticlesTabUiTest {
 
         composeRule.onNodeWithText("Fresh Article").assertIsDisplayed()
         composeRule.onNodeWithText("Stale Article").assertDoesNotExist()
+    }
+
+    @Test
+    fun articlesTab_reportsTheActualVisibleArticlesWhenOfflineBannerIsPresent() {
+        val visibleArticleIds = AtomicReference<List<String>>(emptyList())
+        val articles = (1..8).map { index -> sampleArticle("article-$index", "Article $index") }
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTabWithStaticPaging(
+                    state = ArticleTabState(
+                        articles = articles,
+                        selectedArticleId = null,
+                        isSyncingFeeds = false,
+                        isOffline = true,
+                    ),
+                    actions = noOpArticleActions().copy(
+                        onVisibleArticles = { visible ->
+                            visibleArticleIds.set(visible.map { it.id })
+                        },
+                    ),
+                )
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) { visibleArticleIds.get().isNotEmpty() }
+        assertEquals("article-1", visibleArticleIds.get().first())
+        assertTrue(visibleArticleIds.get().size <= 4)
     }
 
     @Test

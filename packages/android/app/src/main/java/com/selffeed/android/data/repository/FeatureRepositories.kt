@@ -66,7 +66,8 @@ class FeedRepositoryImpl @Inject constructor(
 
     override suspend fun deleteFeed(id: String): AppResult<Boolean> = source.deleteFeed(id)
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = source.syncFeed(id)
-    override suspend fun syncAllFeeds(): AppResult<SyncResponse> = source.syncAllFeeds()
+    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?): AppResult<SyncResponse> =
+        source.syncAllFeeds(feedId, categoryId)
     override suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus> = source.syncAllFeedsStatus()
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray): AppResult<OpmlImportSummary> =
         source.importOpml(fileName, fileBytes)

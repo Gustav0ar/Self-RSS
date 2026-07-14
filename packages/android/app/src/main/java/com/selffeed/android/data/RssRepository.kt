@@ -251,8 +251,8 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun syncAllFeeds() = safeCall {
-        feedRemote.syncAllFeeds()
+    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
+        feedRemote.syncAllFeeds(feedId, categoryId)
     }
 
     override suspend fun syncAllFeedsStatus() = safeReadCall {

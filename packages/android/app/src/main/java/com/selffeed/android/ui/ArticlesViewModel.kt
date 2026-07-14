@@ -156,6 +156,10 @@ class ArticlesViewModel @Inject constructor(
         refreshArticlePager()
     }
 
+    fun warmVisibleArticles(articles: List<ArticleListItem>) {
+        articleWarmingManager.warmVisibleArticles(articles)
+    }
+
     /**
      * Keeps the currently materialized Paging window for reader navigation
      * and optimistic read-state updates. Paging/Room remains the only source
