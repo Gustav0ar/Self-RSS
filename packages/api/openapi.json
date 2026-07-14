@@ -1003,7 +1003,11 @@
 					"stale",
 					"queuedAt",
 					"startedAt",
-					"heartbeatAt"
+					"heartbeatAt",
+					"totalFeeds",
+					"completedFeeds",
+					"newArticles",
+					"articleRevision"
 				],
 				"properties": {
 					"queued": {
@@ -1032,6 +1036,22 @@
 						"type": "string",
 						"format": "date-time",
 						"nullable": true
+					},
+					"totalFeeds": {
+						"type": "integer",
+						"minimum": 0
+					},
+					"completedFeeds": {
+						"type": "integer",
+						"minimum": 0
+					},
+					"newArticles": {
+						"type": "integer",
+						"minimum": 0
+					},
+					"articleRevision": {
+						"type": "integer",
+						"minimum": 0
 					}
 				}
 			}
@@ -1869,6 +1889,24 @@
 				"security": [
 					{
 						"bearerAuth": []
+					}
+				],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "feedId",
+						"schema": {
+							"type": "string",
+							"format": "uuid"
+						}
+					},
+					{
+						"in": "query",
+						"name": "categoryId",
+						"schema": {
+							"type": "string",
+							"format": "uuid"
+						}
 					}
 				],
 				"responses": {

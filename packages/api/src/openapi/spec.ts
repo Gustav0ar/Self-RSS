@@ -421,7 +421,19 @@ export const openApiSpec = {
 			},
 			FeedSyncAllStatus: {
 				type: 'object',
-				required: ['queued', 'running', 'active', 'stale', 'queuedAt', 'startedAt', 'heartbeatAt'],
+				required: [
+					'queued',
+					'running',
+					'active',
+					'stale',
+					'queuedAt',
+					'startedAt',
+					'heartbeatAt',
+					'totalFeeds',
+					'completedFeeds',
+					'newArticles',
+					'articleRevision',
+				],
 				properties: {
 					queued: { type: 'boolean' },
 					running: { type: 'boolean' },
@@ -430,6 +442,10 @@ export const openApiSpec = {
 					queuedAt: { type: 'string', format: 'date-time', nullable: true },
 					startedAt: { type: 'string', format: 'date-time', nullable: true },
 					heartbeatAt: { type: 'string', format: 'date-time', nullable: true },
+					totalFeeds: { type: 'integer', minimum: 0 },
+					completedFeeds: { type: 'integer', minimum: 0 },
+					newArticles: { type: 'integer', minimum: 0 },
+					articleRevision: { type: 'integer', minimum: 0 },
 				},
 			},
 		},
@@ -580,6 +596,10 @@ export const openApiSpec = {
 			post: {
 				tags: ['Feeds'],
 				security: bearerSecurity,
+				parameters: [
+					{ in: 'query', name: 'feedId', schema: { type: 'string', format: 'uuid' } },
+					{ in: 'query', name: 'categoryId', schema: { type: 'string', format: 'uuid' } },
+				],
 				responses: { '202': json({ type: 'object' }) },
 			},
 		},

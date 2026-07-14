@@ -9,11 +9,33 @@ describe('FeedSyncService', () => {
 		startedAt: noonTimestamp,
 		heartbeatAt: noonTimestamp,
 	});
+	const emptySyncProgress = {
+		totalFeeds: 0,
+		completedFeeds: 0,
+		newArticles: 0,
+		articleRevision: 0,
+	};
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
+	});
+
+	it('prioritizes user-visible article enrichment ahead of background work', async () => {
+		const articleRepo = { queueEnrichments: vi.fn(async () => undefined) };
+		const service = new FeedSyncService(
+			{} as never,
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+
+		await service.queueArticleEnrichment('article-visible');
+
+		expect(articleRepo.queueEnrichments).toHaveBeenCalledWith(['article-visible'], new Date(0));
 	});
 
 	it('skips article enrichment when another worker holds the article lock', async () => {
@@ -795,18 +817,18 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledTimes(3);
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: false,
-			forceFetch: true,
+			warmArticleCache: true,
+			forceFetch: false,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: false,
-			forceFetch: true,
+			warmArticleCache: true,
+			forceFetch: false,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: false,
-			forceFetch: true,
+			warmArticleCache: true,
+			forceFetch: false,
 		});
 		expect(result).toEqual({
 			totalFeeds: 3,
@@ -848,8 +870,8 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledTimes(2);
 		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: false,
-			forceFetch: true,
+			warmArticleCache: true,
+			forceFetch: false,
 		});
 		expect(result).toEqual({
 			totalFeeds: 1,
@@ -858,6 +880,46 @@ describe('FeedSyncService', () => {
 			skippedFeeds: 0,
 			newArticles: 3,
 		});
+	});
+
+	it('prioritizes the selected scope and reports incremental progress', async () => {
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [
+				{ id: 'other', syncStatus: 'idle' },
+				{ id: 'category-feed', syncStatus: 'idle' },
+				{ id: 'selected', syncStatus: 'idle' },
+			]),
+			findByCategory: vi.fn(async () => [{ id: 'category-feed' }]),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		const started: string[] = [];
+		vi.spyOn(service, 'syncFeed').mockImplementation(async (feedId) => {
+			started.push(feedId);
+			return { newArticles: 1, total: 1 };
+		});
+		const progress: Array<{ totalFeeds: number; completedFeeds: number; newArticles: number }> = [];
+
+		await service.syncAllFeeds(
+			'user-1',
+			{ feedId: 'selected', categoryId: 'category-1' },
+			(update) => {
+				progress.push(update);
+			},
+		);
+
+		expect(started).toEqual(['selected', 'category-feed', 'other']);
+		expect(progress).toEqual([
+			{ totalFeeds: 3, completedFeeds: 1, newArticles: 1 },
+			{ totalFeeds: 3, completedFeeds: 2, newArticles: 2 },
+			{ totalFeeds: 3, completedFeeds: 3, newArticles: 3 },
+		]);
 	});
 
 	it('warms the article list cache after bulk refresh without blocking completion', async () => {
@@ -1007,8 +1069,8 @@ describe('FeedSyncService', () => {
 		for (const call of syncFeedSpy.mock.calls) {
 			expect(call[2]).toEqual({
 				enrichArticles: true,
-				warmArticleCache: false,
-				forceFetch: true,
+				warmArticleCache: true,
+				forceFetch: false,
 			});
 		}
 
@@ -1040,13 +1102,17 @@ describe('FeedSyncService', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('RPUSH'),
-			3,
+			5,
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
 			'feed:sync-all:lock:user-1',
+			'feed:sync-all:request:user-1',
+			'feed:sync-all:progress:user-1',
 			queuedMarker,
 			'1800',
 			'user-1',
+			'{}',
+			'{"totalFeeds":0,"completedFeeds":0,"newArticles":0}',
 		);
 		expect(result).toEqual({ accepted: true, alreadyQueued: false });
 	});
@@ -1070,13 +1136,17 @@ describe('FeedSyncService', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('LPOS'),
-			3,
+			5,
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:queue',
 			'feed:sync-all:lock:user-1',
+			'feed:sync-all:request:user-1',
+			'feed:sync-all:progress:user-1',
 			queuedMarker,
 			'1800',
 			'user-1',
+			'{}',
+			'{"totalFeeds":0,"completedFeeds":0,"newArticles":0}',
 		);
 		expect(result).toEqual({ accepted: true, alreadyQueued: true });
 	});
@@ -1106,6 +1176,7 @@ describe('FeedSyncService', () => {
 			queuedAt: expect.any(String),
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1134,6 +1205,7 @@ describe('FeedSyncService', () => {
 			queuedAt: null,
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1168,6 +1240,7 @@ describe('FeedSyncService', () => {
 			queuedAt: '2026-06-21T11:58:00.000Z',
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1198,6 +1271,39 @@ describe('FeedSyncService', () => {
 			queuedAt: null,
 			startedAt: '2026-06-21T12:00:00.000Z',
 			heartbeatAt: '2026-06-21T12:00:00.000Z',
+			...emptySyncProgress,
+		});
+	});
+
+	it('reports persisted progress and the article cache revision', async () => {
+		const redis = {
+			get: vi.fn(async (key: string) => {
+				if (key.includes(':lock:')) return String(Date.now());
+				if (key.includes(':progress:')) {
+					return JSON.stringify({ totalFeeds: 8, completedFeeds: 3, newArticles: 5 });
+				}
+				if (key === 'articles:gen:user-1') return '42';
+				return null;
+			}),
+			del: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+
+		const result = await service.getSyncAllFeedsStatus('user-1');
+
+		expect(result).toMatchObject({
+			active: true,
+			totalFeeds: 8,
+			completedFeeds: 3,
+			newArticles: 5,
+			articleRevision: 42,
 		});
 	});
 
@@ -1228,6 +1334,7 @@ describe('FeedSyncService', () => {
 		expect(redis.del).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
+			'feed:sync-all:request:user-1',
 		);
 		expect(result).toEqual({
 			queued: false,
@@ -1237,6 +1344,7 @@ describe('FeedSyncService', () => {
 			queuedAt: null,
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1259,6 +1367,7 @@ describe('FeedSyncService', () => {
 		expect(redis.del).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
+			'feed:sync-all:request:user-1',
 		);
 		expect(result).toEqual({
 			queued: false,
@@ -1268,6 +1377,7 @@ describe('FeedSyncService', () => {
 			queuedAt: null,
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1302,6 +1412,7 @@ describe('FeedSyncService', () => {
 			queuedAt: null,
 			startedAt: null,
 			heartbeatAt: null,
+			...emptySyncProgress,
 		});
 	});
 
@@ -1311,6 +1422,7 @@ describe('FeedSyncService', () => {
 		const redis = {
 			lpop: vi.fn(async () => 'user-1'),
 			lrem: vi.fn(async () => 0),
+			get: vi.fn(async () => null),
 			set: vi.fn(async () => 'OK'),
 			del: vi.fn(async () => 2),
 		};
@@ -1341,10 +1453,11 @@ describe('FeedSyncService', () => {
 			1800,
 			'NX',
 		);
-		expect(syncAllSpy).toHaveBeenCalledWith('user-1');
+		expect(syncAllSpy).toHaveBeenCalledWith('user-1', {}, expect.any(Function));
 		expect(redis.del).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
+			'feed:sync-all:request:user-1',
 		);
 		expect(result).toEqual({
 			userId: 'user-1',
@@ -1388,7 +1501,11 @@ describe('FeedSyncService', () => {
 		const result = await service.processNextQueuedSyncAllFeeds();
 
 		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
-		expect(syncAllSpy).toHaveBeenCalledWith('user-1');
+		expect(syncAllSpy).toHaveBeenCalledWith(
+			'user-1',
+			{ feedId: undefined, categoryId: undefined },
+			expect.any(Function),
+		);
 		expect(result).toEqual({
 			userId: 'user-1',
 			skipped: false,

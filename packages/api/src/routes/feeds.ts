@@ -146,7 +146,11 @@ export function createFeedRoutes(
 	routes.post('/sync', async (c) => {
 		await enforceRateLimit(c, rateLimiter, 'feed-sync-all', RATE_LIMITS.feedSync);
 		const userId = c.get('userId');
-		const result = await syncService.queueSyncAllFeeds(userId);
+		const searchParams = new URL(c.req.url).searchParams;
+		const result = await syncService.queueSyncAllFeeds(userId, {
+			feedId: searchParams.get('feedId') ?? undefined,
+			categoryId: searchParams.get('categoryId') ?? undefined,
+		});
 		return c.json({ data: result }, 202);
 	});
 

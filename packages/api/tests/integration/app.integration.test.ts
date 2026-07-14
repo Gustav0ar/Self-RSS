@@ -1132,9 +1132,13 @@ describe('API integration', () => {
 			});
 			expect(secondFeed.response.status).toBe(201);
 
-			const sync = await authedRequest('/api/v1/feeds/sync', token, {
-				method: 'POST',
-			});
+			const sync = await authedRequest(
+				`/api/v1/feeds/sync?feedId=${secondFeed.body.data.id}&categoryId=${category.body.data.id}`,
+				token,
+				{
+					method: 'POST',
+				},
+			);
 			expect(sync.response.status).toBe(202);
 			expect(sync.body.data).toEqual({
 				accepted: true,
@@ -1148,6 +1152,9 @@ describe('API integration', () => {
 				running: false,
 				active: true,
 				stale: false,
+				totalFeeds: 0,
+				completedFeeds: 0,
+				newArticles: 0,
 			});
 			expect(queuedStatus.body.data.queuedAt).toEqual(expect.any(String));
 			expect(queuedStatus.body.data.startedAt).toBeNull();
@@ -1211,6 +1218,10 @@ describe('API integration', () => {
 				queuedAt: null,
 				startedAt: null,
 				heartbeatAt: null,
+				totalFeeds: 2,
+				completedFeeds: 2,
+				newArticles: 3,
+				articleRevision: expect.any(Number),
 			});
 
 			const feeds = await authedRequest('/api/v1/feeds', token);

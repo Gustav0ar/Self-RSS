@@ -20,6 +20,8 @@ if redis.call("LPOS", KEYS[2], ARGV[3]) ~= false then
 	return 0
 end
 redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+redis.call("SET", KEYS[4], ARGV[4], "EX", ARGV[2])
+redis.call("SET", KEYS[5], ARGV[5], "EX", ARGV[2])
 redis.call("RPUSH", KEYS[2], ARGV[3])
 return 1
 `;
@@ -36,6 +38,17 @@ interface LockStatusValue {
 	heartbeatAt: number | null;
 }
 
+export interface ManualSyncScope {
+	feedId?: string;
+	categoryId?: string;
+}
+
+interface SyncProgressValue {
+	totalFeeds: number;
+	completedFeeds: number;
+	newArticles: number;
+}
+
 export interface FeedSyncAllStatus {
 	queued: boolean;
 	running: boolean;
@@ -44,22 +57,64 @@ export interface FeedSyncAllStatus {
 	queuedAt: string | null;
 	startedAt: string | null;
 	heartbeatAt: string | null;
+	totalFeeds: number;
+	completedFeeds: number;
+	newArticles: number;
+	articleRevision: number;
 }
 
-export async function queueManualSyncAllFeeds(redis: Redis, userId: string) {
+export async function queueManualSyncAllFeeds(
+	redis: Redis,
+	userId: string,
+	scope: ManualSyncScope = {},
+) {
 	const now = Date.now();
 	const didQueue = await redis.eval(
 		QUEUE_SYNC_ALL_FEEDS_SCRIPT,
-		3,
+		5,
 		CacheKeys.feedSyncAllQueued(userId),
 		CacheKeys.feedSyncAllQueue(),
 		CacheKeys.feedSyncAllLock(userId),
+		CacheKeys.feedSyncAllRequest(userId),
+		CacheKeys.feedSyncAllProgress(userId),
 		encodeQueuedValue(now),
 		String(MANUAL_SYNC_DEDUPE_TTL_SECONDS),
 		userId,
+		JSON.stringify(scope),
+		JSON.stringify({ totalFeeds: 0, completedFeeds: 0, newArticles: 0 }),
 	);
 
 	return Number(didQueue) === 1;
+}
+
+export async function getManualSyncAllFeedsRequest(
+	redis: Redis,
+	userId: string,
+): Promise<ManualSyncScope> {
+	const value = await redis.get(CacheKeys.feedSyncAllRequest(userId));
+	if (!value) return {};
+	try {
+		const parsed = JSON.parse(value) as ManualSyncScope;
+		return {
+			feedId: typeof parsed.feedId === 'string' ? parsed.feedId : undefined,
+			categoryId: typeof parsed.categoryId === 'string' ? parsed.categoryId : undefined,
+		};
+	} catch {
+		return {};
+	}
+}
+
+export async function updateManualSyncAllFeedsProgress(
+	redis: Redis,
+	userId: string,
+	progress: SyncProgressValue,
+) {
+	await redis.set(
+		CacheKeys.feedSyncAllProgress(userId),
+		JSON.stringify(progress),
+		'EX',
+		MANUAL_SYNC_DEDUPE_TTL_SECONDS,
+	);
 }
 
 export async function getManualSyncAllFeedsStatus(
@@ -68,7 +123,13 @@ export async function getManualSyncAllFeedsStatus(
 ): Promise<FeedSyncAllStatus> {
 	const queuedKey = CacheKeys.feedSyncAllQueued(userId);
 	const lockKey = CacheKeys.feedSyncAllLock(userId);
-	const [queuedValue, lockValue] = await Promise.all([redis.get(queuedKey), redis.get(lockKey)]);
+	const [queuedValue, lockValue, progressValue, revisionValue] = await Promise.all([
+		redis.get(queuedKey),
+		redis.get(lockKey),
+		redis.get(CacheKeys.feedSyncAllProgress(userId)),
+		redis.get(CacheKeys.articleCacheGeneration(userId)),
+	]);
+	const progress = parseProgressValue(progressValue);
 	const queuedState = parseQueuedValue(queuedValue);
 	const lockState = parseLockValue(lockValue);
 	const lockStatus = await getManualSyncLockStatus(redis, userId, lockState);
@@ -86,6 +147,10 @@ export async function getManualSyncAllFeedsStatus(
 		queuedAt: queued ? timestampToIso(queuedStatus.value?.queuedAt) : null,
 		startedAt: running ? timestampToIso(lockStatus.value?.startedAt) : null,
 		heartbeatAt: running ? timestampToIso(lockStatus.value?.heartbeatAt) : null,
+		totalFeeds: progress.totalFeeds,
+		completedFeeds: progress.completedFeeds,
+		newArticles: progress.newArticles,
+		articleRevision: normalizeCounter(revisionValue),
 	};
 }
 
@@ -150,7 +215,32 @@ export function startManualSyncAllFeedsHeartbeat(redis: Redis, userId: string) {
 }
 
 export async function releaseManualSyncAllFeedsState(redis: Redis, userId: string) {
-	await redis.del(CacheKeys.feedSyncAllLock(userId), CacheKeys.feedSyncAllQueued(userId));
+	await redis.del(
+		CacheKeys.feedSyncAllLock(userId),
+		CacheKeys.feedSyncAllQueued(userId),
+		CacheKeys.feedSyncAllRequest(userId),
+	);
+}
+
+function parseProgressValue(value: string | null): SyncProgressValue {
+	if (!value) return { totalFeeds: 0, completedFeeds: 0, newArticles: 0 };
+	try {
+		const parsed = JSON.parse(value) as Partial<SyncProgressValue>;
+		return {
+			totalFeeds: normalizeCounter(parsed.totalFeeds),
+			completedFeeds: normalizeCounter(parsed.completedFeeds),
+			newArticles: normalizeCounter(parsed.newArticles),
+		};
+	} catch {
+		return { totalFeeds: 0, completedFeeds: 0, newArticles: 0 };
+	}
+}
+
+function normalizeCounter(value: unknown) {
+	const number = typeof value === 'string' ? Number(value) : value;
+	return typeof number === 'number' && Number.isFinite(number) && number >= 0
+		? Math.floor(number)
+		: 0;
 }
 
 async function getManualSyncLockStatus(

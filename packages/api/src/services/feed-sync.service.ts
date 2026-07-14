@@ -24,11 +24,19 @@ import { fetchArticlePageContent } from './article-source-fetcher.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
+	FeedSyncFetchError,
+	getSyncErrorDetails,
+	normalizeSyncThrowable,
+} from './feed-sync-errors.js';
+import {
 	acquireManualSyncAllFeedsLock,
+	getManualSyncAllFeedsRequest,
 	getManualSyncAllFeedsStatus,
+	type ManualSyncScope,
 	queueManualSyncAllFeeds,
 	releaseManualSyncAllFeedsState,
 	startManualSyncAllFeedsHeartbeat,
+	updateManualSyncAllFeedsProgress,
 } from './feed-sync-status.js';
 import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
@@ -70,68 +78,6 @@ const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
-
-interface SyncErrorDetails {
-	error: string;
-	stack?: string;
-	status?: number;
-	statusText?: string;
-	url?: string;
-}
-
-class FeedSyncFetchError extends Error {
-	constructor(readonly details: SyncErrorDetails) {
-		super(details.error);
-		this.name = 'FeedSyncFetchError';
-	}
-}
-
-function getSyncErrorDetails(error: unknown): SyncErrorDetails {
-	if (error instanceof FeedSyncFetchError) {
-		return error.details;
-	}
-
-	if (error instanceof Error) {
-		return { error: error.message, stack: error.stack };
-	}
-
-	if (typeof Response !== 'undefined' && error instanceof Response) {
-		const statusText = error.statusText || 'Unknown status';
-		return {
-			error: `HTTP ${error.status}: ${statusText}`,
-			status: error.status,
-			statusText,
-			...(error.url ? { url: error.url } : {}),
-		};
-	}
-
-	if (error && typeof error === 'object') {
-		const responseLike = error as { status?: unknown; statusText?: unknown; url?: unknown };
-		if (typeof responseLike.status === 'number') {
-			const statusText =
-				typeof responseLike.statusText === 'string' && responseLike.statusText
-					? responseLike.statusText
-					: 'Unknown status';
-			return {
-				error: `HTTP ${responseLike.status}: ${statusText}`,
-				status: responseLike.status,
-				statusText,
-				...(typeof responseLike.url === 'string' && responseLike.url
-					? { url: responseLike.url }
-					: {}),
-			};
-		}
-	}
-
-	return { error: String(error) };
-}
-
-function normalizeSyncThrowable(error: unknown, details: SyncErrorDetails): Error {
-	if (error instanceof Error) {
-		return error;
-	}
-	return new Error(details.error);
-}
 
 export class FeedSyncService {
 	private parser: RSSParser;
@@ -510,7 +456,15 @@ export class FeedSyncService {
 		}
 	}
 
-	async syncAllFeeds(userId: string) {
+	async syncAllFeeds(
+		userId: string,
+		scope: ManualSyncScope = {},
+		onProgress?: (progress: {
+			totalFeeds: number;
+			completedFeeds: number;
+			newArticles: number;
+		}) => Promise<void> | void,
+	) {
 		const feeds = await this.feedRepo.findAllByUser(userId);
 		const staleSyncingFeeds = feeds.filter((feed) => feed.syncStatus === 'syncing');
 		if (staleSyncingFeeds.length > 0) {
@@ -524,7 +478,19 @@ export class FeedSyncService {
 				),
 			);
 		}
-		const syncableFeeds = feeds;
+		const categoryFeedIds = scope.categoryId
+			? new Set(
+					(await this.feedRepo.findByCategory(userId, scope.categoryId)).map((feed) => feed.id),
+				)
+			: new Set<string>();
+		const syncableFeeds = [...feeds].sort((left, right) => {
+			const priority = (feed: (typeof feeds)[number]) => {
+				if (scope.feedId === feed.id) return 0;
+				if (categoryFeedIds.has(feed.id)) return 1;
+				return 2;
+			};
+			return priority(left) - priority(right);
+		});
 
 		if (syncableFeeds.length === 0) {
 			return {
@@ -542,9 +508,19 @@ export class FeedSyncService {
 			syncFeed: (feed) =>
 				this.syncFeed(feed.id, userId, {
 					enrichArticles: true,
-					warmArticleCache: false,
-					forceFetch: true,
+					warmArticleCache: true,
+					// A manual refresh must contact the publisher, but HTTP
+					// validators still need to be sent so unchanged feeds can
+					// complete with a cheap 304 response.
+					forceFetch: false,
 				}),
+			onProgress: async (progress) => {
+				await onProgress?.({
+					totalFeeds: progress.totalFeeds,
+					completedFeeds: progress.completedFeeds,
+					newArticles: progress.newArticles,
+				});
+			},
 			onFeedError: (feed, err) => {
 				const errorDetails = getSyncErrorDetails(err);
 				logger.error('Feed sync failed during bulk sync', {
@@ -567,8 +543,8 @@ export class FeedSyncService {
 		};
 	}
 
-	async queueSyncAllFeeds(userId: string) {
-		const didQueue = await queueManualSyncAllFeeds(this.redis, userId);
+	async queueSyncAllFeeds(userId: string, scope: ManualSyncScope = {}) {
+		const didQueue = await queueManualSyncAllFeeds(this.redis, userId, scope);
 		if (!didQueue) {
 			return { accepted: true, alreadyQueued: true };
 		}
@@ -598,8 +574,16 @@ export class FeedSyncService {
 		const stopHeartbeat = startManualSyncAllFeedsHeartbeat(this.redis, userId);
 
 		try {
+			const scope = await getManualSyncAllFeedsRequest(this.redis, userId);
+			await updateManualSyncAllFeedsProgress(this.redis, userId, {
+				totalFeeds: 0,
+				completedFeeds: 0,
+				newArticles: 0,
+			});
 			logger.info('Starting queued bulk feed sync', { userId });
-			const result = await this.syncAllFeeds(userId);
+			const result = await this.syncAllFeeds(userId, scope, (progress) =>
+				updateManualSyncAllFeedsProgress(this.redis, userId, progress),
+			);
 			logger.info('Queued bulk feed sync complete', { userId, ...result });
 			return { userId, skipped: false as const, result };
 		} finally {
@@ -660,7 +644,10 @@ export class FeedSyncService {
 	}
 
 	async queueArticleEnrichment(articleId: string) {
-		await this.articleRepo.queueEnrichments([articleId]);
+		// User-visible prefetch/open requests outrank the background queue.
+		// Pending enrichments are ordered by nextEnrichmentAt, so epoch zero
+		// moves this article to the front without requiring a schema change.
+		await this.articleRepo.queueEnrichments([articleId], new Date(0));
 	}
 
 	private async enrichArticlesInBackground(pendingEnrichments: PendingArticleEnrichment[]) {

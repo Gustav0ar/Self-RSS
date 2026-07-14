@@ -20,6 +20,9 @@ interface BulkSyncOptions<TFeed extends BulkSyncFeed> {
 	concurrency: number;
 	syncFeed: (feed: TFeed) => Promise<BulkSyncFeedResult | null>;
 	onFeedError?: (feed: TFeed, error: unknown) => void;
+	onProgress?: (
+		progress: BulkSyncResult & { completedFeeds: number; totalFeeds: number },
+	) => Promise<void> | void;
 }
 
 const BULK_SYNC_LOCK_RETRY_ATTEMPTS = 3;
@@ -52,12 +55,14 @@ export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 	concurrency,
 	syncFeed,
 	onFeedError,
+	onProgress,
 }: BulkSyncOptions<TFeed>): Promise<BulkSyncResult> {
 	let syncedFeeds = 0;
 	let failedFeeds = 0;
 	let skippedFeeds = 0;
 	let newArticles = 0;
 	let nextFeedIndex = 0;
+	let completedFeeds = 0;
 
 	const worker = async () => {
 		while (nextFeedIndex < feeds.length) {
@@ -81,6 +86,16 @@ export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 			} catch (error) {
 				failedFeeds += 1;
 				onFeedError?.(feed, error);
+			} finally {
+				completedFeeds += 1;
+				await onProgress?.({
+					syncedFeeds,
+					failedFeeds,
+					skippedFeeds,
+					newArticles,
+					completedFeeds,
+					totalFeeds: feeds.length,
+				});
 			}
 		}
 	};
