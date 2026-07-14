@@ -3,7 +3,6 @@ package com.selffeed.android.ui.components
 import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
@@ -37,7 +36,6 @@ class ReaderHtmlMediaStabilityTest {
             composeRule.activity.setShowWhenLocked(true)
             composeRule.activity.setTurnScreenOn(true)
         }
-        val pageFinished = CountDownLatch(1)
         val initialHeightReported = CountDownLatch(1)
         val mediaBurstFinished = CountDownLatch(1)
         val heightCallbacks = AtomicInteger(0)
@@ -79,28 +77,25 @@ class ReaderHtmlMediaStabilityTest {
                             },
                             "Android",
                         )
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                pageFinished.countDown()
-                            }
-                        }
-                        loadDataWithBaseURL(
-                            DefaultReaderDocumentBaseUrl,
-                            document,
-                            "text/html",
-                            "utf-8",
-                            DefaultReaderDocumentBaseUrl,
-                        )
                     }
                 },
                 onRelease = { it.releaseReaderResources() },
             )
         }
 
-        assertTrue("Reader HTML did not finish loading", pageFinished.await(30, TimeUnit.SECONDS))
+        composeRule.waitForIdle()
+        composeRule.runOnUiThread {
+            webView.loadDataWithBaseURL(
+                DefaultReaderDocumentBaseUrl,
+                document,
+                "text/html",
+                "utf-8",
+                DefaultReaderDocumentBaseUrl,
+            )
+        }
         assertTrue(
-            "The reader JavaScript bridge did not report its initial height",
-            initialHeightReported.await(10, TimeUnit.SECONDS),
+            "The attached reader WebView did not report its initial height",
+            initialHeightReported.await(30, TimeUnit.SECONDS),
         )
         SystemClock.sleep(350)
         heightCallbacks.set(0)
