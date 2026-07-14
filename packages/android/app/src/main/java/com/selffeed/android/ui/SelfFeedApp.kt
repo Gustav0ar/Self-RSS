@@ -140,6 +140,7 @@ data class SelfFeedAppActions(
     val onDismissImportSummary: () -> Unit = {},
     val onRefreshArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
+    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
     val onArticleDisplayed: (String) -> Unit,
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
@@ -373,6 +374,7 @@ fun SelfFeedApp(
         ArticleTabActions(
             onRefresh = actions.onRefreshArticles,
             onOpenArticle = actions.onOpenArticle,
+            onOpenArticleFromQueue = actions.onOpenArticleFromQueue,
             onToggleRead = actions.onToggleRead,
             onReadStateChanged = { articleId, previousRead ->
                 offerReadUndo(articleId, previousRead, !previousRead)

@@ -230,6 +230,10 @@ fun SelfFeedAppRoute(
                     }
                     appViewModel.openReaderFrom(origin)
                 },
+                onOpenArticleFromQueue = { articleId, queue ->
+                    articlesViewModel.openArticleFromQueue(articleId, queue)
+                    appViewModel.openReaderFrom(HomeTab.ARTICLES)
+                },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
                 onCloseArticle = {
                     articlesViewModel.closeArticle()

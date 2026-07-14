@@ -228,8 +228,13 @@ fun ArticlesTab(
                         isRead = isRead,
                         selected = state.selectedArticleId == article.id,
                         onClick = {
-                            actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
-                            actions.onOpenArticle(article.id)
+                            actions.onOpenArticleFromQueue(
+                                article.id,
+                                readerQueueForTappedArticle(
+                                    snapshot = pagedArticles.itemSnapshotList.items,
+                                    tappedArticle = article,
+                                ),
+                            )
                         },
                         onToggleRead = { read ->
                             actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
@@ -283,6 +288,15 @@ fun ArticlesTab(
 }
 
 private const val VISIBLE_ARTICLE_PREFETCH_LIMIT = 4
+
+internal fun readerQueueForTappedArticle(
+    snapshot: List<ArticleListItem>,
+    tappedArticle: ArticleListItem,
+): List<ArticleListItem> = if (snapshot.any { it.id == tappedArticle.id }) {
+    snapshot
+} else {
+    listOf(tappedArticle) + snapshot.filterNot { it.id == tappedArticle.id }
+}
 
 @Composable
 private fun OfflineArticlesBanner() {

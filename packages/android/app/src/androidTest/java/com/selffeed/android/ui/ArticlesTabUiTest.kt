@@ -71,7 +71,7 @@ class ArticlesTabUiTest {
     }
 
     @Test
-    fun articlesTab_openingArticleClearsPreviousSelection() {
+	fun articlesTab_openingArticleClearsPreviousSelection() {
         var openedArticleId: String? = null
 
         composeRule.setContent {
@@ -92,7 +92,38 @@ class ArticlesTabUiTest {
                         onArticleSnapshot = {},
                     ),
                 )
-            }
+	}
+
+	@Test
+	fun articlesTab_opensVisibleArticleWithItsReaderQueueAtomically() {
+		var openedArticleId: String? = null
+		var openedQueue: List<ArticleListItem> = emptyList()
+		val article = sampleArticle("article-1", "Visible Article")
+
+		composeRule.setContent {
+			SelfFeedTheme {
+				ArticlesTabWithStaticPaging(
+					state = ArticleTabState(
+						articles = listOf(article),
+						selectedArticleId = null,
+						isSyncingFeeds = false,
+					),
+					actions = noOpArticleActions().copy(
+						onOpenArticleFromQueue = { id, queue ->
+							openedArticleId = id
+							openedQueue = queue
+						},
+					),
+				)
+			}
+		}
+
+		composeRule.onNodeWithText("Visible Article").performClick()
+		composeRule.runOnIdle {
+			assertEquals("article-1", openedArticleId)
+			assertEquals(listOf("article-1"), openedQueue.map { it.id })
+		}
+	}
         }
 
         // Click on the second article

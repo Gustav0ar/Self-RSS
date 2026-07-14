@@ -49,6 +49,7 @@ data class ArticleTabState(
 data class ArticleTabActions(
     val onRefresh: () -> Unit,
     val onOpenArticle: (String) -> Unit,
+    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
     val onToggleRead: (String, Boolean) -> Unit,
     val onReadStateChanged: (String, Boolean) -> Unit = { _, _ -> },
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,

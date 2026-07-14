@@ -163,7 +163,7 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `openArticle selects retained row immediately while detail fetch is pending`() = runTest {
+	fun `openArticle selects retained row immediately while detail fetch is pending`() = runTest {
         val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
         coEvery { repository.article("a2", false) } coAnswers { detailResult.await() }
         val viewModel = createViewModel()
@@ -187,7 +187,23 @@ class ArticlesViewModelTest {
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Fetched Second Article", viewModel.state.value.selectedArticle?.title)
         coVerify { repository.markRead("a2", true, "auto_open") }
-    }
+	}
+
+	@Test
+	fun `openArticleFromQueue selects tapped row when synchronized list state is empty`() = runTest {
+		val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
+		coEvery { repository.article("a2", false) } coAnswers { detailResult.await() }
+		val viewModel = createViewModel()
+		val tappedArticle = sampleArticle("a2", title = "Visible during reconciliation")
+
+		viewModel.updateArticleQueueSnapshot(emptyList())
+		viewModel.openArticleFromQueue("a2", listOf(tappedArticle))
+		runCurrent()
+
+		assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+		assertEquals("Visible during reconciliation", viewModel.state.value.selectedArticle?.title)
+		detailResult.complete(AppResult.Success(sampleDetail("a2")))
+	}
 
     @Test
     fun `openArticle ignores stale detail response from an older tap`() = runTest {
