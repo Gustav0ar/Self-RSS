@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -79,7 +80,6 @@ fun ArticlesTab(
 ) {
     val listState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
-    val density = LocalDensity.current
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
     var wasRefreshing by remember { mutableStateOf(false) }
     val readStateOverrides = remember(state.articles) {
@@ -92,8 +92,8 @@ fun ArticlesTab(
     // begins after that background job publishes new data. Treat both phases
     // as one refresh so Material switches from the stationary pull arrow to
     // its indeterminate animated spinner immediately and keeps it moving.
-    val isRefreshing = state.isSyncingFeeds || (isPagingInitialLoad && articleCount > 0)
-    val isEmpty = articleCount == 0 && !isPagingInitialLoad && !isRefreshing && !state.isSyncingFeeds
+    val isRefreshing = state.isStartingFeedSync || state.isSyncingFeeds || isPagingInitialLoad
+    val isEmpty = articleCount == 0 && !isRefreshing
 
     LaunchedEffect(isRefreshing, articleCount) {
         if (!wasRefreshing && isRefreshing && listState.firstVisibleItemIndex == 0) {
@@ -124,7 +124,9 @@ fun ArticlesTab(
             // render as a single static dot, which is what the user
             // sees as a "frozen spinner" during refresh.
             PullToRefreshDefaults.Indicator(
-                modifier = Modifier.align(Alignment.TopCenter),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .testTag("articles-refresh-indicator"),
                 isRefreshing = isRefreshing,
                 state = pullToRefreshState,
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -134,51 +136,18 @@ fun ArticlesTab(
     ) {
         LazyColumn(
             state = listState,
+            // PullToRefreshBox draws its indicator above this list. Keep the
+            // content at its normal position instead of translating it with
+            // the pull distance; otherwise the active spinner appears to
+            // reserve vertical space even though it is an overlay.
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    val progress = pullToRefreshState.distanceFraction
-                    if (progress > 0f) {
-                        // Create the "rubber band" effect by offsetting and scaling the list
-                        translationY = with(density) {
-                            val offset = if (progress <= 1f) {
-                                progress * 80.dp.toPx()
-                            } else {
-                                // Resistive pull beyond threshold
-                                80.dp.toPx() + (progress - 1f) * 24.dp.toPx()
-                            }
-                            offset
-                        }
-
-                        val scale = 1f + (progress * 0.01f).coerceAtMost(0.015f)
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                },
+                .testTag("articles-list"),
             verticalArrangement = Arrangement.Top,
         ) {
             if (state.isOffline) {
                 item(key = "articles-offline-status") {
                     OfflineArticlesBanner()
-                }
-            }
-
-            if (state.isSyncingFeeds) {
-                item(key = "articles-background-sync") {
-                    FeedRefreshBanner()
-                }
-            }
-
-            if (isPagingInitialLoad && articleCount == 0) {
-                item(key = "articles-loading") {
-                    Box(
-                        modifier = Modifier
-                            .fillParentMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                    }
                 }
             }
 
@@ -331,25 +300,6 @@ private fun OfflineArticlesBanner() {
             modifier = Modifier.padding(12.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-    }
-}
-
-@Composable
-private fun FeedRefreshBanner() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .semantics { liveRegion = LiveRegionMode.Polite },
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Text(
-            text = "Refreshing feeds in the background. New articles will appear as they arrive.",
-            modifier = Modifier.padding(12.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
         )
     }
 }

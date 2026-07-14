@@ -53,6 +53,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -230,7 +231,10 @@ fun SelfFeedApp(
     LaunchedEffect(statusMessage) {
         statusMessage?.let {
             actions.onClearMessages()
-            snackbarHostState.showSnackbar(it)
+            snackbarHostState.showSnackbar(
+                message = it,
+                duration = SnackbarDuration.Short,
+            )
         }
     }
 
@@ -292,11 +296,11 @@ fun SelfFeedApp(
     }
     val articleTabState = remember(
         articleQueue,
-            selectedArticle?.id,
-            state.feeds.loading,
-            state.feeds.syncInBackground,
-            state.isOnline,
-            state.feeds.feeds.size,
+        selectedArticle?.id,
+        state.feeds.loading,
+        state.feeds.syncInBackground,
+        state.isOnline,
+        state.feeds.feeds.size,
         state.articles.loading,
         state.settings.preferences?.density,
     ) {
@@ -304,6 +308,7 @@ fun SelfFeedApp(
             articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
             isSyncingFeeds = state.feeds.syncInBackground,
+            isStartingFeedSync = state.feeds.loading,
             density = DensityPreference.fromApiValue(state.settings.preferences?.density),
             isOffline = !state.isOnline,
             feedCount = state.feeds.feeds.size,
