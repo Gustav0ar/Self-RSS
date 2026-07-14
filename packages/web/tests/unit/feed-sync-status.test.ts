@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { REFRESH_INTERVALS } from '../../src/lib/constants';
 import {
 	buildAllFeedsRefreshActivity,
 	type FeedSyncAllStatus,
+	getFeedSyncStatusPollInterval,
 	hasFreshInactiveFeedSyncStatus,
 } from '../../src/lib/feed-sync-status';
 
@@ -100,5 +102,18 @@ describe('feed sync status reconciliation', () => {
 			isTakingLonger: false,
 			shouldShowStatus: false,
 		});
+	});
+
+	it('rechecks long-running background syncs often enough to clear stale feedback promptly', () => {
+		expect(
+			getFeedSyncStatusPollInterval({
+				queued: false,
+				running: true,
+				active: true,
+				stale: true,
+				startedAt: new Date(Date.now() - 90_000).toISOString(),
+			}),
+		).toBe(REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS);
+		expect(REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS).toBeLessThanOrEqual(5_000);
 	});
 });
