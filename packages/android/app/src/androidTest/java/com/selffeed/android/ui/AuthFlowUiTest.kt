@@ -158,7 +158,8 @@ class AuthFlowUiTest {
         composeRule.onNodeWithText("Server").performTextInput("rss.example.com")
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
-        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.onNodeWithText("Continue").performScrollTo().assertIsDisplayed().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { capturedServers.isNotEmpty() }
 
         assert(capturedServers.last() == "rss.example.com") { "Submitted server should match input" }
     }
