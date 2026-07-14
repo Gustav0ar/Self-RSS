@@ -15,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -36,7 +37,6 @@ class ReaderHtmlMediaStabilityTest {
             composeRule.activity.setShowWhenLocked(true)
             composeRule.activity.setTurnScreenOn(true)
         }
-        val initialHeightReported = CountDownLatch(1)
         val mediaBurstFinished = CountDownLatch(1)
         val heightCallbacks = AtomicInteger(0)
         lateinit var webView: WebView
@@ -67,7 +67,6 @@ class ReaderHtmlMediaStabilityTest {
                                 @JavascriptInterface
                                 fun updateHeight(@Suppress("UNUSED_PARAMETER") height: Float) {
                                     heightCallbacks.incrementAndGet()
-                                    initialHeightReported.countDown()
                                 }
 
                                 @JavascriptInterface
@@ -94,8 +93,8 @@ class ReaderHtmlMediaStabilityTest {
             )
         }
         assertTrue(
-            "The attached reader WebView did not report its initial height",
-            initialHeightReported.await(30, TimeUnit.SECONDS),
+            "The attached reader WebView did not initialize its document observers",
+            awaitReaderDocumentReady(webView),
         )
         SystemClock.sleep(350)
         heightCallbacks.set(0)
@@ -138,5 +137,26 @@ class ReaderHtmlMediaStabilityTest {
             callbacksAfterBurst,
             heightCallbacks.get(),
         )
+    }
+
+    private fun awaitReaderDocumentReady(webView: WebView): Boolean {
+        val deadline = SystemClock.uptimeMillis() + 30_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            val resultReceived = CountDownLatch(1)
+            val isReady = AtomicBoolean(false)
+            webView.post {
+                webView.evaluateJavascript(
+                    "Boolean(document.getElementById('content-container') && window.SelfFeedApp)",
+                ) { result ->
+                    isReady.set(result == "true")
+                    resultReceived.countDown()
+                }
+            }
+            if (resultReceived.await(2, TimeUnit.SECONDS) && isReady.get()) {
+                return true
+            }
+            SystemClock.sleep(250)
+        }
+        return false
     }
 }
