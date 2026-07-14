@@ -163,7 +163,7 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `markRead with successful server response invalidates the article cache`() = runTest {
+    fun `markRead with successful server response retains the warmed article cache`() = runTest {
         val articleId = "article-2"
         val detail = sampleArticleDetail(id = articleId, isRead = false)
         coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
@@ -181,8 +181,7 @@ class RssRepositoryTest {
         val result = repository.markRead(articleId, true)
         assertTrue(result is AppResult.Success)
 
-        // Optimistic update followed by detail cache invalidation means the
-        // server's truth is what we'll read on the next fetch.
+        assertEquals(true, repository.cachedArticleDetail(articleId)?.isRead)
         coVerify { api.markRead(articleId, MarkReadRequest(read = true)) }
     }
 
@@ -203,7 +202,7 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `read state cache invalidation keeps retained article query rows`() = runTest {
+    fun `read state persistence keeps the active paging source valid`() = runTest {
         val articleId = "article-retained"
         val queryKey = ArticlePageQuery(unreadOnly = true).remoteKey()
         localStore.writeArticleRemotePage(
@@ -212,10 +211,13 @@ class RssRepositoryTest {
             clearExisting = true,
         )
 
+        val pagingSource = localStore.articlePagingSource(queryKey)
         repository.updateCachedReadState(articleId, read = true)
         repository.invalidateReadStateCaches(articleId)
 
-        val page = localStore.articlePagingSource(queryKey).load(
+        assertEquals(false, pagingSource.invalid)
+        assertEquals(mapOf(articleId to true), localStore.readArticleReadOverrides())
+        val page = pagingSource.load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -223,7 +225,34 @@ class RssRepositoryTest {
             ),
         ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
         assertEquals(listOf(articleId), page.data.map { it.id })
-        assertTrue(page.data.first().isRead)
+        assertEquals(false, page.data.first().isRead)
+    }
+
+    @Test
+    fun `realtime content invalidation retains the active Room queue`() = runTest {
+        val queryKey = ArticlePageQuery(unreadOnly = true).remoteKey()
+        localStore.writeArticleRemotePage(
+            queryKey = queryKey,
+            payload = ApiListResponse(
+                data = listOf(sampleArticle("article-visible")),
+                cursor = null,
+                hasMore = false,
+            ),
+            clearExisting = true,
+        )
+        val pagingSource = localStore.articlePagingSource(queryKey)
+
+        repository.invalidateArticleContentCaches()
+
+        assertEquals(false, pagingSource.invalid)
+        val page = pagingSource.load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertEquals(listOf("article-visible"), page.data.map { it.id })
     }
 
     @Test
@@ -251,7 +280,8 @@ class RssRepositoryTest {
             ),
         ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
         assertEquals(listOf("article-bulk-read"), page.data.map { it.id })
-        assertTrue(page.data.first().isRead)
+        assertEquals(false, page.data.first().isRead)
+        assertEquals(mapOf("article-bulk-read" to true), localStore.readArticleReadOverrides())
     }
 
     @Test

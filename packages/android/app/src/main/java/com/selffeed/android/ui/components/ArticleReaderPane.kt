@@ -42,6 +42,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,15 +67,18 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.formatPublishedAt
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArticleReaderPane(
     articles: List<ArticleListItem>,
     selectedArticle: ArticleDetail,
+    prefetchedArticles: Map<String, ArticleDetail> = emptyMap(),
     onOpenOriginal: (ArticleDetail) -> Unit,
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
+    onVisibleArticleChanged: (String) -> Unit = {},
     onArticleDisplayed: (String) -> Unit = {},
     appearance: ReaderAppearance = ReaderAppearance(),
     preferHtml: Boolean = selectedArticle.contentHtml?.isNotBlank() == true,
@@ -91,6 +96,7 @@ fun ArticleReaderPane(
     if (readerArticles.isEmpty() || selectedArticleIndex == -1) {
         ArticleDetailView(
             article = selectedArticle,
+            isActive = true,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
             preferHtml = preferHtml,
@@ -103,6 +109,9 @@ fun ArticleReaderPane(
     val pagerState = rememberPagerState(initialPage = selectedArticleIndex) {
         readerArticles.size
     }
+    val latestSelectedArticleId by rememberUpdatedState(selectedArticle.id)
+    val latestOnArticleSelected by rememberUpdatedState(onArticleSelected)
+    val latestOnVisibleArticleChanged by rememberUpdatedState(onVisibleArticleChanged)
 
     LaunchedEffect(selectedArticle.id, readerArticles) {
         val targetPage = readerArticles.indexOfFirst { it.id == selectedArticle.id }
@@ -111,31 +120,58 @@ fun ArticleReaderPane(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage, readerArticles) {
+    LaunchedEffect(pagerState, readerArticles) {
         // Guard against the article list shrinking while the user is mid-swipe
         // (e.g. SSE event marks-read + hideRead removes the current article
         // from the list). Without this bounds check the previous code threw
         // IndexOutOfBoundsException on the next frame.
-        if (readerArticles.isEmpty()) return@LaunchedEffect
-        val page = pagerState.currentPage.coerceIn(0, readerArticles.lastIndex)
-        val articleId = readerArticles[page].id
-        if (articleId != selectedArticle.id) {
-            onArticleSelected(articleId)
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { settledPage ->
+                if (readerArticles.isEmpty()) return@collect
+                val page = settledPage.coerceIn(0, readerArticles.lastIndex)
+                val articleId = readerArticles[page].id
+                if (articleId != latestSelectedArticleId) {
+                    latestOnArticleSelected(articleId)
+                }
+            }
+    }
+
+    LaunchedEffect(pagerState, readerArticles) {
+        snapshotFlow { pagerState.currentPage }
+            .distinctUntilChanged()
+            .collect { currentPage ->
+                if (readerArticles.isEmpty()) return@collect
+                val page = currentPage.coerceIn(0, readerArticles.lastIndex)
+                latestOnVisibleArticleChanged(readerArticles[page].id)
+            }
+    }
+
+    val selectedDetails = remember(selectedArticle, prefetchedArticles) {
+        prefetchedArticles.toMutableMap().apply {
+            put(
+                selectedArticle.id,
+                get(selectedArticle.id)?.withNonRegressiveReaderContent(selectedArticle)
+                    ?: selectedArticle,
+            )
         }
     }
 
     HorizontalPager(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
-        beyondViewportPageCount = 1,
+        beyondViewportPageCount = 2,
+        key = { page -> readerArticles[page].id },
     ) { page ->
         if (readerArticles.isEmpty()) return@HorizontalPager
         val articleItem = readerArticles[page]
-        if (articleItem.id == selectedArticle.id) {
+        val article = selectedDetails[articleItem.id]
+        if (article != null) {
             ArticleDetailView(
-                article = selectedArticle,
-                onOpenOriginal = { onOpenOriginal(selectedArticle) },
-                onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+                article = article,
+                isActive = articleItem.id == selectedArticle.id,
+                onOpenOriginal = { onOpenOriginal(article) },
+                onDisplayed = { onArticleDisplayed(article.id) },
                 preferHtml = preferHtml,
                 onPreferHtmlChanged = onPreferHtmlChanged,
                 appearance = appearance,
@@ -151,6 +187,7 @@ fun ArticleReaderPane(
 @Composable
 private fun ArticleDetailView(
     article: ArticleDetail,
+    isActive: Boolean,
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
     preferHtml: Boolean,
@@ -170,8 +207,8 @@ private fun ArticleDetailView(
     var fullscreenMedia by remember { mutableStateOf<FullscreenMediaView?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
 
-    LaunchedEffect(article.id) {
-        onDisplayed()
+    LaunchedEffect(article.id, isActive) {
+        if (isActive) onDisplayed()
     }
 
     val backgroundColor = MaterialTheme.colorScheme.background
@@ -347,6 +384,7 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .testTag("reader-loading-${article.id}")
             .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {

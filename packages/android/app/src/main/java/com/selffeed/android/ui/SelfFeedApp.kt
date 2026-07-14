@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
@@ -141,6 +142,7 @@ data class SelfFeedAppActions(
     val onRefreshArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
     val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
+    val onReaderPageChanged: (String) -> Unit = {},
     val onArticleDisplayed: (String) -> Unit,
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
@@ -177,6 +179,7 @@ fun SelfFeedApp(
     val selectedArticle = state.articles.selectedArticle
     val selectedFeedId = state.articles.selectedFeedId
     val selectedCategoryId = state.articles.selectedCategoryId
+    val readerFeedTitle = state.articles.currentReaderFeedTitle()
     val readStateOverrides by readStateOverrides.collectAsStateWithLifecycle()
     var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
     val offerReadUndo: (String, Boolean, Boolean) -> Unit = remember(actions, snackbarHostState, scope) {
@@ -198,6 +201,7 @@ fun SelfFeedApp(
     val topBarLabel = remember(
         activeTab,
         selectedArticle,
+        readerFeedTitle,
         selectedFeedId,
         selectedCategoryId,
         state.feeds.feeds,
@@ -206,6 +210,7 @@ fun SelfFeedApp(
         topBarLabel(
             activeTab = activeTab,
             selectedArticle = selectedArticle,
+            readerFeedTitle = readerFeedTitle,
             selectedFeedId = selectedFeedId,
             selectedCategoryId = selectedCategoryId,
             feeds = state.feeds.feeds,
@@ -260,6 +265,10 @@ fun SelfFeedApp(
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
+    // This state belongs to the list session, not the compact list NavEntry.
+    // Keeping it above list/detail navigation preserves the exact viewport
+    // when the list pane leaves composition while the reader is open.
+    val articleListState = rememberLazyListState()
     val articleSnapshot = articlePagingItems.itemSnapshotList.items
     val articleRefreshState = articlePagingItems.loadState.refresh
     LaunchedEffect(articleSnapshot, articleRefreshState) {
@@ -410,6 +419,7 @@ fun SelfFeedApp(
             ArticleReaderPane(
                 articles = articleQueue,
                 selectedArticle = article,
+                prefetchedArticles = state.articles.readerDetails,
                 onOpenOriginal = { openedArticle ->
                     openedArticle.canonicalUrl?.let { url ->
                         openExternalUrl(context, url)
@@ -417,6 +427,7 @@ fun SelfFeedApp(
                 },
                 onBackToList = actions.onCloseArticle,
                 onArticleSelected = actions.onOpenArticle,
+                onVisibleArticleChanged = actions.onReaderPageChanged,
                 onArticleDisplayed = actions.onArticleDisplayed,
                 appearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance(),
                 preferHtml = preferHtml,
@@ -491,7 +502,26 @@ fun SelfFeedApp(
                                 selectedArticleId = selectedArticle?.id,
                                 initialPreferHtml = selectedArticle?.contentHtml?.isNotBlank() == true,
                                 onCloseArticle = actions.onCloseArticle,
-                                listContent = { ArticlesTab(articleTabState, articleActions, articlePagingItems) },
+                                listContent = { openReaderImmediately ->
+                                    val immediateArticleActions = remember(articleActions, openReaderImmediately) {
+                                        articleActions.copy(
+                                            onOpenArticle = { articleId ->
+                                                openReaderImmediately()
+                                                articleActions.onOpenArticle(articleId)
+                                            },
+                                            onOpenArticleFromQueue = { articleId, queue ->
+                                                openReaderImmediately()
+                                                articleActions.onOpenArticleFromQueue(articleId, queue)
+                                            },
+                                        )
+                                    }
+                                    ArticlesTab(
+                                        state = articleTabState,
+                                        actions = immediateArticleActions,
+                                        pagedArticles = articlePagingItems,
+                                        listState = articleListState,
+                                    )
+                                },
                                 detailContent = readerContent,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -688,13 +718,14 @@ private fun AppBottomBar(
 private fun topBarLabel(
     activeTab: HomeTab,
     selectedArticle: ArticleDetail?,
+    readerFeedTitle: String?,
     selectedFeedId: String?,
     selectedCategoryId: String?,
     feeds: List<FeedWithCounts>,
     categories: List<CategoryWithCounts>,
 ): String = when (activeTab) {
     HomeTab.ARTICLES -> when {
-        selectedArticle != null -> selectedArticle.feedTitle
+        selectedArticle != null -> readerFeedTitle ?: selectedArticle.feedTitle
         selectedFeedId != null -> feeds.find { it.id == selectedFeedId }?.title ?: "Feed"
         selectedCategoryId != null -> categories.find { it.id == selectedCategoryId }?.name ?: "Category"
         else -> "All Feeds"
@@ -703,6 +734,14 @@ private fun topBarLabel(
     HomeTab.FEEDS -> "Manage Feeds"
     HomeTab.SETTINGS -> "Settings"
     HomeTab.STATS -> "Stats"
+}
+
+internal fun ArticlesUiState.currentReaderFeedTitle(): String? {
+    val articleId = visibleReaderArticleId ?: selectedArticle?.id ?: return null
+    return readerQueue.firstOrNull { it.id == articleId }?.feedTitle
+        ?: readerDetails[articleId]?.feedTitle
+        ?: items.firstOrNull { it.id == articleId }?.feedTitle
+        ?: selectedArticle?.takeIf { it.id == articleId }?.feedTitle
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

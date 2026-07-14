@@ -19,6 +19,7 @@ object LocalTables {
     const val ARTICLE_QUERY_ENTRIES = "article_query_entries"
     const val ARTICLE_REMOTE_KEYS = "article_remote_keys"
     const val PENDING_READ_STATE_MUTATIONS = "pending_read_state_mutations"
+    const val ARTICLE_READ_OVERRIDES = "article_read_overrides"
     const val ARTICLE_DETAILS = "article_details"
 }
 
@@ -111,6 +112,14 @@ data class PendingReadStateMutationEntity(
     val updatedAt: Long,
 )
 
+/** A durable presentation overlay that does not invalidate article paging rows. */
+@Entity(tableName = LocalTables.ARTICLE_READ_OVERRIDES)
+data class ArticleReadOverrideEntity(
+    @PrimaryKey val articleId: String,
+    val read: Boolean,
+    val updatedAt: Long,
+)
+
 @Entity(
     tableName = LocalTables.ARTICLE_DETAILS,
     indices = [Index("feedId"), Index("writtenAt")],
@@ -176,11 +185,19 @@ interface LocalStoreDao {
     @Query("DELETE FROM pending_read_state_mutations WHERE articleId = :articleId")
     suspend fun deletePendingReadStateMutation(articleId: String)
 
-    @Query("UPDATE articles SET isRead = :read WHERE id = :articleId")
-    suspend fun updateArticleReadState(articleId: String, read: Boolean)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleReadOverride(override: ArticleReadOverrideEntity)
 
-    @Query("UPDATE articles SET isRead = 1 WHERE feedId IN (:feedIds)")
-    suspend fun markArticlesReadByFeeds(feedIds: List<String>)
+    @Query("SELECT * FROM article_read_overrides")
+    suspend fun readArticleReadOverrides(): List<ArticleReadOverrideEntity>
+
+    @Query(
+        """
+        INSERT OR REPLACE INTO article_read_overrides(articleId, read, updatedAt)
+        SELECT id, 1, :updatedAt FROM articles WHERE feedId IN (:feedIds)
+        """,
+    )
+    suspend fun markArticleReadOverridesByFeeds(feedIds: List<String>, updatedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleDetail(detail: ArticleDetailEntity)
@@ -209,6 +226,9 @@ interface LocalStoreDao {
     @Query("DELETE FROM pending_read_state_mutations")
     suspend fun clearPendingReadStateMutations()
 
+    @Query("DELETE FROM article_read_overrides")
+    suspend fun clearArticleReadOverrides()
+
     @Query("DELETE FROM article_details")
     suspend fun clearArticleDetails()
 }
@@ -221,6 +241,7 @@ interface LocalStoreDao {
         ArticleQueryEntryEntity::class,
         ArticleRemoteKeyEntity::class,
         PendingReadStateMutationEntity::class,
+        ArticleReadOverrideEntity::class,
         ArticleDetailEntity::class,
     ],
     version = LOCAL_DATABASE_VERSION,

@@ -112,7 +112,7 @@ class LocalStore(
 
     suspend fun queueReadStateMutation(articleId: String, read: Boolean) {
         database.withTransaction {
-            dao.updateArticleReadState(articleId, read)
+            dao.upsertArticleReadOverride(articleId.toReadOverride(read))
             dao.upsertPendingReadStateMutation(
                 PendingReadStateMutationEntity(
                     articleId = articleId,
@@ -121,19 +121,22 @@ class LocalStore(
                 ),
             )
         }
-        notifyInvalidation(TABLE_ARTICLES)
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
     }
 
     suspend fun updateArticleReadState(articleId: String, read: Boolean) {
-        dao.updateArticleReadState(articleId, read)
-        notifyInvalidation(TABLE_ARTICLES)
+        dao.upsertArticleReadOverride(articleId.toReadOverride(read))
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
     }
+
+    suspend fun readArticleReadOverrides(): Map<String, Boolean> =
+        dao.readArticleReadOverrides().associate { it.articleId to it.read }
 
     suspend fun markArticlesReadByFeeds(feedIds: Collection<String>) {
         val ids = feedIds.distinct()
         if (ids.isEmpty()) return
-        dao.markArticlesReadByFeeds(ids)
-        notifyInvalidation(TABLE_ARTICLES)
+        dao.markArticleReadOverridesByFeeds(ids, System.currentTimeMillis())
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
     }
 
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =
@@ -180,6 +183,7 @@ class LocalStore(
         dao.clearArticleQueryEntries()
         dao.clearArticleRemoteKeys()
         dao.clearPendingReadStateMutations()
+        dao.clearArticleReadOverrides()
         dao.clearArticleDetails()
         notifyInvalidation("all")
     }
@@ -194,6 +198,7 @@ class LocalStore(
                 dao.clearArticleRemoteKeys()
             }
             TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
+            TABLE_ARTICLE_READ_OVERRIDES -> dao.clearArticleReadOverrides()
             else -> return
         }
         notifyInvalidation(table)
@@ -294,6 +299,13 @@ class LocalStore(
             contentVersion = contentVersion,
         )
 
+    private fun String.toReadOverride(read: Boolean): ArticleReadOverrideEntity =
+        ArticleReadOverrideEntity(
+            articleId = this,
+            read = read,
+            updatedAt = System.currentTimeMillis(),
+        )
+
     private fun ArticleEntity.toModel(): ArticleListItem =
         ArticleListItem(
             id = id,
@@ -316,6 +328,7 @@ class LocalStore(
         const val TABLE_CATEGORIES = LocalTables.CATEGORIES
         const val TABLE_FEEDS = LocalTables.FEEDS
         const val TABLE_ARTICLES = LocalTables.ARTICLES
+        const val TABLE_ARTICLE_READ_OVERRIDES = LocalTables.ARTICLE_READ_OVERRIDES
         const val TABLE_ARTICLE_DETAILS = LocalTables.ARTICLE_DETAILS
 
         private const val MAX_ARTICLE_DETAIL_AGE_MS = 7L * 24 * 60 * 60 * 1000

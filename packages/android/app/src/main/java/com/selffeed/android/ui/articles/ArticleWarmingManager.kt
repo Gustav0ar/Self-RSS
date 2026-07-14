@@ -2,12 +2,13 @@ package com.selffeed.android.ui.articles
 
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.ArticleRepository
+import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.job
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,12 +22,16 @@ class ArticleWarmingManager @Inject constructor(
     private val repository: ArticleRepository,
 ) {
     private var scope: CoroutineScope? = null
-    private var warmNextArticlesJob: Job? = null
-    private var warmVisibleArticlesJob: Job? = null
+    private val warmingJobs = mutableMapOf<String, Job>()
     private var lastVisibleArticleIds: List<String> = emptyList()
+    private var onArticlesWarmed: (List<ArticleDetail>) -> Unit = {}
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
+    }
+
+    fun setOnArticlesWarmed(callback: (List<ArticleDetail>) -> Unit) {
+        onArticlesWarmed = callback
     }
 
     /**
@@ -48,25 +53,7 @@ class ArticleWarmingManager @Inject constructor(
         val articlesToWarm = (next + previous).distinctBy { it.id }
         if (articlesToWarm.isEmpty()) return
 
-        // Prefetch hero images for all articles to warm
-        repository.prefetchHeroImages(articlesToWarm.map { it.heroImageUrl })
-
-        warmNextArticlesJob?.cancel()
-        warmNextArticlesJob = scope?.launch {
-            // Detail fetches run concurrently and are intentionally decoupled
-            // from canonical enrichment. A slow publisher must never block the
-            // next swipe target from entering memory/disk cache.
-            val details = articlesToWarm.map { article ->
-                async {
-                    repository.cachedArticleDetail(article.id)
-                        ?: when (val prefetched = repository.prefetchArticle(article.id)) {
-                            is AppResult.Success -> prefetched.data
-                            is AppResult.Error -> null
-                        }
-                }
-            }.awaitAll()
-            repository.prefetchHeroImages(details.map { it?.heroImageUrl })
-        }
+        warmArticles(articlesToWarm, enrichPending = true)
     }
 
     /**
@@ -80,39 +67,68 @@ class ArticleWarmingManager @Inject constructor(
         if (candidateIds.isEmpty() || candidateIds == lastVisibleArticleIds) return
         lastVisibleArticleIds = candidateIds
 
-        repository.prefetchHeroImages(candidates.map { it.heroImageUrl })
-        warmVisibleArticlesJob?.cancel()
-        warmVisibleArticlesJob = scope?.launch {
-            val details = candidates.map { article ->
-                async {
-                    repository.cachedArticleDetail(article.id)
-                        ?: when (val prefetched = repository.prefetchArticle(article.id)) {
-                            is AppResult.Success -> prefetched.data
-                            is AppResult.Error -> null
-                        }
-                }
-            }.awaitAll()
-            repository.prefetchHeroImages(details.map { it?.heroImageUrl })
-            details
-                .filter { it?.contentStatus == "enrichment_pending" }
-                .forEach { detail -> repository.enrichArticle(detail!!.id, invalidateCaches = false) }
-        }
+        warmArticles(candidates, enrichPending = true)
     }
 
     /**
      * Cancels any pending warming job.
      */
     fun cancelWarming() {
-        warmNextArticlesJob?.cancel()
-        warmNextArticlesJob = null
-        warmVisibleArticlesJob?.cancel()
-        warmVisibleArticlesJob = null
+        warmingJobs.values.forEach(Job::cancel)
+        warmingJobs.clear()
         lastVisibleArticleIds = emptyList()
     }
 
+    private fun warmArticles(candidates: List<ArticleListItem>, enrichPending: Boolean) {
+        repository.prefetchHeroImages(candidates.map { it.heroImageUrl })
+
+        val cached = candidates.mapNotNull { repository.cachedArticleDetail(it.id) }
+        publishWarmed(cached)
+
+        val activeScope = scope ?: return
+        candidates.forEach { article ->
+            if (cached.any { it.id == article.id } || warmingJobs[article.id]?.isActive == true) return@forEach
+
+            val job = activeScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val detail = when (val prefetched = repository.prefetchArticle(article.id)) {
+                        is AppResult.Success -> prefetched.data
+                        is AppResult.Error -> null
+                    }
+                    if (detail != null) {
+                        publishWarmed(listOf(detail))
+                        if (enrichPending && detail.contentStatus == "enrichment_pending") {
+                            repository.enrichArticle(detail.id, invalidateCaches = false)
+                        }
+                    }
+                } finally {
+                    warmingJobs.remove(article.id, coroutineContext.job)
+                }
+            }
+            warmingJobs[article.id] = job
+            job.start()
+        }
+    }
+
+    private fun publishWarmed(details: List<ArticleDetail>) {
+        if (details.isEmpty()) return
+        onArticlesWarmed(details)
+        repository.prefetchHeroImages(
+            details.flatMap { detail ->
+                buildList {
+                    add(detail.heroImageUrl)
+                    detail.media
+                        .asSequence()
+                        .filter { it.type == "image" }
+                        .mapTo(this) { it.url }
+                }
+            },
+        )
+    }
+
     private companion object {
-        const val NEXT_ARTICLE_WARM_LIMIT = 2
-        const val PREVIOUS_ARTICLE_WARM_LIMIT = 1
-        const val VISIBLE_ARTICLE_WARM_LIMIT = 4
+        const val NEXT_ARTICLE_WARM_LIMIT = 6
+        const val PREVIOUS_ARTICLE_WARM_LIMIT = 4
+        const val VISIBLE_ARTICLE_WARM_LIMIT = 8
     }
 }

@@ -111,7 +111,6 @@ class ReadStateManager @Inject constructor(
                 is AppResult.Success -> {
                     val confirmed = result.data
                     rememberArticleReadState(articleId, confirmed)
-                    repository.updateCachedReadState(articleId, confirmed)
                     onConfirm(articleId, feedId, confirmed, previousReadState)
                 }
                 is AppResult.Error -> {
@@ -194,10 +193,11 @@ class ReadStateManager @Inject constructor(
         when (event) {
             is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
             is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
-            is ArticlesNewEvent, is RealtimeConnectedEvent -> {
+            is ArticlesNewEvent -> {
                 repository.invalidateArticleContentCaches()
                 _events.emit(ArticleFeatureEvent.ArticlesChanged())
             }
+            is RealtimeConnectedEvent -> Unit
             is ArticleUpdatedEvent -> {
                 repository.invalidateArticleContentCaches(event.articleId)
                 _events.emit(ArticleFeatureEvent.ArticlesChanged(event.articleId))

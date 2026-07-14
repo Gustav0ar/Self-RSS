@@ -29,7 +29,7 @@ import kotlinx.serialization.Serializable
 data object ArticleListDestination : NavKey
 
 @Serializable
-data class ArticleDetailDestination(val articleId: String) : NavKey
+data object ArticleDetailDestination : NavKey
 
 /**
  * Navigation 3 owns the reader back stack. Its Material list-detail scene
@@ -42,29 +42,37 @@ fun ArticleListDetailNavigation(
     selectedArticleId: String?,
     initialPreferHtml: Boolean,
     onCloseArticle: () -> Unit,
-    listContent: @Composable () -> Unit,
+    listContent: @Composable (openReaderImmediately: () -> Unit) -> Unit,
     detailContent: @Composable (preferHtml: Boolean, onPreferHtmlChanged: (Boolean) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val backStack = rememberNavBackStack(ArticleListDestination)
-    // Navigation 3 replaces the detail entry when the selected id changes.
-    // Keep this session preference above that entry so Rich mode stays chosen
-    // while the next article's detail payload is loading.
+    // The detail entry represents the whole reader session, not one article.
+    // Keeping this destination stable is essential: replacing its key after a
+    // pager swipe disposes the pager and its WebViews, producing a visible
+    // one-frame flash after the swipe has already settled.
     var preferredHtml: Boolean? by rememberSaveable { mutableStateOf(null) }
     val preferHtml = preferredHtml ?: initialPreferHtml
+    val isReaderOpen = selectedArticleId != null
+    val openReaderImmediately: () -> Unit = remember(backStack) {
+        {
+            if (backStack.lastOrNull() != ArticleDetailDestination) {
+                backStack.add(ArticleDetailDestination)
+            }
+        }
+    }
 
-    LaunchedEffect(selectedArticleId) {
-        if (selectedArticleId == null) {
+    LaunchedEffect(isReaderOpen) {
+        if (!isReaderOpen) {
             preferredHtml = null
         } else if (preferredHtml == null) {
             preferredHtml = initialPreferHtml
         }
-        val detailDestination = selectedArticleId?.let(::ArticleDetailDestination)
-        val currentDetail = backStack.lastOrNull() as? ArticleDetailDestination
-        if (detailDestination == currentDetail) return@LaunchedEffect
+        val hasDetailDestination = backStack.lastOrNull() == ArticleDetailDestination
+        if (isReaderOpen == hasDetailDestination) return@LaunchedEffect
 
         while (backStack.size > 1) backStack.removeLastOrNull()
-        if (detailDestination != null) backStack.add(detailDestination)
+        if (isReaderOpen) backStack.add(ArticleDetailDestination)
     }
 
     val listDetailStrategy = rememberListDetailSceneStrategy<NavKey>()
@@ -81,7 +89,7 @@ fun ArticleListDetailNavigation(
                     detailPlaceholder = { ReaderPlaceholder() },
                 ),
             ) {
-                listContent()
+                listContent(openReaderImmediately)
             }
             entry<ArticleDetailDestination>(
                 metadata = ListDetailSceneStrategy.detailPane(),

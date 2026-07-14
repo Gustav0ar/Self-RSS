@@ -37,6 +37,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
@@ -283,38 +285,46 @@ class RssRepository @Inject constructor(
         readStateOverrides: () -> Map<String, Boolean>,
     ): Flow<PagingData<ArticleListItem>> {
         val queryKey = query.remoteKey()
-        return Pager(
-            config = PagingConfig(
-                pageSize = ARTICLE_PAGE_SIZE,
-                initialLoadSize = ARTICLE_PAGE_SIZE,
-                prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
-                enablePlaceholders = false,
-            ),
-            remoteMediator = ArticleRemoteMediator(
-                queryKey = queryKey,
-                forceInitialRefresh = query.generation > 0L,
-                localStore = localStore,
-                loadPage = { limit, cursor ->
-                    runtime.safeCall {
-                        runtime.withRetry {
-                            articleRemote.articles(
-                                feedId = query.feedId,
-                                categoryId = query.categoryId,
-                                unreadOnly = query.unreadOnly,
-                                sort = query.sort,
-                                limit = limit,
-                                cursor = cursor,
-                            )
-                        }
+        return flow {
+            // Snapshot durable overlays once per explicit query generation.
+            // Subsequent read receipts are rendered by the ViewModel's live
+            // override state and cannot structurally invalidate this Pager.
+            val durableReadStates = localStore.readArticleReadOverrides()
+            emitAll(
+                Pager(
+                    config = PagingConfig(
+                        pageSize = ARTICLE_PAGE_SIZE,
+                        initialLoadSize = ARTICLE_PAGE_SIZE,
+                        prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
+                        enablePlaceholders = false,
+                    ),
+                    remoteMediator = ArticleRemoteMediator(
+                        queryKey = queryKey,
+                        forceInitialRefresh = query.generation > 0L,
+                        localStore = localStore,
+                        loadPage = { limit, cursor ->
+                            runtime.safeCall {
+                                runtime.withRetry {
+                                    articleRemote.articles(
+                                        feedId = query.feedId,
+                                        categoryId = query.categoryId,
+                                        unreadOnly = query.unreadOnly,
+                                        sort = query.sort,
+                                        limit = limit,
+                                        cursor = cursor,
+                                    )
+                                }
+                            }
+                        },
+                    ),
+                    pagingSourceFactory = { localStore.articlePagingSource(queryKey) },
+                ).flow.map { pagingData ->
+                    val readStates = durableReadStates + readStateOverrides()
+                    pagingData.map { article ->
+                        readStates[article.id]?.let { article.copy(isRead = it) } ?: article
                     }
                 },
-            ),
-            pagingSourceFactory = { localStore.articlePagingSource(queryKey) },
-        ).flow.map { pagingData ->
-            val readStates = readStateOverrides()
-            pagingData.map { article ->
-                readStates[article.id]?.let { article.copy(isRead = it) } ?: article
-            }
+            )
         }
     }
 
@@ -455,8 +465,8 @@ class RssRepository @Inject constructor(
         try {
             articleRemote.markRead(articleId, read, source).let { read }.also {
                 localStore.updateArticleReadState(articleId, read)
-                // The detail is now authoritative; refresh the cached body.
-                invalidateArticleDetailCache(articleId)
+                // A read receipt does not change article content. Keep the
+                // already-warmed detail so reopening remains instant.
                 runtime.invalidateByPrefix("stats")
             }
         } catch (e: Exception) {
@@ -609,10 +619,8 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun invalidateReadStateCaches(articleId: String?) {
-        if (articleId != null) {
-            runtime.invalidateByPrefix("article:$articleId")
-            offlineReadStore.clearArticleDetail(articleId)
-        }
+        // Read state is an overlay; never evict immutable article content or
+        // the visible list for a receipt arriving from another client.
         runtime.invalidateByPrefix("feeds")
         runtime.invalidateByPrefix("categories")
         runtime.invalidateByPrefix("stats")
@@ -630,7 +638,11 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("feeds")
         runtime.invalidateByPrefix("categories")
         runtime.invalidateByPrefix("stats")
-        offlineReadStore.clearArticleLists()
+        // Realtime availability is a hint for the next explicit refresh.
+        // Clearing Room here invalidates the active PagingSource and briefly
+        // replaces the user's queue with an empty list while they are reading.
+        // The manual refresh RemoteMediator transaction will replace the
+        // durable query rows atomically when the user asks for fresh content.
     }
 
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
@@ -652,13 +664,22 @@ class RssRepository @Inject constructor(
     }
 
     private suspend fun invalidateFeedAndArticleCaches() {
+        invalidateFeedAndArticleRuntimeCaches()
+        runtime.invalidateByPrefix("article:")
+        offlineReadStore.clearFeedAndArticleData()
+    }
+
+    /**
+     * Marks network-derived values stale without deleting the Room Paging
+     * source currently on screen. A completed background sync is followed by
+     * an explicit Pager refresh that replaces query rows transactionally.
+     */
+    private fun invalidateFeedAndArticleRuntimeCaches() {
         runtime.invalidateByPrefix("feeds")
         runtime.invalidateByPrefix("articles")
         runtime.invalidateByPrefix("search")
         runtime.invalidateByPrefix("stats")
         runtime.invalidateByPrefix("categories")
-        runtime.invalidateByPrefix("article:")
-        offlineReadStore.clearFeedAndArticleData()
     }
 
     private suspend fun flushPendingReadStateMutations() {

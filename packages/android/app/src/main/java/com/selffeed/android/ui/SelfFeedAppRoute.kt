@@ -47,7 +47,6 @@ fun SelfFeedAppRoute(
 
     SelfFeedTheme(darkTheme = darkTheme) {
         val latestFeedsState = rememberUpdatedState(feedsState)
-        val latestSearchState = rememberUpdatedState(searchState)
         val workflowCoordinator = remember { AppWorkflowCoordinator() }
         val workflowSink = object : AppWorkflowSink {
             override fun refreshAuthenticatedSession() {
@@ -111,7 +110,6 @@ fun SelfFeedAppRoute(
                 feedsViewModel.loadCategories()
                 feedsViewModel.loadFeeds()
                 settingsViewModel.loadStats()
-                if (latestSearchState.value.query.length >= 2) searchViewModel.search(debounceMs = 0)
             }
         }
 
@@ -235,6 +233,7 @@ fun SelfFeedAppRoute(
                     appViewModel.openReaderFrom(HomeTab.ARTICLES)
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
+                onReaderPageChanged = articlesViewModel::onReaderPageChanged,
                 onCloseArticle = {
                     articlesViewModel.closeArticle()
                     appViewModel.closeReader()

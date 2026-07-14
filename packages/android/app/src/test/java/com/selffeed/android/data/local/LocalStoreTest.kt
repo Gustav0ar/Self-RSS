@@ -117,7 +117,7 @@ class LocalStoreTest {
     }
 
     @Test
-    fun `queued read state updates article row and can be cleared`() = runBlocking {
+    fun `queued read state persists without invalidating the visible article page`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),
             cursor = null,
@@ -129,6 +129,7 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
+        val pagingSource = store.articlePagingSource("query-read-state")
         store.queueReadStateMutation("a-1", read = true)
 
         val pending = store.readPendingReadStateMutations()
@@ -136,7 +137,10 @@ class LocalStoreTest {
         assertEquals("a-1", pending.first().articleId)
         assertTrue(pending.first().read)
 
-        val result = store.articlePagingSource("query-read-state").load(
+        assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
+        assertEquals(false, pagingSource.invalid)
+
+        val result = pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -144,14 +148,14 @@ class LocalStoreTest {
             ),
         )
         val page = result as PagingSource.LoadResult.Page
-        assertTrue(page.data.first().isRead)
+        assertEquals(false, page.data.first().isRead)
 
         store.deletePendingReadStateMutation("a-1")
         assertTrue(store.readPendingReadStateMutations().isEmpty())
     }
 
     @Test
-    fun `read state update keeps article in existing paging query`() = runBlocking {
+    fun `read state update uses a non paging overlay`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),
             cursor = null,
@@ -163,9 +167,12 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
+        val pagingSource = store.articlePagingSource("query-retained-read")
         store.updateArticleReadState("a-1", read = true)
 
-        val result = store.articlePagingSource("query-retained-read").load(
+        assertEquals(false, pagingSource.invalid)
+        assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
+        val result = pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -174,11 +181,11 @@ class LocalStoreTest {
         )
         val page = result as PagingSource.LoadResult.Page
         assertEquals(listOf("a-1"), page.data.map { it.id })
-        assertTrue(page.data.first().isRead)
+        assertEquals(false, page.data.first().isRead)
     }
 
     @Test
-    fun `feed read state update keeps matching article rows in existing paging queries`() = runBlocking {
+    fun `feed read state update persists overlays without invalidating paging`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(
                 sampleArticle("a-1", feedId = "f-1"),
@@ -193,9 +200,12 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
+        val pagingSource = store.articlePagingSource("query-feed-read-state")
         store.markArticlesReadByFeeds(setOf("f-1"))
 
-        val result = store.articlePagingSource("query-feed-read-state").load(
+        assertEquals(false, pagingSource.invalid)
+        assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
+        val result = pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -204,7 +214,7 @@ class LocalStoreTest {
         )
         val page = result as PagingSource.LoadResult.Page
         assertEquals(listOf("a-1", "a-2"), page.data.map { it.id })
-        assertEquals(true, page.data.first { it.id == "a-1" }.isRead)
+        assertEquals(false, page.data.first { it.id == "a-1" }.isRead)
         assertEquals(false, page.data.first { it.id == "a-2" }.isRead)
     }
 

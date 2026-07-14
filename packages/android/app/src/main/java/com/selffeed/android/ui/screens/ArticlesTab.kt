@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -79,8 +80,8 @@ fun ArticlesTab(
     state: ArticleTabState,
     actions: ArticleTabActions,
     pagedArticles: LazyPagingItems<ArticleListItem>,
+    listState: LazyListState = rememberLazyListState(),
 ) {
-    val listState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
     var wasRefreshing by remember { mutableStateOf(false) }

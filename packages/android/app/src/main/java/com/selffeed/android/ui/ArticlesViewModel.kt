@@ -25,12 +25,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
 data class ArticlesUiState(
     val items: List<ArticleListItem> = emptyList(),
     val readerQueue: List<ArticleListItem> = emptyList(),
+    val readerDetails: Map<String, ArticleDetail> = emptyMap(),
+    val visibleReaderArticleId: String? = null,
     val selectedArticle: ArticleDetail? = null,
     val selectedFeedId: String? = null,
     val selectedCategoryId: String? = null,
@@ -93,15 +96,20 @@ class ArticlesViewModel @Inject constructor(
         enrichmentManager.setScope(viewModelScope)
         enrichmentManager.setOnArticleRefreshed { refreshed ->
             _state.update { current ->
+                val retainedDetails = retainReaderDetails(current, listOf(refreshed))
                 if (current.selectedArticle?.id == refreshed.id) {
                     val displayed = current.selectedArticle.withNonRegressiveReaderContent(refreshed)
-                    current.copy(selectedArticle = displayed.withReadState(knownArticleReadStates()[refreshed.id]))
+                    current.copy(
+                        selectedArticle = displayed.withReadState(knownArticleReadStates()[refreshed.id]),
+                        readerDetails = retainedDetails,
+                    )
                 } else {
-                    current
+                    current.copy(readerDetails = retainedDetails)
                 }
             }
         }
         articleWarmingManager.setScope(viewModelScope)
+        articleWarmingManager.setOnArticlesWarmed(::retainWarmedArticles)
 
         // Forward read state manager events to our events flow
         viewModelScope.launch {
@@ -113,6 +121,8 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun setScope(feedId: String?, categoryId: String?) {
+        val current = _state.value
+        if (current.selectedFeedId == feedId && current.selectedCategoryId == categoryId) return
         _state.update {
             it.copy(
                 selectedFeedId = feedId,
@@ -120,6 +130,8 @@ class ArticlesViewModel @Inject constructor(
                 selectedArticle = null,
                 items = emptyList(),
                 readerQueue = emptyList(),
+                readerDetails = emptyMap(),
+                visibleReaderArticleId = null,
                 errorMessage = null,
             )
         }
@@ -178,11 +190,19 @@ class ArticlesViewModel @Inject constructor(
         val activeQueue = current.readerQueue.takeIf { queue -> queue.any { it.id == id } }
             ?: current.items
         if (current.readerQueue !== activeQueue) {
-            _state.update { it.copy(readerQueue = activeQueue) }
+            val activeIds = activeQueue.asSequence().map { it.id }.toSet()
+            _state.update {
+                it.copy(
+                    readerQueue = activeQueue,
+                    readerDetails = it.readerDetails.filterKeys(activeIds::contains),
+                )
+            }
         }
-        val optimisticArticle = activeQueue
-            .firstOrNull { it.id == id }
-            ?.toArticleDetail(knownArticleReadStates()[id])
+        val optimisticArticle = (
+            current.readerDetails[id]
+                ?: repository.cachedArticleDetail(id)
+                ?: activeQueue.firstOrNull { it.id == id }?.toArticleDetail(knownArticleReadStates()[id])
+            )?.withReadState(knownArticleReadStates()[id])
         if (optimisticArticle != null) {
             selectArticle(optimisticArticle)
             if (
@@ -191,10 +211,18 @@ class ArticlesViewModel @Inject constructor(
             ) {
                 markReadAutomatically(id)
             }
-            articleWarmingManager.warmAdjacentArticles(id, activeQueue)
+            viewModelScope.launch {
+                yield()
+                articleWarmingManager.warmAdjacentArticles(id, activeQueue)
+            }
         }
 
         viewModelScope.launch {
+            // The list row already supplied an optimistic reader snapshot.
+            // Let Compose commit the navigation transition before starting
+            // cache/database/network work for the canonical detail.
+            yield()
+            if (openRequestId != openArticleSequence.get()) return@launch
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
@@ -217,7 +245,15 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun openArticleFromQueue(id: String, queue: List<ArticleListItem>) {
-        if (queue.isNotEmpty()) _state.update { it.copy(readerQueue = queue) }
+        if (queue.isNotEmpty()) {
+            val queueIds = queue.asSequence().map { it.id }.toSet()
+            _state.update {
+                it.copy(
+                    readerQueue = queue,
+                    readerDetails = it.readerDetails.filterKeys(queueIds::contains),
+                )
+            }
+        }
         openArticle(id)
     }
 
@@ -234,10 +270,25 @@ class ArticlesViewModel @Inject constructor(
         }
     }
 
+    fun onReaderPageChanged(articleId: String) {
+        _state.update { current ->
+            val queue = current.readerQueue.ifEmpty { current.items }
+            if (queue.none { it.id == articleId }) current
+            else current.copy(visibleReaderArticleId = articleId)
+        }
+    }
+
     fun closeArticle() {
         enrichmentManager.cancelEnrichment()
         articleWarmingManager.cancelWarming()
-        _state.update { it.copy(selectedArticle = null, readerQueue = emptyList()) }
+        _state.update {
+            it.copy(
+                selectedArticle = null,
+                readerQueue = emptyList(),
+                readerDetails = emptyMap(),
+                visibleReaderArticleId = null,
+            )
+        }
         enrichmentManager.updateSelectedArticle(null)
         readStateManager.updateSelectedArticle(null)
     }
@@ -276,6 +327,13 @@ class ArticlesViewModel @Inject constructor(
                             state.items.map { if (it.id == id) it.copy(isRead = previous) else it }
                         } ?: state.items,
                         selectedArticle = prevArticle ?: state.selectedArticle,
+                        readerDetails = if (prevState == null) {
+                            state.readerDetails
+                        } else {
+                            state.readerDetails.mapValues { (articleId, article) ->
+                                if (articleId == id) article.copy(isRead = prevState) else article
+                            }
+                        },
                     )
                 }
                 if (prevState != null) {
@@ -338,6 +396,7 @@ class ArticlesViewModel @Inject constructor(
     override fun onCleared() {
         enrichmentManager.cancelEnrichment()
         articleWarmingManager.cancelWarming()
+        articleWarmingManager.setOnArticlesWarmed {}
         readStateManager.stopReadStateSync()
         super.onCleared()
     }
@@ -351,6 +410,9 @@ class ArticlesViewModel @Inject constructor(
                 selectedArticle = state.selectedArticle?.let {
                     if (it.id == articleId) it.copy(isRead = isRead) else it
                 },
+                readerDetails = state.readerDetails.mapValues { (id, article) ->
+                    if (id == articleId) article.copy(isRead = isRead) else article
+                },
             )
         }
         publishReadStateOverrides(articleId to isRead)
@@ -362,7 +424,13 @@ class ArticlesViewModel @Inject constructor(
                 ?.takeIf { it.id == article.id }
                 ?.withNonRegressiveReaderContent(article)
                 ?: article
-            current.copy(selectedArticle = selectedArticle)
+            current.copy(
+                selectedArticle = selectedArticle,
+                readerDetails = retainReaderDetails(
+                    current = current,
+                    incoming = listOf(selectedArticle),
+                ),
+            )
         }
         val selectedArticle = _state.value.selectedArticle ?: return
         enrichmentManager.updateSelectedArticle(selectedArticle)
@@ -396,9 +464,10 @@ class ArticlesViewModel @Inject constructor(
                 applyScopeReadState(event.affectedFeedIds)
             }
             is ArticleFeatureEvent.ArticlesChanged -> {
-                refreshArticlePager()
+                // Realtime data invalidates caches for the next explicit
+                // refresh, but never replaces the list the user is browsing.
                 val selectedId = _state.value.selectedArticle?.id
-                if (selectedId != null && (event.articleId == null || event.articleId == selectedId)) {
+                if (selectedId != null && event.articleId == selectedId) {
                     openArticle(selectedId, forceRefresh = true)
                 }
             }
@@ -430,6 +499,13 @@ class ArticlesViewModel @Inject constructor(
                     }
                 },
                 selectedArticle = current.selectedArticle?.let { article ->
+                    if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
+                        article.copy(isRead = true)
+                    } else {
+                        article
+                    }
+                },
+                readerDetails = current.readerDetails.mapValues { (_, article) ->
                     if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
                         article.copy(isRead = true)
                     } else {
@@ -506,6 +582,41 @@ class ArticlesViewModel @Inject constructor(
     private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail =
         isRead?.let { copy(isRead = it) } ?: this
 
+    private fun retainWarmedArticles(articles: List<ArticleDetail>) {
+        _state.update { current ->
+            val retained = retainReaderDetails(current, articles)
+            val selected = current.selectedArticle?.let { displayed ->
+                retained[displayed.id]?.let(displayed::withNonRegressiveReaderContent) ?: displayed
+            }
+            current.copy(readerDetails = retained, selectedArticle = selected)
+        }
+    }
+
+    private fun retainReaderDetails(
+        current: ArticlesUiState,
+        incoming: List<ArticleDetail>,
+    ): Map<String, ArticleDetail> {
+        val queue = current.readerQueue.ifEmpty { current.items }
+        val allowedIds = queue.asSequence().map { it.id }.toSet() +
+            listOfNotNull(current.selectedArticle?.id)
+        val retained = LinkedHashMap<String, ArticleDetail>()
+        current.readerDetails
+            .filterKeys(allowedIds::contains)
+            .forEach(retained::put)
+        incoming.forEach { article ->
+            if (article.id in allowedIds) {
+                val withReadState = article.withReadState(knownArticleReadStates()[article.id])
+                retained[article.id] = retained[article.id]
+                    ?.withNonRegressiveReaderContent(withReadState)
+                    ?: withReadState
+            }
+        }
+        while (retained.size > READER_DETAIL_LIMIT) {
+            retained.remove(retained.keys.first())
+        }
+        return retained
+    }
+
     private fun ArticleListItem.toArticleDetail(isRead: Boolean?): ArticleDetail =
         ArticleDetail(
             id = id,
@@ -545,5 +656,6 @@ class ArticlesViewModel @Inject constructor(
     )
 
     private companion object {
+        const val READER_DETAIL_LIMIT = 20
     }
 }

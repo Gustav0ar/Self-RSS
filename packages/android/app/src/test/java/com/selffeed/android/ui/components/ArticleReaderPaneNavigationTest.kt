@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleMedia
@@ -80,6 +81,130 @@ class ArticleReaderPaneNavigationTest {
         }
 
         assertEquals("article-1", displayedArticleId)
+    }
+
+    @Test
+    fun prefetchedPagesStayRenderedDuringRapidSwipesWithoutLoadingPlaceholder() {
+        val articles = (1..5).map { index ->
+            sampleArticle("article-$index", "Article $index")
+        }
+        val details = articles.associate { article ->
+            article.id to sampleDetail(
+                id = article.id,
+                title = article.title,
+                isRead = false,
+                contentText = "Complete body for ${article.title}",
+            )
+        }
+        var selectedArticle by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = articles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id -> selectedArticle = details.getValue(id) },
+                )
+            }
+        }
+
+        repeat(3) { index ->
+            composeRule.onRoot().performTouchInput { swipeLeft() }
+            val expectedId = "article-${index + 2}"
+            composeRule.waitUntil(timeoutMillis = 5_000) { selectedArticle.id == expectedId }
+            composeRule.onNodeWithTag("reader-loading-$expectedId").assertDoesNotExist()
+        }
+
+        composeRule.onNodeWithText("Article 4").assertIsDisplayed()
+        composeRule.onNodeWithText("Complete body for Article 4").assertIsDisplayed()
+    }
+
+    @Test
+    fun offscreenPrefetchedPagesDoNotReportDisplayedUntilSelected() {
+        val articles = listOf(
+            sampleArticle("article-1", "First Article"),
+            sampleArticle("article-2", "Second Article"),
+        )
+        val details = articles.associate { article ->
+            article.id to sampleDetail(article.id, article.title, isRead = false)
+        }
+        val displayed = mutableListOf<String>()
+        var selectedArticle by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = articles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id -> selectedArticle = details.getValue(id) },
+                    onArticleDisplayed = displayed::add,
+                )
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) { displayed == listOf("article-1") }
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { displayed.contains("article-2") }
+
+        assertEquals(listOf("article-1", "article-2"), displayed)
+    }
+
+    @Test
+    fun visibleSourceChangesImmediatelyAndReturningToInitialArticleReselectsIt() {
+        val articles = listOf(
+            sampleArticle("article-1", "First Article", feedTitle = "First Feed"),
+            sampleArticle("article-2", "Second Article", feedTitle = "Second Feed"),
+        )
+        val details = articles.associate { article ->
+            article.id to sampleDetail(
+                id = article.id,
+                title = article.title,
+                isRead = false,
+                feedTitle = article.feedTitle,
+            )
+        }
+        val events = mutableListOf<String>()
+        var selectedArticle by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = articles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onVisibleArticleChanged = { id -> events += "visible:$id" },
+                    onArticleSelected = { id ->
+                        events += "selected:$id"
+                        selectedArticle = details.getValue(id)
+                    },
+                )
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) { events.lastOrNull() == "visible:article-1" }
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { selectedArticle.id == "article-2" }
+        composeRule.onRoot().performTouchInput { swipeRight() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { selectedArticle.id == "article-1" }
+
+        assertEquals(
+            listOf(
+                "visible:article-1",
+                "visible:article-2",
+                "selected:article-2",
+                "visible:article-1",
+                "selected:article-1",
+            ),
+            events,
+        )
     }
 
     @Test
@@ -241,11 +366,11 @@ class ArticleReaderPaneNavigationTest {
         composeRule.onNodeWithText("Rich").assertIsDisplayed().assertIsSelected()
     }
 
-    private fun sampleArticle(id: String, title: String): ArticleListItem =
+    private fun sampleArticle(id: String, title: String, feedTitle: String = "Test Feed"): ArticleListItem =
         ArticleListItem(
             id = id,
             feedId = "feed-1",
-            feedTitle = "Test Feed",
+            feedTitle = feedTitle,
             title = title,
             excerpt = "Excerpt for $title",
             isRead = false,
@@ -260,6 +385,7 @@ class ArticleReaderPaneNavigationTest {
         contentText: String? = "Body for $title",
         contentVersion: Int = 1,
         media: List<ArticleMedia> = emptyList(),
+        feedTitle: String = "Test Feed",
     ): ArticleDetail =
         ArticleDetail(
             id = id,
@@ -274,7 +400,7 @@ class ArticleReaderPaneNavigationTest {
             publishedAt = null,
             fetchedAt = null,
             hash = "hash-$id",
-            feedTitle = "Test Feed",
+            feedTitle = feedTitle,
             feedFaviconUrl = null,
             feedSiteUrl = null,
             media = media,
