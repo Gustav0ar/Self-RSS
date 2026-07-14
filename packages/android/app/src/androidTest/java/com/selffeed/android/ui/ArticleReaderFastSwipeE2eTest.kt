@@ -48,7 +48,7 @@ class ArticleReaderFastSwipeE2eTest {
                     selectedArticleId = selected.id,
                     onCloseArticle = {},
                     listContent = { androidx.compose.material3.Text("Article list") },
-                    detailContent = { preferHtml, onPreferHtmlChanged ->
+                    detailContent = { _, _ ->
                         ArticleReaderPane(
                             articles = articles,
                             selectedArticle = selected,
@@ -58,8 +58,10 @@ class ArticleReaderFastSwipeE2eTest {
                             onArticleSelected = { id -> selected = details.getValue(id) },
                             onVisibleArticleChanged = { id -> visible += id },
                             onArticleDisplayed = { id -> displayed += id },
-                            preferHtml = preferHtml,
-                            onPreferHtmlChanged = onPreferHtmlChanged,
+                            // This regression verifies prefetched page transitions using
+                            // Compose-visible reader text; Rich-mode WebView rendering is
+                            // covered separately by MainActivityHiltUiTest.
+                            preferHtml = false,
                         )
                     },
                 )

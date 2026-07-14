@@ -2,8 +2,10 @@ package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -94,10 +96,10 @@ class FeedEditorUiTest {
         }
 
         composeRule.onNodeWithText("1 feed is not updating").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText(
+        composeRule.onAllNodesWithText(
             "Unavailable News is not updating. The feed server timed out before returning a response.",
             substring = true,
-        ).performScrollTo().assertIsDisplayed()
+        ).assertCountEquals(2)
     }
 
     private fun feedState(
