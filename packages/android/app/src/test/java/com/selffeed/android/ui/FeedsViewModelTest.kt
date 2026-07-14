@@ -14,8 +14,11 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -130,6 +133,28 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `queue response timeout releases foreground loading without cancelling the refresh`() = runTest {
+        val delayedResponse = CompletableDeferred<AppResult<SyncResponse>>()
+        coEvery { repository.syncAllFeeds() } coAnswers { delayedResponse.await() }
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+        advanceTimeBy(4_000L)
+        runCurrent()
+
+        assertEquals(false, viewModel.state.value.loading)
+        assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals("Checking background refresh", viewModel.state.value.statusMessage)
+        coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
+
+        delayedResponse.complete(AppResult.Success(SyncResponse(status = "queued")))
+        runCurrent()
+
+        assertEquals(1L, viewModel.state.value.syncRevision)
+        coVerify { repository.syncAllFeedsStatus() }
+    }
+
+    @Test
     fun `syncAllFeeds forwards the selected scope`() = runTest {
         coEvery { repository.syncAllFeeds("feed-1", "category-1") } returns
             AppResult.Success(SyncResponse(status = "queued"))
@@ -163,7 +188,15 @@ class FeedsViewModelTest {
 
         assertEquals(7L, viewModel.state.value.articleRevision)
         assertTrue(viewModel.state.value.syncInBackground)
+        assertEquals(4, viewModel.state.value.syncTotalFeeds)
+        assertEquals(1, viewModel.state.value.syncCompletedFeeds)
+        assertEquals(2, viewModel.state.value.syncNewArticles)
         assertEquals(0L, viewModel.state.value.syncRevision)
+
+        viewModel.syncAllFeeds()
+
+        coVerify(exactly = 1) { repository.syncAllFeeds() }
+        assertEquals("Refreshing feeds in background · 1/4", viewModel.state.value.statusMessage)
     }
 
     @Test

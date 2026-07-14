@@ -143,8 +143,13 @@ fun SelfFeedAppRoute(
             workflowCoordinator.onFeedSyncRevisionChanged(feedsState.syncRevision, workflowSink)
         }
 
+        // articleRevision is observed only while this ViewModel is polling a
+        // user-initiated sync, so early publisher results can become visible
+        // without waiting for the entire background batch.
         LaunchedEffect(feedsState.articleRevision) {
-            if (feedsState.articleRevision > 0L) articlesViewModel.refreshArticles()
+            if (feedsState.articleRevision > 0L && feedsState.syncInBackground) {
+                articlesViewModel.refreshArticles()
+            }
         }
 
         LaunchedEffect(Unit) {
@@ -214,6 +219,9 @@ fun SelfFeedAppRoute(
                 onExportOpml = feedsViewModel::exportOpml,
                 onDismissImportSummary = feedsViewModel::dismissImportSummary,
                 onRefreshArticles = {
+                    // Refresh the API/Room list immediately. Publisher fetches
+                    // continue independently and publish revisions as they land.
+                    articlesViewModel.refreshArticles()
                     feedsViewModel.syncAllFeeds(
                         feedId = articlesState.selectedFeedId,
                         categoryId = articlesState.selectedCategoryId,

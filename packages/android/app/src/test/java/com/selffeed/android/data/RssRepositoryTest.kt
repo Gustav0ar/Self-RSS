@@ -17,6 +17,7 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.MarkReadResponse
@@ -341,6 +342,42 @@ class RssRepositoryTest {
         assertEquals(1, pending.size)
         assertEquals(articleId, pending.first().articleId)
         coVerify(exactly = 0) { api.markRead(any(), any()) }
+    }
+
+    @Test
+    fun `sync completion does not clear the visible Room paging queue`() = runTest {
+        val queryKey = ArticlePageQuery().remoteKey()
+        localStore.writeArticleRemotePage(
+            queryKey = queryKey,
+            payload = ApiListResponse(
+                data = listOf(sampleArticle("article-visible")),
+                cursor = null,
+                hasMore = false,
+            ),
+            clearExisting = true,
+        )
+        val pagingSource = localStore.articlePagingSource(queryKey)
+        coEvery { api.syncAllFeedsStatus() } returns com.selffeed.android.network.ApiEnvelope(
+            FeedSyncAllStatus(
+                queued = false,
+                running = false,
+                active = false,
+                stale = false,
+            ),
+        )
+
+        val result = repository.syncAllFeedsStatus()
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(false, pagingSource.invalid)
+        val page = pagingSource.load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertEquals(listOf("article-visible"), page.data.map { it.id })
     }
 
     @Test

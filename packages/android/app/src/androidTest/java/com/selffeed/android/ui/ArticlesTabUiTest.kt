@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -219,6 +220,31 @@ class ArticlesTabUiTest {
             .onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
             .assertCountEquals(1)
         composeRule.onNodeWithText("Start by adding a feed").assertDoesNotExist()
+    }
+
+    @Test
+    fun articlesTab_backgroundSyncUsesNonBlockingProgressOverlay() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTabWithStaticPaging(
+                    state = ArticleTabState(
+                        articles = listOf(sampleArticle("article-1", "Visible Article")),
+                        selectedArticleId = null,
+                        isSyncingFeeds = true,
+                        isStartingFeedSync = false,
+                        syncCompletedFeeds = 3,
+                        syncTotalFeeds = 10,
+                    ),
+                    actions = noOpArticleActions(),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Visible Article").assertIsDisplayed()
+        composeRule.onNodeWithTag("articles-background-sync").assertIsDisplayed()
+        composeRule
+            .onNodeWithContentDescription("Refreshing feeds in background, 3 of 10 complete")
+            .assertIsDisplayed()
     }
 
     @Test

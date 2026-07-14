@@ -259,7 +259,7 @@ class RssRepository @Inject constructor(
 
     override suspend fun syncAllFeedsStatus() = safeReadCall {
         feedRemote.syncAllFeedsStatus().also { status ->
-            if (!status.active) invalidateFeedAndArticleCaches()
+            if (!status.active) invalidateFeedAndArticleRuntimeCaches()
         }
     }
 

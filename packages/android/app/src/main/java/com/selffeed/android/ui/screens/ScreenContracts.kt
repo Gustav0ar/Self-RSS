@@ -41,6 +41,8 @@ data class ArticleTabState(
     val selectedArticleId: String?,
     val isSyncingFeeds: Boolean,
     val isStartingFeedSync: Boolean = false,
+    val syncCompletedFeeds: Int = 0,
+    val syncTotalFeeds: Int = 0,
     val density: DensityPreference = DensityPreference.COMFORTABLE,
     val isOffline: Boolean = false,
     val feedCount: Int = 0,

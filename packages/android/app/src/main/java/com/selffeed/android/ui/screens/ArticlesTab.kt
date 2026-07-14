@@ -104,11 +104,10 @@ fun ArticlesTab(
             }
             .collect(actions.onVisibleArticles)
     }
-    // A pull starts feed synchronization first; the Paging refresh only
-    // begins after that background job publishes new data. Treat both phases
-    // as one refresh so Material switches from the stationary pull arrow to
-    // its indeterminate animated spinner immediately and keeps it moving.
-    val isRefreshing = state.isStartingFeedSync || state.isSyncingFeeds || isPagingInitialLoad
+    // Pull-to-refresh owns only the bounded foreground list reload. Publisher
+    // synchronization may continue for slow feeds, but must never capture the
+    // pull gesture or leave this spinner running for minutes.
+    val isRefreshing = state.isStartingFeedSync || isPagingInitialLoad
     val isEmpty = articleCount == 0 && !isRefreshing
 
     LaunchedEffect(isRefreshing, articleCount) {
@@ -284,6 +283,52 @@ fun ArticlesTab(
                     }
                 }
             }
+        }
+
+        if (state.isSyncingFeeds) {
+            BackgroundFeedSyncIndicator(
+                completedFeeds = state.syncCompletedFeeds,
+                totalFeeds = state.syncTotalFeeds,
+                modifier = Modifier.align(Alignment.TopEnd),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackgroundFeedSyncIndicator(
+    completedFeeds: Int,
+    totalFeeds: Int,
+    modifier: Modifier = Modifier,
+) {
+    val progressLabel = if (totalFeeds > 0) "$completedFeeds/$totalFeeds" else "…"
+    Surface(
+        modifier = modifier
+            .padding(top = 8.dp, end = 12.dp)
+            .testTag("articles-background-sync")
+            .semantics {
+                contentDescription = if (totalFeeds > 0) {
+                    "Refreshing feeds in background, $completedFeeds of $totalFeeds complete"
+                } else {
+                    "Refreshing feeds in background"
+                }
+            },
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(
+                text = progressLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

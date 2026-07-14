@@ -21,9 +21,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 data class FeedsUiState(
@@ -34,6 +36,9 @@ data class FeedsUiState(
     val syncRevision: Long = 0L,
     val articleRevision: Long = 0L,
     val syncInBackground: Boolean = false,
+    val syncTotalFeeds: Int = 0,
+    val syncCompletedFeeds: Int = 0,
+    val syncNewArticles: Int = 0,
     val lastImportSummary: OpmlImportSummary? = null,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
@@ -164,15 +169,64 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun syncAllFeeds(feedId: String? = null, categoryId: String? = null) {
-        if (_state.value.loading || _state.value.syncInBackground) return
+        if (_state.value.loading) return
+        if (_state.value.syncInBackground) {
+            _state.update {
+                it.copy(
+                    statusMessage = backgroundSyncMessage(
+                        completed = it.syncCompletedFeeds,
+                        total = it.syncTotalFeeds,
+                    ),
+                )
+            }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(loading = true, errorMessage = null) }
-            when (val result = repository.syncAllFeeds(feedId, categoryId)) {
+            val queueRequest = async { repository.syncAllFeeds(feedId, categoryId) }
+            val result = withTimeoutOrNull(REFRESH_QUEUE_TIMEOUT_MS) {
+                queueRequest.await()
+            }
+            if (result == null) {
+                // The queue endpoint is intentionally tiny, but a saturated
+                // VPS can still delay the response. Release pull-to-refresh,
+                // but keep the request alive so a slow response cannot silently
+                // cancel the refresh the user explicitly requested.
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        syncInBackground = true,
+                        statusMessage = "Checking background refresh",
+                    )
+                }
+                when (val eventualResult = queueRequest.await()) {
+                    is AppResult.Success -> {
+                        _state.update {
+                            it.copy(
+                                lastSyncSummary = eventualResult.data,
+                                statusMessage = "Refreshing feeds in the background",
+                            )
+                        }
+                        monitorQueuedSync()
+                    }
+                    is AppResult.Error -> _state.update {
+                        it.copy(
+                            syncInBackground = false,
+                            errorMessage = eventualResult.message,
+                        )
+                    }
+                }
+                return@launch
+            }
+            when (result) {
                 is AppResult.Success -> {
                     _state.update {
                         it.copy(
                             loading = false,
                             syncInBackground = true,
+                            syncTotalFeeds = 0,
+                            syncCompletedFeeds = 0,
+                            syncNewArticles = 0,
                             lastSyncSummary = result.data,
                             statusMessage = "Refreshing feeds in the background",
                         )
@@ -190,6 +244,13 @@ class FeedsViewModel @Inject constructor(
         while (currentCoroutineContext().isActive) {
             when (val status = repository.syncAllFeedsStatus()) {
                 is AppResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            syncTotalFeeds = status.data.totalFeeds,
+                            syncCompletedFeeds = status.data.completedFeeds,
+                            syncNewArticles = status.data.newArticles,
+                        )
+                    }
                     if (status.data.articleRevision > _state.value.articleRevision) {
                         _state.update { it.copy(articleRevision = status.data.articleRevision) }
                     }
@@ -198,7 +259,11 @@ class FeedsViewModel @Inject constructor(
                             it.copy(
                                 syncInBackground = false,
                                 syncRevision = it.syncRevision + 1,
-                                statusMessage = "Feeds refreshed",
+                                statusMessage = if (status.data.newArticles > 0) {
+                                    "${status.data.newArticles} new articles"
+                                } else {
+                                    "Feeds are up to date"
+                                },
                             )
                         }
                         loadFeeds()
@@ -242,6 +307,11 @@ class FeedsViewModel @Inject constructor(
         const val SYNC_STATUS_FAST_POLL_MS = 750L
         const val SYNC_STATUS_SLOW_POLL_MS = 10_000L
         const val SYNC_STATUS_MAX_FAST_POLLS = 400
+        const val REFRESH_QUEUE_TIMEOUT_MS = 4_000L
+
+        fun backgroundSyncMessage(completed: Int, total: Int): String =
+            if (total > 0) "Refreshing feeds in background · $completed/$total"
+            else "Refreshing feeds in background"
     }
 
     fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
