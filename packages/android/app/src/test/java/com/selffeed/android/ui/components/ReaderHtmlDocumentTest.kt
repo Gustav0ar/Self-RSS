@@ -9,6 +9,34 @@ import org.junit.Test
 
 class ReaderHtmlDocumentTest {
     @Test
+    fun readerHtmlDocumentCoalescesMediaHeightChangesAndCancelsPendingWork() {
+        val document = buildReaderHtmlDocument(
+            html = "<p>Text</p><img src=\"https://example.com/image.jpg\">",
+            colors = ReaderHtmlColors(
+                background = "#FFFFFF",
+                text = "#111827",
+                surface = "#F3F4F6",
+                mutedText = "#6B7280",
+                link = "#3345B8",
+            ),
+        )
+
+        val schedulerStart = document.indexOf("function scheduleReaderUpdate()")
+        val cancelPrevious = document.indexOf("clearTimeout(pendingHeightUpdate)", schedulerStart)
+        val scheduleSettledUpdate = document.indexOf("pendingHeightUpdate = setTimeout(() =>", schedulerStart)
+
+        assertTrue(schedulerStart >= 0)
+        assertTrue(cancelPrevious > schedulerStart)
+        assertTrue(scheduleSettledUpdate > cancelPrevious)
+        assertTrue(document.contains("}, 120)"))
+        assertTrue(document.contains("new ResizeObserver(scheduleReaderUpdate)"))
+        assertTrue(document.contains("new MutationObserver(scheduleReaderUpdate)"))
+        assertTrue(document.contains("if (pendingHeightUpdate !== null)"))
+        assertTrue(document.contains("pendingHeightUpdate = null"))
+        assertFalse(document.contains("requestAnimationFrame(postHeight)"))
+    }
+
+    @Test
     fun readerHtmlDocumentInjectsThemeAndContrastRepair() {
         val document = buildReaderHtmlDocument(
             html = """

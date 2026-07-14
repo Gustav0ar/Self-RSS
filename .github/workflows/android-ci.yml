@@ -64,13 +64,9 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
-          target: google_apis
           arch: x86_64
-          emulator-boot-timeout: 1200
           disable-animations: true
-          script: |
-            ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.selffeed.android.ui.components.ReaderHtmlMediaStabilityTest
-            ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest -Pandroid.testInstrumentationRunnerArguments.notClass=com.selffeed.android.ui.components.ReaderHtmlMediaStabilityTest
+          script: ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest
 
   android-baseline-profile:
     name: Android Baseline Profile
