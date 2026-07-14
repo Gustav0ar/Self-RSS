@@ -71,7 +71,9 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest
+          script: |
+            ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest
+            SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./scripts/verify-android-release-startup.sh
 
   android-baseline-profile:
     name: Android Baseline Profile
