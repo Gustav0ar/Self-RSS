@@ -1,0 +1,132 @@
+package com.selffeed.android.ui.components
+
+import android.os.SystemClock
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.viewinterop.AndroidView
+import com.selffeed.android.ui.ReaderAppearance
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * Device-level regression coverage for the rich reader's media flicker.
+ *
+ * Images report several intermediate intrinsic sizes while they decode. The
+ * reader used to forward every ResizeObserver notification to Compose, which
+ * repeatedly resized the WebView and invalidated its media compositor layer.
+ * Text stayed stable, but images visibly flashed. This test uses a real WebView
+ * and reproduces that burst of layout changes without depending on the network.
+ */
+class ReaderHtmlMediaStabilityTest {
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun rapidMediaLayoutChangesAreCoalescedAndThenStop() {
+        composeRule.runOnUiThread {
+            composeRule.activity.setShowWhenLocked(true)
+            composeRule.activity.setTurnScreenOn(true)
+        }
+        val pageFinished = CountDownLatch(1)
+        val heightCallbacks = AtomicInteger(0)
+        lateinit var webView: WebView
+        val document = buildReaderHtmlDocument(
+            html = """
+                <p>Stable article text.</p>
+                <div id="media-under-test"></div>
+            """.trimIndent(),
+            colors = ReaderHtmlColors(
+                background = "#FFFFFF",
+                text = "#111827",
+                surface = "#F3F4F6",
+                mutedText = "#6B7280",
+                link = "#3345B8",
+            ),
+            appearance = ReaderAppearance(),
+        )
+
+        composeRule.setContent {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    WebView(context).apply {
+                        webView = this
+                        settings.javaScriptEnabled = true
+                        addJavascriptInterface(
+                            object {
+                                @JavascriptInterface
+                                fun updateHeight(@Suppress("UNUSED_PARAMETER") height: Float) {
+                                    heightCallbacks.incrementAndGet()
+                                }
+                            },
+                            "Android",
+                        )
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                pageFinished.countDown()
+                            }
+                        }
+                        loadDataWithBaseURL(
+                            DefaultReaderDocumentBaseUrl,
+                            document,
+                            "text/html",
+                            "utf-8",
+                            DefaultReaderDocumentBaseUrl,
+                        )
+                    }
+                },
+                onRelease = { it.releaseReaderResources() },
+            )
+        }
+
+        assertTrue("Reader HTML did not finish loading", pageFinished.await(5, TimeUnit.SECONDS))
+        SystemClock.sleep(350)
+        assertTrue(
+            "The reader JavaScript bridge did not report its initial height",
+            heightCallbacks.get() > 0,
+        )
+        heightCallbacks.set(0)
+
+        composeRule.runOnUiThread {
+            webView.evaluateJavascript(
+                """
+                    (() => {
+                        const media = document.getElementById('media-under-test');
+                        let frame = 0;
+                        const updates = setInterval(() => {
+                            frame += 1;
+                            media.style.height = (120 + frame * 18) + 'px';
+                            if (frame === 12) clearInterval(updates);
+                        }, 10);
+                    })();
+                """.trimIndent(),
+                null,
+            )
+        }
+
+        SystemClock.sleep(700)
+        val callbacksAfterBurst = heightCallbacks.get()
+        assertTrue(
+            "Expected one coalesced height update (plus at most the fallback check), " +
+                "but received $callbacksAfterBurst callbacks for 12 media layout changes",
+            callbacksAfterBurst in 1..3,
+        )
+
+        SystemClock.sleep(500)
+        assertEquals(
+            "Height callbacks continued after media layout settled",
+            callbacksAfterBurst,
+            heightCallbacks.get(),
+        )
+    }
+}

@@ -3,6 +3,7 @@ package com.selffeed.android.ui.components
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.ReaderFontPreference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -46,6 +47,7 @@ class ReaderHtmlDocumentTest {
         assertTrue(document.contains("let pendingHeightUpdate = null"))
         assertTrue(document.contains("setTimeout(() =>"))
         assertTrue(document.contains("}, 120)"))
+        assertFalse(document.contains("requestAnimationFrame(postHeight)"))
         assertTrue(document.contains("maximum-scale=5.0, user-scalable=yes"))
     }
 
