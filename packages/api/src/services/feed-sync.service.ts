@@ -24,10 +24,13 @@ import { fetchArticlePageContent } from './article-source-fetcher.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
+	buildPartialSyncWarning,
 	FeedSyncFetchError,
 	getSyncErrorDetails,
+	nextFailedSyncRetryAt,
 	normalizeSyncThrowable,
 } from './feed-sync-errors.js';
+import { syncScheduledFeeds } from './feed-sync-scheduled.js';
 import {
 	acquireManualSyncAllFeedsLock,
 	getManualSyncAllFeedsRequest,
@@ -42,11 +45,6 @@ import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
 const logger = createLogger();
-
-const FAILED_SYNC_RETRY_MINUTES = {
-	min: 5,
-	max: 60,
-};
 
 interface SyncConfig {
 	timeoutMs: number;
@@ -81,6 +79,10 @@ const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
 const MANUAL_FEED_SYNC_TIMEOUT_MS = 5_000;
 const MANUAL_FEED_SYNC_MAX_CONCURRENCY = 4;
+const SCHEDULED_FEED_SYNC_TIMEOUT_MS = 15_000;
+const SCHEDULED_FEED_SYNC_MAX_CONCURRENCY = 2;
+const SCHEDULED_FEED_SYNC_BATCH_SIZE = 50;
+const FEED_VALIDATOR_TTL_SECONDS = 15 * 60;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
@@ -398,12 +400,16 @@ export class FeedSyncService {
 			// Update nextSyncAt so the scheduler's index-backed query skips this
 			// feed until it's due (prevents re-fetching every minute).
 			const nextSyncAt = new Date(Date.now() + feed.pollingIntervalMinutes * 60_000);
+			const { itemWarning, persistedWarning } = buildPartialSyncWarning(
+				syncWarning,
+				itemProcessingFailures,
+			);
 
 			await this.feedRepo.update(feedId, userId, {
 				...feedUpdates,
 				lastSyncedAt: new Date(),
-				lastSyncError: syncWarning,
-				lastSyncErrorAt: syncWarning ? new Date() : null,
+				lastSyncError: persistedWarning || null,
+				lastSyncErrorAt: persistedWarning ? new Date() : null,
 				nextSyncAt,
 				syncStatus: 'idle',
 			});
@@ -412,10 +418,7 @@ export class FeedSyncService {
 				status: 'success',
 				httpStatus: 200,
 				itemCount: insertedArticles.length,
-				errorMessage:
-					itemProcessingFailures.length > 0
-						? `Skipped ${itemProcessingFailures.length} malformed article item(s)`
-						: undefined,
+				errorMessage: itemWarning ?? undefined,
 			});
 
 			await this.invalidateUnreadCache(userId, feedId);
@@ -451,7 +454,7 @@ export class FeedSyncService {
 		} catch (err) {
 			const errorDetails = getSyncErrorDetails(err);
 			await this.feedRepo.update(feedId, userId, {
-				nextSyncAt: this.nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
+				nextSyncAt: nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
 				lastSyncError: errorDetails.error,
 				lastSyncErrorAt: new Date(),
 				syncStatus: 'error',
@@ -531,10 +534,9 @@ export class FeedSyncService {
 					enrichArticles: true,
 					// Warm the full user cache once after the batch.
 					warmArticleCache: false,
-					// A manual refresh must contact the publisher, but HTTP
-					// validators still need to be sent so unchanged feeds can
-					// complete with a cheap 304 response.
-					forceFetch: false,
+					// A manual refresh must bypass publisher validators. Several
+					// real feeds reuse stale ETags and otherwise hide new articles.
+					forceFetch: true,
 					// Leave slow publishers for the robust background scheduler.
 					fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
 					fetchMaxRetries: 0,
@@ -631,27 +633,22 @@ export class FeedSyncService {
 			});
 		}
 
-		// Fetch ALL due feeds - no artificial limit. The concurrency control
-		// handles parallel processing, so there's no need to cap the batch size.
-		const dueFeeds = await this.feedRepo.findDueForSync(1000);
-		let succeeded = 0;
-		let failed = 0;
-
-		for (let i = 0; i < dueFeeds.length; i += this.config.concurrency) {
-			const batch = dueFeeds.slice(i, i + this.config.concurrency);
-			const batchResults = await Promise.allSettled(
-				batch.map((feed) => this.syncFeed(feed.id, feed.userId)),
-			);
-			for (const result of batchResults) {
-				if (result.status === 'fulfilled') {
-					succeeded += 1;
-				} else {
-					failed += 1;
-				}
-			}
-		}
-
-		return { total: dueFeeds.length, succeeded, failed };
+		// Bound each drain so a few slow or broken publishers cannot keep every
+		// later feed trapped in one long-running scheduler cycle. The scheduler
+		// immediately revisits the oldest remaining due feeds on its next pass.
+		const dueFeeds = await this.feedRepo.findDueForSync(SCHEDULED_FEED_SYNC_BATCH_SIZE);
+		return syncScheduledFeeds({
+			feeds: dueFeeds,
+			concurrency: Math.min(this.config.concurrency, SCHEDULED_FEED_SYNC_MAX_CONCURRENCY),
+			syncFeed: (feed) =>
+				this.syncFeed(feed.id, feed.userId, {
+					warmArticleCache: false,
+					fetchTimeoutMs: Math.min(this.config.timeoutMs, SCHEDULED_FEED_SYNC_TIMEOUT_MS),
+					// A failed source is persisted and retried by the scheduler.
+					// Retrying inline only blocks healthy feeds behind it.
+					fetchMaxRetries: 0,
+				}),
+		});
 	}
 
 	private warmArticleCacheInBackground(userId: string, context: Record<string, unknown>) {
@@ -858,7 +855,10 @@ export class FeedSyncService {
 			'User-Agent': 'SelfFeed/1.0',
 			Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
 		};
-		if (!ignoreCache) {
+		if (ignoreCache) {
+			headers['Cache-Control'] = 'no-cache';
+			headers.Pragma = 'no-cache';
+		} else {
 			if (etag) headers['If-None-Match'] = etag;
 			if (lastMod) headers['If-Modified-Since'] = lastMod;
 		}
@@ -922,7 +922,10 @@ export class FeedSyncService {
 		}
 
 		const parsed = (await this.parser.parseString(result.text)) as RSSParser.Output<FeedItemRecord>;
-		const ttl = 60 * 60 * 24 * 7;
+		// Some publishers return stale validators for hours or days. Expiring
+		// them frequently preserves cheap conditional polling while guaranteeing
+		// a regular unconditional fetch that can discover those articles.
+		const ttl = FEED_VALIDATOR_TTL_SECONDS;
 		await Promise.all([
 			result.etag ? this.redis.set(etagKey, result.etag, 'EX', ttl) : Promise.resolve(null),
 			result.lastModified
@@ -947,14 +950,6 @@ export class FeedSyncService {
 		if (!existingHeroImageUrl && nextHeroImageUrl) return true;
 
 		return stripHtml(nextContentHtml).length > stripHtml(existingContentHtml ?? '').length + 80;
-	}
-
-	private nextFailedSyncRetryAt(pollingIntervalMinutes: number) {
-		const retryMinutes = Math.min(
-			FAILED_SYNC_RETRY_MINUTES.max,
-			Math.max(FAILED_SYNC_RETRY_MINUTES.min, pollingIntervalMinutes),
-		);
-		return new Date(Date.now() + retryMinutes * 60_000);
 	}
 
 	private shouldProcessArticle(

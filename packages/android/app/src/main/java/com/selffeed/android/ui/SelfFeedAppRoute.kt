@@ -11,6 +11,7 @@ import com.selffeed.android.ui.components.shareOpmlContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
+import kotlinx.coroutines.delay
 
 @Composable
 fun SelfFeedAppRoute(
@@ -125,6 +126,14 @@ fun SelfFeedAppRoute(
 
         LaunchedEffect(authState.isAuthenticated) {
             workflowCoordinator.onAuthenticationChanged(authState.isAuthenticated, workflowSink)
+        }
+
+        LaunchedEffect(authState.isAuthenticated) {
+            if (!authState.isAuthenticated) return@LaunchedEffect
+            while (true) {
+                delay(60_000L)
+                feedsViewModel.refreshFeedHealth()
+            }
         }
 
         LaunchedEffect(

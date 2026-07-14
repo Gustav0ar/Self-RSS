@@ -41,6 +41,7 @@ class FeedsViewModelTest {
         repository = mockk()
         coEvery { repository.categories() } returns AppResult.Success(emptyList())
         coEvery { repository.feeds(any()) } returns AppResult.Success(emptyList())
+        coEvery { repository.refreshFeeds(any()) } returns AppResult.Success(emptyList())
         coEvery { repository.createCategory(any(), any()) } returns AppResult.Success(sampleCategory())
         coEvery { repository.updateCategory(any(), any(), any()) } returns AppResult.Success(sampleCategory())
         coEvery { repository.deleteCategory(any()) } returns AppResult.Success(true)
@@ -68,6 +69,21 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.loadFeeds()
         assertNotNull(viewModel.state.value.feeds)
+    }
+
+    @Test
+    fun `refreshFeedHealth publishes fresh server feed failures`() = runTest {
+        val failedFeed = sampleFeed().copy(
+            syncStatus = "error",
+            lastSyncError = "HTTP 503: Service Unavailable",
+        )
+        coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(failedFeed))
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.refreshFeedHealth()
+
+        assertEquals("HTTP 503: Service Unavailable", viewModel.state.value.feeds.single().lastSyncError)
+        coVerify { repository.refreshFeeds(null) }
     }
 
     @Test

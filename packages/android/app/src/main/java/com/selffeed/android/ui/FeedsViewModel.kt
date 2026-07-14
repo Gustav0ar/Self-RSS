@@ -77,6 +77,17 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
+    fun refreshFeedHealth() {
+        viewModelScope.launch {
+            when (val result = repository.refreshFeeds(null)) {
+                is AppResult.Success -> _state.update { it.copy(feeds = result.data) }
+                // Background health polling must not replace an otherwise
+                // usable cached drawer with a global connection error.
+                is AppResult.Error -> Unit
+            }
+        }
+    }
+
     fun createCategory(name: String, parentCategoryId: String? = null) {
         if (name.isBlank()) return
         viewModelScope.launch {
@@ -266,7 +277,7 @@ class FeedsViewModel @Inject constructor(
                                 },
                             )
                         }
-                        loadFeeds()
+                        refreshFeedHealth()
                         return
                     }
                     if (status.data.stale) {

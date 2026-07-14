@@ -69,6 +69,8 @@ describe('SidebarTree feed sync warnings', () => {
 		const warning = screen.getByLabelText(/Phoronix is not updating\. HTTP 403: Forbidden/);
 		expect(warning).toBeTruthy();
 		expect(warning.getAttribute('title')).toContain('Phoronix is not updating');
+		expect(screen.getAllByText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toHaveLength(2);
+		expect(screen.getByRole('status', { name: '1 feed is not updating' })).toBeTruthy();
 	});
 
 	it('does not show a warning for healthy feeds', () => {

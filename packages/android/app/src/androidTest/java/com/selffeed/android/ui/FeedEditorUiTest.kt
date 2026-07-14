@@ -7,8 +7,10 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.screens.FeedTabActions
 import com.selffeed.android.ui.screens.FeedTabState
 import com.selffeed.android.ui.screens.FeedsTab
@@ -72,11 +74,38 @@ class FeedEditorUiTest {
         composeRule.onNodeWithText("Category: Blogs").assertIsDisplayed()
     }
 
+    @Test
+    fun feedFailureSummaryShowsTheDetailedServerError() {
+        val failedFeed = FeedWithCounts(
+            id = "failed-feed",
+            categoryId = "news",
+            title = "Unavailable News",
+            feedUrl = "https://example.com/feed.xml",
+            pollingIntervalMinutes = 5,
+            syncStatus = "error",
+            lastSyncError = "The feed server timed out before returning a response",
+            lastSyncErrorAt = "2026-07-14T12:00:00.000Z",
+            unreadCount = 0,
+        )
+        composeRule.setContent {
+            SelfFeedTheme {
+                FeedsTab(feedState(feeds = listOf(failedFeed)), noOpActions())
+            }
+        }
+
+        composeRule.onNodeWithText("1 feed is not updating").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Unavailable News is not updating. The feed server timed out before returning a response.",
+            substring = true,
+        ).performScrollTo().assertIsDisplayed()
+    }
+
     private fun feedState(
         categories: List<CategoryWithCounts> = listOf(category("news", "News"), category("work", "Work")),
+        feeds: List<FeedWithCounts> = emptyList(),
     ) = FeedTabState(
         categories = categories,
-        feeds = emptyList(),
+        feeds = feeds,
         hideRead = false,
         totalUnread = 0,
         selectedCategoryId = null,

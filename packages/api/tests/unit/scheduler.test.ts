@@ -33,6 +33,14 @@ describe('scheduler error handling', () => {
 	});
 
 	describe('startSyncScheduler', () => {
+		it('drains due feeds immediately when the worker starts', async () => {
+			const syncService = { syncDueFeeds: vi.fn().mockResolvedValue({ total: 0 }) };
+			const stop = startSyncScheduler(syncService as never, 60_000);
+
+			await vi.waitFor(() => expect(syncService.syncDueFeeds).toHaveBeenCalledTimes(1));
+			stop();
+		});
+
 		it('yields scheduled sync capacity while manual refresh is active', async () => {
 			vi.useFakeTimers();
 			let manualRefreshActive = true;

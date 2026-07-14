@@ -19,7 +19,7 @@ export function startSyncScheduler(
 ) {
 	logger.info('Feed sync scheduler started', { intervalMs });
 
-	const interval = setInterval(async () => {
+	const drainOnce = async () => {
 		if (shouldPause()) {
 			logger.debug('Pausing scheduled feed sync while manual refresh has priority');
 			return;
@@ -45,7 +45,12 @@ export function startSyncScheduler(
 		} finally {
 			coordinator.isRunning = false;
 		}
-	}, intervalMs);
+	};
+
+	// Do not leave feeds waiting for the first interval after a worker restart
+	// or deployment. The coordinator keeps this safe from overlapping cycles.
+	void drainOnce();
+	const interval = setInterval(() => void drainOnce(), intervalMs);
 
 	return () => clearInterval(interval);
 }

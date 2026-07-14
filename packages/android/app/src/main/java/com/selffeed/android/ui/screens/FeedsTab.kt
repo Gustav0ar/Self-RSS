@@ -195,6 +195,9 @@ fun FeedsTab(
     val feedsByCategory = remember(state.feeds) {
         state.feeds.groupBy { it.categoryId }
     }
+    val failedFeedWarnings = remember(state.feeds) {
+        state.feeds.mapNotNull { feedSyncWarning(it) }
+    }
     // Categories can be populated into the same snapshot-backed list after this
     // screen is composed. Do not cache the flattened result by list identity or
     // the add-feed dialog can keep an empty category menu while the sidebar is
@@ -308,6 +311,49 @@ fun FeedsTab(
                         onSelect()
                     },
                 )
+            }
+        }
+
+        if (failedFeedWarnings.isNotEmpty()) {
+            item {
+                FeedSurfaceCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = WarningAmber,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (failedFeedWarnings.size == 1) {
+                                "1 feed is not updating"
+                            } else {
+                                "${failedFeedWarnings.size} feeds are not updating"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = WarningAmber,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    failedFeedWarnings.take(3).forEach { warning ->
+                        Text(
+                            text = warning,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = WarningAmber,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    if (failedFeedWarnings.size > 3) {
+                        Text(
+                            text = "And ${failedFeedWarnings.size - 3} more.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = WarningAmber,
+                        )
+                    }
+                }
             }
         }
 
@@ -880,7 +926,7 @@ private fun FeedRow(
                 text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
                 color = if (syncWarning != null) WarningAmber else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = if (syncWarning != null) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -906,5 +952,11 @@ private fun FeedRow(
 internal fun feedSyncWarning(feed: FeedWithCounts): String? {
     if (feed.syncStatus != "error" && feed.lastSyncError.isNullOrBlank()) return null
     val detail = feed.lastSyncError?.trim()?.takeIf { it.isNotEmpty() } ?: "Latest refresh failed"
-    return "${feed.title} is not updating. $detail"
+    val message = if (detail.lastOrNull() in setOf('.', '!', '?')) detail else "$detail."
+    val failedAt = feed.lastSyncErrorAt
+        ?.let(::formatPublishedAt)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { " Last attempt $it." }
+        .orEmpty()
+    return "${feed.title} is not updating. $message$failedAt"
 }

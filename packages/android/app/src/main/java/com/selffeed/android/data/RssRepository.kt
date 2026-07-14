@@ -229,6 +229,14 @@ class RssRepository @Inject constructor(
         }
     }
 
+    override suspend fun refreshFeeds(categoryId: String?) = safeReadCall {
+        flushPendingReadStateMutations()
+        runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
+            runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
+            offlineReadStore.writeFeeds(feeds)
+        }
+    }
+
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) = safeCall {
         feedRemote.createFeed(feedUrl, categoryId, title).also {
             invalidateFeedAndArticleCaches()

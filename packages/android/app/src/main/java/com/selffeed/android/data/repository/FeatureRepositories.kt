@@ -54,6 +54,8 @@ class FeedRepositoryImpl @Inject constructor(
 
     override suspend fun deleteCategory(id: String): AppResult<Boolean> = source.deleteCategory(id)
     override suspend fun feeds(categoryId: String?): AppResult<List<FeedWithCounts>> = source.feeds(categoryId)
+    override suspend fun refreshFeeds(categoryId: String?): AppResult<List<FeedWithCounts>> =
+        source.refreshFeeds(categoryId)
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): AppResult<FeedWithCounts> =
         source.createFeed(feedUrl, categoryId, title)
 

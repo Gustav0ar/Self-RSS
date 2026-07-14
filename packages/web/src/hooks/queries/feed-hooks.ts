@@ -9,6 +9,11 @@ import { invalidateReaderQueries } from './cache-utils';
 export function useFeeds(categoryId?: string) {
 	return useQuery({
 		queryKey: ['feeds', categoryId],
+		// Feed health can change in the background without an article event
+		// (timeouts, DNS failures, malformed XML). Keep the sidebar feedback
+		// current without refreshing or disturbing the article list itself.
+		refetchInterval: 60_000,
+		refetchIntervalInBackground: false,
 		queryFn: ({ signal }) => {
 			const params = categoryId ? `?categoryId=${categoryId}` : '';
 			return apiFetch<ApiResponse<FeedWithCounts[]>>(`/feeds${params}`, { signal }).then(

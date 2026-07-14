@@ -42,6 +42,7 @@ interface FeedRepository {
     suspend fun updateCategory(id: String, name: String?, parentCategoryId: String?): AppResult<CategoryWithCounts>
     suspend fun deleteCategory(id: String): AppResult<Boolean>
     suspend fun feeds(categoryId: String? = null): AppResult<List<FeedWithCounts>>
+    suspend fun refreshFeeds(categoryId: String? = null): AppResult<List<FeedWithCounts>> = feeds(categoryId)
     suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): AppResult<FeedWithCounts>
     suspend fun updateFeed(
         id: String,

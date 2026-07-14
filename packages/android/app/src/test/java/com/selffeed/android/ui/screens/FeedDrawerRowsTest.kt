@@ -52,7 +52,7 @@ class FeedDrawerRowsTest {
         )
 
         assertEquals(
-            "phoronix is not updating. HTTP 403: Forbidden",
+            "phoronix is not updating. HTTP 403: Forbidden.",
             feedSyncWarning(feed),
         )
     }

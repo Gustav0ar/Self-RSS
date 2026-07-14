@@ -238,7 +238,16 @@ describe('FeedSyncService', () => {
 			'run-1',
 			expect.objectContaining({
 				status: 'success',
-				errorMessage: 'Skipped 1 malformed article item(s)',
+				errorMessage: 'Skipped 1 malformed article item(s). First error: bad title payload',
+			}),
+		);
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				lastSyncError: 'Skipped 1 malformed article item(s). First error: bad title payload',
+				lastSyncErrorAt: expect.any(Date),
 			}),
 		);
 		expect(result).toEqual({ newArticles: 1, total: 2 });
@@ -675,7 +684,7 @@ describe('FeedSyncService', () => {
 				title: 'Failing Feed',
 				feedUrl: 'https://example.com/feed.xml',
 				userId: 'user-1',
-				pollingIntervalMinutes: 15,
+				pollingIntervalMinutes: 60,
 			})),
 			update: vi.fn(async () => undefined),
 		};
@@ -818,7 +827,7 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: false,
+			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
@@ -826,7 +835,7 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: false,
+			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
@@ -834,7 +843,7 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: false,
+			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
@@ -880,7 +889,7 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: false,
+			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
@@ -1032,8 +1041,101 @@ describe('FeedSyncService', () => {
 		const result = await service.syncDueFeeds();
 
 		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(expect.any(Date));
-		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(1000);
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(50);
+		for (const call of syncFeedSpy.mock.calls) {
+			expect(call[2]).toEqual({
+				warmArticleCache: false,
+				fetchTimeoutMs: 5_000,
+				fetchMaxRetries: 0,
+			});
+		}
 		expect(result).toEqual({ total: 3, succeeded: 2, failed: 1 });
+	});
+
+	it('does not let a slow scheduled feed block later healthy feeds', async () => {
+		const feedRepo = {
+			resetStaleSyncing: vi.fn(async () => []),
+			findDueForSync: vi.fn(async () => [
+				{ id: 'slow', userId: 'user-1' },
+				{ id: 'fast-1', userId: 'user-1' },
+				{ id: 'fast-2', userId: 'user-1' },
+			]),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 30_000, maxContentLength: 1_000_000, concurrency: 5, allowPrivateHosts: false },
+		);
+		let releaseSlow: (() => void) | undefined;
+		const started: string[] = [];
+		vi.spyOn(service, 'syncFeed').mockImplementation(async (feedId) => {
+			started.push(feedId);
+			if (feedId === 'slow') {
+				await new Promise<void>((resolve) => {
+					releaseSlow = resolve;
+				});
+			}
+			return { newArticles: 0, total: 0 };
+		});
+
+		const syncPromise = service.syncDueFeeds();
+		await vi.waitFor(() => expect(started).toEqual(['slow', 'fast-1', 'fast-2']));
+		releaseSlow?.();
+
+		await expect(syncPromise).resolves.toEqual({ total: 3, succeeded: 3, failed: 0 });
+	});
+
+	it('expires publisher validators quickly so stale ETags cannot hide articles for days', async () => {
+		const redis = {
+			get: vi.fn(async () => null),
+			set: vi.fn(async () => 'OK'),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+		);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						'<?xml version="1.0"?><rss version="2.0"><channel><title>Fresh feed</title></channel></rss>',
+						{
+							status: 200,
+							headers: {
+								etag: '"stale-prone-etag"',
+								'last-modified': 'Tue, 14 Jul 2026 12:00:00 GMT',
+							},
+						},
+					),
+			),
+		);
+
+		await (
+			service as unknown as {
+				fetchAndParse: (url: string, ignoreCache: boolean) => Promise<unknown>;
+			}
+		).fetchAndParse('https://example.com/feed.xml', true);
+
+		expect(redis.set).toHaveBeenCalledWith(
+			'feed:etag:https://example.com/feed.xml',
+			'"stale-prone-etag"',
+			'EX',
+			15 * 60,
+		);
+		expect(redis.set).toHaveBeenCalledWith(
+			'feed:lastmod:https://example.com/feed.xml',
+			'Tue, 14 Jul 2026 12:00:00 GMT',
+			'EX',
+			15 * 60,
+		);
 	});
 
 	it('recovers stale syncing feeds before scheduled sync selection', async () => {
@@ -1058,7 +1160,7 @@ describe('FeedSyncService', () => {
 		const result = await service.syncDueFeeds();
 
 		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(new Date('2026-01-01T00:05:00.000Z'));
-		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(1000);
+		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(50);
 		expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 });
 	});
 
@@ -1117,7 +1219,7 @@ describe('FeedSyncService', () => {
 			expect(call[2]).toEqual({
 				enrichArticles: true,
 				warmArticleCache: false,
-				forceFetch: false,
+				forceFetch: true,
 				fetchTimeoutMs: 5_000,
 				fetchMaxRetries: 0,
 				deferScopedCacheCleanup: true,

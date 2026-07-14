@@ -88,6 +88,9 @@ export function SidebarTree({
 	onEditFeed,
 	onDeleteFeed,
 }: SidebarTreeProps) {
+	const failedFeeds = uniqueFeeds(uncategorizedFeeds, categoryFeedMap).filter(
+		(feed) => feedSyncWarning(feed) != null,
+	);
 	const categoryHandlers: CategoryTreeHandlers = {
 		selectedFeedId,
 		selectedCategoryId,
@@ -137,6 +140,35 @@ export function SidebarTree({
 					) : null}
 				</button>
 
+				{failedFeeds.length > 0 ? (
+					<div
+						className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-amber-300"
+						role="status"
+						aria-label={
+							failedFeeds.length === 1
+								? '1 feed is not updating'
+								: `${failedFeeds.length} feeds are not updating`
+						}
+					>
+						<div className="flex items-center gap-2 text-xs font-semibold">
+							<TriangleAlert className="h-4 w-4 shrink-0" />
+							<span>
+								{failedFeeds.length === 1
+									? '1 feed is not updating'
+									: `${failedFeeds.length} feeds are not updating`}
+							</span>
+						</div>
+						<div className="mt-1.5 space-y-1 text-[11px] leading-4">
+							{failedFeeds.slice(0, 3).map((feed) => (
+								<p key={feed.id} className="line-clamp-2">
+									{feedSyncWarning(feed)}
+								</p>
+							))}
+							{failedFeeds.length > 3 ? <p>And {failedFeeds.length - 3} more.</p> : null}
+						</div>
+					</div>
+				) : null}
+
 				{categories.map((category) => (
 					<CategoryTreeRow key={category.id} category={category} depth={0} {...categoryHandlers} />
 				))}
@@ -182,6 +214,17 @@ export function SidebarTree({
 			</div>
 		</nav>
 	);
+}
+
+function uniqueFeeds(
+	uncategorizedFeeds: FeedWithCounts[],
+	categoryFeedMap: Map<string, FeedWithCounts[]>,
+) {
+	const byId = new Map(uncategorizedFeeds.map((feed) => [feed.id, feed]));
+	for (const feeds of categoryFeedMap.values()) {
+		for (const feed of feeds) byId.set(feed.id, feed);
+	}
+	return [...byId.values()];
 }
 
 function CategoryTreeRow({
@@ -427,6 +470,11 @@ function FeedTreeRow({
 							</span>
 						) : null}
 					</div>
+					{syncWarning ? (
+						<p className="mt-0.5 line-clamp-2 text-[11px] font-normal leading-4 text-amber-400">
+							{syncWarning}
+						</p>
+					) : null}
 				</div>
 				{(feed.unreadCount ?? 0) > 0 ? (
 					<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">

@@ -64,7 +64,6 @@ try {
 		deps.services.feedSync,
 		undefined,
 		dueSyncCoordinator,
-		() => queuedSyncCoordinator.isRunning,
 	);
 	const stopQueuedSyncWorker = startQueuedSyncWorker(
 		deps.services.feedSync,

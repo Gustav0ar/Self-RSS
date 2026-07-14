@@ -461,6 +461,27 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `refreshFeeds bypasses stale sqlite feed health`() = runTest {
+        localStore.writeFeeds(listOf(sampleFeed("f-local")))
+        coEvery { api.feeds(null) } returns com.selffeed.android.network.ApiEnvelope(
+            listOf(
+                sampleFeed("f-network").copy(
+                    syncStatus = "error",
+                    lastSyncError = "The feed server timed out before returning a response",
+                ),
+            ),
+        )
+
+        val result = repository.refreshFeeds(null)
+
+        assertTrue(result is AppResult.Success)
+        val feed = (result as AppResult.Success).data.single()
+        assertEquals("f-network", feed.id)
+        assertEquals("error", feed.syncStatus)
+        coVerify(exactly = 1) { api.feeds(null) }
+    }
+
+    @Test
     fun `restoreSession uses saved access token before refreshing`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns "access-token"
