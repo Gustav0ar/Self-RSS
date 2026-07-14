@@ -192,55 +192,37 @@ fun ArticlesTab(
                 }
             }
 
-            val retainedArticles = state.articles.takeIf { articleCount == 0 && it.isNotEmpty() }
-            if (retainedArticles != null) {
-                items(retainedArticles, key = { it.id }, contentType = { "retained-article-row" }) { article ->
+            items(
+                count = pagedArticles.itemCount,
+                // `peek` does not trigger a load on the paging source;
+                // calling `pagedArticles[index]` instead forces a load
+                // and is paid for twice (once here, once in the body).
+                key = { index -> pagedArticles.peek(index)?.id ?: "article-placeholder-$index" },
+                contentType = { index ->
+                    if (pagedArticles.peek(index) == null) "article-placeholder"
+                    else "article-row"
+                },
+            ) { index ->
+                val article = pagedArticles[index]
+                if (article == null) {
+                    ArticlePlaceholderRow()
+                } else {
                     val isRead = readStateOverrides[article.id] ?: article.isRead
                     ArticleListRow(
                         article = article,
                         isRead = isRead,
                         selected = state.selectedArticleId == article.id,
-                        onClick = { actions.onOpenArticle(article.id) },
+                        onClick = {
+                            actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
+                            actions.onOpenArticle(article.id)
+                        },
                         onToggleRead = { read ->
+                            actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
                             actions.onToggleRead(article.id, read)
                             actions.onReadStateChanged(article.id, !read)
                         },
                         density = state.density,
                     )
-                }
-            } else {
-                items(
-                    count = pagedArticles.itemCount,
-                    // `peek` does not trigger a load on the paging source;
-                    // calling `pagedArticles[index]` instead forces a load
-                    // and is paid for twice (once here, once in the body).
-                    key = { index -> pagedArticles.peek(index)?.id ?: "article-placeholder-$index" },
-                    contentType = { index ->
-                        if (pagedArticles.peek(index) == null) "article-placeholder"
-                        else "article-row"
-                    },
-                ) { index ->
-                    val article = pagedArticles[index]
-                    if (article == null) {
-                        ArticlePlaceholderRow()
-                    } else {
-                        val isRead = readStateOverrides[article.id] ?: article.isRead
-                        ArticleListRow(
-                            article = article,
-                            isRead = isRead,
-                            selected = state.selectedArticleId == article.id,
-                            onClick = {
-                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
-                                actions.onOpenArticle(article.id)
-                            },
-                            onToggleRead = { read ->
-                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
-                                actions.onToggleRead(article.id, read)
-                                actions.onReadStateChanged(article.id, !read)
-                            },
-                            density = state.density,
-                        )
-                    }
                 }
             }
 

@@ -80,6 +80,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
 import com.selffeed.android.R
@@ -257,17 +258,20 @@ fun SelfFeedApp(
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
-    LaunchedEffect(articlePagingItems.itemSnapshotList.items) {
-        val snapshot = articlePagingItems.itemSnapshotList.items
-        if (snapshot.isNotEmpty()) actions.onArticleSnapshot(snapshot)
+    val articleSnapshot = articlePagingItems.itemSnapshotList.items
+    val articleRefreshState = articlePagingItems.loadState.refresh
+    LaunchedEffect(articleSnapshot, articleRefreshState) {
+        // A completed Paging generation is authoritative even when it is
+        // empty. Ignoring empty snapshots leaves the ViewModel holding rows
+        // from the previous query until another scroll happens to publish a
+        // non-empty window.
+        settledArticleSnapshot(articleSnapshot, articleRefreshState)
+            ?.let(actions.onArticleSnapshot)
     }
-    // Use paging items if available, otherwise fall back to state items
     val rawArticleQueue = if (selectedArticle != null && state.articles.readerQueue.isNotEmpty()) {
         state.articles.readerQueue
     } else {
-        articlePagingItems.itemSnapshotList.items
-            .takeIf { it.isNotEmpty() }
-            ?: state.articles.items
+        articleSnapshot
     }
     // Apply read state overrides to show articles as read without filtering them out
     val articleQueue = remember(rawArticleQueue, readStateOverrides) {
@@ -517,6 +521,11 @@ fun SelfFeedApp(
     }
 
 }
+
+internal fun settledArticleSnapshot(
+    snapshot: List<ArticleListItem>,
+    refreshState: LoadState,
+): List<ArticleListItem>? = snapshot.takeIf { refreshState is LoadState.NotLoading }
 
 @Composable
 private fun LoadingScreen() {

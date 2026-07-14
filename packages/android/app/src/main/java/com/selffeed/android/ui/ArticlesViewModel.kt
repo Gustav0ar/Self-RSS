@@ -162,7 +162,6 @@ class ArticlesViewModel @Inject constructor(
      * of article-list data; this is not a second list cache.
      */
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
-        if (articles.isEmpty()) return
         val itemsWithReadStates = articles.withReadStates(knownArticleReadStates())
         _state.update { it.copy(items = itemsWithReadStates) }
         readStateManager.updateItems(itemsWithReadStates)

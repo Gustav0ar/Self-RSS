@@ -103,6 +103,37 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `empty settled paging snapshot clears stale visible articles`() = runTest {
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(sampleArticle("old-article", title = "Stale Article")),
+        )
+
+        viewModel.updateArticleQueueSnapshot(emptyList())
+
+        assertTrue(viewModel.state.value.items.isEmpty())
+    }
+
+    @Test
+    fun `empty visible snapshot does not discard the open reader queue`() = runTest {
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle("a1", title = "First Article"),
+                sampleArticle("a2", title = "Second Article"),
+            ),
+        )
+        viewModel.openArticle("a1")
+        runCurrent()
+
+        viewModel.updateArticleQueueSnapshot(emptyList())
+
+        assertTrue(viewModel.state.value.items.isEmpty())
+        assertEquals(listOf("a1", "a2"), viewModel.state.value.readerQueue.map { it.id })
+        assertEquals("a1", viewModel.state.value.selectedArticle?.id)
+    }
+
+    @Test
     fun `openArticle marks unread article when auto-mark is set to navigate`() = runTest {
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
