@@ -817,18 +817,27 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledTimes(3);
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: true,
+			warmArticleCache: false,
 			forceFetch: false,
+			fetchTimeoutMs: 5_000,
+			fetchMaxRetries: 0,
+			deferScopedCacheCleanup: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: true,
+			warmArticleCache: false,
 			forceFetch: false,
+			fetchTimeoutMs: 5_000,
+			fetchMaxRetries: 0,
+			deferScopedCacheCleanup: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: true,
+			warmArticleCache: false,
 			forceFetch: false,
+			fetchTimeoutMs: 5_000,
+			fetchMaxRetries: 0,
+			deferScopedCacheCleanup: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 3,
@@ -870,8 +879,11 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledTimes(2);
 		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
 			enrichArticles: true,
-			warmArticleCache: true,
+			warmArticleCache: false,
 			forceFetch: false,
+			fetchTimeoutMs: 5_000,
+			fetchMaxRetries: 0,
+			deferScopedCacheCleanup: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 1,
@@ -882,7 +894,7 @@ describe('FeedSyncService', () => {
 		});
 	});
 
-	it('prioritizes the selected scope and reports incremental progress', async () => {
+	it('limits an interactive feed refresh to the selected feed', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [
 				{ id: 'other', syncStatus: 'idle' },
@@ -914,12 +926,45 @@ describe('FeedSyncService', () => {
 			},
 		);
 
-		expect(started).toEqual(['selected', 'category-feed', 'other']);
-		expect(progress).toEqual([
-			{ totalFeeds: 3, completedFeeds: 1, newArticles: 1 },
-			{ totalFeeds: 3, completedFeeds: 2, newArticles: 2 },
-			{ totalFeeds: 3, completedFeeds: 3, newArticles: 3 },
-		]);
+		expect(started).toEqual(['selected']);
+		expect(progress).toEqual([{ totalFeeds: 1, completedFeeds: 1, newArticles: 1 }]);
+	});
+
+	it('limits an interactive category refresh to feeds in that category', async () => {
+		const feedRepo = {
+			findAllByUser: vi.fn(async () => [
+				{ id: 'other', syncStatus: 'idle' },
+				{ id: 'category-1', syncStatus: 'idle' },
+				{ id: 'category-2', syncStatus: 'idle' },
+			]),
+			findByCategory: vi.fn(async () => [{ id: 'category-1' }, { id: 'category-2' }]),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{ timeoutMs: 30_000, maxContentLength: 1_000_000, concurrency: 8, allowPrivateHosts: false },
+		);
+		const started: string[] = [];
+		const syncFeedSpy = vi.spyOn(service, 'syncFeed').mockImplementation(async (feedId) => {
+			started.push(feedId);
+			return { newArticles: 0, total: 1 };
+		});
+
+		const result = await service.syncAllFeeds('user-1', { categoryId: 'category' });
+
+		expect(started).toEqual(['category-1', 'category-2']);
+		expect(result.totalFeeds).toBe(2);
+		for (const call of syncFeedSpy.mock.calls) {
+			expect(call[2]).toMatchObject({
+				warmArticleCache: false,
+				fetchTimeoutMs: 5_000,
+				fetchMaxRetries: 0,
+				deferScopedCacheCleanup: true,
+			});
+		}
 	});
 
 	it('warms the article list cache after bulk refresh without blocking completion', async () => {
@@ -928,6 +973,7 @@ describe('FeedSyncService', () => {
 			findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
 		};
 		const articleCache = {
+			invalidateCache: vi.fn(async () => undefined),
 			populateCache: vi.fn(
 				() =>
 					new Promise<void>((resolve) => {
@@ -951,6 +997,7 @@ describe('FeedSyncService', () => {
 		const result = await service.syncAllFeeds('user-1');
 
 		expect(result.newArticles).toBe(2);
+		expect(articleCache.invalidateCache).toHaveBeenCalledTimes(1);
 		expect(articleCache.populateCache).toHaveBeenCalledWith('user-1');
 		finishCacheWarm();
 	});
@@ -1069,8 +1116,11 @@ describe('FeedSyncService', () => {
 		for (const call of syncFeedSpy.mock.calls) {
 			expect(call[2]).toEqual({
 				enrichArticles: true,
-				warmArticleCache: true,
+				warmArticleCache: false,
 				forceFetch: false,
+				fetchTimeoutMs: 5_000,
+				fetchMaxRetries: 0,
+				deferScopedCacheCleanup: true,
 			});
 		}
 

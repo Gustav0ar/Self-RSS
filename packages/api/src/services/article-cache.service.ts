@@ -396,7 +396,7 @@ export class ArticleCacheService {
 	 * This handles race conditions - if a user was reading during invalidation,
 	 * they'll detect the generation mismatch and fetch fresh data.
 	 */
-	async invalidateCache(userId: string): Promise<void> {
+	async invalidateCache(userId: string, options: { cleanupScoped?: boolean } = {}): Promise<void> {
 		// Increment generation first - this marks cache as stale
 		// Any in-flight reads will detect the mismatch
 		await this.incrementGeneration(userId);
@@ -405,6 +405,7 @@ export class ArticleCacheService {
 		const cacheKey = CacheKeys.articleListCache(userId);
 		const metaKey = CacheKeys.articleListCacheMeta(userId);
 		await this.redis.del(cacheKey, metaKey);
+		if (options.cleanupScoped === false) return;
 
 		// Delete all feed/category scoped caches for this user. Use SCAN,
 		// not KEYS, so a large keyspace does not block Redis. The pattern

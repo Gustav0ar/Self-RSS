@@ -15,10 +15,15 @@ export function startSyncScheduler(
 	syncService: FeedSyncService,
 	intervalMs: number = 30 * 1000,
 	coordinator: SyncCoordinator = { isRunning: false },
+	shouldPause: () => boolean = () => false,
 ) {
 	logger.info('Feed sync scheduler started', { intervalMs });
 
 	const interval = setInterval(async () => {
+		if (shouldPause()) {
+			logger.debug('Pausing scheduled feed sync while manual refresh has priority');
+			return;
+		}
 		if (coordinator.isRunning) {
 			logger.warn('Skipping sync cycle because the previous one is still running');
 			return;
@@ -85,11 +90,12 @@ export function startArticleEnrichmentWorker(
 	syncService: FeedSyncService,
 	intervalMs: number = 500,
 	coordinator: SyncCoordinator = { isRunning: false },
+	shouldPause: () => boolean = () => false,
 ) {
 	logger.info('Article enrichment worker started', { intervalMs });
 
 	const drainOnce = async () => {
-		if (coordinator.isRunning) return;
+		if (coordinator.isRunning || shouldPause()) return;
 		coordinator.isRunning = true;
 		try {
 			const result = await syncService.processPendingArticleEnrichments();
@@ -222,6 +228,7 @@ interface CacheWarmerOptions {
 	includeIdleUsers?: boolean;
 	idleUsersLimit?: number;
 	runOnStart?: boolean;
+	shouldPause?: () => boolean;
 }
 
 /**
@@ -245,6 +252,7 @@ export function startCacheWarmer(
 	const includeIdleUsers = options.includeIdleUsers ?? false;
 	const idleUsersLimit = options.idleUsersLimit ?? 25;
 	const runOnStart = options.runOnStart ?? true;
+	const shouldPause = options.shouldPause ?? (() => false);
 
 	logger.info('Article cache warmer started', {
 		intervalMs,
@@ -257,7 +265,7 @@ export function startCacheWarmer(
 	let isRunning = false;
 
 	const warmOnce = async () => {
-		if (isRunning) return;
+		if (isRunning || shouldPause()) return;
 		isRunning = true;
 		try {
 			const recentUserIds = await articleCache.getRecentlyActiveUserIds(

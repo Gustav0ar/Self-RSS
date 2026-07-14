@@ -59,6 +59,9 @@ interface SyncFeedOptions {
 	enrichArticles?: boolean;
 	warmArticleCache?: boolean;
 	forceFetch?: boolean;
+	fetchTimeoutMs?: number;
+	fetchMaxRetries?: number;
+	deferScopedCacheCleanup?: boolean;
 }
 
 interface PendingArticleEnrichment {
@@ -76,6 +79,8 @@ const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
 const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
+const MANUAL_FEED_SYNC_TIMEOUT_MS = 5_000;
+const MANUAL_FEED_SYNC_MAX_CONCURRENCY = 4;
 const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
@@ -128,14 +133,22 @@ export class FeedSyncService {
 			const articleCount = (await this.articleRepo.countByFeeds?.([feedId])) ?? 0;
 			const isProxyFeed = isKnownProxyFeedUrl(feed.feedUrl);
 			const ignoreCache = options.forceFetch === true || articleCount === 0 || isProxyFeed;
-			const initialParsed = await this.fetchAndParse(feed.feedUrl, ignoreCache).catch((error) => {
+			const fetchOptions =
+				options.fetchTimeoutMs != null || options.fetchMaxRetries != null
+					? { timeoutMs: options.fetchTimeoutMs, maxRetries: options.fetchMaxRetries }
+					: null;
+			const fetchForSync = (url: string, bypassCache: boolean) =>
+				fetchOptions
+					? this.fetchAndParse(url, bypassCache, fetchOptions)
+					: this.fetchAndParse(url, bypassCache);
+			const initialParsed = await fetchForSync(feed.feedUrl, ignoreCache).catch((error) => {
 				throw new FeedSyncFetchError(getSyncErrorDetails(error));
 			});
 			const proxyResolution = await resolveStaleProxyFeed({
 				feedUrl: feed.feedUrl,
 				parsed: initialParsed,
 				config: this.config,
-				fetchAndParse: (candidateUrl, ignoreCache) => this.fetchAndParse(candidateUrl, ignoreCache),
+				fetchAndParse: fetchForSync,
 			});
 			const parsed = proxyResolution?.parsed ?? initialParsed;
 			const effectiveFeedUrl = proxyResolution?.feedUrl ?? feed.feedUrl;
@@ -407,7 +420,9 @@ export class FeedSyncService {
 
 			await this.invalidateUnreadCache(userId, feedId);
 			if (this.articleCache && (insertedArticles.length > 0 || articlesToUpdate.length > 0)) {
-				await this.articleCache.invalidateCache(userId);
+				await this.articleCache.invalidateCache(userId, {
+					cleanupScoped: options.deferScopedCacheCleanup !== true,
+				});
 			}
 			await this.metricsRepo.incrementSyncCount(userId);
 
@@ -483,7 +498,13 @@ export class FeedSyncService {
 					(await this.feedRepo.findByCategory(userId, scope.categoryId)).map((feed) => feed.id),
 				)
 			: new Set<string>();
-		const syncableFeeds = [...feeds].sort((left, right) => {
+		// Feed scope wins over category scope when both legacy parameters are present.
+		const scopedFeeds = scope.feedId
+			? feeds.filter((feed) => feed.id === scope.feedId)
+			: scope.categoryId
+				? feeds.filter((feed) => categoryFeedIds.has(feed.id))
+				: feeds;
+		const syncableFeeds = [...scopedFeeds].sort((left, right) => {
 			const priority = (feed: (typeof feeds)[number]) => {
 				if (scope.feedId === feed.id) return 0;
 				if (categoryFeedIds.has(feed.id)) return 1;
@@ -494,7 +515,7 @@ export class FeedSyncService {
 
 		if (syncableFeeds.length === 0) {
 			return {
-				totalFeeds: feeds.length,
+				totalFeeds: 0,
 				syncedFeeds: 0,
 				failedFeeds: 0,
 				skippedFeeds: 0,
@@ -504,15 +525,20 @@ export class FeedSyncService {
 
 		const bulkResult = await syncFeedsForBulk({
 			feeds: syncableFeeds,
-			concurrency: this.config.concurrency,
+			concurrency: Math.min(this.config.concurrency, MANUAL_FEED_SYNC_MAX_CONCURRENCY),
 			syncFeed: (feed) =>
 				this.syncFeed(feed.id, userId, {
 					enrichArticles: true,
-					warmArticleCache: true,
+					// Warm the full user cache once after the batch.
+					warmArticleCache: false,
 					// A manual refresh must contact the publisher, but HTTP
 					// validators still need to be sent so unchanged feeds can
 					// complete with a cheap 304 response.
 					forceFetch: false,
+					// Leave slow publishers for the robust background scheduler.
+					fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
+					fetchMaxRetries: 0,
+					deferScopedCacheCleanup: true,
 				}),
 			onProgress: async (progress) => {
 				await onProgress?.({
@@ -534,11 +560,14 @@ export class FeedSyncService {
 
 		// Populate cache after bulk sync completes
 		if (this.articleCache && bulkResult.newArticles > 0) {
+			// One SCAN/cleanup per user batch instead of one per feed. Individual
+			// feeds still bump the generation so clients see early revisions.
+			await this.articleCache.invalidateCache(userId);
 			this.warmArticleCacheInBackground(userId, { operation: 'bulkFeedSync' });
 		}
 
 		return {
-			totalFeeds: feeds.length,
+			totalFeeds: syncableFeeds.length,
 			...bulkResult,
 		};
 	}
@@ -816,6 +845,7 @@ export class FeedSyncService {
 	private async fetchAndParse(
 		feedUrl: string,
 		ignoreCache = false,
+		options: { timeoutMs?: number; maxRetries?: number } = {},
 	): Promise<RSSParser.Output<FeedItemRecord>> {
 		const etagKey = CacheKeys.feedEtag(feedUrl);
 		const lastModKey = CacheKeys.feedLastModified(feedUrl);
@@ -836,7 +866,10 @@ export class FeedSyncService {
 		const result = await withRetry(
 			async () => {
 				const controller = new AbortController();
-				const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+				const timeout = setTimeout(
+					() => controller.abort(),
+					options.timeoutMs ?? this.config.timeoutMs,
+				);
 
 				try {
 					const response = await fetchWithValidatedRedirects(
@@ -880,7 +913,7 @@ export class FeedSyncService {
 					clearTimeout(timeout);
 				}
 			},
-			{ maxRetries: 3 },
+			{ maxRetries: options.maxRetries ?? 3 },
 			{ operation: 'fetchAndParse', feedUrl },
 		);
 

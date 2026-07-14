@@ -64,6 +64,7 @@ try {
 		deps.services.feedSync,
 		undefined,
 		dueSyncCoordinator,
+		() => queuedSyncCoordinator.isRunning,
 	);
 	const stopQueuedSyncWorker = startQueuedSyncWorker(
 		deps.services.feedSync,
@@ -74,6 +75,7 @@ try {
 		deps.services.feedSync,
 		undefined,
 		articleEnrichmentCoordinator,
+		() => queuedSyncCoordinator.isRunning,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article, {
 		retentionDays: env.RETENTION_DELETION_DAYS,
@@ -87,6 +89,7 @@ try {
 		concurrency: env.CACHE_WARMER_CONCURRENCY,
 		includeIdleUsers: env.CACHE_WARMER_IDLE_USERS_ENABLED,
 		idleUsersLimit: env.CACHE_WARMER_IDLE_USERS_LIMIT,
+		shouldPause: () => queuedSyncCoordinator.isRunning,
 	});
 	const stopWorkerHeartbeat = startWorkerHeartbeat(redis);
 

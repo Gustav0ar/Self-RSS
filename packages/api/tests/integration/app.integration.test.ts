@@ -1064,7 +1064,7 @@ describe('API integration', () => {
 		}
 	});
 
-	it('syncs every feed for the current user from the bulk sync endpoint', async () => {
+	it('syncs only the selected feed from the scoped bulk sync endpoint', async () => {
 		const registered = await registerUser('sync-all@example.com');
 		const token = registered.body.data.tokens.accessToken;
 
@@ -1200,11 +1200,11 @@ describe('API integration', () => {
 				userId: registered.body.data.user.id,
 				skipped: false,
 				result: {
-					totalFeeds: 2,
-					syncedFeeds: 2,
+					totalFeeds: 1,
+					syncedFeeds: 1,
 					failedFeeds: 0,
 					skippedFeeds: 0,
-					newArticles: 3,
+					newArticles: 2,
 				},
 			});
 
@@ -1218,9 +1218,9 @@ describe('API integration', () => {
 				queuedAt: null,
 				startedAt: null,
 				heartbeatAt: null,
-				totalFeeds: 2,
-				completedFeeds: 2,
-				newArticles: 3,
+				totalFeeds: 1,
+				completedFeeds: 1,
+				newArticles: 2,
 				articleRevision: expect.any(Number),
 			});
 
@@ -1232,11 +1232,14 @@ describe('API integration', () => {
 					(total: number, feed: { unreadCount: number }) => total + feed.unreadCount,
 					0,
 				),
-			).toBe(3);
+			).toBe(2);
 
 			const articles = await authedRequest('/api/v1/articles?sort=latest&limit=10', token);
 			expect(articles.response.status).toBe(200);
-			expect(articles.body.data).toHaveLength(3);
+			expect(articles.body.data).toHaveLength(2);
+			expect(articles.body.data.map((article: { title: string }) => article.title)).not.toContain(
+				'First Story',
+			);
 		} finally {
 			await firstFeedServer.stop();
 			await secondFeedServer.stop();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	startArticleEnrichmentWorker,
 	startCacheWarmer,
 	startQueuedSyncWorker,
 	startRetentionCleanup,
@@ -32,6 +33,25 @@ describe('scheduler error handling', () => {
 	});
 
 	describe('startSyncScheduler', () => {
+		it('yields scheduled sync capacity while manual refresh is active', async () => {
+			vi.useFakeTimers();
+			let manualRefreshActive = true;
+			const syncService = { syncDueFeeds: vi.fn().mockResolvedValue({ total: 0 }) };
+			const stop = startSyncScheduler(
+				syncService as never,
+				100,
+				{ isRunning: false },
+				() => manualRefreshActive,
+			);
+
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.syncDueFeeds).not.toHaveBeenCalled();
+			manualRefreshActive = false;
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.syncDueFeeds).toHaveBeenCalledTimes(1);
+			stop();
+			vi.useRealTimers();
+		});
 		it('logs errors when syncDueFeeds throws', async () => {
 			const syncService = {
 				syncDueFeeds: vi.fn().mockRejectedValue(new Error('Database connection failed')),
@@ -124,6 +144,30 @@ describe('scheduler error handling', () => {
 		});
 	});
 
+	describe('startArticleEnrichmentWorker', () => {
+		it('does not compete with an active manual refresh', async () => {
+			vi.useFakeTimers();
+			let manualRefreshActive = true;
+			const syncService = {
+				processPendingArticleEnrichments: vi.fn().mockResolvedValue({ processed: 0 }),
+			};
+			const stop = startArticleEnrichmentWorker(
+				syncService as never,
+				100,
+				{ isRunning: false },
+				() => manualRefreshActive,
+			);
+
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.processPendingArticleEnrichments).not.toHaveBeenCalled();
+			manualRefreshActive = false;
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.processPendingArticleEnrichments).toHaveBeenCalledTimes(1);
+			stop();
+			vi.useRealTimers();
+		});
+	});
+
 	describe('startRetentionCleanup', () => {
 		it('logs errors when deleteOlderThan throws', async () => {
 			const articleRepo = {
@@ -183,6 +227,30 @@ describe('scheduler error handling', () => {
 	});
 
 	describe('startCacheWarmer', () => {
+		it('does not compete with an active manual refresh', async () => {
+			vi.useFakeTimers();
+			let manualRefreshActive = true;
+			const articleCache = {
+				getRecentlyActiveUserIds: vi.fn().mockResolvedValue(['recent-1']),
+				populateCache: vi.fn().mockResolvedValue(undefined),
+			};
+			const stop = startCacheWarmer(
+				articleCache as never,
+				{ findActiveUserIds: vi.fn() },
+				{
+					intervalMs: 100,
+					shouldPause: () => manualRefreshActive,
+				},
+			);
+
+			await vi.advanceTimersByTimeAsync(100);
+			expect(articleCache.populateCache).not.toHaveBeenCalled();
+			manualRefreshActive = false;
+			await vi.advanceTimersByTimeAsync(100);
+			expect(articleCache.populateCache).toHaveBeenCalledWith('recent-1');
+			stop();
+			vi.useRealTimers();
+		});
 		it('logs errors when getRecentlyActiveUserIds throws', async () => {
 			const articleCache = {
 				getRecentlyActiveUserIds: vi.fn().mockRejectedValue(new Error('Cache service error')),
