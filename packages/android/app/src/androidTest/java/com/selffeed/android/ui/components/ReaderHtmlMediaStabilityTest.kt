@@ -38,6 +38,8 @@ class ReaderHtmlMediaStabilityTest {
             composeRule.activity.setTurnScreenOn(true)
         }
         val pageFinished = CountDownLatch(1)
+        val initialHeightReported = CountDownLatch(1)
+        val mediaBurstFinished = CountDownLatch(1)
         val heightCallbacks = AtomicInteger(0)
         lateinit var webView: WebView
         val document = buildReaderHtmlDocument(
@@ -67,6 +69,12 @@ class ReaderHtmlMediaStabilityTest {
                                 @JavascriptInterface
                                 fun updateHeight(@Suppress("UNUSED_PARAMETER") height: Float) {
                                     heightCallbacks.incrementAndGet()
+                                    initialHeightReported.countDown()
+                                }
+
+                                @JavascriptInterface
+                                fun mediaBurstFinished() {
+                                    mediaBurstFinished.countDown()
                                 }
                             },
                             "Android",
@@ -89,12 +97,12 @@ class ReaderHtmlMediaStabilityTest {
             )
         }
 
-        assertTrue("Reader HTML did not finish loading", pageFinished.await(5, TimeUnit.SECONDS))
-        SystemClock.sleep(350)
+        assertTrue("Reader HTML did not finish loading", pageFinished.await(30, TimeUnit.SECONDS))
         assertTrue(
             "The reader JavaScript bridge did not report its initial height",
-            heightCallbacks.get() > 0,
+            initialHeightReported.await(10, TimeUnit.SECONDS),
         )
+        SystemClock.sleep(350)
         heightCallbacks.set(0)
 
         composeRule.runOnUiThread {
@@ -106,7 +114,10 @@ class ReaderHtmlMediaStabilityTest {
                         const updates = setInterval(() => {
                             frame += 1;
                             media.style.height = (120 + frame * 18) + 'px';
-                            if (frame === 12) clearInterval(updates);
+                            if (frame === 12) {
+                                clearInterval(updates);
+                                Android.mediaBurstFinished();
+                            }
                         }, 10);
                     })();
                 """.trimIndent(),
@@ -114,7 +125,11 @@ class ReaderHtmlMediaStabilityTest {
             )
         }
 
-        SystemClock.sleep(700)
+        assertTrue(
+            "Reader HTML did not finish the media layout burst",
+            mediaBurstFinished.await(10, TimeUnit.SECONDS),
+        )
+        SystemClock.sleep(350)
         val callbacksAfterBurst = heightCallbacks.get()
         assertTrue(
             "Expected one coalesced height update (plus at most the fallback check), " +
