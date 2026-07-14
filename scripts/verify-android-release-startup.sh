@@ -20,9 +20,23 @@ if [ -z "$BUILD_TOOLS_DIR" ]; then
   exit 1
 fi
 
+DEBUG_KEYSTORE="$HOME/.android/debug.keystore"
+if [ ! -f "$DEBUG_KEYSTORE" ]; then
+  mkdir -p "$(dirname "$DEBUG_KEYSTORE")"
+  keytool -genkeypair \
+    -keystore "$DEBUG_KEYSTORE" \
+    -storepass android \
+    -alias androiddebugkey \
+    -keypass android \
+    -keyalg RSA \
+    -keysize 2048 \
+    -validity 10000 \
+    -dname "CN=Android Debug,O=Android,C=US"
+fi
+
 "$BUILD_TOOLS_DIR/zipalign" -f 4 "$UNSIGNED_APK" "$SIGNED_APK"
 "$BUILD_TOOLS_DIR/apksigner" sign \
-  --ks "$HOME/.android/debug.keystore" \
+  --ks "$DEBUG_KEYSTORE" \
   --ks-key-alias androiddebugkey \
   --ks-pass pass:android \
   --key-pass pass:android \
