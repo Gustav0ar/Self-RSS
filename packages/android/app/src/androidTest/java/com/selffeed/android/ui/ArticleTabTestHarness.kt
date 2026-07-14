@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.screens.ArticleTabActions
 import com.selffeed.android.ui.screens.ArticleTabState
 import com.selffeed.android.ui.screens.ArticlesTab
@@ -17,9 +18,10 @@ import kotlinx.coroutines.flow.flowOf
 fun ArticlesTabWithStaticPaging(
     state: ArticleTabState,
     actions: ArticleTabActions,
+    pagingArticles: List<ArticleListItem> = state.articles,
 ) {
-    val pagingData = remember(state.articles) {
-        flowOf(PagingData.from(state.articles))
+    val pagingData = remember(pagingArticles) {
+        flowOf(PagingData.from(pagingArticles))
     }
     ArticlesTab(
         state = state,

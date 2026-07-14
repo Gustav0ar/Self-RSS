@@ -6,8 +6,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -22,12 +25,21 @@ import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
 class ArticlesTabUiTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Before
+    fun showTestActivityWhileDeviceIsLocked() {
+        composeRule.runOnUiThread {
+            composeRule.activity.setShowWhenLocked(true)
+            composeRule.activity.setTurnScreenOn(true)
+        }
+    }
 
     @Test
     fun articlesTab_showsRowsAndTriggersActions() {
@@ -90,15 +102,19 @@ class ArticlesTabUiTest {
     }
 
     @Test
-    fun articlesTab_showsBackgroundRefreshStatusWithoutHidingCurrentRows() {
+    fun articlesTab_refreshIndicatorOverlaysRowsWithoutPersistentBanner() {
+        var state by mutableStateOf(
+            ArticleTabState(
+                articles = listOf(sampleArticle("article-1", "Visible Article")),
+                selectedArticleId = null,
+                isSyncingFeeds = false,
+            ),
+        )
+
         composeRule.setContent {
             SelfFeedTheme {
                 ArticlesTabWithStaticPaging(
-                    state = ArticleTabState(
-                        articles = listOf(sampleArticle("article-1", "Visible Article")),
-                        selectedArticleId = null,
-                        isSyncingFeeds = true,
-                    ),
+                    state = state,
                     actions = ArticleTabActions(
                         onRefresh = {},
                         onOpenArticle = {},
@@ -110,12 +126,108 @@ class ArticlesTabUiTest {
         }
 
         composeRule.onNodeWithText("Visible Article").assertIsDisplayed()
+        val rowTopBeforeRefresh = composeRule
+            .onNodeWithText("Visible Article")
+            .fetchSemanticsNode()
+            .boundsInRoot
+            .top
+        val listModifierNames = composeRule
+            .onNodeWithTag("articles-list")
+            .fetchSemanticsNode()
+            .layoutInfo
+            .getModifierInfo()
+            .map { it.modifier::class.java.name }
+        assertTrue(
+            "The article list must not use a graphics-layer pull translation: $listModifierNames",
+            // LazyColumn owns an internal GraphicsLayerElement for item
+            // animation. A block-based layer here would be the custom pull
+            // translation that previously moved the entire list downward.
+            listModifierNames.none { it.contains("BlockGraphicsLayer") },
+        )
+
+        composeRule.runOnUiThread {
+            state = state.copy(isStartingFeedSync = true)
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("articles-refresh-indicator").fetchSemanticsNodes().size == 1
+        }
+
+        val rowTopDuringRefresh = composeRule
+            .onNodeWithText("Visible Article")
+            .fetchSemanticsNode()
+            .boundsInRoot
+            .top
+        assertEquals(rowTopBeforeRefresh, rowTopDuringRefresh, 0.5f)
+        composeRule
+            .onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
         composeRule
             .onNodeWithText("Refreshing feeds in the background. New articles will appear as they arrive.")
-            .assertIsDisplayed()
+            .assertDoesNotExist()
+    }
+
+    @Test
+    fun articlesTab_initialFeedSyncUsesOnlyTheTopIndicatorImmediately() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTabWithStaticPaging(
+                    state = ArticleTabState(
+                        articles = emptyList(),
+                        selectedArticleId = null,
+                        isSyncingFeeds = false,
+                        isStartingFeedSync = true,
+                    ),
+                    actions = noOpArticleActions(),
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertIsDisplayed()
         composeRule
-            .onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
-            .assertIsDisplayed()
+            .onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
+        composeRule.onNodeWithText("Start by adding a feed").assertDoesNotExist()
+    }
+
+    @Test
+    fun articlesTab_emptyPagingSnapshotNeverRendersRetainedStateRows() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTabWithStaticPaging(
+                    state = ArticleTabState(
+                        articles = listOf(sampleArticle("stale-1", "Stale Article")),
+                        selectedArticleId = null,
+                        isSyncingFeeds = false,
+                        feedCount = 1,
+                    ),
+                    actions = noOpArticleActions(),
+                    pagingArticles = emptyList(),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Stale Article").assertDoesNotExist()
+    }
+
+    @Test
+    fun articlesTab_rendersTheNewPagingGenerationWithoutAListGesture() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTabWithStaticPaging(
+                    state = ArticleTabState(
+                        articles = listOf(sampleArticle("stale-1", "Stale Article")),
+                        selectedArticleId = null,
+                        isSyncingFeeds = false,
+                        feedCount = 1,
+                    ),
+                    actions = noOpArticleActions(),
+                    pagingArticles = listOf(sampleArticle("fresh-1", "Fresh Article")),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Fresh Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Stale Article").assertDoesNotExist()
     }
 
     @Test
