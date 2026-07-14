@@ -8,6 +8,10 @@ export interface FeedSyncAllStatus {
 	queuedAt?: string | null;
 	startedAt?: string | null;
 	heartbeatAt?: string | null;
+	totalFeeds?: number;
+	completedFeeds?: number;
+	newArticles?: number;
+	articleRevision?: number;
 }
 
 export const ALL_FEEDS_SYNC_ID = '__all_feeds__';

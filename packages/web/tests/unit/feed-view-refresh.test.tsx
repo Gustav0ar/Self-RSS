@@ -72,6 +72,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 	usePrefetchArticle: () => vi.fn(),
 	useWarmNextArticles: () => warmNextArticlesMock,
+	useWarmVisibleArticles: () => vi.fn(),
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
 }));
 
@@ -203,7 +204,7 @@ describe('FeedView refresh', () => {
 		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
 
 		fireEvent.click(refreshButton);
-		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true });
+		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true, categoryId: undefined });
 	});
 
 	it('allows refreshing for category views', () => {
@@ -215,7 +216,10 @@ describe('FeedView refresh', () => {
 		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
 
 		fireEvent.click(refreshButton);
-		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true });
+		expect(refreshFeed).toHaveBeenCalledWith(undefined, {
+			force: true,
+			categoryId: 'category-1',
+		});
 	});
 
 	it('shows refresh progress while all feeds are syncing in the background', () => {

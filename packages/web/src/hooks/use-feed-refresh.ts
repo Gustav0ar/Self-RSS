@@ -18,6 +18,7 @@ import { useAppState } from '@/providers/app-state';
 
 interface RefreshOptions {
 	force?: boolean;
+	categoryId?: string;
 }
 
 export function useFeedRefresh() {
@@ -35,6 +36,7 @@ export function useFeedRefresh() {
 	const [untimedStatusActiveSince, setUntimedStatusActiveSince] = useState(0);
 	const [, setRefreshClock] = useState(0);
 	const wasRefreshingAllFeeds = useRef(false);
+	const lastArticleRevision = useRef<number | null>(null);
 	const hasSettledInactiveAllFeedsStatus = hasFreshInactiveFeedSyncStatus({
 		status: allFeedsSyncStatus,
 		statusUpdatedAt: allFeedsSyncStatusUpdatedAt,
@@ -107,6 +109,21 @@ export function useFeedRefresh() {
 	}, [allFeedsRefreshActivity.isTakingLonger, qc, setSyncingFeedId, syncingFeedId]);
 
 	useEffect(() => {
+		if (!allFeedsRefreshActivity.isActive) {
+			return;
+		}
+
+		const revision = allFeedsSyncStatus?.articleRevision;
+		if (revision == null) {
+			return;
+		}
+		if (lastArticleRevision.current != null && revision > lastArticleRevision.current) {
+			qc.invalidateQueries({ queryKey: ['articles'] });
+		}
+		lastArticleRevision.current = Math.max(lastArticleRevision.current ?? 0, revision);
+	}, [allFeedsRefreshActivity.isActive, allFeedsSyncStatus?.articleRevision, qc]);
+
+	useEffect(() => {
 		if (allFeedsRefreshActivity.isActive) {
 			wasRefreshingAllFeeds.current = true;
 			return;
@@ -131,10 +148,11 @@ export function useFeedRefresh() {
 				setFeedSyncError(null);
 				setAllFeedsRefreshQueuedAt(queuedAt);
 				setSyncingFeedId(ALL_FEEDS_SYNC_ID);
+				lastArticleRevision.current = allFeedsSyncStatus?.articleRevision ?? 0;
 				setRefreshClock((tick) => tick + 1);
 
 				try {
-					await syncAllFeeds.mutateAsync();
+					await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
 					void refetchAllFeedsSyncStatus();
 					return true;
 				} catch (error) {
@@ -175,6 +193,7 @@ export function useFeedRefresh() {
 		},
 		[
 			feeds,
+			allFeedsSyncStatus?.articleRevision,
 			hasSettledInactiveAllFeedsStatus,
 			refetchAllFeedsSyncStatus,
 			setFeedSyncError,

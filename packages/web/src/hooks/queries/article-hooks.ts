@@ -35,6 +35,15 @@ function enrichArticle(articleId: string) {
 	).then((r) => r.data);
 }
 
+function preloadImages(urls: readonly (string | null | undefined)[]) {
+	if (typeof Image === 'undefined') return;
+	for (const url of new Set(urls.filter((value): value is string => !!value))) {
+		const image = new Image();
+		image.decoding = 'async';
+		image.src = url;
+	}
+}
+
 // --- Articles ---
 
 export type { ArticleQueryParams };
@@ -133,11 +142,15 @@ export function useWarmNextArticles() {
 				void (async () => {
 					const queryKey = articleQueryKey(articleId);
 					try {
-						await qc.fetchQuery({
+						const detail = await qc.fetchQuery({
 							queryKey,
 							queryFn: ({ signal }) => fetchArticle(articleId, signal),
 							staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
 						});
+						preloadImages([
+							detail.heroImageUrl,
+							...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
+						]);
 					} catch {
 						// Background warming should never surface as reader UI noise.
 					} finally {
@@ -145,6 +158,50 @@ export function useWarmNextArticles() {
 					}
 				})();
 			}
+		},
+		[qc],
+	);
+}
+
+export function useWarmVisibleArticles() {
+	const qc = useQueryClient();
+	const lastCandidateKey = useRef('');
+
+	return useCallback(
+		(candidates: readonly { id: string; heroImageUrl: string | null }[]) => {
+			const unique = Array.from(
+				new Map(candidates.map((article) => [article.id, article])).values(),
+			)
+				.filter((article) => article.id)
+				.slice(0, 4);
+			const candidateKey = unique.map((article) => article.id).join('|');
+			if (!candidateKey || candidateKey === lastCandidateKey.current) return;
+			lastCandidateKey.current = candidateKey;
+			preloadImages(unique.map((article) => article.heroImageUrl));
+
+			void Promise.all(
+				unique.map((article) =>
+					qc.fetchQuery({
+						queryKey: articleQueryKey(article.id),
+						queryFn: ({ signal }) => fetchArticle(article.id, signal),
+						staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
+					}),
+				),
+			)
+				.then((details) => {
+					preloadImages(
+						details.flatMap((detail) => [
+							detail.heroImageUrl,
+							...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
+						]),
+					);
+					for (const detail of details) {
+						if (detail.contentStatus === 'enrichment_pending') {
+							void enrichArticle(detail.id).catch(() => undefined);
+						}
+					}
+				})
+				.catch(() => undefined);
 		},
 		[qc],
 	);

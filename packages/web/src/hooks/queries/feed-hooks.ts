@@ -1,6 +1,5 @@
 import type { ApiResponse, FeedWithCounts, OpmlImportSummary } from '@self-feed/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef } from 'react';
 import { apiDownload, apiFetch } from '@/lib/api';
 import { type FeedSyncAllStatus, getFeedSyncStatusPollInterval } from '@/lib/feed-sync-status';
 import { invalidateReaderQueries } from './cache-utils';
@@ -107,26 +106,18 @@ export function useSyncFeed() {
 
 export function useSyncAllFeeds() {
 	const qc = useQueryClient();
-	const delayedRefreshTimers = useRef<ReturnType<typeof globalThis.setTimeout>[]>([]);
-	const clearDelayedRefreshTimers = useCallback(() => {
-		for (const timer of delayedRefreshTimers.current) {
-			globalThis.clearTimeout(timer);
-		}
-		delayedRefreshTimers.current = [];
-	}, []);
-	useEffect(() => clearDelayedRefreshTimers, [clearDelayedRefreshTimers]);
 
 	return useMutation({
-		mutationFn: () => apiFetch('/feeds/sync', { method: 'POST' }),
+		mutationFn: (scope?: { feedId?: string; categoryId?: string }) => {
+			const query = new URLSearchParams();
+			if (scope?.feedId) query.set('feedId', scope.feedId);
+			if (scope?.categoryId) query.set('categoryId', scope.categoryId);
+			const suffix = query.size > 0 ? `?${query.toString()}` : '';
+			return apiFetch(`/feeds/sync${suffix}`, { method: 'POST' });
+		},
 		onSuccess: () => {
-			clearDelayedRefreshTimers();
-			// Immediate optimistic refresh of articles for fast UI update
+			// The status revision and event stream drive subsequent reconciliations.
 			qc.invalidateQueries({ queryKey: ['articles'] });
-			// Additional refreshes at staggered intervals for background sync
-			for (const delayMs of [2_000, 5_000, 15_000]) {
-				const timer = globalThis.setTimeout(() => invalidateReaderQueries(qc), delayMs);
-				delayedRefreshTimers.current.push(timer);
-			}
 		},
 	});
 }

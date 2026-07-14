@@ -25,6 +25,7 @@ import {
 	useStats,
 	useSyncAllFeeds,
 	useSyncAllFeedsStatus,
+	useWarmVisibleArticles,
 } from '../../src/hooks/queries';
 
 beforeEach(() => {
@@ -325,7 +326,26 @@ describe('read query cancellation', () => {
 });
 
 describe('useSyncAllFeeds', () => {
-	it('clears delayed refresh timers on unmount', async () => {
+	it('encodes feed and category priority in the queued refresh request', async () => {
+		apiFetchMock.mockResolvedValue({ data: { queued: true } });
+		const queryClient = new RealQueryClient({
+			defaultOptions: { mutations: { retry: false } },
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useSyncAllFeeds(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({ feedId: 'feed 1', categoryId: 'category/1' });
+		});
+
+		expect(apiFetchMock).toHaveBeenCalledWith('/feeds/sync?feedId=feed+1&categoryId=category%2F1', {
+			method: 'POST',
+		});
+	});
+
+	it('uses progress revisions instead of fixed delayed invalidations', async () => {
 		vi.useFakeTimers();
 		apiFetchMock.mockResolvedValue({ data: { queued: true } });
 		const queryClient = new RealQueryClient({
@@ -336,19 +356,68 @@ describe('useSyncAllFeeds', () => {
 			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 		);
 
-		const { result, unmount } = renderHook(() => useSyncAllFeeds(), { wrapper });
+		const { result } = renderHook(() => useSyncAllFeeds(), { wrapper });
 
 		await act(async () => {
-			await result.current.mutateAsync();
+			await result.current.mutateAsync({});
 		});
-		const invalidationsBeforeUnmount = invalidateSpy.mock.calls.length;
-
-		unmount();
+		const immediateInvalidations = invalidateSpy.mock.calls.length;
 		act(() => {
 			vi.advanceTimersByTime(15_000);
 		});
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
-		expect(invalidateSpy).toHaveBeenCalledTimes(invalidationsBeforeUnmount);
+		expect(invalidateSpy).toHaveBeenCalledTimes(immediateInvalidations);
+	});
+});
+
+describe('useWarmVisibleArticles', () => {
+	it('warms only four visible details, preloads images, and queues pending enrichment once', async () => {
+		const loadedImages: string[] = [];
+		class FakeImage {
+			decoding = '';
+			set src(value: string) {
+				loadedImages.push(value);
+			}
+		}
+		vi.stubGlobal('Image', FakeImage);
+		apiFetchMock.mockImplementation(async (path: string) => {
+			if (path.endsWith('/enrich')) return { data: { success: true } };
+			const id = path.split('/').at(-1);
+			return {
+				data: {
+					id,
+					heroImageUrl: `detail-${id}.jpg`,
+					media: [{ type: 'image', url: `media-${id}.jpg` }],
+					contentStatus: id === 'article-1' ? 'enrichment_pending' : 'feed_ready',
+				},
+			};
+		});
+		const queryClient = new RealQueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useWarmVisibleArticles(), { wrapper });
+		const candidates = Array.from({ length: 5 }, (_, index) => ({
+			id: `article-${index + 1}`,
+			heroImageUrl: `list-${index + 1}.jpg`,
+		}));
+
+		act(() => result.current(candidates));
+		await waitFor(() => {
+			expect(apiFetchMock).toHaveBeenCalledWith('/articles/article-1/enrich', { method: 'POST' });
+		});
+		expect(apiFetchMock).not.toHaveBeenCalledWith('/articles/article-5', expect.anything());
+		expect(loadedImages).toEqual(
+			expect.arrayContaining(['list-1.jpg', 'detail-article-1.jpg', 'media-article-1.jpg']),
+		);
+
+		act(() => result.current(candidates));
+		expect(
+			apiFetchMock.mock.calls.filter(([path]) => path === '/articles/article-1/enrich'),
+		).toHaveLength(1);
+		vi.unstubAllGlobals();
 	});
 });

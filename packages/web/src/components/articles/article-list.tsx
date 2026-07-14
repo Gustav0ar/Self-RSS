@@ -24,6 +24,7 @@ interface ArticleListProps {
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onPrefetch?: (id: string) => void;
+	onVisible?: (articles: ArticleListItemData[]) => void;
 	loading?: boolean;
 	hasMore?: boolean;
 	onLoadMore?: () => void;
@@ -46,6 +47,7 @@ export function ArticleList({
 	selectedId,
 	onSelect,
 	onPrefetch,
+	onVisible,
 	loading,
 	hasMore,
 	onLoadMore,
@@ -98,6 +100,15 @@ export function ArticleList({
 	// trigger from the non-virtualized version.
 	const virtualItems = virtualizer.getVirtualItems();
 	const lastVisibleIndex = virtualItems[virtualItems.length - 1]?.index ?? 0;
+	useEffect(() => {
+		if (!onVisible) return;
+		const visibleArticles = virtualItems
+			.filter((item) => item.index >= 0 && item.index < articles.length)
+			.slice(0, 4)
+			.map((item) => articles[item.index])
+			.filter((article): article is ArticleListItemData => article != null);
+		if (visibleArticles.length > 0) onVisible(visibleArticles);
+	}, [articles, onVisible, virtualItems]);
 	useEffect(() => {
 		if (!hasMore || loadingMore) return;
 		if (articles.length === 0) return;

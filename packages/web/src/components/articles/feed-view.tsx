@@ -20,6 +20,7 @@ import {
 	useSearch,
 	useUpdatePreferences,
 	useWarmNextArticles,
+	useWarmVisibleArticles,
 } from '@/hooks/queries';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
@@ -44,7 +45,6 @@ interface FeedViewProps {
 }
 
 const EMPTY_CATEGORY_TREE = [] as const;
-
 export function FeedView({
 	feedId,
 	categoryId,
@@ -70,6 +70,7 @@ export function FeedView({
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
 	const warmNextArticles = useWarmNextArticles();
+	const warmVisibleArticles = useWarmVisibleArticles();
 	const { data: categories } = useCategories();
 
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
@@ -255,7 +256,7 @@ export function FeedView({
 		if (feedId) {
 			void refreshFeed(feedId, { force: true });
 		} else {
-			void refreshFeed(undefined, { force: true });
+			void refreshFeed(undefined, { force: true, categoryId });
 		}
 	}
 
@@ -353,6 +354,7 @@ export function FeedView({
 						selectedId={effectiveArticleId}
 						onSelect={handleSelectArticle}
 						onPrefetch={prefetchArticle}
+						onVisible={warmVisibleArticles}
 						loading={showListLoader}
 						hasMore={hasNextPage}
 						onLoadMore={handleLoadMore}

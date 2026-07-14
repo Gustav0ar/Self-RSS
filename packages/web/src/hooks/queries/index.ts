@@ -14,6 +14,7 @@ export {
 	useMarkRead,
 	usePrefetchArticle,
 	useWarmNextArticles,
+	useWarmVisibleArticles,
 } from './article-hooks';
 // Re-export cache utilities
 export {

@@ -20,6 +20,7 @@ let allFeedsSyncStatus:
 			queuedAt?: string | null;
 			startedAt?: string | null;
 			heartbeatAt?: string | null;
+			articleRevision?: number;
 	  }
 	| undefined;
 let allFeedsSyncStatusUpdatedAt = 0;
@@ -114,6 +115,47 @@ describe('useFeedRefresh', () => {
 
 		expect(result.current.isRefreshingAllFeeds).toBe(true);
 		expect(invalidateReaderQueriesMock).not.toHaveBeenCalled();
+	});
+
+	it('prioritizes the selected category and reconciles each article revision', async () => {
+		const queryClient = makeQueryClient();
+		const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+		allFeedsSyncStatus = {
+			queued: false,
+			running: false,
+			active: false,
+			articleRevision: 12,
+		};
+		const { result, rerender } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		await act(async () => {
+			await result.current.refreshFeed(undefined, { force: true, categoryId: 'category-1' });
+		});
+		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledWith({ categoryId: 'category-1' });
+
+		allFeedsSyncStatus = {
+			queued: false,
+			running: true,
+			active: true,
+			articleRevision: 13,
+		};
+		allFeedsSyncStatusUpdatedAt = nowMs + 1;
+		rerender();
+
+		await waitFor(() => {
+			expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
+		});
+		const firstRevisionInvalidations = invalidateSpy.mock.calls.length;
+		rerender();
+		expect(invalidateSpy).toHaveBeenCalledTimes(firstRevisionInvalidations);
+
+		allFeedsSyncStatus = { ...allFeedsSyncStatus, articleRevision: 14 };
+		rerender();
+		await waitFor(() => {
+			expect(invalidateSpy).toHaveBeenCalledTimes(firstRevisionInvalidations + 1);
+		});
 	});
 
 	it('releases the foreground loader when server status stays active too long', async () => {

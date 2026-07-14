@@ -59,6 +59,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	useUpdatePreferences: () => ({ mutate: vi.fn() }),
 	usePrefetchArticle: () => vi.fn(),
 	useWarmNextArticles: () => vi.fn(),
+	useWarmVisibleArticles: () => vi.fn(),
 }));
 
 vi.mock('../../src/components/articles/reader-pane', () => ({
