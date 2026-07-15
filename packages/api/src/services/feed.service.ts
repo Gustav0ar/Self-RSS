@@ -7,6 +7,7 @@ import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import { fetchWithRetry } from '../utils/retry.js';
 import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
+import { getSyncErrorDetails } from './feed-sync-errors.js';
 
 interface FeedMetadata {
 	title: string;
@@ -199,10 +200,8 @@ export class FeedService {
 				description: parsed.description ?? null,
 			};
 		} catch (error) {
-			throw AppError.badRequest(
-				'Could not fetch or parse the feed URL',
-				error instanceof Error ? error.message : String(error),
-			);
+			const errorDetails = getSyncErrorDetails(error);
+			throw AppError.badRequest('Could not fetch or parse the feed URL', errorDetails.error);
 		} finally {
 			clearTimeout(timeout);
 		}

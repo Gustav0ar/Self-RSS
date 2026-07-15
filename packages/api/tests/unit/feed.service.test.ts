@@ -161,6 +161,36 @@ describe('FeedService - create', () => {
 			}),
 		);
 	});
+
+	it('reports when the feed publisher denies access from the API server', async () => {
+		const feedRepo = {
+			findByUrl: vi.fn().mockResolvedValue(null),
+			create: vi.fn(),
+		};
+		const categoryRepo = { findById: vi.fn(async () => ({ id: 'cat-1' })) };
+		const service = new FeedService(feedRepo as never, categoryRepo as never, {} as never, {
+			maxContentLength: 10_000,
+			allowPrivateHosts: true,
+		});
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('http://127.0.0.1/feed.xml');
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('Blocked', { status: 403, statusText: 'Forbidden' })),
+		);
+
+		await expect(
+			service.create('user-1', {
+				categoryId: 'cat-1',
+				feedUrl: 'https://example.com/feed.xml',
+			}),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			details: 'The feed publisher denied access from this server (HTTP 403: Forbidden)',
+			message: 'Could not fetch or parse the feed URL',
+			statusCode: 400,
+		});
+		expect(feedRepo.create).not.toHaveBeenCalled();
+	});
 });
 
 describe('FeedService - update / delete', () => {

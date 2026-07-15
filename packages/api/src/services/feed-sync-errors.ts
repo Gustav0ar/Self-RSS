@@ -13,6 +13,17 @@ export class FeedSyncFetchError extends Error {
 	}
 }
 
+function describeHttpError(status: number, statusText: string) {
+	const httpStatus = `HTTP ${status}: ${statusText}`;
+	if (status === 401 || status === 403) {
+		return `The feed publisher denied access from this server (${httpStatus})`;
+	}
+	if (status === 429) {
+		return `The feed publisher rate-limited this server (${httpStatus})`;
+	}
+	return httpStatus;
+}
+
 export function getSyncErrorDetails(error: unknown): SyncErrorDetails {
 	if (error instanceof FeedSyncFetchError) return error.details;
 	if (error instanceof Error) {
@@ -34,7 +45,7 @@ export function getSyncErrorDetails(error: unknown): SyncErrorDetails {
 	if (typeof Response !== 'undefined' && error instanceof Response) {
 		const statusText = error.statusText || 'Unknown status';
 		return {
-			error: `HTTP ${error.status}: ${statusText}`,
+			error: describeHttpError(error.status, statusText),
 			status: error.status,
 			statusText,
 			...(error.url ? { url: error.url } : {}),
@@ -49,7 +60,7 @@ export function getSyncErrorDetails(error: unknown): SyncErrorDetails {
 					? responseLike.statusText
 					: 'Unknown status';
 			return {
-				error: `HTTP ${responseLike.status}: ${statusText}`,
+				error: describeHttpError(responseLike.status, statusText),
 				status: responseLike.status,
 				statusText,
 				...(typeof responseLike.url === 'string' && responseLike.url
