@@ -11,8 +11,8 @@ if [ ! -d "$GENERATED_RULES_DIR" ] || [ ! -f "$USAGE_FILE" ]; then
 fi
 
 mapfile -t reflective_models < <(
-  rg -l 'public synthetic <init>' "$GENERATED_RULES_DIR"/*.pro \
-    | xargs -r rg --no-filename '^-keepnames class ' \
+  grep -l 'public synthetic <init>' "$GENERATED_RULES_DIR"/*.pro \
+    | xargs -r grep -h '^-keepnames class ' \
     | sed -E 's/^-keepnames class ([^ ]+)$/\1/' \
     | sort -u
 )
