@@ -68,6 +68,9 @@ export function createDeps(
 		maxContentLength: number;
 		concurrency: number;
 		allowPrivateHosts: boolean;
+		relayUrl?: string;
+		relayToken?: string;
+		allowedHosts?: readonly string[];
 	},
 ): AppDeps {
 	const repos = {

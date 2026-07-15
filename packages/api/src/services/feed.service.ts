@@ -5,8 +5,10 @@ import type { CategoryRepository } from '../repositories/category.repository.js'
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
+import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
+import { fetchFeedWithRelayFallback } from '../utils/feed-fetch-relay.js';
 import { fetchWithRetry } from '../utils/retry.js';
-import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
+import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
 import { getSyncErrorDetails } from './feed-sync-errors.js';
 
 interface FeedMetadata {
@@ -16,7 +18,7 @@ interface FeedMetadata {
 	description: string | null;
 }
 
-interface FeedFetchConfig {
+interface FeedFetchConfig extends FeedFetchRelayConfig {
 	maxContentLength: number;
 	allowPrivateHosts: boolean;
 }
@@ -166,13 +168,18 @@ export class FeedService {
 		try {
 			const response = await fetchWithRetry(
 				() =>
-					fetchWithValidatedRedirects(
+					fetchFeedWithRelayFallback(
 						feedUrl,
 						{
 							signal: controller.signal,
 							headers: createFeedFetchHeaders(),
 						},
 						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+						{
+							relayUrl: this.config.relayUrl,
+							relayToken: this.config.relayToken,
+							allowedHosts: this.config.allowedHosts,
+						},
 					),
 				{ maxRetries: 3 },
 				{ operation: 'fetchFeedMetadata', feedUrl },

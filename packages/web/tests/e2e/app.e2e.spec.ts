@@ -188,6 +188,34 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await expect(page.getByRole('button', { name: unreadBadgeName('My DevTools') })).toHaveCount(0);
 });
 
+test('reader can add and read a feed through the authenticated fallback relay', async ({
+	page,
+}) => {
+	const blockedFeedUrl = process.env.PLAYWRIGHT_RELAY_BLOCKED_FEED_URL;
+	test.skip(
+		!blockedFeedUrl,
+		'Relay fallback server is available only in the repository E2E harness',
+	);
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+	const categoryName = `Relay ${Date.now()}`;
+
+	await page.getByRole('button', { name: 'Add Category' }).click();
+	await page.getByLabel('Name').fill(categoryName);
+	await page.getByRole('button', { name: 'Add category' }).last().click();
+	await expect(page.getByRole('button', { name: new RegExp(`^${categoryName}$`) })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Add Feed' }).click();
+	await page.getByLabel('Feed URL').fill(blockedFeedUrl!);
+	await page.getByLabel('Feed category').selectOption({ label: categoryName });
+	await page.getByRole('button', { name: 'Add feed' }).last().click();
+
+	await page.getByRole('button', { name: new RegExp(`^${categoryName}$`) }).click();
+	const feedButton = page.getByRole('button', { name: unreadBadgeName('Relay Hardware News') });
+	await expect(feedButton).toBeVisible();
+	await feedButton.click();
+	await expect(page.getByRole('button', { name: /Relay fallback article/ })).toBeVisible();
+});
+
 test('user can refresh a feed, see unread badges update, and load older articles on scroll', async ({
 	page,
 }) => {

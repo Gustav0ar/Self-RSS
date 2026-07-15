@@ -12,6 +12,15 @@ const booleanCoercible = z.preprocess((val) => {
 	return val;
 }, z.coerce.boolean());
 
+const optionalUrl = z.preprocess(
+	(value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+	z.string().url().optional(),
+);
+const optionalRelayToken = z.preprocess(
+	(value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+	z.string().min(32).optional(),
+);
+
 const rawEnvSchema = z
 	.object({
 		NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -34,6 +43,9 @@ const rawEnvSchema = z
 		FEED_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
 		FEED_MAX_CONTENT_LENGTH: z.coerce.number().int().min(1024).default(5242880),
 		FEED_ALLOW_PRIVATE_HOSTS: booleanCoercible.default(false),
+		FEED_FETCH_RELAY_URL: optionalUrl,
+		FEED_FETCH_RELAY_TOKEN: optionalRelayToken,
+		FEED_FETCH_RELAY_HOSTS: z.string().default(''),
 		ALLOW_REGISTRATION: booleanCoercible.optional(),
 		RATE_LIMIT_AUTH_MAX: z.coerce.number().int().min(1).default(30),
 		RATE_LIMIT_FEED_CREATE_MAX: z.coerce.number().int().min(1).default(100),
@@ -55,6 +67,19 @@ const rawEnvSchema = z
 				code: 'custom',
 				path: ['JWT_REFRESH_SECRET'],
 				message: 'JWT refresh secret must differ from JWT secret',
+			});
+		}
+
+		const relaySettings = [
+			Boolean(env.FEED_FETCH_RELAY_URL),
+			Boolean(env.FEED_FETCH_RELAY_TOKEN),
+			env.FEED_FETCH_RELAY_HOSTS.split(',').some((host) => host.trim().length > 0),
+		];
+		if (relaySettings.some(Boolean) && !relaySettings.every(Boolean)) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['FEED_FETCH_RELAY_URL'],
+				message: 'Feed fetch relay URL, token, and hosts must be configured together',
 			});
 		}
 
@@ -105,6 +130,9 @@ const rawEnvSchema = z
 
 const envSchema = rawEnvSchema.transform((env) => ({
 	...env,
+	FEED_FETCH_RELAY_HOSTS: env.FEED_FETCH_RELAY_HOSTS.split(',')
+		.map((host) => host.trim().toLowerCase())
+		.filter(Boolean),
 	ALLOW_REGISTRATION: env.ALLOW_REGISTRATION ?? env.NODE_ENV !== 'production',
 	REQUIRE_WORKER_HEARTBEAT: env.REQUIRE_WORKER_HEARTBEAT ?? env.NODE_ENV === 'production',
 }));

@@ -9,10 +9,11 @@ import type { MetricsRepository, SyncRunRepository } from '../repositories/setti
 import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
+import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
+import { fetchFeedWithRelayFallback } from '../utils/feed-fetch-relay.js';
 import { createLogger } from '../utils/logger.js';
 import { resolvePublisherHtmlUrls, resolvePublisherUrl } from '../utils/publisher-url.js';
 import { withRetry } from '../utils/retry.js';
-import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import {
 	extractExcerpt,
 	extractHeroImage,
@@ -49,7 +50,7 @@ import { acquireOwnedRedisLock } from './redis-owned-lock.js';
 
 const logger = createLogger();
 
-interface SyncConfig {
+interface SyncConfig extends FeedFetchRelayConfig {
 	timeoutMs: number;
 	maxContentLength: number;
 	concurrency: number;
@@ -881,13 +882,18 @@ export class FeedSyncService {
 				);
 
 				try {
-					const response = await fetchWithValidatedRedirects(
+					const response = await fetchFeedWithRelayFallback(
 						feedUrl,
 						{
 							signal: controller.signal,
 							headers,
 						},
 						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+						{
+							relayUrl: this.config.relayUrl,
+							relayToken: this.config.relayToken,
+							allowedHosts: this.config.allowedHosts,
+						},
 					);
 
 					if (response.status === 304) {

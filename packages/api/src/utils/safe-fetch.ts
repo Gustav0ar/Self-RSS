@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { AppError } from '../middleware/errors.js';
 
-interface RemoteFetchSecurityOptions {
+export interface RemoteFetchSecurityOptions {
 	allowPrivateHosts: boolean;
 	maxRedirects?: number;
 }

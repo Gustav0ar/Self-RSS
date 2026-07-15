@@ -8,6 +8,7 @@
 		"dev:worker": "bun --env-file=.env --env-file=../../.env.example --watch src/worker.ts",
 		"start": "bun --env-file=.env --env-file=../../.env.example src/index.ts",
 		"start:worker": "bun --env-file=.env --env-file=../../.env.example src/worker.ts",
+		"start:feed-relay": "bun src/feed-relay.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run tests/unit",
 		"test:unit": "vitest run tests/unit",

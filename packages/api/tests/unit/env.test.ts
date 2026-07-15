@@ -81,6 +81,29 @@ describe('getEnv', () => {
 		expect(getEnv().TRUSTED_PROXY_HOPS).toBe(2);
 	});
 
+	it('parses an explicitly allowlisted feed fetch relay', () => {
+		applyEnv({
+			FEED_FETCH_RELAY_URL: 'http://192.0.2.10:18080/videocardz/rss-feed',
+			FEED_FETCH_RELAY_TOKEN: 'relay-token-with-more-than-thirty-two-characters',
+			FEED_FETCH_RELAY_HOSTS: ' VideoCardz.com ',
+		});
+
+		const env = getEnv();
+		expect(env.FEED_FETCH_RELAY_URL).toBe('http://192.0.2.10:18080/videocardz/rss-feed');
+		expect(env.FEED_FETCH_RELAY_TOKEN).toHaveLength(48);
+		expect(env.FEED_FETCH_RELAY_HOSTS).toEqual(['videocardz.com']);
+	});
+
+	it('requires the feed relay URL, token, and hosts together', () => {
+		applyEnv({
+			FEED_FETCH_RELAY_URL: 'http://192.0.2.10:18080/videocardz/rss-feed',
+			FEED_FETCH_RELAY_TOKEN: undefined,
+			FEED_FETCH_RELAY_HOSTS: 'videocardz.com',
+		});
+
+		expect(() => getEnv()).toThrowError(/relay URL, token, and hosts must be configured together/);
+	});
+
 	it('accepts development placeholder values', () => {
 		applyEnv({
 			NODE_ENV: 'development',

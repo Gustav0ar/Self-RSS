@@ -157,6 +157,75 @@ async function startBrowserCompatibleFeedServer(xml: string) {
 	};
 }
 
+async function startRelayFallbackServers(initialXml: string, token: string) {
+	let xml = initialXml;
+	let directRequests = 0;
+	let relayRequests = 0;
+	const relayAuthorizations: Array<string | undefined> = [];
+	const directServer = createServer((_req, res) => {
+		directRequests += 1;
+		res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+		res.end('<html><body>Datacenter address blocked</body></html>');
+	});
+	const relayServer = createServer((req, res) => {
+		relayRequests += 1;
+		relayAuthorizations.push(req.headers.authorization);
+		if (req.url !== '/videocardz/rss-feed') {
+			res.writeHead(404).end();
+			return;
+		}
+		if (req.headers.authorization !== `Bearer ${token}`) {
+			res.writeHead(401).end();
+			return;
+		}
+		res.writeHead(200, {
+			'Content-Type': 'application/rss+xml; charset=utf-8',
+			'X-Self-Feed-Relay': 'videocardz',
+		});
+		res.end(xml);
+	});
+
+	await Promise.all([
+		new Promise<void>((resolve) => directServer.listen(0, '127.0.0.1', () => resolve())),
+		new Promise<void>((resolve) => relayServer.listen(0, '127.0.0.1', () => resolve())),
+	]);
+	const directAddress = directServer.address();
+	const relayAddress = relayServer.address();
+	if (
+		!directAddress ||
+		typeof directAddress === 'string' ||
+		!relayAddress ||
+		typeof relayAddress === 'string'
+	) {
+		throw new Error('Failed to start relay fallback test servers');
+	}
+
+	return {
+		directUrl: `http://127.0.0.1:${directAddress.port}/feed.xml`,
+		relayUrl: `http://127.0.0.1:${relayAddress.port}/videocardz/rss-feed`,
+		get directRequests() {
+			return directRequests;
+		},
+		get relayRequests() {
+			return relayRequests;
+		},
+		relayAuthorizations,
+		setXml(nextXml: string) {
+			xml = nextXml;
+		},
+		async stop() {
+			await Promise.all(
+				[directServer, relayServer].map(
+					(server) =>
+						new Promise<void>((resolve, reject) =>
+							server.close((error) => (error ? reject(error) : resolve())),
+						),
+				),
+			);
+		},
+	};
+}
+
 beforeAll(async () => {
 	await redis.connect();
 });
@@ -204,6 +273,86 @@ describe('API integration - additional flows', () => {
 			expect(feedServer.userAgents).toEqual([FEED_FETCH_USER_AGENT, FEED_FETCH_USER_AGENT]);
 		} finally {
 			await feedServer.stop();
+		}
+	});
+
+	it('adds and syncs an allowlisted feed through the relay after a direct 403', async () => {
+		const relayToken = 'integration-relay-token-that-is-long-enough';
+		const initialXml = `<?xml version="1.0"?>
+			<rss version="2.0"><channel>
+				<title>VideoCardz Test Feed</title><link>https://videocardz.com</link>
+				<item><title>Initial story</title><link>https://videocardz.com/newz/initial</link><guid>initial</guid></item>
+			</channel></rss>`;
+		const servers = await startRelayFallbackServers(initialXml, relayToken);
+		const relayDeps = createDeps(db, redis, tokenUtils, {
+			timeoutMs: 5_000,
+			maxContentLength: 1024 * 1024,
+			concurrency: 1,
+			allowPrivateHosts: true,
+			relayUrl: servers.relayUrl,
+			relayToken,
+			allowedHosts: ['127.0.0.1'],
+		});
+		const relayApp = createApp(relayDeps, tokenUtils);
+		const relayRequest = async (path: string, init: RequestInit = {}) => {
+			const response = await relayApp.request(path, init);
+			const body = await response.json().catch(() => null);
+			return { response, body };
+		};
+
+		try {
+			const registered = await relayRequest('/api/v1/auth/register', {
+				method: 'POST',
+				headers: JSON_HEADERS,
+				body: JSON.stringify({ email: 'relay-fallback@example.com', password: 'password123' }),
+			});
+			const token = registered.body.data.tokens.accessToken;
+			const authorizedRequest = (path: string, init: RequestInit = {}) =>
+				relayRequest(path, {
+					...init,
+					headers: {
+						...(init.headers ?? {}),
+						Authorization: `Bearer ${token}`,
+						'Content-Type': 'application/json',
+					},
+				});
+			const category = await authorizedRequest('/api/v1/categories', {
+				method: 'POST',
+				body: JSON.stringify({ name: 'Technology' }),
+			});
+			const feed = await authorizedRequest('/api/v1/feeds', {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: servers.directUrl,
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+			expect(feed.body.data.title).toBe('VideoCardz Test Feed');
+
+			servers.setXml(`<?xml version="1.0"?>
+				<rss version="2.0"><channel>
+					<title>VideoCardz Test Feed</title><link>https://videocardz.com</link>
+					<item><title>New story</title><link>https://videocardz.com/newz/new</link><guid>new</guid></item>
+					<item><title>Initial story</title><link>https://videocardz.com/newz/initial</link><guid>initial</guid></item>
+				</channel></rss>`);
+			const sync = await authorizedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, {
+				method: 'POST',
+			});
+			expect(sync.response.status).toBe(200);
+			const articles = await authorizedRequest(
+				`/api/v1/articles?feedId=${feed.body.data.id}&limit=10`,
+			);
+			expect(articles.response.status).toBe(200);
+			expect(articles.body.data.map((article: { title: string }) => article.title)).toEqual(
+				expect.arrayContaining(['Initial story', 'New story']),
+			);
+			expect(servers.directRequests).toBe(2);
+			expect(servers.relayRequests).toBe(2);
+			expect(servers.relayAuthorizations).toEqual([`Bearer ${relayToken}`, `Bearer ${relayToken}`]);
+		} finally {
+			await relayDeps.services.realtime.close();
+			await servers.stop();
 		}
 	});
 

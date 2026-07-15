@@ -52,6 +52,9 @@ try {
 		maxContentLength: env.FEED_MAX_CONTENT_LENGTH,
 		concurrency: env.FEED_SYNC_CONCURRENCY,
 		allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
+		relayUrl: env.FEED_FETCH_RELAY_URL,
+		relayToken: env.FEED_FETCH_RELAY_TOKEN,
+		allowedHosts: env.FEED_FETCH_RELAY_HOSTS,
 	});
 	const app = createApp(deps, tokenUtils, {
 		requireWorkerHeartbeat: env.REQUIRE_WORKER_HEARTBEAT,
