@@ -7,6 +7,7 @@ on:
       - 'packages/android/**'
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
+      - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
   pull_request:
@@ -15,6 +16,7 @@ on:
       - 'packages/android/**'
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
+      - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
   workflow_dispatch:
