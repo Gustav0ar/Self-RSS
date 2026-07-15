@@ -8,6 +8,7 @@ export const createFeedSchema = z.object({
 
 export const updateFeedSchema = z.object({
 	categoryId: z.string().uuid().optional(),
+	feedUrl: z.string().url().max(2048).optional(),
 	title: z.string().min(1).max(255).optional(),
 	pollingIntervalMinutes: z.number().int().min(5).max(1440).optional(),
 });

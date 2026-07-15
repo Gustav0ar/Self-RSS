@@ -54,8 +54,8 @@ export class CategoryRepository {
 	 */
 	async createMany(rows: (typeof categories.$inferInsert)[]) {
 		if (rows.length === 0) return [];
-		return this.db.transaction(async (tx) => {
-			return tx.insert(categories).values(rows).returning();
+		return this.db.transaction((tx) => {
+			return tx.insert(categories).values(rows).returning().all();
 		});
 	}
 
@@ -74,7 +74,7 @@ export class CategoryRepository {
 	 */
 	async createManyInTransaction(rows: (typeof categories.$inferInsert)[]) {
 		if (rows.length === 0) return [];
-		return this.db.transaction(async (tx) => {
+		return this.db.transaction((tx) => {
 			const inserted: (typeof categories.$inferSelect)[] = [];
 			for (const row of rows) {
 				const parentId = row.parentCategoryId;
@@ -90,10 +90,11 @@ export class CategoryRepository {
 				} else {
 					resolvedParent = parentId;
 				}
-				const [created] = await tx
+				const [created] = tx
 					.insert(categories)
 					.values({ ...row, parentCategoryId: resolvedParent })
-					.returning();
+					.returning()
+					.all();
 				if (created) {
 					inserted.push(created);
 				}

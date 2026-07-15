@@ -10,6 +10,7 @@ interface OfflineReadStore {
     suspend fun clearCategories()
 
     suspend fun writeFeeds(feeds: List<FeedWithCounts>)
+    suspend fun mergeFeeds(feeds: List<FeedWithCounts>)
     suspend fun readFeeds(): List<FeedWithCounts>
     suspend fun clearFeeds()
 
@@ -44,6 +45,17 @@ class CompositeOfflineReadStore(
     override suspend fun writeFeeds(feeds: List<FeedWithCounts>) {
         localStore.writeFeeds(feeds)
         fileCacheStore.writeFeeds(feeds)
+    }
+
+    override suspend fun mergeFeeds(feeds: List<FeedWithCounts>) {
+        if (feeds.isEmpty()) return
+        val replacements = feeds.associateBy(FeedWithCounts::id)
+        val existing = readFeeds()
+        val merged = buildList {
+            existing.forEach { add(replacements[it.id] ?: it) }
+            feeds.filterNot { incoming -> existing.any { it.id == incoming.id } }.forEach(::add)
+        }
+        writeFeeds(merged)
     }
 
     override suspend fun readFeeds(): List<FeedWithCounts> =

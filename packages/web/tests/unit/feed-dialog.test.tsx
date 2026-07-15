@@ -125,18 +125,23 @@ describe('FeedDialog - edit mode', () => {
 		expect((screen.getByLabelText('Custom name (optional)') as HTMLInputElement).value).toBe(
 			'DevTools Digest',
 		);
+		expect((screen.getByLabelText('Feed URL') as HTMLInputElement).value).toBe(
+			'https://example.com/devtools.xml',
+		);
 		expect((screen.getByLabelText('Feed category') as HTMLSelectElement).value).toBe('cat-2');
 		expect((screen.getByLabelText('Polling interval (minutes)') as HTMLInputElement).value).toBe(
 			'60',
 		);
 	});
 
-	it('does not show the feed URL field in edit mode', () => {
+	it('allows the existing feed URL to be edited', () => {
 		render(
 			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={() => {}} />,
 		);
 
-		expect(screen.queryByLabelText('Feed URL')).toBeNull();
+		const input = screen.getByLabelText('Feed URL') as HTMLInputElement;
+		fireEvent.change(input, { target: { value: 'https://example.com/replacement.xml' } });
+		expect(input.value).toBe('https://example.com/replacement.xml');
 	});
 
 	it('submits only the editable fields on save', async () => {
@@ -149,11 +154,15 @@ describe('FeedDialog - edit mode', () => {
 		fireEvent.change(screen.getByLabelText('Custom name (optional)'), {
 			target: { value: 'My DevTools' },
 		});
+		fireEvent.change(screen.getByLabelText('Feed URL'), {
+			target: { value: 'https://example.com/replacement.xml' },
+		});
 		fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
 		await waitFor(() => {
 			expect(updateMutateAsync).toHaveBeenCalledWith({
 				id: 'feed-1',
+				feedUrl: 'https://example.com/replacement.xml',
 				title: 'My DevTools',
 				categoryId: 'cat-2',
 				pollingIntervalMinutes: 60,

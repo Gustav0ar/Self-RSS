@@ -48,6 +48,7 @@ export function useUpdateFeed() {
 		}: {
 			id: string;
 			categoryId?: string;
+			feedUrl?: string;
 			title?: string;
 			pollingIntervalMinutes?: number;
 		}) =>

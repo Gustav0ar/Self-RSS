@@ -35,6 +35,7 @@ data class CreateFeedRequest(
 
 @JsonClass(generateAdapter = true)
 data class UpdateFeedRequest(
+    val feedUrl: String? = null,
     val categoryId: String? = null,
     val title: String? = null,
     val pollingIntervalMinutes: Int? = null,

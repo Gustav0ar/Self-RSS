@@ -41,6 +41,8 @@ function AuthActionsProbe() {
 	return (
 		<div>
 			<div>{auth.isAuthenticated ? auth.username : 'logged-out'}</div>
+			<div>{auth.logoutError ?? 'no-logout-error'}</div>
+			<div>{auth.isLoggingOut ? 'logging-out' : 'logout-idle'}</div>
 			<button type="button" onClick={() => void auth.login('next@example.com', 'password123')}>
 				login
 			</button>
@@ -197,6 +199,65 @@ describe('AuthProvider', () => {
 		});
 		expect(clearTokensMock).toHaveBeenCalled();
 		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
+	});
+
+	it('keeps the session active while server logout is still in flight', async () => {
+		let finishLogout: (() => void) | null = null;
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock.mockImplementation((path: string) => {
+			if (path === '/auth/me') return Promise.resolve({ data: { email: 'current@example.com' } });
+			return new Promise((resolve) => {
+				finishLogout = () => resolve({ data: { success: true } });
+			});
+		});
+
+		renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+		);
+		await waitFor(() => expect(screen.getByText('current@example.com')).toBeTruthy());
+
+		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+		await waitFor(() => expect(screen.getByText('logging-out')).toBeTruthy());
+		expect(screen.getByText('current@example.com')).toBeTruthy();
+		expect(clearTokensMock).not.toHaveBeenCalled();
+
+		act(() => finishLogout?.());
+		await waitFor(() => expect(screen.getByText('logged-out')).toBeTruthy());
+		expect(screen.getByText('logout-idle')).toBeTruthy();
+	});
+
+	it('keeps the authenticated session and cached data when server logout fails', async () => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock.mockImplementation(async (path: string) => {
+			if (path === '/auth/me') return { data: { email: 'current@example.com' } };
+			throw new Error('Service unavailable');
+		});
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(['stats'], { totalUnread: 10 });
+
+		renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+			queryClient,
+		);
+		await waitFor(() => {
+			expect(screen.getByText('current@example.com')).toBeTruthy();
+		});
+
+		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+		await waitFor(() => {
+			expect(
+				screen.getByText('Sign out failed. Your session is still active; please try again.'),
+			).toBeTruthy();
+		});
+		expect(screen.getByText('current@example.com')).toBeTruthy();
+		expect(clearTokensMock).not.toHaveBeenCalled();
+		expect(queryClient.getQueryData(['stats'])).toEqual({ totalUnread: 10 });
 	});
 
 	it('clears cached user data when the API reports authentication was lost', async () => {

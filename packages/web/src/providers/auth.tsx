@@ -16,9 +16,11 @@ interface AuthState {
 	isLoading: boolean;
 	username: string | null;
 	authLostMessage: string | null;
+	logoutError: string | null;
+	isLoggingOut: boolean;
 	login: (username: string, password: string) => Promise<void>;
 	register: (username: string, email: string, password: string) => Promise<void>;
-	logout: () => void;
+	logout: () => Promise<boolean>;
 	clearAuthLostMessage: () => void;
 }
 
@@ -30,11 +32,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [isLoading, setIsLoading] = useState(true);
 	const [username, setUsername] = useState<string | null>(null);
 	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
+	const [logoutError, setLogoutError] = useState<string | null>(null);
+	const [isLoggingOut, setIsLoggingOut] = useState(false);
 
 	useEffect(() => {
 		setAuthLostHandler((message) => {
 			clearTokens();
 			queryClient.clear();
+			setLogoutError(null);
 			setIsAuthenticated(false);
 			setUsername(null);
 			setAuthLostMessage(message);
@@ -99,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			});
 			queryClient.clear();
 			setAuthLostMessage(null);
+			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setIsAuthenticated(true);
@@ -114,6 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			});
 			queryClient.clear();
 			setAuthLostMessage(null);
+			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setIsAuthenticated(true);
@@ -122,16 +129,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	);
 
 	const logout = useCallback(async () => {
+		setIsLoggingOut(true);
+		setLogoutError(null);
 		try {
 			await apiFetch('/auth/logout', { method: 'POST' });
 		} catch {
-			// ignore failure
+			setLogoutError('Sign out failed. Your session is still active; please try again.');
+			setIsLoggingOut(false);
+			return false;
 		}
 		clearTokens();
 		queryClient.clear();
 		setIsAuthenticated(false);
 		setUsername(null);
 		setAuthLostMessage(null);
+		setLogoutError(null);
+		setIsLoggingOut(false);
+		return true;
 	}, [queryClient]);
 
 	const clearAuthLostMessage = useCallback(() => {
@@ -145,6 +159,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				isLoading,
 				username,
 				authLostMessage,
+				logoutError,
+				isLoggingOut,
 				login,
 				register,
 				logout,

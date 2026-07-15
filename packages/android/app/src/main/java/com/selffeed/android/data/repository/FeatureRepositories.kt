@@ -61,10 +61,11 @@ class FeedRepositoryImpl @Inject constructor(
 
     override suspend fun updateFeed(
         id: String,
+		feedUrl: String?,
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,
-    ): AppResult<FeedWithCounts> = source.updateFeed(id, categoryId, title, pollingIntervalMinutes)
+    ): AppResult<FeedWithCounts> = source.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes)
 
     override suspend fun deleteFeed(id: String): AppResult<Boolean> = source.deleteFeed(id)
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = source.syncFeed(id)

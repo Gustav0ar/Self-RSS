@@ -105,6 +105,11 @@ const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
 
 const FORBIDDEN_PATTERNS: ForbiddenPattern[] = [
 	{
+		pattern: /\.transaction\(\s*async\b/,
+		reason:
+			'Bun SQLite transactions are synchronous. Use a synchronous callback and execute queries with .all(), .get(), .run(), or .sync() before returning.',
+	},
+	{
 		pattern: /\bfunction\s+decodeCursor\s*\(/,
 		allowedPaths: new Set(['packages/api/src/utils/article-cursor.ts']),
 		reason:

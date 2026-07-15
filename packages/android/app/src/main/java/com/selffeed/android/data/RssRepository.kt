@@ -208,7 +208,7 @@ class RssRepository @Inject constructor(
 
         val cachedFeeds = offlineReadStore.readFeeds()
         if (cachedFeeds.isNotEmpty()) {
-            val filtered = categoryId?.let { id -> cachedFeeds.filter { it.categoryId == id } } ?: cachedFeeds
+            val filtered = filterCachedFeeds(cachedFeeds, categoryId)
             if (filtered.isNotEmpty()) {
                 runtime.putCached(key, FEEDS_TTL_MS, filtered)
                 refreshFeedsInBackground(categoryId)
@@ -219,12 +219,12 @@ class RssRepository @Inject constructor(
         try {
             runtime.cachedGet(key = key, ttlMs = FEEDS_TTL_MS) {
                 runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
-                    offlineReadStore.writeFeeds(feeds)
+                    persistFeedSnapshot(categoryId, feeds)
                 }
             }
         } catch (e: Exception) {
             val cached = offlineReadStore.readFeeds()
-            val filtered = categoryId?.let { id -> cached.filter { it.categoryId == id } } ?: cached
+            val filtered = filterCachedFeeds(cached, categoryId)
             filtered.takeIf { it.isNotEmpty() } ?: throw e
         }
     }
@@ -233,7 +233,7 @@ class RssRepository @Inject constructor(
         flushPendingReadStateMutations()
         runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
             runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
-            offlineReadStore.writeFeeds(feeds)
+            persistFeedSnapshot(categoryId, feeds)
         }
     }
 
@@ -243,8 +243,8 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun updateFeed(id: String, categoryId: String?, title: String?, pollingIntervalMinutes: Int?) = safeCall {
-        feedRemote.updateFeed(id, categoryId, title, pollingIntervalMinutes).also {
+    override suspend fun updateFeed(id: String, feedUrl: String?, categoryId: String?, title: String?, pollingIntervalMinutes: Int?) = safeCall {
+        feedRemote.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes).also {
             invalidateFeedAndArticleCaches()
         }
     }
@@ -402,7 +402,7 @@ class RssRepository @Inject constructor(
             runCatching {
                 runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
                     runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
-                    offlineReadStore.writeFeeds(feeds)
+                    persistFeedSnapshot(categoryId, feeds)
                 }
             }
         }
@@ -472,7 +472,7 @@ class RssRepository @Inject constructor(
         }
         try {
             articleRemote.markRead(articleId, read, source).let { read }.also {
-                localStore.updateArticleReadState(articleId, read)
+                localStore.clearAcknowledgedReadStateOverride(articleId)
                 // A read receipt does not change article content. Keep the
                 // already-warmed detail so reopening remains instant.
                 runtime.invalidateByPrefix("stats")
@@ -489,8 +489,8 @@ class RssRepository @Inject constructor(
         markRead(articleId, read, source = "manual")
 
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall {
-        articleRemote.markAllRead(feedId, categoryId).also { response ->
-            localStore.markArticlesReadByFeeds(response.feedIds)
+        articleRemote.markAllRead(feedId, categoryId).also {
+            localStore.clearAcknowledgedReadStateOverrides()
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("categories")
             runtime.invalidateByPrefix("stats")
@@ -627,6 +627,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun invalidateReadStateCaches(articleId: String?) {
+        flushPendingReadStateMutations()
         // Read state is an overlay; never evict immutable article content or
         // the visible list for a receipt arriving from another client.
         runtime.invalidateByPrefix("feeds")
@@ -658,11 +659,11 @@ class RssRepository @Inject constructor(
         runtime.getCached<ArticleDetail>(key)?.let { cached ->
             runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = read))
         }
-        localStore.updateArticleReadState(articleId, read)
+        localStore.clearAcknowledgedReadStateOverride(articleId)
     }
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
-        localStore.markArticlesReadByFeeds(feedIds)
+        localStore.clearAcknowledgedReadStateOverrides()
         runtime.invalidateByPrefix("search")
     }
 
@@ -700,7 +701,7 @@ class RssRepository @Inject constructor(
                 runtime.withRetry {
                     articleRemote.markRead(mutation.articleId, mutation.read)
                 }
-                localStore.deletePendingReadStateMutation(mutation.articleId)
+                localStore.acknowledgeReadStateMutation(mutation.articleId)
             } catch (e: Exception) {
                 runtime.debugLog("Pending read-state flush failed for ${mutation.articleId}: ${e.message ?: e::class.java.simpleName}")
                 failedIds.add(mutation.articleId)
@@ -709,6 +710,44 @@ class RssRepository @Inject constructor(
         if (failedIds.isNotEmpty()) {
             runtime.debugLog("Pending read-state flush failed for ${failedIds.size} mutation(s): ${failedIds.joinToString()}")
         }
+    }
+
+    private suspend fun persistFeedSnapshot(categoryId: String?, feeds: List<FeedWithCounts>) {
+        if (categoryId == null) {
+            offlineReadStore.writeFeeds(feeds)
+        } else {
+            offlineReadStore.mergeFeeds(feeds)
+        }
+    }
+
+    private suspend fun filterCachedFeeds(
+        feeds: List<FeedWithCounts>,
+        categoryId: String?,
+    ): List<FeedWithCounts> {
+        if (categoryId == null) return feeds
+        val flattened = buildList {
+            fun append(categories: List<CategoryWithCounts>) {
+                for (category in categories) {
+                    add(category)
+                    append(category.children.orEmpty())
+                }
+            }
+            append(offlineReadStore.readCategories())
+        }
+        val includedCategoryIds = mutableSetOf(categoryId)
+        var changed: Boolean
+        do {
+            changed = false
+            for (category in flattened) {
+                if (
+                    category.parentCategoryId in includedCategoryIds &&
+                    includedCategoryIds.add(category.id)
+                ) {
+                    changed = true
+                }
+            }
+        } while (changed)
+        return feeds.filter { it.categoryId in includedCategoryIds }
     }
 
     private companion object {

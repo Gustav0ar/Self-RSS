@@ -46,7 +46,7 @@ class FeedsViewModelTest {
         coEvery { repository.updateCategory(any(), any(), any()) } returns AppResult.Success(sampleCategory())
         coEvery { repository.deleteCategory(any()) } returns AppResult.Success(true)
         coEvery { repository.createFeed(any(), any(), any()) } returns AppResult.Success(sampleFeed())
-        coEvery { repository.updateFeed(any(), any(), any(), any()) } returns AppResult.Success(sampleFeed())
+        coEvery { repository.updateFeed(any(), any(), any(), any(), any()) } returns AppResult.Success(sampleFeed())
         coEvery { repository.deleteFeed(any()) } returns AppResult.Success(true)
         coEvery { repository.syncAllFeeds() } returns AppResult.Success(SyncResponse(syncedFeeds = 3, failedFeeds = 0))
         coEvery { repository.syncAllFeedsStatus() } returns AppResult.Success(completedSyncStatus())
@@ -122,6 +122,29 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.createFeed("", "c-1", "Title")
         coVerify(exactly = 0) { repository.createFeed(any(), any(), any()) }
+    }
+
+    @Test
+    fun `updateFeed trims and forwards the edited URL`() = runTest {
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.updateFeed(
+            id = "f-1",
+            feedUrl = "  https://example.com/replacement.xml  ",
+            title = "Replacement",
+            categoryId = "c-1",
+            pollingIntervalMinutes = 60,
+        )
+
+        coVerify {
+            repository.updateFeed(
+                "f-1",
+                "https://example.com/replacement.xml",
+                "c-1",
+                "Replacement",
+                60,
+            )
+        }
     }
 
     @Test

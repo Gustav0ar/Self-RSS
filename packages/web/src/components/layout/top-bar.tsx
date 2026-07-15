@@ -30,7 +30,7 @@ function TopBarContent({
 }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
-	const { isAuthenticated, logout, username } = useAuth();
+	const { isAuthenticated, isLoggingOut, logout, logoutError, username } = useAuth();
 
 	function cycleTheme() {
 		const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
@@ -116,7 +116,8 @@ function TopBarContent({
 							) : null}
 							<button
 								type="button"
-								onClick={logout}
+								onClick={() => void logout()}
+								disabled={isLoggingOut}
 								className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
 								aria-label="Sign out"
 							>
@@ -126,6 +127,14 @@ function TopBarContent({
 					) : null}
 				</div>
 			</div>
+			{logoutError ? (
+				<p
+					role="alert"
+					className="mx-2 mt-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
+					{logoutError}
+				</p>
+			) : null}
 		</header>
 	);
 }

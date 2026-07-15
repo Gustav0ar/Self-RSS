@@ -13,6 +13,7 @@ trap 'rm -f "$SIGNED_APK" "$SIGNED_APK.idsig"' EXIT
 
 SELF_FEED_API_BASE_URL="$SELF_FEED_API_BASE_URL" \
   "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleRelease
+bash "$ROOT_DIR/scripts/check-android-release-r8.sh"
 
 BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
 if [ -z "$BUILD_TOOLS_DIR" ]; then

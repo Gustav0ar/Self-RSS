@@ -155,6 +155,37 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `acknowledged read state clears pending mutation and durable override atomically`() = runBlocking {
+        store.queueReadStateMutation("a-1", read = true)
+
+        store.acknowledgeReadStateMutation("a-1")
+
+        assertTrue(store.readPendingReadStateMutations().isEmpty())
+        assertTrue(store.readArticleReadOverrides().isEmpty())
+    }
+
+    @Test
+    fun `realtime acknowledgement does not clear an unsent offline override`() = runBlocking {
+        store.queueReadStateMutation("a-1", read = true)
+
+        store.clearAcknowledgedReadStateOverride("a-1")
+
+        assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
+        assertEquals(1, store.readPendingReadStateMutations().size)
+    }
+
+    @Test
+    fun `bulk acknowledgement clears server-confirmed overrides but preserves pending mutations`() = runBlocking {
+        store.queueReadStateMutation("a-pending", read = true)
+        store.updateArticleReadState("a-acknowledged", read = true)
+
+        store.clearAcknowledgedReadStateOverrides()
+
+        assertEquals(mapOf("a-pending" to true), store.readArticleReadOverrides())
+        assertEquals(listOf("a-pending"), store.readPendingReadStateMutations().map { it.articleId })
+    }
+
+    @Test
     fun `read state update uses a non paging overlay`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),

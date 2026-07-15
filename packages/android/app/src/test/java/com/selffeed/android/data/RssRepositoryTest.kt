@@ -183,6 +183,7 @@ class RssRepositoryTest {
         assertTrue(result is AppResult.Success)
 
         assertEquals(true, repository.cachedArticleDetail(articleId)?.isRead)
+        assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify { api.markRead(articleId, MarkReadRequest(read = true)) }
     }
 
@@ -203,7 +204,7 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `read state persistence keeps the active paging source valid`() = runTest {
+    fun `acknowledged realtime read state keeps the active paging source valid without a durable override`() = runTest {
         val articleId = "article-retained"
         val queryKey = ArticlePageQuery(unreadOnly = true).remoteKey()
         localStore.writeArticleRemotePage(
@@ -217,7 +218,7 @@ class RssRepositoryTest {
         repository.invalidateReadStateCaches(articleId)
 
         assertEquals(false, pagingSource.invalid)
-        assertEquals(mapOf(articleId to true), localStore.readArticleReadOverrides())
+        assertTrue(localStore.readArticleReadOverrides().isEmpty())
         val page = pagingSource.load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(
                 key = null,
@@ -282,7 +283,7 @@ class RssRepositoryTest {
         ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
         assertEquals(listOf("article-bulk-read"), page.data.map { it.id })
         assertEquals(false, page.data.first().isRead)
-        assertEquals(mapOf("article-bulk-read" to true), localStore.readArticleReadOverrides())
+        assertTrue(localStore.readArticleReadOverrides().isEmpty())
     }
 
     @Test
@@ -313,7 +314,36 @@ class RssRepositoryTest {
 
         assertTrue(readResult is AppResult.Success)
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify(exactly = 1) { api.markRead(articleId, MarkReadRequest(read = true)) }
+    }
+
+    @Test
+    fun `reconnect invalidation flushes pending read state before clearing acknowledged overlays`() = runTest {
+        val articleId = "article-reconnect"
+        localStore.queueReadStateMutation(articleId, read = true)
+        coEvery {
+            api.markRead(articleId, MarkReadRequest(read = true))
+        } returns com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true))
+
+        repository.invalidateReadStateCaches()
+
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        assertTrue(localStore.readArticleReadOverrides().isEmpty())
+        coVerify(exactly = 1) { api.markRead(articleId, MarkReadRequest(read = true)) }
+    }
+
+    @Test
+    fun `reconnect invalidation preserves pending read state when the server flush fails`() = runTest {
+        val articleId = "article-reconnect-failure"
+        localStore.queueReadStateMutation(articleId, read = true)
+        coEvery { api.markRead(articleId, MarkReadRequest(read = true)) } throws
+            java.net.SocketTimeoutException("still offline")
+
+        repository.invalidateReadStateCaches()
+
+        assertEquals(listOf(articleId), localStore.readPendingReadStateMutations().map { it.articleId })
+        assertEquals(mapOf(articleId to true), localStore.readArticleReadOverrides())
     }
 
     @Test
@@ -478,7 +508,52 @@ class RssRepositoryTest {
         val feed = (result as AppResult.Success).data.single()
         assertEquals("f-network", feed.id)
         assertEquals("error", feed.syncStatus)
+        assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
+        assertEquals(listOf("f-network"), cacheStore.readFeeds().map { it.id })
         coVerify(exactly = 1) { api.feeds(null) }
+    }
+
+    @Test
+    fun `scoped feed refresh merges into the complete offline snapshot`() = runTest {
+        localStore.writeFeeds(listOf(sampleFeed("f-existing", categoryId = "c-other")))
+        coEvery { api.feeds("c-target") } returns com.selffeed.android.network.ApiEnvelope(
+            listOf(sampleFeed("f-target", categoryId = "c-target")),
+        )
+
+        val result = repository.refreshFeeds("c-target")
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(
+            setOf("f-existing", "f-target"),
+            localStore.readFeeds().map { it.id }.toSet(),
+        )
+        assertEquals(
+            setOf("f-existing", "f-target"),
+            cacheStore.readFeeds().map { it.id }.toSet(),
+        )
+    }
+
+    @Test
+    fun `offline parent category includes feeds from descendant categories`() = runTest {
+        val child = sampleCategory("c-child", parentCategoryId = "c-root")
+        localStore.writeCategories(
+            listOf(sampleCategory("c-root", children = listOf(child))),
+        )
+        localStore.writeFeeds(
+            listOf(
+                sampleFeed("f-root", categoryId = "c-root"),
+                sampleFeed("f-child", categoryId = "c-child"),
+                sampleFeed("f-unrelated", categoryId = "c-other"),
+            ),
+        )
+
+        val result = repository.feeds("c-root")
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(
+            setOf("f-root", "f-child"),
+            (result as AppResult.Success).data.map { it.id }.toSet(),
+        )
     }
 
     @Test
@@ -630,18 +705,24 @@ class RssRepositoryTest {
         isEnriched = false,
     )
 
-    private fun sampleCategory(id: String): CategoryWithCounts = CategoryWithCounts(
+    private fun sampleCategory(
+        id: String,
+        parentCategoryId: String? = null,
+        children: List<CategoryWithCounts>? = null,
+    ): CategoryWithCounts = CategoryWithCounts(
         id = id,
+        parentCategoryId = parentCategoryId,
         name = "Category $id",
         slug = id,
         sortOrder = 0,
         feedCount = 1,
         unreadCount = 1,
+        children = children,
     )
 
-    private fun sampleFeed(id: String): FeedWithCounts = FeedWithCounts(
+    private fun sampleFeed(id: String, categoryId: String = "c-local"): FeedWithCounts = FeedWithCounts(
         id = id,
-        categoryId = "c-local",
+        categoryId = categoryId,
         title = "Feed $id",
         feedUrl = "https://example.com/$id.xml",
         pollingIntervalMinutes = 60,

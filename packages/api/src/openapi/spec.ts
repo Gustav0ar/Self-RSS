@@ -1,5 +1,6 @@
 import { authPaths, authSchemas } from './auth.spec';
 import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
+import { preferencesAndStatsSchemas } from './preferences-stats.spec';
 
 export const openApiSpec = {
 	openapi: '3.1.0',
@@ -215,6 +216,7 @@ export const openApiSpec = {
 					excerpt: { type: ['string', 'null'] },
 					heroImageUrl: { type: ['string', 'null'] },
 					publishedAt: { type: ['string', 'null'], format: 'date-time' },
+					displayedAt: { type: ['string', 'null'], format: 'date-time' },
 					isRead: { type: 'boolean' },
 					contentStatus: {
 						type: 'string',
@@ -364,31 +366,7 @@ export const openApiSpec = {
 					feedIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
 				},
 			},
-			Preferences: {
-				type: 'object',
-				properties: {
-					theme: { type: 'string' },
-					fontFamily: { type: 'string' },
-					textSize: { type: 'integer' },
-					density: { type: 'string' },
-					defaultSort: { type: 'string' },
-					hideRead: { type: 'boolean' },
-					keyboardShortcutsEnabled: { type: 'boolean' },
-					autoMarkReadMode: { type: 'string' },
-					accentColor: { type: 'string' },
-				},
-			},
-			Stats: {
-				type: 'object',
-				properties: {
-					totalUnread: { type: 'integer' },
-					totalRead: { type: 'integer' },
-					totalFeeds: { type: 'integer' },
-					totalCategories: { type: 'integer' },
-					recentSyncRuns: { type: 'array', items: { type: 'object' } },
-					dailyMetrics: { type: 'array', items: { type: 'object' } },
-				},
-			},
+			...preferencesAndStatsSchemas,
 			OpmlImportWarning: {
 				type: 'object',
 				required: ['code', 'message'],
@@ -570,6 +548,20 @@ export const openApiSpec = {
 				},
 			},
 		},
+		'/feeds/export/opml': {
+			get: {
+				tags: ['Feeds'],
+				security: bearerSecurity,
+				responses: {
+					'200': {
+						description: 'OPML subscription export',
+						content: {
+							'application/xml': { schema: { type: 'string' } },
+						},
+					},
+				},
+			},
+		},
 		'/feeds/{feedId}': {
 			patch: {
 				tags: ['Feeds'],
@@ -579,6 +571,7 @@ export const openApiSpec = {
 					type: 'object',
 					properties: {
 						categoryId: { type: 'string', format: 'uuid' },
+						feedUrl: { type: 'string', format: 'uri', maxLength: 2048 },
 						title: { type: 'string', minLength: 1, maxLength: 255 },
 						pollingIntervalMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
 					},

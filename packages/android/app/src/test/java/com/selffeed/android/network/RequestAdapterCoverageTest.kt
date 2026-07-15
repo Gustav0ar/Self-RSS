@@ -8,6 +8,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -108,5 +109,32 @@ class RequestAdapterCoverageTest {
         val decoded = adapter.fromJson(json)!!
         assertEquals(original.email, decoded.email)
         assertEquals(original.password, decoded.password)
+    }
+
+    @Test
+    fun `generated adapter decodes preferences when optional fields are absent`() {
+        val adapter = moshi.adapter(UserPreferences::class.java)
+
+        val decoded = adapter.fromJson(
+            """
+            {
+              "theme": "system",
+              "fontFamily": "sans",
+              "textSize": 100,
+              "density": "comfortable",
+              "defaultSort": "newest",
+              "hideRead": false,
+              "keyboardShortcutsEnabled": true,
+              "autoMarkReadMode": "manual"
+            }
+            """.trimIndent(),
+        )
+
+        assertNotNull(decoded)
+        assertEquals("system", decoded?.theme)
+        assertNull(decoded?.userId)
+        assertNull(decoded?.accentColor)
+        assertNull(decoded?.createdAt)
+        assertNull(decoded?.updatedAt)
     }
 }

@@ -113,8 +113,8 @@ export function replaceArticleEnrichedContent(
 	articleId: string,
 	data: EnrichedContentReplacement,
 ) {
-	return db.transaction(async (tx) => {
-		const [updated] = await tx
+	return db.transaction((tx) => {
+		const [updated] = tx
 			.update(articles)
 			.set({
 				contentHtml: data.contentHtml,
@@ -129,9 +129,10 @@ export function replaceArticleEnrichedContent(
 				nextEnrichmentAt: null,
 			})
 			.where(eq(articles.id, articleId))
-			.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId });
-		await tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId));
-		if (data.media.length > 0) await tx.insert(articleMedia).values(data.media);
+			.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId })
+			.all();
+		tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId)).run();
+		if (data.media.length > 0) tx.insert(articleMedia).values(data.media).run();
 		return updated ?? null;
 	});
 }

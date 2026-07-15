@@ -148,11 +148,13 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    fun updateFeed(id: String, title: String?, categoryId: String?, pollingIntervalMinutes: Int?) {
+    fun updateFeed(id: String, feedUrl: String, title: String?, categoryId: String?, pollingIntervalMinutes: Int?) {
+        if (feedUrl.isBlank()) return
         viewModelScope.launch {
             when (
                 val result = repository.updateFeed(
                     id = id,
+                    feedUrl = feedUrl.trim(),
                     categoryId = categoryId,
                     title = title?.trim()?.ifBlank { null },
                     pollingIntervalMinutes = pollingIntervalMinutes,

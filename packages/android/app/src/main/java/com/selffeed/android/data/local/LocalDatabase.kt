@@ -185,6 +185,29 @@ interface LocalStoreDao {
     @Query("DELETE FROM pending_read_state_mutations WHERE articleId = :articleId")
     suspend fun deletePendingReadStateMutation(articleId: String)
 
+    @Query("DELETE FROM article_read_overrides WHERE articleId = :articleId")
+    suspend fun deleteArticleReadOverride(articleId: String)
+
+    @Query(
+        """
+        DELETE FROM article_read_overrides
+        WHERE articleId = :articleId
+          AND NOT EXISTS (
+              SELECT 1 FROM pending_read_state_mutations
+              WHERE pending_read_state_mutations.articleId = :articleId
+          )
+        """,
+    )
+    suspend fun deleteAcknowledgedArticleReadOverride(articleId: String)
+
+    @Query(
+        """
+        DELETE FROM article_read_overrides
+        WHERE articleId NOT IN (SELECT articleId FROM pending_read_state_mutations)
+        """,
+    )
+    suspend fun clearAcknowledgedArticleReadOverrides()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleReadOverride(override: ArticleReadOverrideEntity)
 

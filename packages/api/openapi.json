@@ -492,6 +492,13 @@
 						],
 						"format": "date-time"
 					},
+					"displayedAt": {
+						"type": [
+							"string",
+							"null"
+						],
+						"format": "date-time"
+					},
 					"isRead": {
 						"type": "boolean"
 					},
@@ -881,7 +888,25 @@
 			},
 			"Preferences": {
 				"type": "object",
+				"required": [
+					"userId",
+					"theme",
+					"fontFamily",
+					"textSize",
+					"density",
+					"defaultSort",
+					"hideRead",
+					"keyboardShortcutsEnabled",
+					"autoMarkReadMode",
+					"accentColor",
+					"createdAt",
+					"updatedAt"
+				],
 				"properties": {
+					"userId": {
+						"type": "string",
+						"format": "uuid"
+					},
 					"theme": {
 						"type": "string"
 					},
@@ -907,12 +932,31 @@
 						"type": "string"
 					},
 					"accentColor": {
-						"type": "string"
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"createdAt": {
+						"type": "string",
+						"format": "date-time"
+					},
+					"updatedAt": {
+						"type": "string",
+						"format": "date-time"
 					}
 				}
 			},
 			"Stats": {
 				"type": "object",
+				"required": [
+					"totalUnread",
+					"totalRead",
+					"totalFeeds",
+					"totalCategories",
+					"recentSyncRuns",
+					"dailyMetrics"
+				],
 				"properties": {
 					"totalUnread": {
 						"type": "integer"
@@ -1784,6 +1828,30 @@
 				}
 			}
 		},
+		"/feeds/export/opml": {
+			"get": {
+				"tags": [
+					"Feeds"
+				],
+				"security": [
+					{
+						"bearerAuth": []
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "OPML subscription export",
+						"content": {
+							"application/xml": {
+								"schema": {
+									"type": "string"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/feeds/{feedId}": {
 			"patch": {
 				"tags": [
@@ -1813,6 +1881,11 @@
 									"categoryId": {
 										"type": "string",
 										"format": "uuid"
+									},
+									"feedUrl": {
+										"type": "string",
+										"format": "uri",
+										"maxLength": 2048
 									},
 									"title": {
 										"type": "string",

@@ -1,9 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TopBar } from '../../src/components/layout/top-bar';
 
 const setThemeMock = vi.fn();
 const mutateMock = vi.fn();
+const logoutMock = vi.fn();
+let logoutErrorMock: string | null = null;
+let isLoggingOutMock = false;
 
 vi.mock('@tanstack/react-router', () => ({
 	Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string }) => (
@@ -24,7 +27,9 @@ vi.mock('../../src/components/search/search-bar', () => ({
 vi.mock('../../src/providers/auth', () => ({
 	useAuth: () => ({
 		isAuthenticated: true,
-		logout: vi.fn(),
+		isLoggingOut: isLoggingOutMock,
+		logout: logoutMock,
+		logoutError: logoutErrorMock,
 		username: 'admin@example.com',
 	}),
 }));
@@ -44,6 +49,30 @@ vi.mock('../../src/hooks/queries', () => ({
 }));
 
 describe('TopBar', () => {
+	beforeEach(() => {
+		logoutErrorMock = null;
+		isLoggingOutMock = false;
+		logoutMock.mockClear();
+	});
+
+	it('disables repeated sign-out attempts while revocation is in flight', () => {
+		isLoggingOutMock = true;
+		render(<TopBar />);
+
+		expect((screen.getByRole('button', { name: 'Sign out' }) as HTMLButtonElement).disabled).toBe(
+			true,
+		);
+	});
+
+	it('shows a truthful logout failure and keeps retry available', () => {
+		logoutErrorMock = 'Sign out failed. Your session is still active; please try again.';
+		render(<TopBar />);
+
+		expect(screen.getByRole('alert').textContent).toContain('session is still active');
+		fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+		expect(logoutMock).toHaveBeenCalledTimes(1);
+	});
+
 	it('cycles from dark to system and persists the preference', () => {
 		render(<TopBar />);
 

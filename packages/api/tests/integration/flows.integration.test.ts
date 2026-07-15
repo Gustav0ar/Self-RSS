@@ -5,6 +5,7 @@ import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { closeRedis, getRedis } from '../../src/db/redis.js';
+import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -127,6 +128,35 @@ async function startMutableFeedServer(initialXml: string) {
 	};
 }
 
+async function startBrowserCompatibleFeedServer(xml: string) {
+	const userAgents: string[] = [];
+	const server = createServer((req, res) => {
+		const userAgent = req.headers['user-agent'] ?? '';
+		userAgents.push(userAgent);
+		if (!userAgent.startsWith('Mozilla/5.0')) {
+			res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+			res.end('<html><body>Browser verification required</body></html>');
+			return;
+		}
+		res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+		res.end(xml);
+	});
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+	const address = server.address();
+	if (!address || typeof address === 'string') {
+		throw new Error('Failed to start browser-compatible RSS server');
+	}
+	return {
+		url: `http://127.0.0.1:${address.port}/feed.xml`,
+		userAgents,
+		async stop() {
+			await new Promise<void>((resolve, reject) =>
+				server.close((error) => (error ? reject(error) : resolve())),
+			);
+		},
+	};
+}
+
 beforeAll(async () => {
 	await redis.connect();
 });
@@ -142,6 +172,41 @@ afterAll(async () => {
 });
 
 describe('API integration - additional flows', () => {
+	it('creates and syncs feeds that require a browser-compatible user agent', async () => {
+		const registered = await registerUser('browser-compatible-feed@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Compatibility' }),
+		});
+		const feedServer = await startBrowserCompatibleFeedServer(`<?xml version="1.0"?>
+			<rss version="2.0"><channel>
+				<title>Browser-compatible feed</title><link>https://example.com</link>
+				<item><title>Story</title><link>https://example.com/story</link><guid>story-1</guid></item>
+			</channel></rss>`);
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+			expect(feed.body.data.title).toBe('Browser-compatible feed');
+
+			const sync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			expect(sync.response.status).toBe(200);
+			expect(feedServer.userAgents).toHaveLength(2);
+			expect(feedServer.userAgents).toEqual([FEED_FETCH_USER_AGENT, FEED_FETCH_USER_AGENT]);
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
 	it('returns 304 for unchanged article detail with If-None-Match', async () => {
 		const registered = await registerUser('etag@example.com');
 		const token = registered.body.data.tokens.accessToken;

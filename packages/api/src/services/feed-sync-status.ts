@@ -9,6 +9,49 @@ const MANUAL_SYNC_LOCK_TTL_SECONDS = 60 * 30;
 const MANUAL_SYNC_STATUS_STALE_MS = 90_000;
 const MANUAL_SYNC_HEARTBEAT_INTERVAL_MS = 15_000;
 
+const TAKE_OVER_STALE_LOCK_SCRIPT = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+	return 0
+end
+redis.call("SET", KEYS[1], ARGV[2], "EX", ARGV[3])
+return 1
+`;
+
+const RENEW_OWNED_LOCK_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if not current then
+	return 0
+end
+local ok, decoded = pcall(cjson.decode, current)
+if not ok or decoded.ownerToken ~= ARGV[1] then
+	return 0
+end
+decoded.heartbeatAt = tonumber(ARGV[2])
+redis.call("SET", KEYS[1], cjson.encode(decoded), "EX", ARGV[3])
+return 1
+`;
+
+const RELEASE_OWNED_SYNC_STATE_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+if not current then
+	return 0
+end
+local ok, decoded = pcall(cjson.decode, current)
+if not ok or decoded.ownerToken ~= ARGV[1] then
+	return 0
+end
+redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
+return 1
+`;
+
+const RELEASE_STALE_SYNC_STATE_SCRIPT = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+	return 0
+end
+redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
+return 1
+`;
+
 const QUEUE_SYNC_ALL_FEEDS_SCRIPT = `
 if redis.call("EXISTS", KEYS[1]) == 1 then
 	return 0
@@ -36,6 +79,7 @@ interface QueuedStatusValue {
 interface LockStatusValue {
 	startedAt: number | null;
 	heartbeatAt: number | null;
+	ownerToken: string | null;
 }
 
 export interface ManualSyncScope {
@@ -132,7 +176,7 @@ export async function getManualSyncAllFeedsStatus(
 	const progress = parseProgressValue(progressValue);
 	const queuedState = parseQueuedValue(queuedValue);
 	const lockState = parseLockValue(lockValue);
-	const lockStatus = await getManualSyncLockStatus(redis, userId, lockState);
+	const lockStatus = await getManualSyncLockStatus(redis, userId, lockState, lockValue);
 	const running = lockStatus.status === 'active';
 	const queuedStatus = running
 		? ({ status: 'missing', value: null } as const)
@@ -157,52 +201,41 @@ export async function getManualSyncAllFeedsStatus(
 export async function acquireManualSyncAllFeedsLock(redis: Redis, userId: string) {
 	const lockKey = CacheKeys.feedSyncAllLock(userId);
 	const now = Date.now();
+	const ownerToken = crypto.randomUUID();
 	const didLock = await redis.set(
 		lockKey,
-		encodeLockValue(now, now),
+		encodeLockValue(now, now, ownerToken),
 		'EX',
 		MANUAL_SYNC_LOCK_TTL_SECONDS,
 		'NX',
 	);
 	if (didLock === 'OK') {
-		return true;
+		return ownerToken;
 	}
 
 	const existingLockValue = await redis.get(lockKey);
 	const existingLockState = parseLockValue(existingLockValue);
 	if (existingLockState != null && !hasFreshLockHeartbeat(existingLockState)) {
-		logger.warn('Clearing stale queued bulk feed sync lock before processing queue', { userId });
-		await redis.del(lockKey);
+		logger.warn('Taking over stale queued bulk feed sync lock before processing queue', { userId });
 		const retryNow = Date.now();
-		const retryLock = await redis.set(
+		const retryLock = await redis.eval(
+			TAKE_OVER_STALE_LOCK_SCRIPT,
+			1,
 			lockKey,
-			encodeLockValue(retryNow, retryNow),
-			'EX',
-			MANUAL_SYNC_LOCK_TTL_SECONDS,
-			'NX',
+			existingLockValue ?? '',
+			encodeLockValue(retryNow, retryNow, ownerToken),
+			String(MANUAL_SYNC_LOCK_TTL_SECONDS),
 		);
-		return retryLock === 'OK';
+		return Number(retryLock) === 1 ? ownerToken : null;
 	}
 
-	return false;
+	return null;
 }
 
-export function startManualSyncAllFeedsHeartbeat(redis: Redis, userId: string) {
-	const lockKey = CacheKeys.feedSyncAllLock(userId);
+export function startManualSyncAllFeedsHeartbeat(redis: Redis, userId: string, ownerToken: string) {
 	const heartbeat = setInterval(() => {
-		void redis
-			.get(lockKey)
-			.then((currentValue) => {
-				const currentState = parseLockValue(currentValue);
-				const now = Date.now();
-				const startedAt = currentState?.startedAt ?? now;
-				return redis.set(
-					lockKey,
-					encodeLockValue(startedAt, now),
-					'EX',
-					MANUAL_SYNC_LOCK_TTL_SECONDS,
-				);
-			})
+		void Promise.resolve()
+			.then(() => renewManualSyncAllFeedsLock(redis, userId, ownerToken))
 			.catch((error: unknown) => {
 				logger.warn('Failed to update queued bulk feed sync heartbeat', {
 					userId,
@@ -214,11 +247,34 @@ export function startManualSyncAllFeedsHeartbeat(redis: Redis, userId: string) {
 	return () => clearInterval(heartbeat);
 }
 
-export async function releaseManualSyncAllFeedsState(redis: Redis, userId: string) {
-	await redis.del(
+export async function renewManualSyncAllFeedsLock(
+	redis: Redis,
+	userId: string,
+	ownerToken: string,
+) {
+	const renewed = await redis.eval(
+		RENEW_OWNED_LOCK_SCRIPT,
+		1,
+		CacheKeys.feedSyncAllLock(userId),
+		ownerToken,
+		String(Date.now()),
+		String(MANUAL_SYNC_LOCK_TTL_SECONDS),
+	);
+	return Number(renewed) === 1;
+}
+
+export async function releaseManualSyncAllFeedsState(
+	redis: Redis,
+	userId: string,
+	ownerToken: string,
+) {
+	return redis.eval(
+		RELEASE_OWNED_SYNC_STATE_SCRIPT,
+		3,
 		CacheKeys.feedSyncAllLock(userId),
 		CacheKeys.feedSyncAllQueued(userId),
 		CacheKeys.feedSyncAllRequest(userId),
+		ownerToken,
 	);
 }
 
@@ -247,6 +303,7 @@ async function getManualSyncLockStatus(
 	redis: Redis,
 	userId: string,
 	lockValue: LockStatusValue | null,
+	rawLockValue: string | null,
 ): Promise<{ status: LockStatus; value: LockStatusValue | null }> {
 	if (lockValue == null) {
 		return { status: 'missing', value: null };
@@ -257,8 +314,21 @@ async function getManualSyncLockStatus(
 	}
 
 	logger.warn('Clearing stale queued bulk feed sync lock', { userId });
-	await releaseManualSyncAllFeedsState(redis, userId);
-	return { status: 'stale', value: lockValue };
+	const didRelease = await redis.eval(
+		RELEASE_STALE_SYNC_STATE_SCRIPT,
+		3,
+		CacheKeys.feedSyncAllLock(userId),
+		CacheKeys.feedSyncAllQueued(userId),
+		CacheKeys.feedSyncAllRequest(userId),
+		rawLockValue ?? '',
+	);
+	if (Number(didRelease) === 1) return { status: 'stale', value: lockValue };
+
+	const currentRawValue = await redis.get(CacheKeys.feedSyncAllLock(userId));
+	const currentValue = parseLockValue(currentRawValue);
+	return currentValue != null && hasFreshLockHeartbeat(currentValue)
+		? { status: 'active', value: currentValue }
+		: { status: 'missing', value: null };
 }
 
 async function getManualSyncQueuedStatus(
@@ -293,8 +363,8 @@ function encodeQueuedValue(queuedAt: number) {
 	return JSON.stringify({ queuedAt });
 }
 
-function encodeLockValue(startedAt: number, heartbeatAt: number) {
-	return JSON.stringify({ startedAt, heartbeatAt });
+function encodeLockValue(startedAt: number, heartbeatAt: number, ownerToken: string) {
+	return JSON.stringify({ startedAt, heartbeatAt, ownerToken });
 }
 
 function parseQueuedValue(value: string | null): QueuedStatusValue | null {
@@ -324,7 +394,7 @@ function parseLockValue(value: string | null): LockStatusValue | null {
 
 	const legacyTimestamp = Number(value);
 	if (isValidTimestamp(legacyTimestamp)) {
-		return { startedAt: legacyTimestamp, heartbeatAt: legacyTimestamp };
+		return { startedAt: legacyTimestamp, heartbeatAt: legacyTimestamp, ownerToken: null };
 	}
 
 	try {
@@ -334,9 +404,10 @@ function parseLockValue(value: string | null): LockStatusValue | null {
 		return {
 			startedAt,
 			heartbeatAt,
+			ownerToken: typeof parsed.ownerToken === 'string' ? parsed.ownerToken : null,
 		};
 	} catch {
-		return { startedAt: null, heartbeatAt: null };
+		return { startedAt: null, heartbeatAt: null, ownerToken: null };
 	}
 }
 

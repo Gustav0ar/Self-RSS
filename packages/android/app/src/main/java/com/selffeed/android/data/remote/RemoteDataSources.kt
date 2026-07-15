@@ -59,10 +59,19 @@ class FeedRemoteDataSource @Inject constructor(
 
     suspend fun updateFeed(
         id: String,
+		feedUrl: String?,
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,
-    ): FeedWithCounts = api.updateFeed(id, UpdateFeedRequest(categoryId, title, pollingIntervalMinutes)).data
+    ): FeedWithCounts = api.updateFeed(
+		id,
+		UpdateFeedRequest(
+			feedUrl = feedUrl,
+			categoryId = categoryId,
+			title = title,
+			pollingIntervalMinutes = pollingIntervalMinutes,
+		),
+	).data
 
     suspend fun deleteFeed(id: String): Boolean = api.deleteFeed(id).data.success
     suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id).data

@@ -54,6 +54,29 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(repository)
         viewModel.loadPreferences()
         assertNotNull(viewModel.state.value.preferences)
+        assertEquals(false, viewModel.state.value.preferencesLoading)
+        assertNull(viewModel.state.value.preferencesLoadError)
+    }
+
+    @Test
+    fun `loadPreferences exposes a recoverable error and succeeds on retry`() = runTest {
+        coEvery { repository.preferences() } returnsMany listOf(
+            AppResult.Error("Settings request failed"),
+            AppResult.Success(samplePreferences()),
+        )
+        val viewModel = SettingsViewModel(repository)
+
+        viewModel.loadPreferences()
+
+        assertNull(viewModel.state.value.preferences)
+        assertEquals(false, viewModel.state.value.preferencesLoading)
+        assertEquals("Settings request failed", viewModel.state.value.preferencesLoadError)
+
+        viewModel.loadPreferences()
+
+        assertNotNull(viewModel.state.value.preferences)
+        assertNull(viewModel.state.value.preferencesLoadError)
+        coVerify(exactly = 2) { repository.preferences() }
     }
 
     @Test

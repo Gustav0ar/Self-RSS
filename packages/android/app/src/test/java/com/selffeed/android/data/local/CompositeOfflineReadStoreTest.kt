@@ -3,6 +3,7 @@ package com.selffeed.android.data.local
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.CategoryWithCounts
+import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkModule
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -78,12 +79,45 @@ class CompositeOfflineReadStoreTest {
         assertTrue(localStore.readPendingReadStateMutations().isNotEmpty())
     }
 
+    @Test
+    fun `merge feeds preserves unrelated room and file cache entries`() = runBlocking {
+        store.writeFeeds(listOf(sampleFeed("f-existing", "c-existing")))
+
+        store.mergeFeeds(listOf(sampleFeed("f-scoped", "c-scoped")))
+
+        val expected = setOf("f-existing", "f-scoped")
+        assertEquals(expected, localStore.readFeeds().map { it.id }.toSet())
+        assertEquals(expected, fileCacheStore.readFeeds().map { it.id }.toSet())
+    }
+
+    @Test
+    fun `merge feeds replaces matching entries consistently without clearing on an empty scope`() = runBlocking {
+        store.writeFeeds(listOf(sampleFeed("f-existing", "c-existing")))
+
+        store.mergeFeeds(listOf(sampleFeed("f-existing", "c-updated").copy(title = "Updated")))
+        store.mergeFeeds(emptyList())
+
+        assertEquals("Updated", localStore.readFeeds().single().title)
+        assertEquals("c-updated", localStore.readFeeds().single().categoryId)
+        assertEquals(localStore.readFeeds(), fileCacheStore.readFeeds())
+    }
+
     private fun sampleCategory(id: String): CategoryWithCounts = CategoryWithCounts(
         id = id,
         name = "Category $id",
         slug = id,
         sortOrder = 0,
         feedCount = 0,
+        unreadCount = 0,
+    )
+
+    private fun sampleFeed(id: String, categoryId: String): FeedWithCounts = FeedWithCounts(
+        id = id,
+        categoryId = categoryId,
+        title = "Feed $id",
+        feedUrl = "https://example.com/$id.xml",
+        pollingIntervalMinutes = 60,
+        syncStatus = "idle",
         unreadCount = 0,
     )
 

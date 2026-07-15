@@ -21,6 +21,7 @@ import com.selffeed.android.network.ArticleMedia
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -55,6 +56,44 @@ class MainActivityHiltUiTest {
         launchActivity()
 
         composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun realtimeReconnectInvalidatesReadStateAndRefreshesEveryArticleSurface() {
+        repository.reset(authenticated = true)
+        launchActivity()
+        waitForText("Injected Article")
+        composeRule.waitUntil(timeoutMillis = 5_000) { repository.hasReadStateSubscriber() }
+        val categoriesBefore = repository.categoryRequests
+        val feedsBefore = repository.feedRequests
+        val articlesBefore = repository.articlePagingRequests
+        val statsBefore = repository.statsRequests
+
+        assertTrue(repository.emitRealtimeConnected())
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            repository.readStateInvalidations > 0 &&
+                repository.categoryRequests > categoriesBefore &&
+                repository.feedRequests > feedsBefore &&
+                repository.articlePagingRequests > articlesBefore &&
+                repository.statsRequests > statsBefore
+        }
+        composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun settingsTabRetriesAStartupPreferencesFailureInsteadOfRenderingBlank() {
+        repository.reset(authenticated = true, preferenceFailures = 2)
+        launchActivity()
+        waitForText("Injected Article")
+
+        composeRule.onNodeWithContentDescription("Settings tab", useUnmergedTree = true).performClick()
+        waitForText("Settings unavailable")
+        composeRule.onNodeWithText("Retry").performClick()
+
+        waitForText("Preferences")
+        assertTrue(repository.preferenceRequests >= 3)
+        composeRule.onNodeWithText("Preferences").assertIsDisplayed()
     }
 
     @Test

@@ -197,7 +197,11 @@ class ReadStateManager @Inject constructor(
                 repository.invalidateArticleContentCaches()
                 _events.emit(ArticleFeatureEvent.ArticlesChanged())
             }
-            is RealtimeConnectedEvent -> Unit
+            is RealtimeConnectedEvent -> {
+                repository.invalidateReadStateCaches()
+                readStateStore.clear()
+                _events.emit(ArticleFeatureEvent.ArticlesChanged())
+            }
             is ArticleUpdatedEvent -> {
                 repository.invalidateArticleContentCaches(event.articleId)
                 _events.emit(ArticleFeatureEvent.ArticlesChanged(event.articleId))

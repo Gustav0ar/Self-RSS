@@ -20,6 +20,8 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val preferences: UserPreferences? = null,
+    val preferencesLoading: Boolean = false,
+    val preferencesLoadError: String? = null,
     val stats: StatsResponse? = null,
     val authSessions: List<AuthSession> = emptyList(),
     val adminRegistrationLocked: Boolean? = null,
@@ -41,18 +43,32 @@ class SettingsViewModel @Inject constructor(
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     fun loadPreferences() {
+        if (_state.value.preferencesLoading) return
+        _state.update { it.copy(preferencesLoading = true, preferencesLoadError = null) }
         viewModelScope.launch {
             when (val result = repository.preferences()) {
                 is AppResult.Success -> {
                     val normalized = result.data.withNormalizedTheme()
-                    _state.update { it.copy(preferences = normalized) }
+                    _state.update {
+                        it.copy(
+                            preferences = normalized,
+                            preferencesLoading = false,
+                            preferencesLoadError = null,
+                        )
+                    }
                     if (normalized.theme != result.data.theme) {
                         // The server still says "amoled"; rewrite to "dark"
                         // and persist.
                         updatePreferences(UpdatePreferencesRequest(theme = "dark"))
                     }
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(
+                        preferencesLoading = false,
+                        preferencesLoadError = result.message,
+                        errorMessage = result.message,
+                    )
+                }
             }
         }
     }

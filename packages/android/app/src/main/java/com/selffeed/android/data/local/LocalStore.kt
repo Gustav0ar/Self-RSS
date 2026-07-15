@@ -146,6 +146,24 @@ class LocalStore(
         dao.deletePendingReadStateMutation(articleId)
     }
 
+    suspend fun acknowledgeReadStateMutation(articleId: String) {
+        database.withTransaction {
+            dao.deletePendingReadStateMutation(articleId)
+            dao.deleteArticleReadOverride(articleId)
+        }
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+    }
+
+    suspend fun clearAcknowledgedReadStateOverride(articleId: String) {
+        dao.deleteAcknowledgedArticleReadOverride(articleId)
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+    }
+
+    suspend fun clearAcknowledgedReadStateOverrides() {
+        dao.clearAcknowledgedArticleReadOverrides()
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+    }
+
     suspend fun writeArticleDetail(detail: ArticleDetail) {
         dao.upsertArticleDetail(
             ArticleDetailEntity(

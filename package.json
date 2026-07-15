@@ -20,6 +20,7 @@
 		"db:migrate": "bun run --filter '@self-feed/api' db:migrate",
 		"db:seed": "bun run --filter '@self-feed/api' db:seed",
 		"openapi:generate": "bun run --filter '@self-feed/api' openapi:generate",
+		"openapi:check:android": "bun scripts/check-android-openapi-contract.ts",
 		"dev": "bun run dev:prepare && bun run dev:infra && bun run dev:services",
 		"dev:api": "API_HOST=0.0.0.0 bun run --filter '@self-feed/api' dev",
 		"dev:worker": "bun run --filter '@self-feed/api' dev:worker",

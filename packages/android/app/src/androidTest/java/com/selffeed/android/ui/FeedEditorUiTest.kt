@@ -4,13 +4,16 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.screens.FeedTabActions
@@ -74,6 +77,42 @@ class FeedEditorUiTest {
         composeRule.onNodeWithTag("feed-category-picker").assertIsDisplayed().performClick()
         composeRule.onNodeWithTag("feed-category-option-blogs").assertIsDisplayed().performClick()
         composeRule.onNodeWithText("Category: Blogs").assertIsDisplayed()
+    }
+
+    @Test
+    fun editFeedShowsAndSubmitsTheChangedUrl() {
+        var submittedUrl: String? = null
+        val feed = FeedWithCounts(
+            id = "feed-1",
+            categoryId = "news",
+            title = "News Feed",
+            feedUrl = "https://example.com/original.xml",
+            pollingIntervalMinutes = 60,
+            syncStatus = "idle",
+            unreadCount = 0,
+        )
+        composeRule.setContent {
+            SelfFeedTheme {
+                FeedsTab(
+                    feedState(feeds = listOf(feed)),
+                    noOpActions().copy(
+                        onUpdateFeed = { _, url, _, _, _ -> submittedUrl = url },
+                    ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("News Feed").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("More options").performClick()
+        composeRule.onNodeWithText("Edit").performClick()
+        composeRule.onNodeWithTag("feed-url-field")
+            .assertTextContains("https://example.com/original.xml")
+            .performTextReplacement("https://example.com/replacement.xml")
+        composeRule.onNodeWithText("Save").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals("https://example.com/replacement.xml", submittedUrl)
+        }
     }
 
     @Test

@@ -8,7 +8,9 @@ import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
 import { createArticleContentHash } from '../utils/article-hash.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import { createLogger } from '../utils/logger.js';
+import { resolvePublisherHtmlUrls, resolvePublisherUrl } from '../utils/publisher-url.js';
 import { withRetry } from '../utils/retry.js';
 import { fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 import {
@@ -43,6 +45,7 @@ import {
 } from './feed-sync-status.js';
 import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
+import { acquireOwnedRedisLock } from './redis-owned-lock.js';
 
 const logger = createLogger();
 
@@ -105,10 +108,7 @@ export class FeedSyncService {
 		this.parser = new RSSParser({
 			timeout: this.config.timeoutMs,
 			maxRedirects: 3,
-			headers: {
-				'User-Agent': 'SelfFeed/1.0',
-				Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-			},
+			headers: createFeedFetchHeaders(),
 		});
 	}
 
@@ -156,9 +156,13 @@ export class FeedSyncService {
 			const effectiveFeedUrl = proxyResolution?.feedUrl ?? feed.feedUrl;
 			const syncWarning = proxyResolution?.warning ?? null;
 			const parsedTitle = this.normalizeText(parsed.title)?.trim() ?? null;
-			const parsedLink = this.normalizeText(parsed.link);
+			const parsedLink = resolvePublisherUrl(this.normalizeText(parsed.link), effectiveFeedUrl);
 			const parsedDescription = this.normalizeText(parsed.description);
-			const parsedImageUrl = this.normalizeText(parsed.image?.url);
+			const parsedImageUrl = resolvePublisherUrl(
+				this.normalizeText(parsed.image?.url),
+				parsedLink,
+				effectiveFeedUrl,
+			);
 
 			const feedUpdates: Record<string, unknown> = {};
 			if (effectiveFeedUrl !== feed.feedUrl) feedUpdates.feedUrl = effectiveFeedUrl;
@@ -213,7 +217,11 @@ export class FeedSyncService {
 					itemRecord.summary ??
 					itemRecord.description ??
 					'';
-				const canonicalUrl = this.normalizeText(itemRecord.link);
+				const canonicalUrl = resolvePublisherUrl(
+					this.normalizeText(itemRecord.link),
+					parsedLink,
+					effectiveFeedUrl,
+				);
 				const articleTitle = this.normalizeText(itemRecord.title) ?? 'Untitled';
 				const author =
 					this.normalizeText(itemRecord.creator) ??
@@ -224,12 +232,17 @@ export class FeedSyncService {
 					typeof rawFeedContent === 'string'
 						? rawFeedContent
 						: (this.normalizeText(rawFeedContent) ?? '');
-				const sanitizedHtml = sanitizeHtml(rawHtml);
+				const sanitizedHtml = resolvePublisherHtmlUrls(
+					sanitizeHtml(rawHtml),
+					canonicalUrl,
+					parsedLink,
+					effectiveFeedUrl,
+				);
 				// Extract text from sanitized HTML (DOMPurify already stripped chrome).
 				// This matches reader output and skips an extra regex pass.
 				const textContent = stripHtml(sanitizedHtml);
 				const excerpt = textContent ? extractExcerpt(textContent) : null;
-				const heroImage = extractHeroImage(rawHtml) ?? extractHeroImage(sanitizedHtml);
+				const heroImage = extractHeroImage(sanitizedHtml);
 
 				if (existingArticle) {
 					if (
@@ -328,10 +341,7 @@ export class FeedSyncService {
 				});
 			}
 
-			// Build media maps up front so the repository can persist all changes
-			// in a single transaction (prevents partial inserts on crash).
-			// Media for new articles is keyed by guid; the repository rewrites to
-			// use the freshly-generated article id after insert.
+			// Build media maps up front so persistence stays atomic.
 			const mediaByGuid = new Map<
 				string,
 				typeof import('../db/schema.js').articleMedia.$inferInsert[]
@@ -596,13 +606,13 @@ export class FeedSyncService {
 
 		await this.redis.lrem(CacheKeys.feedSyncAllQueue(), 0, userId);
 
-		const didLock = await acquireManualSyncAllFeedsLock(this.redis, userId);
-		if (!didLock) {
+		const ownerToken = await acquireManualSyncAllFeedsLock(this.redis, userId);
+		if (!ownerToken) {
 			logger.warn('Skipping queued bulk feed sync because one is already running', { userId });
 			return { userId, skipped: true as const };
 		}
 
-		const stopHeartbeat = startManualSyncAllFeedsHeartbeat(this.redis, userId);
+		const stopHeartbeat = startManualSyncAllFeedsHeartbeat(this.redis, userId, ownerToken);
 
 		try {
 			const scope = await getManualSyncAllFeedsRequest(this.redis, userId);
@@ -619,7 +629,7 @@ export class FeedSyncService {
 			return { userId, skipped: false as const, result };
 		} finally {
 			stopHeartbeat();
-			await releaseManualSyncAllFeedsState(this.redis, userId);
+			await releaseManualSyncAllFeedsState(this.redis, userId, ownerToken);
 		}
 	}
 
@@ -758,13 +768,15 @@ export class FeedSyncService {
 				throw new Error('Canonical article content was unavailable');
 			}
 
-			const sanitizedHtml = sanitizeHtml(enrichedHtml);
+			const sanitizedHtml = resolvePublisherHtmlUrls(
+				sanitizeHtml(enrichedHtml),
+				enrichment.canonicalUrl,
+			);
 			const textContent = stripHtml(sanitizedHtml);
 			const excerpt = textContent ? extractExcerpt(textContent) : null;
 			const heroImage =
-				extractHeroImage(enrichedHtml) ??
 				extractHeroImage(sanitizedHtml) ??
-				enrichment.heroImageUrl;
+				resolvePublisherUrl(enrichment.heroImageUrl, enrichment.canonicalUrl);
 
 			const shouldReplace = this.shouldRefreshArticle(
 				enrichment.contentHtml,
@@ -851,10 +863,7 @@ export class FeedSyncService {
 			? [null, null]
 			: await Promise.all([this.redis.get(etagKey), this.redis.get(lastModKey)]);
 
-		const headers: Record<string, string> = {
-			'User-Agent': 'SelfFeed/1.0',
-			Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-		};
+		const headers = createFeedFetchHeaders();
 		if (ignoreCache) {
 			headers['Cache-Control'] = 'no-cache';
 			headers.Pragma = 'no-cache';
@@ -992,40 +1001,30 @@ export class FeedSyncService {
 	}
 
 	private async tryAcquireFeedSyncLock(feedId: string): Promise<(() => Promise<void>) | null> {
-		const redisWithSet = this.redis as unknown as {
+		const redis = this.redis as unknown as {
 			set?: (...args: unknown[]) => Promise<unknown>;
-			del?: (...args: unknown[]) => Promise<unknown>;
+			eval?: (...args: unknown[]) => Promise<unknown>;
 		};
-
-		if (typeof redisWithSet.set !== 'function') {
+		if (typeof redis.set !== 'function') {
 			logger.warn('Feed sync lock unavailable because Redis set is not configured', { feedId });
-			return async () => undefined;
 		}
-
-		const lockKey = CacheKeys.feedSyncLock(feedId);
-		const lockAcquired = await redisWithSet.set(
-			lockKey,
-			'1',
-			'EX',
-			FEED_SYNC_LOCK_TTL_SECONDS,
-			'NX',
-		);
-		if (lockAcquired !== 'OK') {
-			return null;
-		}
-
-		return async () => {
-			try {
-				if (typeof redisWithSet.del === 'function') {
-					await redisWithSet.del(lockKey);
-				}
-			} catch (err) {
+		return acquireOwnedRedisLock({
+			redis,
+			key: CacheKeys.feedSyncLock(feedId),
+			ttlSeconds: FEED_SYNC_LOCK_TTL_SECONDS,
+			onRenewError: (error) => {
+				logger.warn('Failed to renew feed sync lock', {
+					feedId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+			onReleaseError: (error) => {
 				logger.warn('Failed to release feed sync lock', {
 					feedId,
-					error: err instanceof Error ? err.message : String(err),
+					error: error instanceof Error ? error.message : String(error),
 				});
-			}
-		};
+			},
+		});
 	}
 
 	private parsePublishedAt(value: unknown): Date | null {

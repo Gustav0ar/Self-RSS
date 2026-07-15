@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FeedService } from '../../src/services/feed.service.js';
+import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+});
 
 describe('FeedService - normalizeFeedUrl', () => {
 	it('rejects localhost when private hosts are not allowed', async () => {
@@ -119,12 +125,48 @@ describe('FeedService - create', () => {
 			}),
 		).rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 });
 	});
+
+	it('uses browser-compatible headers when fetching feed metadata', async () => {
+		const feedRepo = {
+			findByUrl: vi.fn().mockResolvedValue(null),
+			create: vi.fn(async (data) => ({ id: 'feed-1', ...data })),
+		};
+		const categoryRepo = { findById: vi.fn(async () => ({ id: 'cat-1' })) };
+		const service = new FeedService(feedRepo as never, categoryRepo as never, {} as never, {
+			maxContentLength: 10_000,
+			allowPrivateHosts: true,
+		});
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('http://127.0.0.1/feed.xml');
+		const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			expect(headers.get('user-agent')).toBe(FEED_FETCH_USER_AGENT);
+			expect(headers.get('accept')).toContain('application/rss+xml');
+			return new Response(
+				'<?xml version="1.0"?><rss version="2.0"><channel><title>Compatible feed</title><link>https://example.com</link></channel></rss>',
+				{ status: 200, headers: { 'content-type': 'application/rss+xml' } },
+			);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		await service.create('user-1', {
+			categoryId: 'cat-1',
+			feedUrl: 'https://example.com/feed.xml',
+		});
+
+		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(feedRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				feedUrl: 'http://127.0.0.1/feed.xml',
+				title: 'Compatible feed',
+			}),
+		);
+	});
 });
 
 describe('FeedService - update / delete', () => {
 	it('updates the feed metadata when present', async () => {
 		const feedRepo = {
-			findById: vi.fn(async () => ({ id: 'feed-1' })),
+			findById: vi.fn(async () => ({ id: 'feed-1', feedUrl: 'https://old.example/feed.xml' })),
 			update: vi.fn(async () => ({ id: 'feed-1', title: 'New' })),
 		};
 		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
@@ -134,6 +176,52 @@ describe('FeedService - update / delete', () => {
 
 		await service.update('user-1', 'feed-1', { title: 'New' });
 		expect(feedRepo.update).toHaveBeenCalledWith('feed-1', 'user-1', { title: 'New' });
+	});
+
+	it('normalizes a changed URL and clears stale sync failures', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({ id: 'feed-1', feedUrl: 'https://old.example/feed.xml' })),
+			findByUrl: vi.fn().mockResolvedValue(null),
+			update: vi.fn(async (_id, _userId, data) => ({ id: 'feed-1', ...data })),
+		};
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('https://new.example/feed.xml');
+
+		await service.update('user-1', 'feed-1', { feedUrl: 'https://new.example/feed.xml' });
+
+		expect(feedRepo.findByUrl).toHaveBeenCalledWith('user-1', 'https://new.example/feed.xml');
+		expect(feedRepo.update).toHaveBeenCalledWith(
+			'feed-1',
+			'user-1',
+			expect.objectContaining({
+				feedUrl: 'https://new.example/feed.xml',
+				syncStatus: 'idle',
+				lastSyncError: null,
+				lastSyncErrorAt: null,
+				nextSyncAt: expect.any(Date),
+			}),
+		);
+	});
+
+	it('rejects changing a feed to another subscription URL', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({ id: 'feed-1', feedUrl: 'https://old.example/feed.xml' })),
+			findByUrl: vi.fn(async () => ({ id: 'feed-2' })),
+			update: vi.fn(),
+		};
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('https://duplicate.example/feed.xml');
+
+		await expect(
+			service.update('user-1', 'feed-1', { feedUrl: 'https://duplicate.example/feed.xml' }),
+		).rejects.toMatchObject({ code: 'CONFLICT', statusCode: 409 });
+		expect(feedRepo.update).not.toHaveBeenCalled();
 	});
 
 	it('returns 404 when updating a missing feed', async () => {

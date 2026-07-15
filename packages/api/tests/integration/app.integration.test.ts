@@ -596,6 +596,15 @@ describe('API integration', () => {
 			});
 			expect(duplicateFeed.response.status).toBe(409);
 
+			const replacementUrl = `${feedServer.url}?source=updated`;
+			const updatedFeed = await authedRequest(`/api/v1/feeds/${createFeed.body.data.id}`, token1, {
+				method: 'PATCH',
+				body: JSON.stringify({ feedUrl: replacementUrl }),
+			});
+			expect(updatedFeed.response.status).toBe(200);
+			expect(updatedFeed.body.data.feedUrl).toBe(replacementUrl);
+			expect(updatedFeed.body.data.syncStatus).toBe('idle');
+
 			const crossUserFeed = await authedRequest('/api/v1/feeds', token2, {
 				method: 'POST',
 				body: JSON.stringify({
@@ -899,6 +908,77 @@ describe('API integration', () => {
 			expect(stats.body.data.dailyMetrics[0].searchCount).toBeGreaterThanOrEqual(1);
 		} finally {
 			await events?.cancel().catch(() => undefined);
+			await feedServer.stop();
+		}
+	});
+
+	it('normalizes relative publisher and article URLs during feed sync', async () => {
+		const registered = await registerUser('relative-urls@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Relative URLs' }),
+		});
+		const feedServer = await startFeedServer(`<?xml version="1.0" encoding="UTF-8"?>
+			<rss version="2.0">
+				<channel>
+					<title>Relative URL Feed</title>
+					<link>/publisher/</link>
+					<description>Relative publisher URLs</description>
+					<image>
+						<url>icons/feed.png</url>
+						<title>Relative URL Feed</title>
+						<link>/publisher/</link>
+					</image>
+					<item>
+						<title>Relative Story</title>
+						<link>stories/alpha</link>
+						<guid>relative-alpha</guid>
+						<description><![CDATA[
+							<p><a href="/about">About</a></p>
+							<img src="../media/hero.jpg" srcset="../media/small.jpg 480w, ../media/large.jpg 960w">
+							<a href="javascript:alert(1)">Unsafe</a>
+						]]></description>
+					</item>
+				</channel>
+			</rss>`);
+		const origin = new URL(feedServer.url).origin;
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+					title: 'Relative URL Feed',
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+
+			const sync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			expect(sync.response.status).toBe(200);
+
+			const feeds = await authedRequest('/api/v1/feeds', token);
+			expect(feeds.body.data[0]).toMatchObject({
+				siteUrl: `${origin}/publisher/`,
+				faviconUrl: `${origin}/publisher/icons/feed.png`,
+			});
+
+			const articles = await authedRequest(`/api/v1/articles?feedId=${feed.body.data.id}`, token);
+			expect(articles.body.data).toHaveLength(1);
+			const detail = await authedRequest(`/api/v1/articles/${articles.body.data[0].id}`, token);
+			expect(detail.body.data.canonicalUrl).toBe(`${origin}/publisher/stories/alpha`);
+			expect(detail.body.data.heroImageUrl).toBe(`${origin}/publisher/media/hero.jpg`);
+			expect(detail.body.data.contentHtml).toContain(`href="${origin}/about"`);
+			expect(detail.body.data.contentHtml).toContain(`src="${origin}/publisher/media/hero.jpg"`);
+			expect(detail.body.data.contentHtml).toContain(
+				`srcset="${origin}/publisher/media/small.jpg 480w, ${origin}/publisher/media/large.jpg 960w"`,
+			);
+			expect(detail.body.data.contentHtml).not.toContain('javascript:');
+			expect(detail.body.data.media[0].url).toBe(`${origin}/publisher/media/hero.jpg`);
+		} finally {
 			await feedServer.stop();
 		}
 	});

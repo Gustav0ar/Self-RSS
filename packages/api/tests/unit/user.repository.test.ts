@@ -66,13 +66,16 @@ describe('UserRepository', () => {
 			const mockTx = {
 				insert: vi.fn().mockReturnValue({
 					values: vi.fn().mockReturnValue({
-						returning: vi.fn().mockResolvedValue([mockUser]),
+						returning: vi.fn().mockReturnValue({
+							all: vi.fn().mockReturnValue([mockUser]),
+						}),
+						run: vi.fn(),
 					}),
 				}),
 			};
 
 			const db = {
-				transaction: vi.fn().mockImplementation(async (fn) => fn(mockTx)),
+				transaction: vi.fn().mockImplementation((fn) => fn(mockTx)),
 			};
 
 			const repo = new UserRepository(db as never);
@@ -89,13 +92,16 @@ describe('UserRepository', () => {
 			const mockTx = {
 				insert: vi.fn().mockReturnValue({
 					values: vi.fn().mockReturnValue({
-						returning: vi.fn().mockResolvedValue([]),
+						returning: vi.fn().mockReturnValue({
+							all: vi.fn().mockReturnValue([]),
+						}),
+						run: vi.fn(),
 					}),
 				}),
 			};
 
 			const db = {
-				transaction: vi.fn().mockImplementation(async (fn) => fn(mockTx)),
+				transaction: vi.fn().mockImplementation((fn) => fn(mockTx)),
 			};
 
 			const repo = new UserRepository(db as never);
@@ -123,21 +129,24 @@ describe('UserRepository', () => {
 			const mockTx = {
 				query: {
 					users: {
-						findFirst: vi.fn().mockResolvedValue(null),
+						findFirst: vi.fn().mockReturnValue({ sync: vi.fn().mockReturnValue(null) }),
 					},
 				},
 				select: vi.fn().mockReturnValue({
-					from: vi.fn().mockResolvedValue([{ count: 0 }]),
+					from: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([{ count: 0 }]) }),
 				}),
 				insert: vi.fn().mockReturnValue({
 					values: vi.fn().mockReturnValue({
-						returning: vi.fn().mockResolvedValue([mockUser]),
+						returning: vi.fn().mockReturnValue({
+							all: vi.fn().mockReturnValue([mockUser]),
+						}),
+						run: vi.fn(),
 					}),
 				}),
 			};
 
 			const db = {
-				transaction: vi.fn().mockImplementation(async (fn) => fn(mockTx)),
+				transaction: vi.fn().mockImplementation((fn) => fn(mockTx)),
 			};
 
 			const repo = new UserRepository(db as never);
@@ -154,21 +163,24 @@ describe('UserRepository', () => {
 			const mockTx = {
 				query: {
 					users: {
-						findFirst: vi.fn().mockResolvedValue(null),
+						findFirst: vi.fn().mockReturnValue({ sync: vi.fn().mockReturnValue(null) }),
 					},
 				},
 				select: vi.fn().mockReturnValue({
-					from: vi.fn().mockResolvedValue([{ count: 0 }]),
+					from: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([{ count: 0 }]) }),
 				}),
 				insert: vi.fn().mockReturnValue({
 					values: vi.fn().mockReturnValue({
-						returning: vi.fn().mockResolvedValue([]),
+						returning: vi.fn().mockReturnValue({
+							all: vi.fn().mockReturnValue([]),
+						}),
+						run: vi.fn(),
 					}),
 				}),
 			};
 
 			const db = {
-				transaction: vi.fn().mockImplementation(async (fn) => fn(mockTx)),
+				transaction: vi.fn().mockImplementation((fn) => fn(mockTx)),
 			};
 
 			const repo = new UserRepository(db as never);

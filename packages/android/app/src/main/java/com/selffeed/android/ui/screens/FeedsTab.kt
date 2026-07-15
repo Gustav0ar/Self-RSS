@@ -441,7 +441,7 @@ fun FeedsTab(
                 if (feed == null) {
                     actions.onCreateFeed(url, categoryId, title)
                 } else {
-                    actions.onUpdateFeed(feed.id, title, categoryId, pollingIntervalMinutes)
+                    actions.onUpdateFeed(feed.id, url, title, categoryId, pollingIntervalMinutes)
                 }
                 managementDialog = null
             },
@@ -563,31 +563,22 @@ private fun FeedEditorDialog(
         }
     }
     val validInterval = pollingInterval.toIntOrNull()?.takeIf { it in 5..1440 }
-    val canSave = if (feed == null) url.trim().isNotEmpty() else categoryId.isNotBlank() && validInterval != null
+    val canSave = url.trim().isNotEmpty() &&
+        (feed == null || (categoryId.isNotBlank() && validInterval != null))
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (feed == null) "Add feed" else "Edit feed") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (feed == null) {
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        label = { Text("Feed or website URL") },
-                        supportingText = { Text("Paste a feed URL or a site such as example.com") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    Text(
-                        text = feed.feedUrl,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Feed or website URL") },
+                    supportingText = { Text("Paste a feed URL or a site such as example.com") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("feed-url-field"),
+                )
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },

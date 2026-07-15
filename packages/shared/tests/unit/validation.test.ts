@@ -6,6 +6,7 @@ import {
 	markAllReadSchema,
 	markReadSchema,
 	readStateSyncEventSchema,
+	updateFeedSchema,
 	updatePreferencesSchema,
 } from '../../src/index.js';
 
@@ -67,6 +68,13 @@ describe('shared validation contracts', () => {
 		expect(createFeedSchema.safeParse({ categoryId: uuidA, feedUrl: 'not-a-url' }).success).toBe(
 			false,
 		);
+	});
+
+	it('validates an optional feed URL update', () => {
+		expect(updateFeedSchema.parse({ feedUrl: 'https://example.com/new.xml' })).toEqual({
+			feedUrl: 'https://example.com/new.xml',
+		});
+		expect(updateFeedSchema.safeParse({ feedUrl: 'not-a-url' }).success).toBe(false);
 	});
 
 	it('validates preference updates without requiring every setting', () => {

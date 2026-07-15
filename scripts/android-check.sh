@@ -9,6 +9,9 @@ if [ ! -f "$ANDROID_DIR/gradlew" ]; then
   exit 1
 fi
 
+echo "[android-check] Checking Android/OpenAPI compatibility..."
+bun "$ROOT_DIR/scripts/check-android-openapi-contract.ts"
+
 echo "[android-check] Running Android unit tests..."
 bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:testDeviceTestUnitTest
 
@@ -21,5 +24,8 @@ bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleDebug
 echo "[android-check] Assembling Android release build..."
 SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ \
   bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleRelease
+
+echo "[android-check] Verifying minified Moshi constructors..."
+bash "$ROOT_DIR/scripts/check-android-release-r8.sh"
 
 echo "[android-check] ✅ All Android checks passed."

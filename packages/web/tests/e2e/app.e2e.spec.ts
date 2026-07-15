@@ -173,9 +173,14 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await expect(page.getByRole('button', { name: new RegExp(`^${emptyCategory}$`) })).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Edit DevTools Digest' }).click();
+	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/devtools.xml`);
+	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/platform.xml`);
 	await page.getByLabel('Custom name (optional)').fill('My DevTools');
 	await page.getByRole('button', { name: 'Save changes' }).click();
 	await expect(page.getByRole('button', { name: unreadBadgeName('My DevTools') })).toBeVisible();
+	await page.getByRole('button', { name: 'Edit My DevTools' }).click();
+	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/platform.xml`);
+	await page.getByRole('button', { name: 'Cancel' }).click();
 
 	await page.getByRole('button', { name: 'Delete My DevTools' }).click();
 	await page.getByRole('button', { name: 'Delete' }).last().click();

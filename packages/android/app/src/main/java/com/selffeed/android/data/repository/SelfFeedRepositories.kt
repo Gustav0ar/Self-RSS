@@ -46,6 +46,7 @@ interface FeedRepository {
     suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): AppResult<FeedWithCounts>
     suspend fun updateFeed(
         id: String,
+		feedUrl: String?,
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,

@@ -10,6 +10,18 @@ interface ArticleFeatureEventSink {
     fun refreshArticleContent()
 }
 
+internal fun refreshArticleContentSurfaces(
+    loadCategories: () -> Unit,
+    loadFeeds: () -> Unit,
+    refreshArticles: () -> Unit,
+    loadStats: () -> Unit,
+) {
+    loadCategories()
+    loadFeeds()
+    refreshArticles()
+    loadStats()
+}
+
 class ArticleFeatureEventCoordinator {
     fun handle(
         event: ArticleFeatureEvent,

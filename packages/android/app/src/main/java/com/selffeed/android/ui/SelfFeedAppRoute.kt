@@ -108,9 +108,12 @@ fun SelfFeedAppRoute(
             }
 
             override fun refreshArticleContent() {
-                feedsViewModel.loadCategories()
-                feedsViewModel.loadFeeds()
-                settingsViewModel.loadStats()
+                refreshArticleContentSurfaces(
+                    loadCategories = feedsViewModel::loadCategories,
+                    loadFeeds = feedsViewModel::loadFeeds,
+                    refreshArticles = articlesViewModel::refreshArticles,
+                    loadStats = settingsViewModel::loadStats,
+                )
             }
         }
 
@@ -133,6 +136,16 @@ fun SelfFeedAppRoute(
             while (true) {
                 delay(60_000L)
                 feedsViewModel.refreshFeedHealth()
+            }
+        }
+
+        LaunchedEffect(chromeState.activeTab, authState.isAuthenticated) {
+            if (
+                authState.isAuthenticated &&
+                chromeState.activeTab == HomeTab.SETTINGS &&
+                settingsState.preferences == null
+            ) {
+                settingsViewModel.loadPreferences()
             }
         }
 
@@ -220,8 +233,8 @@ fun SelfFeedAppRoute(
                 onUpdateCategory = feedsViewModel::updateCategory,
                 onDeleteCategory = feedsViewModel::deleteCategory,
                 onCreateFeed = feedsViewModel::createFeed,
-                onUpdateFeed = { id, title, categoryId, pollingIntervalMinutes ->
-                    feedsViewModel.updateFeed(id, title, categoryId, pollingIntervalMinutes)
+                onUpdateFeed = { id, feedUrl, title, categoryId, pollingIntervalMinutes ->
+                    feedsViewModel.updateFeed(id, feedUrl, title, categoryId, pollingIntervalMinutes)
                 },
                 onDeleteFeed = feedsViewModel::deleteFeed,
                 onImportOpml = feedsViewModel::importOpml,
@@ -276,6 +289,7 @@ fun SelfFeedAppRoute(
                     articlesViewModel.setAutoMarkReadMode(it.apiValue)
                 },
                 onRevokeAuthSession = settingsViewModel::revokeAuthSession,
+                onRetryPreferences = settingsViewModel::loadPreferences,
                 onClearMessages = {
                     authViewModel.clearMessages()
                     feedsViewModel.clearMessages()

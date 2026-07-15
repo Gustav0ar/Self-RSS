@@ -38,4 +38,12 @@ describe('openApiSpec route drift guards', () => {
 		expect(openApiSpec.components.schemas).toHaveProperty('ReorderCategoriesResult');
 		expect(openApiSpec.components.schemas).toHaveProperty('MarkAllReadResult');
 	});
+
+	it('documents OPML export and the Android-required response fields', () => {
+		expect(openApiSpec.paths).toHaveProperty('/feeds/export/opml.get');
+		expect(openApiSpec.components.schemas.Preferences.required).toEqual(
+			expect.arrayContaining(['userId', 'theme', 'accentColor', 'createdAt', 'updatedAt']),
+		);
+		expect(openApiSpec.components.schemas.ArticleListItem.properties).toHaveProperty('displayedAt');
+	});
 });

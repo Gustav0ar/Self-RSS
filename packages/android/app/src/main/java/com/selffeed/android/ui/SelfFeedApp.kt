@@ -134,7 +134,7 @@ data class SelfFeedAppActions(
     val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
     val onDeleteCategory: (String) -> Unit = {},
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
-    val onUpdateFeed: (String, String?, String?, Int?) -> Unit = { _, _, _, _ -> },
+    val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},
     val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
     val onExportOpml: () -> Unit = {},
@@ -160,6 +160,7 @@ data class SelfFeedAppActions(
     val onFontChanged: (ReaderFontPreference) -> Unit = {},
     val onAutoMarkReadModeChanged: (AutoMarkReadPreference) -> Unit = {},
     val onRevokeAuthSession: (String) -> Unit,
+    val onRetryPreferences: () -> Unit = {},
     val onClearMessages: () -> Unit,
 )
 
@@ -358,11 +359,15 @@ fun SelfFeedApp(
     }
     val settingsTabState = remember(
         state.settings.preferences,
+        state.settings.preferencesLoading,
+        state.settings.preferencesLoadError,
         state.settings.stats,
         state.settings.authSessions,
     ) {
         SettingsTabState(
             preferences = state.settings.preferences,
+            preferencesLoading = state.settings.preferencesLoading,
+            preferencesLoadError = state.settings.preferencesLoadError,
             stats = state.settings.stats,
             authSessions = state.settings.authSessions,
         )
@@ -416,6 +421,7 @@ fun SelfFeedApp(
             onAutoMarkReadModeChanged = actions.onAutoMarkReadModeChanged,
             onRevokeAuthSession = actions.onRevokeAuthSession,
             onLogout = actions.onLogout,
+            onRetryPreferences = actions.onRetryPreferences,
         )
     }
     val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit = { preferHtml, onPreferHtmlChanged ->

@@ -52,6 +52,7 @@ function FeedDialogContent({
 			} else if (feed) {
 				await updateFeed.mutateAsync({
 					id: feed.id,
+					feedUrl: feedUrl.trim(),
 					categoryId,
 					title: title.trim() || undefined,
 					pollingIntervalMinutes: Number(pollingIntervalMinutes),
@@ -76,22 +77,20 @@ function FeedDialogContent({
 				</div>
 			) : null}
 			<form onSubmit={handleSubmit} className="space-y-4">
-				{mode === 'create' ? (
-					<div>
-						<label htmlFor="feed-url" className="mb-2 block text-sm font-medium">
-							Feed URL
-						</label>
-						<input
-							id="feed-url"
-							type="url"
-							value={feedUrl}
-							onChange={(event) => setFeedUrl(event.target.value)}
-							required
-							placeholder="https://example.com/feed.xml"
-							className="input-surface h-12 w-full rounded-2xl px-4 text-sm outline-none"
-						/>
-					</div>
-				) : null}
+				<div>
+					<label htmlFor="feed-url" className="mb-2 block text-sm font-medium">
+						Feed URL
+					</label>
+					<input
+						id="feed-url"
+						type="url"
+						value={feedUrl}
+						onChange={(event) => setFeedUrl(event.target.value)}
+						required
+						placeholder="https://example.com/feed.xml"
+						className="input-surface h-12 w-full rounded-2xl px-4 text-sm outline-none"
+					/>
+				</div>
 
 				<div>
 					<label htmlFor="feed-title" className="mb-2 block text-sm font-medium">

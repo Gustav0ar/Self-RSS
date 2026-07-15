@@ -14,6 +14,7 @@ import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.ReadStateSyncEvent
+import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.SyncResponse
@@ -24,6 +25,7 @@ import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import javax.inject.Inject
@@ -32,12 +34,26 @@ import javax.inject.Singleton
 @Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private val online = MutableStateFlow(true)
+    private val readStateSyncEvents = MutableSharedFlow<ReadStateSyncEvent>(extraBufferCapacity = 1)
     private var apiBaseUrl = "10.0.2.2:3000"
     private var authenticated = true
     private var preferences = defaultPreferences
+    private var preferenceFailuresRemaining = 0
     private var articleDetailDelayMs = 0L
     private val articleReadStates = mutableMapOf<String, Boolean>()
     private val articleDetailOverrides = mutableMapOf<String, ArticleDetail>()
+    var categoryRequests = 0
+        private set
+    var feedRequests = 0
+        private set
+    var articlePagingRequests = 0
+        private set
+    var statsRequests = 0
+        private set
+    var preferenceRequests = 0
+        private set
+    var readStateInvalidations = 0
+        private set
     private val fakeArticles = listOf(
         ArticleListItem(
             id = "article-1",
@@ -74,13 +90,24 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(apiBaseUrl)
     }
 
-    fun reset(authenticated: Boolean = true, hideRead: Boolean = false) {
+    fun reset(
+        authenticated: Boolean = true,
+        hideRead: Boolean = false,
+        preferenceFailures: Int = 0,
+    ) {
         this.authenticated = authenticated
         apiBaseUrl = "10.0.2.2:3000"
         preferences = defaultPreferences.copy(hideRead = hideRead)
+        preferenceFailuresRemaining = preferenceFailures
         articleDetailDelayMs = 0L
         articleReadStates.clear()
         articleDetailOverrides.clear()
+        categoryRequests = 0
+        feedRequests = 0
+        articlePagingRequests = 0
+        statsRequests = 0
+        preferenceRequests = 0
+        readStateInvalidations = 0
     }
 
     fun delayArticleDetailsBy(delayMs: Long) {
@@ -122,8 +149,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun isLoggedIn(): Boolean = authenticated
     override fun authEvents(): Flow<String> = emptyFlow()
 
-    override suspend fun categories(): AppResult<List<CategoryWithCounts>> = AppResult.Success(
-        listOf(
+    override suspend fun categories(): AppResult<List<CategoryWithCounts>> {
+        categoryRequests++
+        return AppResult.Success(listOf(
             CategoryWithCounts(
                 id = "category-1",
                 name = "Injected Category",
@@ -132,8 +160,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 feedCount = 1,
                 unreadCount = unreadCount(),
             ),
-        ),
-    )
+        ))
+    }
 
     override suspend fun createCategory(name: String, parentCategoryId: String?): AppResult<CategoryWithCounts> =
         AppResult.Error("Not supported in fake")
@@ -146,8 +174,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override suspend fun deleteCategory(id: String): AppResult<Boolean> = AppResult.Error("Not supported in fake")
 
-    override suspend fun feeds(categoryId: String?): AppResult<List<FeedWithCounts>> = AppResult.Success(
-        listOf(
+    override suspend fun feeds(categoryId: String?): AppResult<List<FeedWithCounts>> {
+        feedRequests++
+        return AppResult.Success(listOf(
             FeedWithCounts(
                 id = "feed-1",
                 categoryId = "category-1",
@@ -157,14 +186,15 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 syncStatus = "idle",
                 unreadCount = unreadCount(),
             ),
-        ),
-    )
+        ))
+    }
 
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): AppResult<FeedWithCounts> =
         AppResult.Error("Not supported in fake")
 
     override suspend fun updateFeed(
         id: String,
+		feedUrl: String?,
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,
@@ -191,6 +221,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,
     ): Flow<PagingData<ArticleListItem>> {
+        articlePagingRequests++
         val overrides = readStateOverrides()
         val articles = currentArticles(query.unreadOnly).map { article ->
             overrides[article.id]?.let { article.copy(isRead = it) } ?: article
@@ -226,8 +257,10 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(MarkAllReadResponse(markedCount = unreadBefore, feedIds = listOf("feed-1")))
     }
     override fun clientId(): String = "android-test-client"
-    override fun readStateEvents(): Flow<ReadStateSyncEvent> = emptyFlow()
-    override suspend fun invalidateReadStateCaches(articleId: String?) = Unit
+    override fun readStateEvents(): Flow<ReadStateSyncEvent> = readStateSyncEvents
+    override suspend fun invalidateReadStateCaches(articleId: String?) {
+        readStateInvalidations++
+    }
     override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
         articleReadStates[articleId] = read
@@ -241,7 +274,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =
         AppResult.Success(ApiListResponse(data = currentArticles(), cursor = null, hasMore = false))
 
-    override suspend fun preferences(): AppResult<UserPreferences> = AppResult.Success(preferences)
+    override suspend fun preferences(): AppResult<UserPreferences> {
+        preferenceRequests++
+        if (preferenceFailuresRemaining > 0) {
+            preferenceFailuresRemaining--
+            return AppResult.Error("Settings request failed")
+        }
+        return AppResult.Success(preferences)
+    }
     override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> {
         preferences = preferences.copy(
             theme = request.theme ?: preferences.theme,
@@ -256,8 +296,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(preferences)
     }
 
-    override suspend fun stats(): AppResult<StatsResponse> =
-        AppResult.Success(
+    override suspend fun stats(): AppResult<StatsResponse> {
+        statsRequests++
+        return AppResult.Success(
             StatsResponse(
                 totalUnread = unreadCount(),
                 totalRead = fakeArticles.size - unreadCount(),
@@ -265,6 +306,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 totalCategories = 1,
             ),
         )
+    }
+
+    fun hasReadStateSubscriber(): Boolean = readStateSyncEvents.subscriptionCount.value > 0
+
+    fun emitRealtimeConnected(): Boolean = readStateSyncEvents.tryEmit(RealtimeConnectedEvent())
 
     override suspend fun authSessions(): AppResult<List<AuthSession>> = AppResult.Success(listOf(fakeSession))
 

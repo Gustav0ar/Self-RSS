@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchArticlePageContent } from '../../src/services/article-source-fetcher.js';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
+import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 
 describe('FeedSyncService', () => {
 	const noonTimestamp = new Date('2026-06-21T12:00:00.000Z').getTime();
 	const queuedMarker = JSON.stringify({ queuedAt: noonTimestamp });
-	const runningMarker = JSON.stringify({
-		startedAt: noonTimestamp,
-		heartbeatAt: noonTimestamp,
-	});
 	const emptySyncProgress = {
 		totalFeeds: 0,
 		completedFeeds: 0,
@@ -452,7 +449,7 @@ describe('FeedSyncService', () => {
 			service as unknown as { resolveEnrichedArticleHtml: () => Promise<string | null> },
 			'resolveEnrichedArticleHtml',
 		).mockResolvedValue(
-			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
+			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="../about">About</a><img src="images/hero.jpg"><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
 		);
 
 		await (
@@ -479,11 +476,12 @@ describe('FeedSyncService', () => {
 			'article-1',
 			expect.objectContaining({
 				contentHtml:
-					'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p></article>',
+					'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="https://example.com/about">About</a><img src="https://example.com/images/hero.jpg"></article>',
 				contentText:
-					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.',
+					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test. About',
 				excerpt:
-					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.',
+					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test. About',
+				heroImageUrl: 'https://example.com/images/hero.jpg',
 			}),
 		);
 	});
@@ -516,10 +514,61 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncFeed('feed-1', 'user-1');
 
-		expect(redis.set).toHaveBeenCalledWith('feed:sync:lock:feed-1', '1', 'EX', 1200, 'NX');
+		expect(redis.set).toHaveBeenCalledWith(
+			'feed:sync:lock:feed-1',
+			expect.any(String),
+			'EX',
+			1200,
+			'NX',
+		);
 		expect(syncRunRepo.create).not.toHaveBeenCalled();
 		expect(feedRepo.update).not.toHaveBeenCalled();
 		expect(result).toEqual({ newArticles: 0, total: 0, skipped: true });
+	});
+
+	it('does not let an expired per-feed lock owner release its replacement', async () => {
+		vi.useFakeTimers();
+		let storedOwner: string | null = null;
+		const redis = {
+			set: vi.fn(async (_key: string, owner: string) => {
+				if (storedOwner != null) return null;
+				storedOwner = owner;
+				return 'OK';
+			}),
+			eval: vi.fn(async (script: string, _keyCount: number, _key: string, owner: string) => {
+				if (storedOwner !== owner) return 0;
+				if (script.includes('DEL')) storedOwner = null;
+				return 1;
+			}),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+		);
+		const acquire = () =>
+			(
+				service as unknown as {
+					tryAcquireFeedSyncLock: (feedId: string) => Promise<(() => Promise<void>) | null>;
+				}
+			).tryAcquireFeedSyncLock('feed-1');
+
+		const releaseA = await acquire();
+		const ownerA = storedOwner;
+		storedOwner = null;
+		const releaseB = await acquire();
+		const ownerB = storedOwner;
+
+		expect(ownerA).toEqual(expect.any(String));
+		expect(ownerB).toEqual(expect.any(String));
+		expect(ownerB).not.toBe(ownerA);
+		await releaseA?.();
+		expect(storedOwner).toBe(ownerB);
+		await releaseB?.();
+		expect(storedOwner).toBeNull();
 	});
 
 	it('schedules lazy enrichment for existing text-only articles with inert feed images', async () => {
@@ -1103,19 +1152,22 @@ describe('FeedSyncService', () => {
 		);
 		vi.stubGlobal(
 			'fetch',
-			vi.fn(
-				async () =>
-					new Response(
-						'<?xml version="1.0"?><rss version="2.0"><channel><title>Fresh feed</title></channel></rss>',
-						{
-							status: 200,
-							headers: {
-								etag: '"stale-prone-etag"',
-								'last-modified': 'Tue, 14 Jul 2026 12:00:00 GMT',
-							},
+			vi.fn(async (_input: string, init?: RequestInit) => {
+				const headers = new Headers(init?.headers);
+				expect(headers.get('user-agent')).toBe(FEED_FETCH_USER_AGENT);
+				expect(headers.get('accept')).toContain('application/rss+xml');
+				expect(headers.get('cache-control')).toBe('no-cache');
+				return new Response(
+					'<?xml version="1.0"?><rss version="2.0"><channel><title>Fresh feed</title></channel></rss>',
+					{
+						status: 200,
+						headers: {
+							etag: '"stale-prone-etag"',
+							'last-modified': 'Tue, 14 Jul 2026 12:00:00 GMT',
 						},
-					),
-			),
+					},
+				);
+			}),
 		);
 
 		await (
@@ -1471,6 +1523,7 @@ describe('FeedSyncService', () => {
 						: null,
 			),
 			del: vi.fn(async () => 2),
+			eval: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1483,10 +1536,13 @@ describe('FeedSyncService', () => {
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
-		expect(redis.del).toHaveBeenCalledWith(
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('ARGV[1]'),
+			3,
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:request:user-1',
+			expect.any(String),
 		);
 		expect(result).toEqual({
 			queued: false,
@@ -1504,6 +1560,7 @@ describe('FeedSyncService', () => {
 		const redis = {
 			get: vi.fn(async (key: string) => (key.includes(':lock:') ? '1' : null)),
 			del: vi.fn(async () => 2),
+			eval: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1516,10 +1573,13 @@ describe('FeedSyncService', () => {
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
-		expect(redis.del).toHaveBeenCalledWith(
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('ARGV[1]'),
+			3,
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:request:user-1',
+			'1',
 		);
 		expect(result).toEqual({
 			queued: false,
@@ -1577,6 +1637,7 @@ describe('FeedSyncService', () => {
 			get: vi.fn(async () => null),
 			set: vi.fn(async () => 'OK'),
 			del: vi.fn(async () => 2),
+			eval: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1600,16 +1661,19 @@ describe('FeedSyncService', () => {
 		expect(redis.lrem).toHaveBeenCalledWith('feed:sync-all:queue', 0, 'user-1');
 		expect(redis.set).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
-			runningMarker,
+			expect.stringContaining('"ownerToken"'),
 			'EX',
 			1800,
 			'NX',
 		);
 		expect(syncAllSpy).toHaveBeenCalledWith('user-1', {}, expect.any(Function));
-		expect(redis.del).toHaveBeenCalledWith(
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('decoded.ownerToken'),
+			3,
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:request:user-1',
+			expect.any(String),
 		);
 		expect(result).toEqual({
 			userId: 'user-1',
@@ -1633,6 +1697,7 @@ describe('FeedSyncService', () => {
 			set: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('OK').mockResolvedValue('OK'),
 			get: vi.fn(async () => String(new Date('2026-06-21T11:58:00.000Z').getTime())),
 			del: vi.fn(async () => 1),
+			eval: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1652,7 +1717,14 @@ describe('FeedSyncService', () => {
 
 		const result = await service.processNextQueuedSyncAllFeeds();
 
-		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('redis.call("GET", KEYS[1])'),
+			1,
+			'feed:sync-all:lock:user-1',
+			expect.any(String),
+			expect.stringContaining('"ownerToken"'),
+			'1800',
+		);
 		expect(syncAllSpy).toHaveBeenCalledWith(
 			'user-1',
 			{ feedId: undefined, categoryId: undefined },
@@ -2169,7 +2241,7 @@ describe('FeedSyncService', () => {
 			'feed-1',
 			'user-1',
 			expect.objectContaining({
-				siteUrl: 'https://example.com',
+				siteUrl: 'https://example.com/',
 				description: 'Description text',
 			}),
 		);

@@ -29,7 +29,7 @@ data class FeedTabActions(
     val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
     val onDeleteCategory: (String) -> Unit = {},
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
-    val onUpdateFeed: (String, String?, String?, Int?) -> Unit = { _, _, _, _ -> },
+    val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},
     val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
     val onExportOpml: () -> Unit = {},
@@ -80,6 +80,8 @@ data class SearchTabActions(
 
 data class SettingsTabState(
     val preferences: UserPreferences?,
+    val preferencesLoading: Boolean = false,
+    val preferencesLoadError: String? = null,
     val stats: StatsResponse?,
     val authSessions: List<AuthSession>,
 )
@@ -94,4 +96,5 @@ data class SettingsTabActions(
     val onAutoMarkReadModeChanged: (com.selffeed.android.ui.AutoMarkReadPreference) -> Unit = {},
     val onRevokeAuthSession: (String) -> Unit,
     val onLogout: () -> Unit,
+    val onRetryPreferences: () -> Unit = {},
 )

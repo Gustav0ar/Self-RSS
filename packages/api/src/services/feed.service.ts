@@ -4,6 +4,7 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import { fetchWithRetry } from '../utils/retry.js';
 import { assertSafeRemoteUrl, fetchWithValidatedRedirects } from '../utils/safe-fetch.js';
 
@@ -31,10 +32,7 @@ export class FeedService {
 		this.parser = new RSSParser({
 			timeout: 15_000,
 			maxRedirects: 3,
-			headers: {
-				'User-Agent': 'SelfFeed/1.0',
-				Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-			},
+			headers: createFeedFetchHeaders(),
 		});
 	}
 
@@ -85,10 +83,21 @@ export class FeedService {
 	async update(
 		userId: string,
 		feedId: string,
-		data: { categoryId?: string; title?: string; pollingIntervalMinutes?: number },
+		data: {
+			categoryId?: string;
+			feedUrl?: string;
+			title?: string;
+			pollingIntervalMinutes?: number;
+		},
 	) {
 		const feed = await this.feedRepo.findById(feedId, userId);
 		if (!feed) throw AppError.notFound('Feed not found');
+		const updates: Partial<typeof data> & {
+			nextSyncAt?: Date;
+			syncStatus?: string;
+			lastSyncError?: string | null;
+			lastSyncErrorAt?: Date | null;
+		} = { ...data };
 
 		if (data.categoryId) {
 			const category = await this.categoryRepo.findById(data.categoryId, userId);
@@ -97,7 +106,25 @@ export class FeedService {
 			}
 		}
 
-		return this.feedRepo.update(feedId, userId, data);
+		if (data.feedUrl !== undefined) {
+			if (data.feedUrl === feed.feedUrl) {
+				delete updates.feedUrl;
+			} else {
+				const normalizedFeedUrl = await this.normalizeFeedUrl(data.feedUrl);
+				const existing = await this.feedRepo.findByUrl(userId, normalizedFeedUrl);
+				if (existing && existing.id !== feedId) {
+					throw AppError.conflict('You already have this feed');
+				}
+
+				updates.feedUrl = normalizedFeedUrl;
+				updates.nextSyncAt = new Date();
+				updates.syncStatus = 'idle';
+				updates.lastSyncError = null;
+				updates.lastSyncErrorAt = null;
+			}
+		}
+
+		return this.feedRepo.update(feedId, userId, updates);
 	}
 
 	async delete(userId: string, feedId: string) {
@@ -142,10 +169,7 @@ export class FeedService {
 						feedUrl,
 						{
 							signal: controller.signal,
-							headers: {
-								'User-Agent': 'SelfFeed/1.0',
-								Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
-							},
+							headers: createFeedFetchHeaders(),
 						},
 						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
 					),

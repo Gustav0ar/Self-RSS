@@ -432,10 +432,10 @@ export class ArticleRepository {
 	}
 
 	async replaceMedia(articleId: string, data: (typeof articleMedia.$inferInsert)[]) {
-		await this.db.transaction(async (tx) => {
-			await tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId));
+		this.db.transaction((tx) => {
+			tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId)).run();
 			if (data.length > 0) {
-				await tx.insert(articleMedia).values(data);
+				tx.insert(articleMedia).values(data).run();
 			}
 		});
 	}
@@ -465,14 +465,15 @@ export class ArticleRepository {
 		mediaByGuid: Map<string, (typeof articleMedia.$inferInsert)[]>;
 		updatedMediaByArticleId: Map<string, (typeof articleMedia.$inferInsert)[]>;
 	}) {
-		return this.db.transaction(async (tx) => {
+		return this.db.transaction((tx) => {
 			const inserted =
 				params.articlesToInsert.length > 0
-					? await tx
+					? tx
 							.insert(articles)
 							.values(params.articlesToInsert)
 							.onConflictDoNothing()
 							.returning()
+							.all()
 					: [];
 
 			// Batch insert all media for newly inserted articles (1 query instead of N)
@@ -484,24 +485,23 @@ export class ArticleRepository {
 				}
 			}
 			if (allNewMedia.length > 0) {
-				await tx.insert(articleMedia).values(allNewMedia);
+				tx.insert(articleMedia).values(allNewMedia).run();
 			}
 
-			// Update all articles with new content in parallel
-			await Promise.all(
-				params.articlesToUpdate.map((update) =>
-					tx
-						.update(articles)
-						.set({
-							contentHtml: update.contentHtml,
-							contentText: update.contentText,
-							excerpt: update.excerpt,
-							heroImageUrl: update.heroImageUrl,
-							hash: update.hash,
-						})
-						.where(eq(articles.id, update.id)),
-				),
-			);
+			// Bun SQLite transactions are synchronous. Execute every update before
+			// the callback returns so an exception rolls the entire batch back.
+			for (const update of params.articlesToUpdate) {
+				tx.update(articles)
+					.set({
+						contentHtml: update.contentHtml,
+						contentText: update.contentText,
+						excerpt: update.excerpt,
+						heroImageUrl: update.heroImageUrl,
+						hash: update.hash,
+					})
+					.where(eq(articles.id, update.id))
+					.run();
+			}
 
 			// Collect all replacement media and delete old media in batch
 			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];
@@ -515,12 +515,12 @@ export class ArticleRepository {
 			// Delete old media for all updated articles (1 query instead of N)
 			const articleIdsToUpdate = params.articlesToUpdate.map((u) => u.id);
 			if (articleIdsToUpdate.length > 0) {
-				await tx.delete(articleMedia).where(inArray(articleMedia.articleId, articleIdsToUpdate));
+				tx.delete(articleMedia).where(inArray(articleMedia.articleId, articleIdsToUpdate)).run();
 			}
 
 			// Batch insert all replacement media (1 query instead of N)
 			if (allReplacementMedia.length > 0) {
-				await tx.insert(articleMedia).values(allReplacementMedia);
+				tx.insert(articleMedia).values(allReplacementMedia).run();
 			}
 
 			return inserted;

@@ -91,8 +91,8 @@ export class FeedRepository {
 			...row,
 			nextSyncAt: row.nextSyncAt ?? now,
 		}));
-		return this.db.transaction(async (tx) => {
-			return tx.insert(feeds).values(populated).returning();
+		return this.db.transaction((tx) => {
+			return tx.insert(feeds).values(populated).returning().all();
 		});
 	}
 

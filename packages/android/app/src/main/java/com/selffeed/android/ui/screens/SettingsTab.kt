@@ -2,6 +2,7 @@ package com.selffeed.android.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,7 +44,41 @@ import kotlin.math.roundToInt
 
 @Composable
 fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
-    val prefs = state.preferences ?: return
+    val prefs = state.preferences
+    if (prefs == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (state.preferencesLoading) {
+                    CircularProgressIndicator()
+                    Text("Loading settings…", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text(
+                        "Settings unavailable",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        state.preferencesLoadError
+                            ?: "The settings request did not complete. Check your connection and try again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = actions.onRetryPreferences) {
+                        Text("Retry")
+                    }
+                }
+            }
+        }
+        return
+    }
     val selectedTheme = ThemePreference.fromApiValue(prefs.theme)
     val selectedSort = ArticleSortPreference.fromApiValue(prefs.defaultSort)
     val selectedDensity = DensityPreference.fromApiValue(prefs.density)

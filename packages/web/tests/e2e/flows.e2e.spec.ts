@@ -417,6 +417,23 @@ test('user can sign out and the session is cleared', async ({ page }) => {
 	await expect(page.getByText('Sign in to your account')).toBeVisible();
 });
 
+test('failed server logout keeps the user signed in and offers a retry', async ({ page }) => {
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+	await page.route('**/api/v1/auth/logout', async (route) => {
+		await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"down"}' });
+	});
+
+	await page.getByRole('button', { name: 'Sign out' }).click();
+	await expect(page.getByRole('alert')).toContainText('Your session is still active');
+	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+	await expect(page.getByText('reader@example.com')).toBeVisible();
+	await expect(page.getByText('Sign in to your account')).toHaveCount(0);
+
+	await page.unroute('**/api/v1/auth/logout');
+	await page.getByRole('button', { name: 'Sign out' }).click();
+	await expect(page.getByText('Sign in to your account')).toBeVisible();
+});
+
 test('user can navigate to the stats panel from the top bar', async ({ page }) => {
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 
