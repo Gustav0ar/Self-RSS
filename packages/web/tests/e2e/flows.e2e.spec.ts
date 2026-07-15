@@ -367,6 +367,104 @@ test('reader can toggle a read article back to unread', async ({ page, request }
 	await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible();
 });
 
+test('rapid keyboard navigation keeps article reads and read-state writes available', async ({
+	page,
+	request,
+}) => {
+	const email = `rapid-reader-${Date.now()}@example.com`;
+	const password = 'password123';
+	const articleCount = 35;
+	const titleFor = (position: number) => `Rapid Article ${String(position).padStart(2, '0')}`;
+	const feedServer = await startMutableFeedServer(
+		feedXml(
+			Array.from({ length: articleCount }, (_, index) => ({
+				title: titleFor(index + 1),
+				guid: `rapid-article-${index + 1}`,
+				pubDate: new Date(Date.UTC(2025, 1, articleCount - index)).toUTCString(),
+			})),
+		),
+	);
+
+	try {
+		await setRegistrationLocked(request, false);
+		const registerResponse = await request.post(`${apiBaseUrl}/auth/register`, {
+			data: { email, password },
+		});
+		expect(registerResponse.ok()).toBeTruthy();
+		const registered = await registerResponse.json();
+		const authHeaders = { Authorization: `Bearer ${registered.data.tokens.accessToken}` };
+
+		const categoryResponse = await request.post(`${apiBaseUrl}/categories`, {
+			headers: authHeaders,
+			data: { name: 'Rapid Reader' },
+		});
+		expect(categoryResponse.ok()).toBeTruthy();
+		const category = await categoryResponse.json();
+
+		const feedResponse = await request.post(`${apiBaseUrl}/feeds`, {
+			headers: authHeaders,
+			data: {
+				categoryId: category.data.id,
+				feedUrl: feedServer.url,
+				title: 'Rapid Reader Feed',
+			},
+		});
+		expect(feedResponse.ok()).toBeTruthy();
+		const feed = await feedResponse.json();
+		const syncResponse = await request.post(`${apiBaseUrl}/feeds/${feed.data.id}/sync`, {
+			headers: authHeaders,
+		});
+		expect(syncResponse.ok()).toBeTruthy();
+
+		const preferencesResponse = await request.patch(`${apiBaseUrl}/preferences`, {
+			headers: authHeaders,
+			data: { autoMarkReadMode: 'on_navigate', hideRead: false, defaultSort: 'latest' },
+		});
+		expect(preferencesResponse.ok()).toBeTruthy();
+
+		await expect
+			.poll(async () => {
+				const response = await request.get(
+					`${apiBaseUrl}/articles?feedId=${feed.data.id}&limit=30`,
+					{
+						headers: authHeaders,
+					},
+				);
+				if (!response.ok()) return 0;
+				const body = await response.json();
+				return body.data.length;
+			})
+			.toBe(30);
+
+		const rejectedArticleRequests: Array<{ method: string; status: number; url: string }> = [];
+		page.on('response', (response) => {
+			const url = new URL(response.url());
+			if (!url.pathname.startsWith('/api/v1/articles/')) return;
+			if (response.status() !== 403 && response.status() !== 429) return;
+			rejectedArticleRequests.push({
+				method: response.request().method(),
+				status: response.status(),
+				url: url.pathname,
+			});
+		});
+
+		await loginThroughUi(page, email, password);
+		await page.getByRole('button', { name: new RegExp(titleFor(1)) }).click();
+		await expect(page.getByRole('heading', { name: titleFor(1), exact: true })).toBeVisible();
+
+		for (let position = 2; position <= articleCount; position += 1) {
+			await page.keyboard.press('j');
+			await expect(
+				page.getByRole('heading', { name: titleFor(position), exact: true }),
+			).toBeVisible();
+		}
+
+		await expect.poll(() => rejectedArticleRequests).toEqual([]);
+	} finally {
+		await feedServer.stop();
+	}
+});
+
 test('hide read toggle persists the user preference', async ({ page }) => {
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 

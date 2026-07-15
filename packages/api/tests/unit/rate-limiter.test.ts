@@ -218,9 +218,9 @@ describe('RATE_LIMITS', () => {
 		});
 	});
 
-	it('exposes production read-heavy endpoint limits at 100/min', () => {
+	it('allows rapid authenticated article reading without raising unrelated read limits', () => {
 		process.env.NODE_ENV = 'production';
-		expect(RATE_LIMITS.articlesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
+		expect(RATE_LIMITS.articlesRead).toEqual({ windowMs: 60_000, maxRequests: 300 });
 		expect(RATE_LIMITS.categoriesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.preferencesRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
 		expect(RATE_LIMITS.statsRead).toEqual({ windowMs: 60_000, maxRequests: 100 });
@@ -236,10 +236,10 @@ describe('RATE_LIMITS', () => {
 		expect(RATE_LIMITS.feedsRead).toEqual({ windowMs: 60_000, maxRequests: 1_000 });
 	});
 
-	it('exposes mutation endpoint limits at 30/min', () => {
+	it('allows rapid read-state writes without raising unrelated mutation limits', () => {
 		expect(RATE_LIMITS.articlesMutate).toEqual({
 			windowMs: 60_000,
-			maxRequests: 30,
+			maxRequests: 180,
 			failureMode: 'closed',
 		});
 		expect(RATE_LIMITS.categoriesMutate).toEqual({

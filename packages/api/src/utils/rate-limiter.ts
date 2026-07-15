@@ -5,13 +5,14 @@ import { createLogger } from './logger.js';
 
 const logger = createLogger();
 const STANDARD_READ_RATE_LIMIT_MAX = 100;
+const ARTICLE_READ_RATE_LIMIT_MAX = 300;
+const ARTICLE_MUTATE_RATE_LIMIT_MAX = 180;
 const TEST_READ_RATE_LIMIT_MAX = 1_000;
 
-function getReadRateLimit() {
+function getReadRateLimit(productionMaxRequests = STANDARD_READ_RATE_LIMIT_MAX) {
 	return {
 		windowMs: 60_000,
-		maxRequests:
-			process.env.NODE_ENV === 'test' ? TEST_READ_RATE_LIMIT_MAX : STANDARD_READ_RATE_LIMIT_MAX,
+		maxRequests: process.env.NODE_ENV === 'test' ? TEST_READ_RATE_LIMIT_MAX : productionMaxRequests,
 	};
 }
 
@@ -130,10 +131,14 @@ export const RATE_LIMITS = {
 	},
 	// Read-heavy endpoints - higher limits
 	get articlesRead() {
-		return getReadRateLimit();
+		return getReadRateLimit(ARTICLE_READ_RATE_LIMIT_MAX);
 	},
 	get articlesMutate() {
-		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
+		return {
+			windowMs: 60_000,
+			maxRequests: ARTICLE_MUTATE_RATE_LIMIT_MAX,
+			failureMode: 'closed' as const,
+		};
 	},
 	get categoriesRead() {
 		return getReadRateLimit();

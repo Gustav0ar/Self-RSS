@@ -644,6 +644,57 @@ describe('API integration - additional flows', () => {
 		}
 	});
 
+	it('supports a rapid reader burst of more than thirty read-state updates', async () => {
+		const registered = await registerUser('rapid-reader@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Rapid Reader' }),
+		});
+		const feedServer = await startFeedServer(`<?xml version="1.0" encoding="UTF-8"?>
+			<rss version="2.0"><channel>
+				<title>Rapid Reader Feed</title><link>https://example.com</link>
+				<item>
+					<title>Rapid navigation article</title>
+					<link>https://example.com/rapid-navigation</link>
+					<guid>rapid-navigation</guid>
+					<description><![CDATA[<p>Body.</p>]]></description>
+				</item>
+			</channel></rss>`);
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+			await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			const articles = await authedRequest(
+				`/api/v1/articles?feedId=${feed.body.data.id}&limit=10`,
+				token,
+			);
+			const articleId = articles.body.data[0].id;
+
+			let lastResponse: Response | null = null;
+			for (let requestNumber = 1; requestNumber <= 31; requestNumber += 1) {
+				const result = await authedRequest(`/api/v1/articles/${articleId}/read`, token, {
+					method: 'PATCH',
+					body: JSON.stringify({ read: requestNumber % 2 === 1 }),
+				});
+				expect(result.response.status).toBe(200);
+				lastResponse = result.response;
+			}
+
+			expect(lastResponse?.headers.get('X-RateLimit-Remaining')).toBe('149');
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
 	it('rejects invalid category UUIDs with 400', async () => {
 		const registered = await registerUser('cat-bad@example.com');
 		const token = registered.body.data.tokens.accessToken;
