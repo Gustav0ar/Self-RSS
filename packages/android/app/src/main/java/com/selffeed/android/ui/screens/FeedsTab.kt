@@ -831,10 +831,14 @@ private fun DrawerItem(
 }
 
 @Composable
-private fun FeedOverflowMenu(onEdit: (() -> Unit)?, onDelete: (() -> Unit)?) {
+private fun FeedOverflowMenu(
+    onEdit: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(modifier = modifier, onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More options")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -935,7 +939,11 @@ private fun FeedRow(
             }
         }
         if (onEdit != null || onDelete != null) {
-            FeedOverflowMenu(onEdit = onEdit, onDelete = onDelete)
+            FeedOverflowMenu(
+                onEdit = onEdit,
+                onDelete = onDelete,
+                modifier = Modifier.testTag("feed-overflow-${feed.id}"),
+            )
         }
     }
 }

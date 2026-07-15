@@ -7,7 +7,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -103,7 +102,7 @@ class FeedEditorUiTest {
         }
 
         composeRule.onNodeWithText("News Feed").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("More options").performClick()
+        composeRule.onNodeWithTag("feed-overflow-feed-1").performClick()
         composeRule.onNodeWithText("Edit").performClick()
         composeRule.onNodeWithTag("feed-url-field")
             .assertTextContains("https://example.com/original.xml")
