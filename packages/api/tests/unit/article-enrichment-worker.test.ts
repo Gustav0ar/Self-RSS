@@ -28,6 +28,37 @@ function serviceFor(articleRepo: Record<string, unknown>) {
 }
 
 describe('durable article enrichment worker', () => {
+	it('processes memory-intensive page extraction one article at a time', async () => {
+		const jobs = Array.from({ length: 4 }, (_, index) => ({
+			...pendingJob(),
+			articleId: `article-${index + 1}`,
+			canonicalUrl: `https://example.com/article-${index + 1}`,
+		}));
+		const articleRepo = {
+			findPendingEnrichments: vi.fn(async () => jobs),
+			markEnrichmentAttempt: vi.fn(async () => undefined),
+			markEnrichmentRetry: vi.fn(async () => undefined),
+		};
+		const service = serviceFor(articleRepo);
+		let active = 0;
+		let maximumActive = 0;
+		vi.spyOn(
+			service as unknown as { enrichSingleArticle: () => Promise<boolean> },
+			'enrichSingleArticle',
+		).mockImplementation(async () => {
+			active++;
+			maximumActive = Math.max(maximumActive, active);
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			active--;
+			return true;
+		});
+
+		const result = await service.processPendingArticleEnrichments(4);
+
+		expect(maximumActive).toBe(1);
+		expect(result).toEqual({ processed: 4, succeeded: 4, failed: 0 });
+	});
+
 	it('claims due database work before enriching it', async () => {
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => [pendingJob()]),

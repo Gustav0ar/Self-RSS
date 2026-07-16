@@ -79,7 +79,8 @@ interface PendingArticleEnrichment {
 
 type FeedItemRecord = Record<string, unknown>;
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
-const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
+// Keep memory-heavy Readability/CSS extraction serial so it cannot interrupt feed refreshes.
+const ARTICLE_ENRICHMENT_CONCURRENCY = 1;
 const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
 const MANUAL_FEED_SYNC_TIMEOUT_MS = 10_000;
@@ -708,7 +709,7 @@ export class FeedSyncService {
 		await this.articleRepo.queueEnrichments?.(pendingEnrichments.map((item) => item.articleId));
 	}
 
-	async processPendingArticleEnrichments(limit = ARTICLE_ENRICHMENT_CONCURRENCY * 2) {
+	async processPendingArticleEnrichments(limit = ARTICLE_ENRICHMENT_CONCURRENCY) {
 		const pending = await this.articleRepo.findPendingEnrichments(limit);
 		this.performanceMetrics?.setArticleEnrichmentQueueDepth(pending.length);
 		if (pending.length === 0) return { processed: 0, succeeded: 0, failed: 0 };

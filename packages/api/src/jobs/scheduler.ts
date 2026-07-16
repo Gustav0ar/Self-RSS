@@ -59,11 +59,12 @@ export function startQueuedSyncWorker(
 	syncService: FeedSyncService,
 	intervalMs: number = 1000,
 	coordinator: SyncCoordinator = { isRunning: false },
+	shouldPause: () => boolean = () => false,
 ) {
 	logger.info('Queued feed sync worker started', { intervalMs });
 
 	const drainOnce = async () => {
-		if (coordinator.isRunning) {
+		if (coordinator.isRunning || shouldPause()) {
 			return;
 		}
 

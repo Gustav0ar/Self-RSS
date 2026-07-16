@@ -63,21 +63,26 @@ try {
 	const dueSyncCoordinator = { isRunning: false };
 	const queuedSyncCoordinator = { isRunning: false };
 	const articleEnrichmentCoordinator = { isRunning: false };
-	const stopSyncScheduler = startSyncScheduler(
-		deps.services.feedSync,
-		undefined,
-		dueSyncCoordinator,
-	);
+	// Start the user queue first. Its initial drain marks the coordinator active
+	// synchronously, so startup cannot launch a scheduled batch on top of a
+	// pending manual refresh.
 	const stopQueuedSyncWorker = startQueuedSyncWorker(
 		deps.services.feedSync,
 		undefined,
 		queuedSyncCoordinator,
+		() => articleEnrichmentCoordinator.isRunning,
+	);
+	const stopSyncScheduler = startSyncScheduler(
+		deps.services.feedSync,
+		undefined,
+		dueSyncCoordinator,
+		() => queuedSyncCoordinator.isRunning || articleEnrichmentCoordinator.isRunning,
 	);
 	const stopArticleEnrichmentWorker = startArticleEnrichmentWorker(
 		deps.services.feedSync,
 		undefined,
 		articleEnrichmentCoordinator,
-		() => queuedSyncCoordinator.isRunning,
+		() => queuedSyncCoordinator.isRunning || dueSyncCoordinator.isRunning,
 	);
 	const stopRetentionCleanup = startRetentionCleanup(deps.repos.article, {
 		retentionDays: env.RETENTION_DELETION_DAYS,
@@ -91,7 +96,10 @@ try {
 		concurrency: env.CACHE_WARMER_CONCURRENCY,
 		includeIdleUsers: env.CACHE_WARMER_IDLE_USERS_ENABLED,
 		idleUsersLimit: env.CACHE_WARMER_IDLE_USERS_LIMIT,
-		shouldPause: () => queuedSyncCoordinator.isRunning,
+		shouldPause: () =>
+			queuedSyncCoordinator.isRunning ||
+			dueSyncCoordinator.isRunning ||
+			articleEnrichmentCoordinator.isRunning,
 	});
 	const stopWorkerHeartbeat = startWorkerHeartbeat(redis);
 

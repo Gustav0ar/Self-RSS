@@ -126,7 +126,9 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 512M
+          # Full-page article extraction is bounded to one page at a time, but
+          # malformed publisher HTML can still briefly require substantial RAM.
+          memory: 1G
         reservations:
           cpus: "0.1"
           memory: 64M

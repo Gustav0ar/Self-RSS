@@ -107,6 +107,29 @@ describe('scheduler error handling', () => {
 	});
 
 	describe('startQueuedSyncWorker', () => {
+		it('waits for an active article extraction before draining refresh work', async () => {
+			vi.useFakeTimers();
+			let articleExtractionActive = true;
+			const syncService = {
+				processNextDelayedFeedSync: vi.fn().mockResolvedValue(null),
+				processNextQueuedSyncAllFeeds: vi.fn().mockResolvedValue(null),
+			};
+			const stop = startQueuedSyncWorker(
+				syncService as never,
+				100,
+				{ isRunning: false },
+				() => articleExtractionActive,
+			);
+
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.processNextQueuedSyncAllFeeds).not.toHaveBeenCalled();
+			articleExtractionActive = false;
+			await vi.advanceTimersByTimeAsync(100);
+			expect(syncService.processNextQueuedSyncAllFeeds).toHaveBeenCalledTimes(1);
+			stop();
+			vi.useRealTimers();
+		});
+
 		it('logs errors when processNextQueuedSyncAllFeeds throws', async () => {
 			const syncService = {
 				processNextDelayedFeedSync: vi.fn().mockResolvedValue(null),
