@@ -20,6 +20,20 @@ interface RefreshOptions {
 	categoryId?: string;
 }
 
+export function shouldAutoSyncSelectedFeed(
+	feed:
+		| {
+				lastSyncedAt: string | null;
+				syncStatus: 'idle' | 'syncing' | 'error';
+				unreadCount?: number;
+		  }
+		| undefined,
+) {
+	return (
+		!!feed && feed.syncStatus !== 'error' && !feed.lastSyncedAt && (feed.unreadCount ?? 0) === 0
+	);
+}
+
 export function useFeedRefresh() {
 	const qc = useQueryClient();
 	const { data: feeds } = useFeeds();
@@ -175,9 +189,7 @@ export function useFeedRefresh() {
 			}
 
 			const selectedFeed = feeds?.find((feed) => feed.id === feedId);
-			const shouldAutoSync =
-				options.force ||
-				(!!selectedFeed && !selectedFeed.lastSyncedAt && (selectedFeed.unreadCount ?? 0) === 0);
+			const shouldAutoSync = options.force || shouldAutoSyncSelectedFeed(selectedFeed);
 			if (!shouldAutoSync) {
 				setFeedSyncError(null);
 				setSyncingFeedId(null);

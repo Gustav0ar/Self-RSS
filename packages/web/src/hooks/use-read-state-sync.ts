@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyReadStateSyncEvent } from '@/hooks/queries';
 import { getClientId } from '@/lib/api';
@@ -10,6 +10,45 @@ export function getReadStateReconnectDelay(attempt: number) {
 		REFRESH_INTERVALS.RECONNECT_MAX_MS,
 		REFRESH_INTERVALS.RECONNECT_MIN_MS * 2 ** attempt,
 	);
+}
+
+const RECONNECT_QUERY_KEYS = [
+	['articles'],
+	['article'],
+	['search'],
+	['categories'],
+	['stats'],
+	['feeds', 'sync', 'status'],
+] as const;
+
+export function reconcileRealtimeQueries(qc: QueryClient) {
+	const options = { cancelRefetch: false };
+	for (const queryKey of RECONNECT_QUERY_KEYS) {
+		void qc.invalidateQueries({ queryKey }, options);
+	}
+	// A broad ['feeds'] invalidation also matches ['feeds', 'sync', 'status'].
+	// Keeping feed collections separate prevents the status snapshot from being
+	// invalidated twice, which used to abort the first refetch in DevTools.
+	void qc.invalidateQueries(
+		{
+			predicate: (query) =>
+				query.queryKey[0] === 'feeds' &&
+				!(query.queryKey[1] === 'sync' && query.queryKey[2] === 'status'),
+		},
+		options,
+	);
+}
+
+export function createRealtimeConnectedHandler(qc: QueryClient) {
+	let hasConnected = false;
+	return () => {
+		qc.setQueryData(['realtime', 'connected'], true);
+		if (!hasConnected) {
+			hasConnected = true;
+			return;
+		}
+		reconcileRealtimeQueries(qc);
+	};
 }
 
 export function useReadStateSync(enabled: boolean) {
@@ -25,6 +64,7 @@ export function useReadStateSync(enabled: boolean) {
 		let controller: AbortController | null = null;
 		let reconnectAttempt = 0;
 		const clientId = getClientId();
+		const handleConnected = createRealtimeConnectedHandler(qc);
 
 		const connect = () => {
 			if (stopped) {
@@ -36,17 +76,7 @@ export function useReadStateSync(enabled: boolean) {
 				signal: controller.signal,
 				onConnected: () => {
 					reconnectAttempt = 0;
-					qc.setQueryData(['realtime', 'connected'], true);
-					// Redis Pub/Sub is intentionally ephemeral. Reconcile every active
-					// cache family after reconnect so events lost while offline cannot
-					// leave the reader or counts stale.
-					qc.invalidateQueries({ queryKey: ['articles'] });
-					qc.invalidateQueries({ queryKey: ['article'] });
-					qc.invalidateQueries({ queryKey: ['search'] });
-					qc.invalidateQueries({ queryKey: ['feeds'] });
-					qc.invalidateQueries({ queryKey: ['categories'] });
-					qc.invalidateQueries({ queryKey: ['stats'] });
-					qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
+					handleConnected();
 				},
 				onEvent: (event) => {
 					reconnectAttempt = 0;

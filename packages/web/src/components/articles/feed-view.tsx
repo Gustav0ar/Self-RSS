@@ -2,6 +2,7 @@ import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
+import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
 import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
 import {
 	buildFeedViewModel,
@@ -282,19 +283,7 @@ export function FeedView({
 	return (
 		<div className="flex h-full min-h-0 flex-col lg:flex-row">
 			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[clamp(23rem,28vw,33rem)] lg:border-b-0 lg:border-r">
-				{feedSyncError || selectedFeedHealth ? (
-					<div
-						className={cn(
-							'mx-3 mt-3 rounded-xl border px-3 py-2 text-sm',
-							feedSyncError || selectedFeedHealth?.severity === 'error'
-								? 'border-destructive/20 bg-destructive/10 text-destructive'
-								: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
-						)}
-						role="status"
-					>
-						{feedSyncError ?? selectedFeedHealth?.detail}
-					</div>
-				) : null}
+				<FeedHealthBanner appError={feedSyncError} sourceIssue={selectedFeedHealth} />
 
 				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
 					<div className="flex items-start justify-between gap-3">

@@ -16,7 +16,7 @@ export class FeedSyncFetchError extends Error {
 function describeHttpError(status: number, statusText: string) {
 	const httpStatus = `HTTP ${status}: ${statusText}`;
 	if (status === 401 || status === 403) {
-		return `The feed publisher denied access from this server (${httpStatus})`;
+		return `The feed publisher rejected this server's fetch request (${httpStatus})`;
 	}
 	if (status === 429) {
 		return `The feed publisher rate-limited this server (${httpStatus})`;
@@ -92,7 +92,14 @@ export function buildPartialSyncWarning(
 	return { itemWarning, persistedWarning };
 }
 
-export function nextFailedSyncRetryAt(pollingIntervalMinutes: number) {
-	const retryMinutes = Math.min(15, Math.max(5, pollingIntervalMinutes));
+export function nextFailedSyncRetryAt(pollingIntervalMinutes: number, status?: number) {
+	const retryMinutes =
+		status === 401 || status === 403
+			? 6 * 60
+			: status === 404 || status === 410
+				? 24 * 60
+				: status === 429
+					? 60
+					: Math.min(15, Math.max(5, pollingIntervalMinutes));
 	return new Date(Date.now() + retryMinutes * 60_000);
 }

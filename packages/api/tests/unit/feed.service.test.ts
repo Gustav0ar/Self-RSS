@@ -185,7 +185,7 @@ describe('FeedService - create', () => {
 			}),
 		).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
-			details: 'The feed publisher denied access from this server (HTTP 403: Forbidden)',
+			details: "The feed publisher rejected this server's fetch request (HTTP 403: Forbidden)",
 			message: 'Could not fetch or parse the feed URL',
 			statusCode: 400,
 		});

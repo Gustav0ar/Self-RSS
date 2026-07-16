@@ -1,3 +1,4 @@
+import type { CategoryWithCounts } from '@self-feed/shared';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedView } from '../../src/components/articles/feed-view';
@@ -21,7 +22,7 @@ let defaultSortPreference = 'latest';
 let keyboardShortcutsEnabled = true;
 let autoMarkReadMode = 'on_navigate';
 let preferencesLoaded = true;
-const categories = [
+const categories: CategoryWithCounts[] = [
 	{
 		id: 'category-1',
 		userId: 'user-1',
@@ -45,8 +46,9 @@ const categories = [
 				description: null,
 				pollingIntervalMinutes: 60,
 				lastSyncedAt: null,
-				nextSyncAt: new Date().toISOString(),
 				syncStatus: 'idle',
+				lastSyncError: null,
+				lastSyncErrorAt: null,
 				createdAt: new Date().toISOString(),
 				updatedAt: new Date().toISOString(),
 				unreadCount: 6,
@@ -55,6 +57,12 @@ const categories = [
 		children: [],
 	},
 ];
+
+function reviewFeed() {
+	const feed = categories[0]?.feeds?.[0];
+	if (!feed) throw new Error('Review feed fixture is missing');
+	return feed;
+}
 
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
@@ -145,6 +153,9 @@ describe('FeedView refresh', () => {
 		keyboardShortcutsEnabled = true;
 		autoMarkReadMode = 'on_navigate';
 		preferencesLoaded = true;
+		reviewFeed().syncStatus = 'idle';
+		reviewFeed().lastSyncError = null;
+		reviewFeed().lastSyncErrorAt = null;
 		articleListProps = null;
 		useInfiniteArticlesMock.mockReturnValue({
 			data: {
@@ -209,6 +220,19 @@ describe('FeedView refresh', () => {
 
 		fireEvent.click(refreshButton);
 		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true, categoryId: undefined });
+	});
+
+	it('labels publisher 403 failures as an external feed issue instead of an app access error', () => {
+		reviewFeed().syncStatus = 'error';
+		reviewFeed().lastSyncError = 'HTTP 403: Forbidden';
+		reviewFeed().lastSyncErrorAt = '2026-07-16T12:00:00.000Z';
+
+		render(<FeedView feedId="feed-42" selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		const sourceIssue = screen.getByRole('status', { name: 'Feed source issue' });
+		expect(sourceIssue.textContent).toContain('Feed source unavailable');
+		expect(sourceIssue.textContent).toContain('Your SelfFeed account is not blocked');
+		expect(screen.queryByRole('alert')).toBeNull();
 	});
 
 	it('allows refreshing for category views', () => {

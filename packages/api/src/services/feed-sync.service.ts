@@ -479,7 +479,7 @@ export class FeedSyncService {
 			const errorDetails = getSyncErrorDetails(err);
 			const failedAt = new Date();
 			await this.feedRepo.update(feedId, userId, {
-				nextSyncAt: nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
+				nextSyncAt: nextFailedSyncRetryAt(feed.pollingIntervalMinutes, errorDetails.status),
 				lastSyncError: errorDetails.error,
 				lastSyncErrorAt: failedAt,
 				syncStatus: 'error',

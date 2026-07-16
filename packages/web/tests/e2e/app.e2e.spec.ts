@@ -245,9 +245,11 @@ test('feed health stays compact, dismissible, and actionable', async ({ page }) 
 	await expect(healthStatus).toBeVisible();
 	await page.getByRole('button', { name: 'Expand Health checks' }).click();
 
-	const warningIcon = page.getByLabel(/Broken Feed is not updating\. HTTP 403: Forbidden/);
+	const warningIcon = page.getByLabel(
+		/Broken Feed is not updating\..*SelfFeed account is not blocked/,
+	);
 	await warningIcon.hover();
-	await expect(page.getByRole('tooltip')).toContainText('HTTP 403: Forbidden');
+	await expect(page.getByRole('tooltip')).toContainText('Your SelfFeed account is not blocked');
 
 	await page.getByRole('button', { name: 'Dismiss feed health summary' }).click();
 	await expect(healthStatus).toHaveCount(0);

@@ -7,7 +7,10 @@ import type {
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { applyReadStateSyncEvent } from '../../src/hooks/queries';
-import { getReadStateReconnectDelay } from '../../src/hooks/use-read-state-sync';
+import {
+	createRealtimeConnectedHandler,
+	getReadStateReconnectDelay,
+} from '../../src/hooks/use-read-state-sync';
 import { clearTokens, setTokens } from '../../src/lib/api';
 import { createSseParser, streamReadStateEvents } from '../../src/lib/read-state-events';
 
@@ -456,6 +459,42 @@ describe('read-state sync', () => {
 		expect(getReadStateReconnectDelay(0)).toBe(1000);
 		expect(getReadStateReconnectDelay(1)).toBe(2000);
 		expect(getReadStateReconnectDelay(10)).toBe(30000);
+	});
+
+	it('does not refetch on the initial SSE connection and never cancels reconnect snapshots', () => {
+		const qc = createQueryClient();
+		const invalidateSpy = vi.spyOn(qc, 'invalidateQueries').mockResolvedValue();
+		const onConnected = createRealtimeConnectedHandler(qc);
+
+		onConnected();
+		expect(qc.getQueryData(['realtime', 'connected'])).toBe(true);
+		expect(invalidateSpy).not.toHaveBeenCalled();
+
+		onConnected();
+		const statusInvalidations = invalidateSpy.mock.calls.filter((call) => {
+			const filters = call[0];
+			return (
+				filters != null &&
+				'queryKey' in filters &&
+				JSON.stringify(filters.queryKey) === JSON.stringify(['feeds', 'sync', 'status'])
+			);
+		});
+		expect(statusInvalidations).toHaveLength(1);
+		expect(statusInvalidations[0]?.[1]).toEqual({ cancelRefetch: false });
+
+		const feedCollectionInvalidation = invalidateSpy.mock.calls.find((call) => {
+			const filters = call[0];
+			return filters != null && 'predicate' in filters;
+		});
+		const feedCollectionFilters = feedCollectionInvalidation?.[0];
+		const predicate =
+			feedCollectionFilters && 'predicate' in feedCollectionFilters
+				? feedCollectionFilters.predicate
+				: undefined;
+		expect(predicate?.({ queryKey: ['feeds'] } as never)).toBe(true);
+		expect(predicate?.({ queryKey: ['feeds', 'category-1'] } as never)).toBe(true);
+		expect(predicate?.({ queryKey: ['feeds', 'sync', 'status'] } as never)).toBe(false);
+		expect(feedCollectionInvalidation?.[1]).toEqual({ cancelRefetch: false });
 	});
 
 	it('applies SSE feed progress and health without polling or refetching feed lists', () => {

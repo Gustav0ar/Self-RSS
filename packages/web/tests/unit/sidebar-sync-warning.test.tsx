@@ -70,13 +70,13 @@ describe('SidebarTree feed sync warnings', () => {
 			}),
 		]);
 
-		const warning = screen.getByLabelText(/Phoronix is not updating\. HTTP 403: Forbidden/);
-		expect(warning).toBeTruthy();
-		expect(screen.queryByText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toBeNull();
-		fireEvent.mouseEnter(warning);
-		expect(screen.getByRole('tooltip').textContent).toMatch(
-			/Phoronix is not updating\. HTTP 403: Forbidden/,
+		const warning = screen.getByLabelText(
+			/Phoronix is not updating\. The publisher rejected this feed server's request \(HTTP 403: Forbidden\)\. Your SelfFeed account is not blocked\./,
 		);
+		expect(warning).toBeTruthy();
+		expect(screen.queryByText(/Phoronix is not updating\./)).toBeNull();
+		fireEvent.mouseEnter(warning);
+		expect(screen.getByRole('tooltip').textContent).toMatch(/Your SelfFeed account is not blocked/);
 		expect(screen.getByRole('status', { name: '1 feed is not updating' })).toBeTruthy();
 	});
 
@@ -91,7 +91,7 @@ describe('SidebarTree feed sync warnings', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Dismiss feed health summary' }));
 
 		expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
-		expect(screen.getByLabelText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toBeTruthy();
+		expect(screen.getByLabelText(/Your SelfFeed account is not blocked/)).toBeTruthy();
 	});
 
 	it('clears dismissed state after recovery so a later failure is announced', async () => {

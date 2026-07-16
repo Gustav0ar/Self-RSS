@@ -156,7 +156,9 @@ describe('useFeedRefresh', () => {
 		feeds = [
 			{
 				id: 'failed-feed',
-				lastSyncedAt: '2026-06-20T12:00:00.000Z',
+				// A first sync that was rejected has no successful timestamp. This
+				// exact state previously retriggered forever after every completion.
+				lastSyncedAt: null,
 				syncStatus: 'error',
 				unreadCount: 0,
 			},
@@ -173,6 +175,28 @@ describe('useFeedRefresh', () => {
 
 		expect(accepted).toBe(false);
 		expect(syncAllFeedsMutateAsyncMock).not.toHaveBeenCalled();
+	});
+
+	it('automatically queues a never-synced healthy feed so new subscriptions load promptly', async () => {
+		feeds = [
+			{
+				id: 'new-feed',
+				lastSyncedAt: null,
+				syncStatus: 'idle',
+				unreadCount: 0,
+			},
+		];
+		const queryClient = makeQueryClient();
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		await act(async () => {
+			await result.current.refreshFeed('new-feed');
+		});
+
+		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledOnce();
+		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledWith({ feedId: 'new-feed' });
 	});
 
 	it('queues an explicit single-feed refresh instead of calling the synchronous endpoint', async () => {
