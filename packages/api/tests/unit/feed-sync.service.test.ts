@@ -518,7 +518,7 @@ describe('FeedSyncService', () => {
 			'feed:sync:lock:feed-1',
 			expect.any(String),
 			'EX',
-			1200,
+			60,
 			'NX',
 		);
 		expect(syncRunRepo.create).not.toHaveBeenCalled();
@@ -840,7 +840,7 @@ describe('FeedSyncService', () => {
 		);
 	});
 
-	it('syncs every non-active feed for a user with summary counts', async () => {
+	it('does not rewrite active feed state before bulk lock checks', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [
 				{ id: 'feed-1', syncStatus: 'idle' },
@@ -871,14 +871,14 @@ describe('FeedSyncService', () => {
 		const result = await service.syncAllFeeds('user-1');
 
 		expect(feedRepo.findAllByUser).toHaveBeenCalledWith('user-1');
-		expect(feedRepo.update).toHaveBeenCalledWith('feed-3', 'user-1', { syncStatus: 'idle' });
+		expect(feedRepo.update).not.toHaveBeenCalled();
 		expect(syncFeedSpy).toHaveBeenCalledTimes(3);
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 0,
+			fetchMaxRetries: 1,
 			deferScopedCacheCleanup: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
@@ -886,7 +886,7 @@ describe('FeedSyncService', () => {
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 0,
+			fetchMaxRetries: 1,
 			deferScopedCacheCleanup: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
@@ -894,7 +894,7 @@ describe('FeedSyncService', () => {
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 0,
+			fetchMaxRetries: 1,
 			deferScopedCacheCleanup: true,
 		});
 		expect(result).toEqual({
@@ -906,8 +906,7 @@ describe('FeedSyncService', () => {
 		});
 	});
 
-	it('retries feeds that are already locked before counting them skipped in bulk refresh', async () => {
-		vi.useFakeTimers();
+	it('ignores feeds that are already locked instead of retrying the load command', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),
 		};
@@ -923,32 +922,25 @@ describe('FeedSyncService', () => {
 
 		const syncFeedSpy = vi
 			.spyOn(service, 'syncFeed')
-			.mockResolvedValueOnce({ newArticles: 0, total: 0, skipped: true })
-			.mockResolvedValueOnce({ newArticles: 3, total: 5 });
+			.mockResolvedValue({ newArticles: 0, total: 0, skipped: true });
 
-		const syncPromise = service.syncAllFeeds('user-1');
-		await vi.waitFor(() => {
-			expect(syncFeedSpy).toHaveBeenCalledTimes(1);
-		});
+		const result = await service.syncAllFeeds('user-1');
 
-		await vi.advanceTimersByTimeAsync(750);
-		const result = await syncPromise;
-
-		expect(syncFeedSpy).toHaveBeenCalledTimes(2);
-		expect(syncFeedSpy).toHaveBeenNthCalledWith(2, 'feed-1', 'user-1', {
+		expect(syncFeedSpy).toHaveBeenCalledTimes(1);
+		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 0,
+			fetchMaxRetries: 1,
 			deferScopedCacheCleanup: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 1,
-			syncedFeeds: 1,
+			syncedFeeds: 0,
 			failedFeeds: 0,
-			skippedFeeds: 0,
-			newArticles: 3,
+			skippedFeeds: 1,
+			newArticles: 0,
 		});
 	});
 
@@ -1018,8 +1010,8 @@ describe('FeedSyncService', () => {
 		for (const call of syncFeedSpy.mock.calls) {
 			expect(call[2]).toMatchObject({
 				warmArticleCache: false,
-				fetchTimeoutMs: 5_000,
-				fetchMaxRetries: 0,
+				fetchTimeoutMs: 10_000,
+				fetchMaxRetries: 1,
 				deferScopedCacheCleanup: true,
 			});
 		}
@@ -1190,6 +1182,50 @@ describe('FeedSyncService', () => {
 		);
 	});
 
+	it('retries one transient feed interruption after a bounded delay', async () => {
+		vi.useFakeTimers();
+		const redis = {
+			get: vi.fn(async () => null),
+			set: vi.fn(async () => 'OK'),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+		);
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError('fetch connection reset'))
+			.mockResolvedValueOnce(
+				new Response(
+					'<?xml version="1.0"?><rss version="2.0"><channel><title>Recovered</title></channel></rss>',
+					{ status: 200 },
+				),
+			);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const fetchPromise = (
+			service as unknown as {
+				fetchAndParse: (
+					url: string,
+					ignoreCache: boolean,
+					options: { maxRetries: number },
+				) => Promise<{ title?: string }>;
+			}
+		).fetchAndParse('https://example.com/feed.xml', true, { maxRetries: 1 });
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+		await vi.advanceTimersByTimeAsync(1_999);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+
+		await expect(fetchPromise).resolves.toMatchObject({ title: 'Recovered' });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
 	it('recovers stale syncing feeds before scheduled sync selection', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-01-01T00:30:00.000Z'));
@@ -1211,7 +1247,7 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncDueFeeds();
 
-		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(new Date('2026-01-01T00:05:00.000Z'));
+		expect(feedRepo.resetStaleSyncing).toHaveBeenCalledWith(new Date('2026-01-01T00:24:00.000Z'));
 		expect(feedRepo.findDueForSync).toHaveBeenCalledWith(50);
 		expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 });
 	});
@@ -1273,7 +1309,7 @@ describe('FeedSyncService', () => {
 				warmArticleCache: false,
 				forceFetch: true,
 				fetchTimeoutMs: 5_000,
-				fetchMaxRetries: 0,
+				fetchMaxRetries: 1,
 				deferScopedCacheCleanup: true,
 			});
 		}
@@ -1511,7 +1547,7 @@ describe('FeedSyncService', () => {
 		});
 	});
 
-	it('clears stale running bulk refresh locks and releases active status', async () => {
+	it('clears a stale worker lock while keeping its durable refresh queued', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
@@ -1522,6 +1558,7 @@ describe('FeedSyncService', () => {
 						? String(new Date('2026-06-21T11:57:30.000Z').getTime())
 						: null,
 			),
+			call: vi.fn(async () => 0),
 			del: vi.fn(async () => 2),
 			eval: vi.fn(async () => 1),
 		};
@@ -1538,18 +1575,16 @@ describe('FeedSyncService', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('ARGV[1]'),
-			3,
+			1,
 			'feed:sync-all:lock:user-1',
-			'feed:sync-all:queued:user-1',
-			'feed:sync-all:request:user-1',
 			expect.any(String),
 		);
 		expect(result).toEqual({
-			queued: false,
+			queued: true,
 			running: false,
-			active: false,
+			active: true,
 			stale: true,
-			queuedAt: null,
+			queuedAt: new Date('2026-06-21T11:57:30.000Z').toISOString(),
 			startedAt: null,
 			heartbeatAt: null,
 			...emptySyncProgress,
@@ -1559,6 +1594,7 @@ describe('FeedSyncService', () => {
 	it('clears legacy running bulk refresh locks that have no heartbeat timestamp', async () => {
 		const redis = {
 			get: vi.fn(async (key: string) => (key.includes(':lock:') ? '1' : null)),
+			call: vi.fn(async () => null),
 			del: vi.fn(async () => 2),
 			eval: vi.fn(async () => 1),
 		};
@@ -1575,10 +1611,8 @@ describe('FeedSyncService', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('ARGV[1]'),
-			3,
+			1,
 			'feed:sync-all:lock:user-1',
-			'feed:sync-all:queued:user-1',
-			'feed:sync-all:request:user-1',
 			'1',
 		);
 		expect(result).toEqual({
@@ -1632,8 +1666,7 @@ describe('FeedSyncService', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
-			lpop: vi.fn(async () => 'user-1'),
-			lrem: vi.fn(async () => 0),
+			lindex: vi.fn(async () => 'user-1'),
 			get: vi.fn(async () => null),
 			set: vi.fn(async () => 'OK'),
 			del: vi.fn(async () => 2),
@@ -1657,8 +1690,7 @@ describe('FeedSyncService', () => {
 
 		const result = await service.processNextQueuedSyncAllFeeds();
 
-		expect(redis.lpop).toHaveBeenCalledWith('feed:sync-all:queue');
-		expect(redis.lrem).toHaveBeenCalledWith('feed:sync-all:queue', 0, 'user-1');
+		expect(redis.lindex).toHaveBeenCalledWith('feed:sync-all:queue', 0);
 		expect(redis.set).toHaveBeenCalledWith(
 			'feed:sync-all:lock:user-1',
 			expect.stringContaining('"ownerToken"'),
@@ -1669,11 +1701,13 @@ describe('FeedSyncService', () => {
 		expect(syncAllSpy).toHaveBeenCalledWith('user-1', {}, expect.any(Function));
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('decoded.ownerToken'),
-			3,
+			4,
 			'feed:sync-all:lock:user-1',
 			'feed:sync-all:queued:user-1',
 			'feed:sync-all:request:user-1',
+			'feed:sync-all:queue',
 			expect.any(String),
+			'user-1',
 		);
 		expect(result).toEqual({
 			userId: 'user-1',
@@ -1692,8 +1726,7 @@ describe('FeedSyncService', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
-			lpop: vi.fn(async () => 'user-1'),
-			lrem: vi.fn(async () => 0),
+			lindex: vi.fn(async () => 'user-1'),
 			set: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('OK').mockResolvedValue('OK'),
 			get: vi.fn(async () => String(new Date('2026-06-21T11:58:00.000Z').getTime())),
 			del: vi.fn(async () => 1),
@@ -1741,6 +1774,36 @@ describe('FeedSyncService', () => {
 				newArticles: 2,
 			},
 		});
+	});
+
+	it('leaves a queued refresh in place while another worker owns it', async () => {
+		const freshLock = JSON.stringify({
+			startedAt: Date.now(),
+			heartbeatAt: Date.now(),
+			ownerToken: 'active-owner',
+		});
+		const redis = {
+			lindex: vi.fn(async () => 'user-1'),
+			set: vi.fn(async () => null),
+			get: vi.fn(async () => freshLock),
+			eval: vi.fn(async () => 0),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+		);
+		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds');
+
+		const result = await service.processNextQueuedSyncAllFeeds();
+
+		expect(result).toEqual({ userId: 'user-1', skipped: true });
+		expect(syncAllSpy).not.toHaveBeenCalled();
+		expect(redis.lindex).toHaveBeenCalledTimes(1);
+		expect(redis.eval).not.toHaveBeenCalled();
 	});
 
 	it('force-fetches feed content even when existing articles have cached validators', async () => {

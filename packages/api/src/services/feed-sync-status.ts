@@ -40,15 +40,16 @@ local ok, decoded = pcall(cjson.decode, current)
 if not ok or decoded.ownerToken ~= ARGV[1] then
 	return 0
 end
+redis.call("LREM", KEYS[4], 0, ARGV[2])
 redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
 return 1
 `;
 
-const RELEASE_STALE_SYNC_STATE_SCRIPT = `
+const RELEASE_STALE_SYNC_LOCK_SCRIPT = `
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return 0
 end
-redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
+redis.call("DEL", KEYS[1])
 return 1
 `;
 
@@ -180,7 +181,14 @@ export async function getManualSyncAllFeedsStatus(
 	const running = lockStatus.status === 'active';
 	const queuedStatus = running
 		? ({ status: 'missing', value: null } as const)
-		: await getManualSyncQueuedStatus(redis, userId, queuedState, lockStatus.status);
+		: await getManualSyncQueuedStatus(
+				redis,
+				userId,
+				queuedState,
+				// A stale owner is cleared above, but the durable list entry still
+				// represents valid work that another worker can resume.
+				lockStatus.status === 'stale' ? 'missing' : lockStatus.status,
+			);
 	const queued = queuedStatus.status === 'active';
 
 	return {
@@ -270,11 +278,13 @@ export async function releaseManualSyncAllFeedsState(
 ) {
 	return redis.eval(
 		RELEASE_OWNED_SYNC_STATE_SCRIPT,
-		3,
+		4,
 		CacheKeys.feedSyncAllLock(userId),
 		CacheKeys.feedSyncAllQueued(userId),
 		CacheKeys.feedSyncAllRequest(userId),
+		CacheKeys.feedSyncAllQueue(),
 		ownerToken,
+		userId,
 	);
 }
 
@@ -315,11 +325,9 @@ async function getManualSyncLockStatus(
 
 	logger.warn('Clearing stale queued bulk feed sync lock', { userId });
 	const didRelease = await redis.eval(
-		RELEASE_STALE_SYNC_STATE_SCRIPT,
-		3,
+		RELEASE_STALE_SYNC_LOCK_SCRIPT,
+		1,
 		CacheKeys.feedSyncAllLock(userId),
-		CacheKeys.feedSyncAllQueued(userId),
-		CacheKeys.feedSyncAllRequest(userId),
 		rawLockValue ?? '',
 	);
 	if (Number(didRelease) === 1) return { status: 'stale', value: lockValue };

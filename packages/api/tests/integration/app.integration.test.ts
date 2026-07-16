@@ -1275,6 +1275,26 @@ describe('API integration', () => {
 			});
 			await expect(redis.llen(CacheKeys.feedSyncAllQueue())).resolves.toBe(1);
 
+			await redis.set(
+				CacheKeys.feedSyncAllLock(registered.body.data.user.id),
+				JSON.stringify({
+					startedAt: Date.now(),
+					heartbeatAt: Date.now(),
+					ownerToken: 'other-worker',
+				}),
+				'EX',
+				1800,
+			);
+			const ignoredWhileRunning = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
+			expect(ignoredWhileRunning).toEqual({
+				userId: registered.body.data.user.id,
+				skipped: true,
+			});
+			// Peeking rather than popping makes the command durable across a
+			// competing worker or restart.
+			await expect(redis.llen(CacheKeys.feedSyncAllQueue())).resolves.toBe(1);
+			await redis.del(CacheKeys.feedSyncAllLock(registered.body.data.user.id));
+
 			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
 			expect(queuedResult).toMatchObject({
 				userId: registered.body.data.user.id,
@@ -1287,6 +1307,7 @@ describe('API integration', () => {
 					newArticles: 2,
 				},
 			});
+			await expect(redis.llen(CacheKeys.feedSyncAllQueue())).resolves.toBe(0);
 
 			const completedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
 			expect(completedStatus.response.status).toBe(200);

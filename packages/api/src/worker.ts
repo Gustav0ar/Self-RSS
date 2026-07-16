@@ -31,7 +31,7 @@ process.on('uncaughtException', (error) => {
 const logger = createLogger();
 
 // Configuration for graceful shutdown
-const DRAIN_TIMEOUT_MS = 30_000; // 30 seconds - time to wait for in-flight syncs to complete
+const DRAIN_TIMEOUT_MS = 90_000; // Stay within the worker container's 2 minute grace period.
 const POLL_INTERVAL_MS = 100; // Check every 100ms for sync completion
 
 try {

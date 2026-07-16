@@ -32,10 +32,8 @@ describe('getManualSyncAllFeedsStatus ownership races', () => {
 
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('ARGV[1]'),
-			3,
+			1,
 			CacheKeys.feedSyncAllLock(userId),
-			CacheKeys.feedSyncAllQueued(userId),
-			CacheKeys.feedSyncAllRequest(userId),
 			stale,
 		);
 		expect(status).toMatchObject({

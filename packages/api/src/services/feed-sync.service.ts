@@ -81,13 +81,15 @@ const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
 const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
-const MANUAL_FEED_SYNC_TIMEOUT_MS = 5_000;
+const MANUAL_FEED_SYNC_TIMEOUT_MS = 10_000;
 const MANUAL_FEED_SYNC_MAX_CONCURRENCY = 4;
 const SCHEDULED_FEED_SYNC_TIMEOUT_MS = 15_000;
 const SCHEDULED_FEED_SYNC_MAX_CONCURRENCY = 2;
 const SCHEDULED_FEED_SYNC_BATCH_SIZE = 50;
 const FEED_VALIDATOR_TTL_SECONDS = 15 * 60;
-const FEED_SYNC_LOCK_TTL_SECONDS = 60 * 20;
+// The heartbeat keeps live fetches locked indefinitely. A short TTL only
+// affects dead workers, allowing their unfinished feeds to resume promptly.
+const FEED_SYNC_LOCK_TTL_SECONDS = 60;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
 
 export class FeedSyncService {
@@ -495,18 +497,6 @@ export class FeedSyncService {
 		}) => Promise<void> | void,
 	) {
 		const feeds = await this.feedRepo.findAllByUser(userId);
-		const staleSyncingFeeds = feeds.filter((feed) => feed.syncStatus === 'syncing');
-		if (staleSyncingFeeds.length > 0) {
-			logger.warn('Resetting stale syncing feeds before bulk refresh', {
-				count: staleSyncingFeeds.length,
-				feedIds: staleSyncingFeeds.map((feed) => feed.id),
-			});
-			await Promise.allSettled(
-				staleSyncingFeeds.map((feed) =>
-					this.feedRepo.update(feed.id, userId, { syncStatus: 'idle' }),
-				),
-			);
-		}
 		const categoryFeedIds = scope.categoryId
 			? new Set(
 					(await this.feedRepo.findByCategory(userId, scope.categoryId)).map((feed) => feed.id),
@@ -550,7 +540,9 @@ export class FeedSyncService {
 					forceFetch: true,
 					// Leave slow publishers for the robust background scheduler.
 					fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
-					fetchMaxRetries: 0,
+					// One delayed retry absorbs connection resets and short publisher
+					// outages. 4xx/429 responses are never retried inline.
+					fetchMaxRetries: 1,
 					deferScopedCacheCleanup: true,
 				}),
 			onProgress: async (progress) => {
@@ -600,12 +592,13 @@ export class FeedSyncService {
 	}
 
 	async processNextQueuedSyncAllFeeds() {
-		const userId = await this.redis.lpop(CacheKeys.feedSyncAllQueue());
+		// Peek instead of popping. The queue entry is acknowledged atomically
+		// with lock/state release only after the refresh finishes, so a worker
+		// restart cannot silently lose the request.
+		const userId = await this.redis.lindex(CacheKeys.feedSyncAllQueue(), 0);
 		if (!userId) {
 			return null;
 		}
-
-		await this.redis.lrem(CacheKeys.feedSyncAllQueue(), 0, userId);
 
 		const ownerToken = await acquireManualSyncAllFeedsLock(this.redis, userId);
 		if (!ownerToken) {
@@ -928,7 +921,11 @@ export class FeedSyncService {
 					clearTimeout(timeout);
 				}
 			},
-			{ maxRetries: options.maxRetries ?? 3 },
+			{
+				maxRetries: options.maxRetries ?? 1,
+				baseDelayMs: 2_000,
+				maxDelayMs: 10_000,
+			},
 			{ operation: 'fetchAndParse', feedUrl },
 		);
 

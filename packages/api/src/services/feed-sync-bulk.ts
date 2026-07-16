@@ -25,31 +25,6 @@ interface BulkSyncOptions<TFeed extends BulkSyncFeed> {
 	) => Promise<void> | void;
 }
 
-const BULK_SYNC_LOCK_RETRY_ATTEMPTS = 3;
-const BULK_SYNC_LOCK_RETRY_DELAY_MS = 750;
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function syncFeedWithLockRetry<TFeed extends BulkSyncFeed>(
-	feed: TFeed,
-	syncFeed: (feed: TFeed) => Promise<BulkSyncFeedResult | null>,
-) {
-	let lastResult: BulkSyncFeedResult | null = null;
-	for (let attempt = 1; attempt <= BULK_SYNC_LOCK_RETRY_ATTEMPTS; attempt += 1) {
-		const result = await syncFeed(feed);
-		lastResult = result;
-		if (!result?.skipped) {
-			return result;
-		}
-		if (attempt < BULK_SYNC_LOCK_RETRY_ATTEMPTS) {
-			await sleep(BULK_SYNC_LOCK_RETRY_DELAY_MS * attempt);
-		}
-	}
-	return lastResult;
-}
-
 export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 	feeds,
 	concurrency,
@@ -73,7 +48,10 @@ export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 				continue;
 			}
 			try {
-				const result = await syncFeedWithLockRetry(feed, syncFeed);
+				// An existing per-feed lock means a scheduled or manual fetch is
+				// already doing this work. Treat the new command as a no-op instead
+				// of waiting and then hitting the publisher again.
+				const result = await syncFeed(feed);
 				if (!result) {
 					continue;
 				}
