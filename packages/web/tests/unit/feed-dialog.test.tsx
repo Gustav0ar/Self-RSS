@@ -144,6 +144,27 @@ describe('FeedDialog - edit mode', () => {
 		expect(input.value).toBe('https://example.com/replacement.xml');
 	});
 
+	it('shows the latest refresh failure in edit mode', () => {
+		render(
+			<FeedDialog
+				mode="edit"
+				categories={sampleCategories}
+				feed={{
+					...sampleFeed,
+					syncStatus: 'error',
+					lastSyncError: 'HTTP 403: Forbidden',
+					lastSyncErrorAt: '2026-07-15T10:00:00.000Z',
+				}}
+				onClose={() => {}}
+			/>,
+		);
+
+		expect(screen.getByRole('status', { name: 'Feed refresh issue' }).textContent).toContain(
+			'HTTP 403: Forbidden',
+		);
+		expect(screen.getByText(/Review the URL and polling interval/)).toBeTruthy();
+	});
+
 	it('submits only the editable fields on save', async () => {
 		updateMutateAsync.mockResolvedValue({});
 

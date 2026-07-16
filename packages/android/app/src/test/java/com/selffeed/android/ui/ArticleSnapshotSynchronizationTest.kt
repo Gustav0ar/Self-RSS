@@ -4,7 +4,9 @@ import androidx.paging.LoadState
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.screens.readerQueueForTappedArticle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ArticleSnapshotSynchronizationTest {
@@ -50,4 +52,18 @@ class ArticleSnapshotSynchronizationTest {
 			readerQueueForTappedArticle(listOf(other, tappedArticle), tappedArticle),
 		)
 	}
+
+    @Test
+    fun `reader requests another page before reaching the loaded boundary`() {
+        val queue = (1..30).map { index -> tappedArticle.copy(id = "article-$index") }
+
+        assertFalse(shouldPrefetchNextReaderPage("article-22", queue))
+        assertTrue(shouldPrefetchNextReaderPage("article-23", queue))
+        assertTrue(shouldPrefetchNextReaderPage("article-30", queue))
+    }
+
+    @Test
+    fun `reader ignores prefetch checks for an article outside its queue`() {
+        assertFalse(shouldPrefetchNextReaderPage("missing", listOf(tappedArticle)))
+    }
 }

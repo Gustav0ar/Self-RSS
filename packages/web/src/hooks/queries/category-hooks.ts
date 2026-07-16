@@ -12,6 +12,11 @@ import { apiFetch } from '@/lib/api';
 export function useCategories() {
 	return useQuery({
 		queryKey: ['categories'],
+		// The sidebar renders feeds from the category tree, including their
+		// latest sync health. Poll this source directly so recovered feeds stop
+		// showing stale warnings without disturbing the article list.
+		refetchInterval: 60_000,
+		refetchIntervalInBackground: false,
 		queryFn: ({ signal }) =>
 			apiFetch<ApiResponse<CategoryTreeResponse>>('/categories', { signal }).then(
 				(r) => r.data.categories,

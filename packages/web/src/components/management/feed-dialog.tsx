@@ -4,6 +4,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { createDialogErrorFallback } from '@/components/error-fallbacks';
 import { useCreateFeed, useUpdateFeed } from '@/hooks/queries';
 import { categoryPathLabel } from '@/lib/categories';
+import { feedHealthIssue } from '@/lib/feed-health';
 import { ModalShell } from './modal-shell';
 
 interface FeedDialogProps {
@@ -65,6 +66,7 @@ function FeedDialogContent({
 	}
 
 	const isPending = createFeed.isPending || updateFeed.isPending;
+	const healthIssue = mode === 'edit' && feed ? feedHealthIssue(feed) : null;
 
 	return (
 		<ModalShell title={mode === 'create' ? 'Add Feed' : 'Edit Feed'} onClose={onClose}>
@@ -74,6 +76,22 @@ function FeedDialogContent({
 			{error ? (
 				<div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
 					{error}
+				</div>
+			) : null}
+			{healthIssue ? (
+				<div
+					className="rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3"
+					role="status"
+					aria-label="Feed refresh issue"
+				>
+					<p className="text-sm font-semibold text-amber-300">Latest refresh failed</p>
+					<p className="mt-1 text-sm leading-5 text-amber-100/85">{healthIssue.detail}</p>
+					{healthIssue.failedAt ? (
+						<p className="mt-1.5 text-xs text-amber-200/65">Last attempt: {healthIssue.failedAt}</p>
+					) : null}
+					<p className="mt-2 text-xs leading-5 text-muted-foreground">
+						Review the URL and polling interval, then save any correction.
+					</p>
 				</div>
 			) : null}
 			<form onSubmit={handleSubmit} className="space-y-4">

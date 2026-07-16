@@ -1,5 +1,5 @@
 import type { FeedWithCounts } from '@self-feed/shared';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SidebarTree } from '../../src/components/layout/sidebar-tree';
 
@@ -27,8 +27,8 @@ function feed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
 	};
 }
 
-function renderTree(uncategorizedFeeds: FeedWithCounts[]) {
-	return render(
+function tree(uncategorizedFeeds: FeedWithCounts[]) {
+	return (
 		<SidebarTree
 			totalUnread={0}
 			categories={[]}
@@ -52,8 +52,12 @@ function renderTree(uncategorizedFeeds: FeedWithCounts[]) {
 			onDeleteCategory={noop}
 			onEditFeed={noop}
 			onDeleteFeed={noop}
-		/>,
+		/>
 	);
+}
+
+function renderTree(uncategorizedFeeds: FeedWithCounts[]) {
+	return render(tree(uncategorizedFeeds));
 }
 
 describe('SidebarTree feed sync warnings', () => {
@@ -68,8 +72,38 @@ describe('SidebarTree feed sync warnings', () => {
 
 		const warning = screen.getByLabelText(/Phoronix is not updating\. HTTP 403: Forbidden/);
 		expect(warning).toBeTruthy();
-		expect(warning.getAttribute('title')).toContain('Phoronix is not updating');
-		expect(screen.getAllByText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toHaveLength(2);
+		expect(screen.queryByText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toBeNull();
+		fireEvent.mouseEnter(warning);
+		expect(screen.getByRole('tooltip').textContent).toMatch(
+			/Phoronix is not updating\. HTTP 403: Forbidden/,
+		);
+		expect(screen.getByRole('status', { name: '1 feed is not updating' })).toBeTruthy();
+	});
+
+	it('lets the user dismiss the aggregate warning without hiding row health', () => {
+		renderTree([
+			feed({
+				syncStatus: 'error',
+				lastSyncError: 'HTTP 403: Forbidden',
+			}),
+		]);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Dismiss feed health summary' }));
+
+		expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
+		expect(screen.getByLabelText(/Phoronix is not updating\. HTTP 403: Forbidden/)).toBeTruthy();
+	});
+
+	it('clears dismissed state after recovery so a later failure is announced', async () => {
+		const view = renderTree([feed({ syncStatus: 'error', lastSyncError: 'Temporary timeout' })]);
+		fireEvent.click(screen.getByRole('button', { name: 'Dismiss feed health summary' }));
+
+		view.rerender(tree([feed()]));
+		await waitFor(() => {
+			expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
+		});
+		view.rerender(tree([feed({ syncStatus: 'error', lastSyncError: 'DNS lookup failed' })]));
+
 		expect(screen.getByRole('status', { name: '1 feed is not updating' })).toBeTruthy();
 	});
 

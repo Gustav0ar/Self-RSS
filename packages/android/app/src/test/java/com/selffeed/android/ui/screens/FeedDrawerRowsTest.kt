@@ -62,6 +62,21 @@ class FeedDrawerRowsTest {
         assertEquals(null, feedSyncWarning(sampleFeed(id = "healthy", categoryId = "linux")))
     }
 
+    @Test
+    fun `feedHealthIssue keeps actionable detail separate from the list warning`() {
+        val issue = feedHealthIssue(
+            sampleFeed(
+                id = "broken",
+                categoryId = "linux",
+                syncStatus = "error",
+                lastSyncError = "Connection timed out",
+            ),
+        )
+
+        assertEquals("Connection timed out.", issue?.detail)
+        assertEquals("broken is not updating. Connection timed out.", issue?.warning)
+    }
+
     private fun sampleCategory(
         id: String,
         name: String,

@@ -19,6 +19,7 @@ import androidx.compose.ui.test.swipeRight
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleMedia
+import com.selffeed.android.ui.shouldPrefetchNextReaderPage
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -121,6 +122,53 @@ class ArticleReaderPaneNavigationTest {
 
         composeRule.onNodeWithText("Article 4").assertIsDisplayed()
         composeRule.onNodeWithText("Complete body for Article 4").assertIsDisplayed()
+    }
+
+    @Test
+    fun readerAcceptsAnotherPageWhileOpenAndNavigatesPastTheOriginalBoundary() {
+        val allArticles = (1..12).map { index ->
+            sampleArticle("article-$index", "Article $index")
+        }
+        val details = allArticles.associate { article ->
+            article.id to sampleDetail(
+                id = article.id,
+                title = article.title,
+                isRead = false,
+                contentText = "Complete body for ${article.title}",
+            )
+        }
+        var loadedArticles by mutableStateOf(allArticles.take(8))
+        var selectedArticle by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = loadedArticles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id -> selectedArticle = details.getValue(id) },
+                    onVisibleArticleChanged = { id ->
+                        if (shouldPrefetchNextReaderPage(id, loadedArticles)) {
+                            loadedArticles = allArticles
+                        }
+                    },
+                    preferHtml = false,
+                )
+            }
+        }
+
+        (2..12).forEach { index ->
+            composeRule.onRoot().performTouchInput { swipeLeft() }
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                selectedArticle.id == "article-$index"
+            }
+        }
+
+        composeRule.onNodeWithText("Article 12").assertIsDisplayed()
+        composeRule.onNodeWithText("Complete body for Article 12").assertIsDisplayed()
+        assertEquals(12, loadedArticles.size)
     }
 
     @Test

@@ -259,7 +259,11 @@ fun SelfFeedAppRoute(
                     appViewModel.openReaderFrom(origin)
                 },
                 onOpenArticleFromQueue = { articleId, queue ->
-                    articlesViewModel.openArticleFromQueue(articleId, queue)
+                    articlesViewModel.openArticleFromQueue(
+                        id = articleId,
+                        queue = queue,
+                        tracksPaging = true,
+                    )
                     appViewModel.openReaderFrom(HomeTab.ARTICLES)
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,

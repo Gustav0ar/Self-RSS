@@ -346,6 +346,54 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `paging append extends an open feed reader beyond the original page`() = runTest {
+        coEvery { repository.article(any(), false) } answers {
+            val id = firstArg<String>()
+            AppResult.Success(sampleDetail(id, title = "Detail $id"))
+        }
+        val firstPage = (1..30).map { index ->
+            sampleArticle("a$index", title = "Article $index")
+        }
+        val secondPage = (31..60).map { index ->
+            sampleArticle("a$index", title = "Article $index")
+        }
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(firstPage)
+        viewModel.openArticleFromQueue(
+            id = "a30",
+            queue = firstPage,
+            tracksPaging = true,
+        )
+        runCurrent()
+
+        viewModel.updateArticleQueueSnapshot(firstPage + secondPage)
+        viewModel.openAdjacentArticle(1)
+        runCurrent()
+
+        assertEquals(60, viewModel.state.value.readerQueue.size)
+        assertEquals("a31", viewModel.state.value.selectedArticle?.id)
+        assertEquals("Detail a31", viewModel.state.value.selectedArticle?.title)
+    }
+
+    @Test
+    fun `paging snapshots do not contaminate a search reader queue`() = runTest {
+        val searchQueue = listOf(
+            sampleArticle("search-1", title = "Search One"),
+            sampleArticle("search-2", title = "Search Two"),
+        )
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("feed-1")))
+        viewModel.openArticleFromQueue("search-1", searchQueue)
+
+        viewModel.updateArticleQueueSnapshot(
+            listOf(sampleArticle("feed-1"), sampleArticle("feed-2")),
+        )
+
+        assertEquals(searchQueue.map { it.id }, viewModel.state.value.readerQueue.map { it.id })
+        assertEquals(false, viewModel.state.value.readerQueueTracksPaging)
+    }
+
+    @Test
     fun `visible reader page tracks the current feed immediately in both directions`() = runTest {
         val viewModel = createViewModel()
         viewModel.updateArticleQueueSnapshot(

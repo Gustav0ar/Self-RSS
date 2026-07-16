@@ -2,11 +2,9 @@ package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -115,7 +113,7 @@ class FeedEditorUiTest {
     }
 
     @Test
-    fun feedFailureSummaryShowsTheDetailedServerError() {
+    fun feedFailureUsesCompactSummaryAndShowsDetailsInEditor() {
         val failedFeed = FeedWithCounts(
             id = "failed-feed",
             categoryId = "news",
@@ -134,10 +132,22 @@ class FeedEditorUiTest {
         }
 
         composeRule.onNodeWithText("1 feed is not updating").performScrollTo().assertIsDisplayed()
-        composeRule.onAllNodesWithText(
-            "Unavailable News is not updating. The feed server timed out before returning a response.",
+        composeRule.onNodeWithText(
+            "The feed server timed out before returning a response",
             substring = true,
-        ).assertCountEquals(2)
+        ).assertDoesNotExist()
+        composeRule.onNodeWithTag("dismiss-feed-health-summary").performClick()
+        composeRule.onNodeWithText("1 feed is not updating").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("feed-overflow-failed-feed").performClick()
+        composeRule.onNodeWithText("Edit").performClick()
+        composeRule.onNodeWithTag("feed-health-details").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "The feed server timed out before returning a response.",
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Review the URL and refresh interval, then save any correction.",
+        ).assertIsDisplayed()
     }
 
     private fun feedState(

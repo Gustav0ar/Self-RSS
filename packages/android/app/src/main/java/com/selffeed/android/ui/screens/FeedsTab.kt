@@ -6,6 +6,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.MarkEmailRead
@@ -77,6 +81,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -196,7 +201,14 @@ fun FeedsTab(
         state.feeds.groupBy { it.categoryId }
     }
     val failedFeedWarnings = remember(state.feeds) {
-        state.feeds.mapNotNull { feedSyncWarning(it) }
+        state.feeds.filter { feedHealthIssue(it) != null }
+    }
+    val healthFingerprint = remember(failedFeedWarnings) {
+        failedFeedWarnings.feedHealthFingerprint()
+    }
+    var dismissedHealthFingerprint by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(healthFingerprint) {
+        if (healthFingerprint.isEmpty()) dismissedHealthFingerprint = null
     }
     // Categories can be populated into the same snapshot-backed list after this
     // screen is composed. Do not cache the flattened result by list identity or
@@ -214,7 +226,9 @@ fun FeedsTab(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("feeds-list"),
         contentPadding = PaddingValues(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -314,44 +328,50 @@ fun FeedsTab(
             }
         }
 
-        if (failedFeedWarnings.isNotEmpty()) {
+        if (
+            failedFeedWarnings.isNotEmpty() &&
+            dismissedHealthFingerprint != healthFingerprint
+        ) {
             item {
                 FeedSurfaceCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Top) {
                         Icon(
                             Icons.Default.Warning,
                             contentDescription = null,
+                            modifier = Modifier.padding(top = 2.dp),
                             tint = WarningAmber,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (failedFeedWarnings.size == 1) {
-                                "1 feed is not updating"
-                            } else {
-                                "${failedFeedWarnings.size} feeds are not updating"
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = WarningAmber,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    failedFeedWarnings.take(3).forEach { warning ->
-                        Text(
-                            text = warning,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = WarningAmber,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    if (failedFeedWarnings.size > 3) {
-                        Text(
-                            text = "And ${failedFeedWarnings.size - 3} more.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = WarningAmber,
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (failedFeedWarnings.size == 1) {
+                                    "1 feed is not updating"
+                                } else {
+                                    "${failedFeedWarnings.size} feeds are not updating"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = WarningAmber,
+                            )
+                            Text(
+                                text = "Open a feed's menu and choose Edit for details.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(
+                            onClick = { dismissedHealthFingerprint = healthFingerprint },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("dismiss-feed-health-summary"),
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Dismiss feed health summary",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -565,12 +585,66 @@ private fun FeedEditorDialog(
     val validInterval = pollingInterval.toIntOrNull()?.takeIf { it in 5..1440 }
     val canSave = url.trim().isNotEmpty() &&
         (feed == null || (categoryId.isNotBlank() && validInterval != null))
+    val healthIssue = feed?.let(::feedHealthIssue)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (feed == null) "Add feed" else "Edit feed") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                healthIssue?.let { issue ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("feed-health-details"),
+                        shape = RoundedCornerShape(14.dp),
+                        color = WarningAmber.copy(alpha = 0.1f),
+                        border = BorderStroke(1.dp, WarningAmber.copy(alpha = 0.3f)),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = WarningAmber,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Latest refresh failed",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = WarningAmber,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = issue.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            issue.failedAt?.let { failedAt ->
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Last attempt: $failedAt",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Review the URL and refresh interval, then save any correction.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
@@ -875,8 +949,8 @@ private fun FeedRow(
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
 ) {
-    val syncWarning = feedSyncWarning(feed)
-    val subtitle = syncWarning ?: feed.description ?: feed.feedUrl
+    val healthIssue = feedHealthIssue(feed)
+    val subtitle = feed.description ?: feed.feedUrl
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -907,11 +981,11 @@ private fun FeedRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (syncWarning != null) {
+                if (healthIssue != null) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.Warning,
-                        contentDescription = syncWarning,
+                        contentDescription = "Feed needs attention. Open Edit for details.",
                         modifier = Modifier.size(14.dp),
                         tint = WarningAmber,
                     )
@@ -920,8 +994,8 @@ private fun FeedRow(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (syncWarning != null) WarningAmber else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (syncWarning != null) 2 else 1,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -948,14 +1022,30 @@ private fun FeedRow(
     }
 }
 
-internal fun feedSyncWarning(feed: FeedWithCounts): String? {
+internal data class FeedHealthIssue(
+    val detail: String,
+    val failedAt: String?,
+    val warning: String,
+)
+
+internal fun feedHealthIssue(feed: FeedWithCounts): FeedHealthIssue? {
     if (feed.syncStatus != "error" && feed.lastSyncError.isNullOrBlank()) return null
     val detail = feed.lastSyncError?.trim()?.takeIf { it.isNotEmpty() } ?: "Latest refresh failed"
     val message = if (detail.lastOrNull() in setOf('.', '!', '?')) detail else "$detail."
     val failedAt = feed.lastSyncErrorAt
         ?.let(::formatPublishedAt)
         ?.takeIf { it.isNotBlank() }
-        ?.let { " Last attempt $it." }
-        .orEmpty()
-    return "${feed.title} is not updating. $message$failedAt"
+    return FeedHealthIssue(
+        detail = message,
+        failedAt = failedAt,
+        warning = "${feed.title} is not updating. $message${failedAt?.let { " Last attempt $it." }.orEmpty()}",
+    )
 }
+
+internal fun feedSyncWarning(feed: FeedWithCounts): String? = feedHealthIssue(feed)?.warning
+
+private fun List<FeedWithCounts>.feedHealthFingerprint(): String =
+    sortedBy { it.id }.joinToString("|") { feed ->
+        listOf(feed.id, feed.syncStatus, feed.lastSyncError.orEmpty(), feed.lastSyncErrorAt.orEmpty())
+            .joinToString(":")
+    }

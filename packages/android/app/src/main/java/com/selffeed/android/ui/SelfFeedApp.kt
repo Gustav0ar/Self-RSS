@@ -437,7 +437,21 @@ fun SelfFeedApp(
                 },
                 onBackToList = actions.onCloseArticle,
                 onArticleSelected = actions.onOpenArticle,
-                onVisibleArticleChanged = actions.onReaderPageChanged,
+                onVisibleArticleChanged = { articleId ->
+                    actions.onReaderPageChanged(articleId)
+                    if (
+                        activeTab == HomeTab.ARTICLES &&
+                        shouldPrefetchNextReaderPage(articleId, articleQueue)
+                    ) {
+                        // Unlike LazyColumn, the full-screen reader does not
+                        // access LazyPagingItems as the user swipes. Reading
+                        // the last presented item emits the Paging access hint
+                        // that loads the next API cursor before the queue ends.
+                        articlePagingItems.lastIndexOrNull()?.let { lastIndex ->
+                            articlePagingItems[lastIndex]
+                        }
+                    }
+                },
                 onArticleDisplayed = actions.onArticleDisplayed,
                 appearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance(),
                 preferHtml = preferHtml,
@@ -569,6 +583,19 @@ internal fun settledArticleSnapshot(
     snapshot: List<ArticleListItem>,
     refreshState: LoadState,
 ): List<ArticleListItem>? = snapshot.takeIf { refreshState is LoadState.NotLoading }
+
+internal fun shouldPrefetchNextReaderPage(
+    visibleArticleId: String,
+    readerQueue: List<ArticleListItem>,
+): Boolean {
+    val visibleIndex = readerQueue.indexOfFirst { it.id == visibleArticleId }
+    return visibleIndex >= 0 && visibleIndex >= readerQueue.size - READER_PAGE_PREFETCH_DISTANCE
+}
+
+private fun <T : Any> androidx.paging.compose.LazyPagingItems<T>.lastIndexOrNull(): Int? =
+    (itemCount - 1).takeIf { it >= 0 }
+
+private const val READER_PAGE_PREFETCH_DISTANCE = 8
 
 @Composable
 private fun LoadingScreen() {

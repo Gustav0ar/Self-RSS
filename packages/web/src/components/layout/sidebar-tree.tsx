@@ -9,8 +9,11 @@ import {
 	Rss as RssIcon,
 	Trash2,
 	TriangleAlert,
+	X,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { feedHealthFingerprint, feedHealthIssue } from '@/lib/feed-health';
 import { cn } from '@/lib/utils';
 
 interface SidebarTreeProps {
@@ -89,8 +92,15 @@ export function SidebarTree({
 	onDeleteFeed,
 }: SidebarTreeProps) {
 	const failedFeeds = uniqueFeeds(uncategorizedFeeds, categoryFeedMap).filter(
-		(feed) => feedSyncWarning(feed) != null,
+		(feed) => feedHealthIssue(feed) != null,
 	);
+	const healthFingerprint = feedHealthFingerprint(failedFeeds);
+	const [dismissedHealthFingerprint, setDismissedHealthFingerprint] = useState<string | null>(null);
+	useEffect(() => {
+		if (healthFingerprint.length === 0) setDismissedHealthFingerprint(null);
+	}, [healthFingerprint]);
+	const showHealthSummary =
+		failedFeeds.length > 0 && dismissedHealthFingerprint !== healthFingerprint;
 	const categoryHandlers: CategoryTreeHandlers = {
 		selectedFeedId,
 		selectedCategoryId,
@@ -140,9 +150,9 @@ export function SidebarTree({
 					) : null}
 				</button>
 
-				{failedFeeds.length > 0 ? (
+				{showHealthSummary ? (
 					<div
-						className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-amber-300"
+						className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2.5 text-amber-300"
 						role="status"
 						aria-label={
 							failedFeeds.length === 1
@@ -150,21 +160,26 @@ export function SidebarTree({
 								: `${failedFeeds.length} feeds are not updating`
 						}
 					>
-						<div className="flex items-center gap-2 text-xs font-semibold">
-							<TriangleAlert className="h-4 w-4 shrink-0" />
-							<span>
-								{failedFeeds.length === 1
-									? '1 feed is not updating'
-									: `${failedFeeds.length} feeds are not updating`}
-							</span>
-						</div>
-						<div className="mt-1.5 space-y-1 text-[11px] leading-4">
-							{failedFeeds.slice(0, 3).map((feed) => (
-								<p key={feed.id} className="line-clamp-2">
-									{feedSyncWarning(feed)}
+						<div className="flex items-start gap-2.5">
+							<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+							<div className="min-w-0 flex-1">
+								<p className="text-xs font-semibold">
+									{failedFeeds.length === 1
+										? '1 feed is not updating'
+										: `${failedFeeds.length} feeds are not updating`}
 								</p>
-							))}
-							{failedFeeds.length > 3 ? <p>And {failedFeeds.length - 3} more.</p> : null}
+								<p className="mt-0.5 text-[11px] leading-4 text-amber-200/80">
+									Hover a warning icon for the latest details.
+								</p>
+							</div>
+							<button
+								type="button"
+								onClick={() => setDismissedHealthFingerprint(healthFingerprint)}
+								className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-amber-200/70 hover:bg-amber-300/10 hover:text-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"
+								aria-label="Dismiss feed health summary"
+							>
+								<X className="h-3.5 w-3.5" />
+							</button>
 						</div>
 					</div>
 				) : null}
@@ -429,7 +444,7 @@ function FeedTreeRow({
 	onEditFeed: (feed: FeedWithCounts) => void;
 	onDeleteFeed: (feed: FeedWithCounts) => void;
 }) {
-	const syncWarning = feedSyncWarning(feed);
+	const healthIssue = feedHealthIssue(feed);
 
 	return (
 		<div className="group/feed relative">
@@ -437,6 +452,7 @@ function FeedTreeRow({
 				type="button"
 				onClick={() => onSelectFeed(feed.id)}
 				aria-label={(feed.unreadCount ?? 0) > 0 ? `${feed.title} ${feed.unreadCount}` : feed.title}
+				aria-describedby={healthIssue ? `feed-health-${feed.id}` : undefined}
 				className={cn(
 					'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 pr-20 text-left text-sm hover:bg-accent/70',
 					selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
@@ -459,22 +475,10 @@ function FeedTreeRow({
 				<div className="min-w-0 flex-1 overflow-hidden">
 					<div className="flex min-w-0 items-center gap-1.5">
 						<SidebarOverflowText text={feed.title} />
-						{syncWarning ? (
-							<span
-								className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-amber-400"
-								title={syncWarning}
-								role="img"
-								aria-label={syncWarning}
-							>
-								<TriangleAlert className="h-3.5 w-3.5" />
-							</span>
+						{healthIssue ? (
+							<FeedHealthIndicator id={`feed-health-${feed.id}`} warning={healthIssue.warning} />
 						) : null}
 					</div>
-					{syncWarning ? (
-						<p className="mt-0.5 line-clamp-2 text-[11px] font-normal leading-4 text-amber-400">
-							{syncWarning}
-						</p>
-					) : null}
 				</div>
 				{(feed.unreadCount ?? 0) > 0 ? (
 					<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
@@ -498,24 +502,45 @@ function FeedTreeRow({
 	);
 }
 
-function feedSyncWarning(feed: FeedWithCounts) {
-	if (feed.syncStatus !== 'error' && !feed.lastSyncError) {
-		return null;
+function FeedHealthIndicator({ id, warning }: { id: string; warning: string }) {
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+	const fallbackId = useId();
+	const tooltipId = id || fallbackId;
+
+	function showTooltip() {
+		const rect = anchorRef.current?.getBoundingClientRect();
+		if (!rect) return;
+		setPosition({ left: rect.left + rect.width / 2, top: rect.top - 8 });
 	}
 
-	const detail = feed.lastSyncError?.trim() || 'The latest feed refresh failed.';
-	const when = feed.lastSyncErrorAt
-		? ` Last failed at ${formatSyncWarningTime(feed.lastSyncErrorAt)}.`
-		: '';
-	return `${feed.title} is not updating. ${detail}${when}`;
-}
-
-function formatSyncWarningTime(value: string) {
-	const date = new Date(value);
-	if (Number.isNaN(date.getTime())) {
-		return value;
-	}
-	return date.toLocaleString();
+	return (
+		<span
+			ref={anchorRef}
+			className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-amber-400 outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"
+			role="img"
+			aria-label={warning}
+			onMouseEnter={showTooltip}
+			onMouseLeave={() => setPosition(null)}
+			onFocus={showTooltip}
+			onBlur={() => setPosition(null)}
+		>
+			<TriangleAlert className="h-3.5 w-3.5" />
+			{position
+				? createPortal(
+						<div
+							id={tooltipId}
+							role="tooltip"
+							style={{ left: position.left, top: position.top }}
+							className="pointer-events-none fixed z-[100] w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-amber-300/20 bg-popover px-3 py-2 text-left text-xs font-normal leading-5 text-popover-foreground shadow-2xl"
+						>
+							{warning}
+						</div>,
+						document.body,
+					)
+				: null}
+		</span>
+	);
 }
 
 function SidebarOverflowText({ text }: { text: string }) {

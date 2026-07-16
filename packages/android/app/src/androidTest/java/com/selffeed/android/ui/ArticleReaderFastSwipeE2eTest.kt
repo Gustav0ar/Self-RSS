@@ -87,6 +87,42 @@ class ArticleReaderFastSwipeE2eTest {
         assertEquals((1..6).map { "article-$it" } + (5 downTo 1).map { "article-$it" }, displayed)
     }
 
+    @Test
+    fun readerContinuesAcrossArticlesAppendedWhileItIsOpen() {
+        val allArticles = (1..12).map(::article)
+        val details = allArticles.associate { item -> item.id to detail(item) }
+        var loadedArticles by mutableStateOf(allArticles.take(8))
+        var selected by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = loadedArticles,
+                    selectedArticle = selected,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id -> selected = details.getValue(id) },
+                    onVisibleArticleChanged = { id ->
+                        if (shouldPrefetchNextReaderPage(id, loadedArticles)) {
+                            loadedArticles = allArticles
+                        }
+                    },
+                    preferHtml = false,
+                )
+            }
+        }
+
+        (2..12).forEach { index ->
+            composeRule.onRoot().performTouchInput { swipeLeft() }
+            composeRule.waitUntil(timeoutMillis = 5_000) { selected.id == "article-$index" }
+        }
+
+        composeRule.onNodeWithText("Complete body 12").assertIsDisplayed()
+        assertEquals(12, loadedArticles.size)
+        assertEquals("article-12", selected.id)
+    }
+
     private fun article(index: Int) = ArticleListItem(
         id = "article-$index",
         feedId = "feed-1",

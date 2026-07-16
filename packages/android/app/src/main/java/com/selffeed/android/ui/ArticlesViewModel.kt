@@ -32,6 +32,7 @@ import javax.inject.Inject
 data class ArticlesUiState(
     val items: List<ArticleListItem> = emptyList(),
     val readerQueue: List<ArticleListItem> = emptyList(),
+    val readerQueueTracksPaging: Boolean = false,
     val readerDetails: Map<String, ArticleDetail> = emptyMap(),
     val visibleReaderArticleId: String? = null,
     val selectedArticle: ArticleDetail? = null,
@@ -130,6 +131,7 @@ class ArticlesViewModel @Inject constructor(
                 selectedArticle = null,
                 items = emptyList(),
                 readerQueue = emptyList(),
+                readerQueueTracksPaging = false,
                 readerDetails = emptyMap(),
                 visibleReaderArticleId = null,
                 errorMessage = null,
@@ -179,7 +181,16 @@ class ArticlesViewModel @Inject constructor(
      */
     fun updateArticleQueueSnapshot(articles: List<ArticleListItem>) {
         val itemsWithReadStates = articles.withReadStates(knownArticleReadStates())
-        _state.update { it.copy(items = itemsWithReadStates) }
+        _state.update { current ->
+            current.copy(
+                items = itemsWithReadStates,
+                readerQueue = if (current.readerQueueTracksPaging) {
+                    current.readerQueue.expandWith(itemsWithReadStates)
+                } else {
+                    current.readerQueue
+                },
+            )
+        }
         readStateManager.updateItems(itemsWithReadStates)
         publishReadStateOverrides()
     }
@@ -194,6 +205,7 @@ class ArticlesViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     readerQueue = activeQueue,
+                    readerQueueTracksPaging = activeQueue === current.items,
                     readerDetails = it.readerDetails.filterKeys(activeIds::contains),
                 )
             }
@@ -244,12 +256,17 @@ class ArticlesViewModel @Inject constructor(
         }
     }
 
-    fun openArticleFromQueue(id: String, queue: List<ArticleListItem>) {
+    fun openArticleFromQueue(
+        id: String,
+        queue: List<ArticleListItem>,
+        tracksPaging: Boolean = false,
+    ) {
         if (queue.isNotEmpty()) {
             val queueIds = queue.asSequence().map { it.id }.toSet()
             _state.update {
                 it.copy(
                     readerQueue = queue,
+                    readerQueueTracksPaging = tracksPaging,
                     readerDetails = it.readerDetails.filterKeys(queueIds::contains),
                 )
             }
@@ -285,6 +302,7 @@ class ArticlesViewModel @Inject constructor(
             it.copy(
                 selectedArticle = null,
                 readerQueue = emptyList(),
+                readerQueueTracksPaging = false,
                 readerDetails = emptyMap(),
                 visibleReaderArticleId = null,
             )
@@ -578,6 +596,21 @@ class ArticlesViewModel @Inject constructor(
 
     private fun List<ArticleListItem>.withReadStates(readStates: Map<String, Boolean>): List<ArticleListItem> =
         map { article -> readStates[article.id]?.let { article.copy(isRead = it) } ?: article }
+
+    /**
+     * Extends an open reader session as Paging materializes more rows. Existing
+     * positions stay stable while a swipe is in progress; incoming snapshots
+     * refresh row metadata and append only IDs that were not already present.
+     */
+    private fun List<ArticleListItem>.expandWith(snapshot: List<ArticleListItem>): List<ArticleListItem> {
+        if (isEmpty()) return snapshot
+        if (snapshot.isEmpty()) return this
+
+        val incomingById = snapshot.associateBy { it.id }
+        val existingIds = asSequence().map { it.id }.toHashSet()
+        return map { article -> incomingById[article.id] ?: article } +
+            snapshot.filterNot { it.id in existingIds }
+    }
 
     private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail =
         isRead?.let { copy(isRead = it) } ?: this

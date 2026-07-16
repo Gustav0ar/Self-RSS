@@ -188,6 +188,77 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await expect(page.getByRole('button', { name: unreadBadgeName('My DevTools') })).toHaveCount(0);
 });
 
+test('feed health stays compact, dismissible, and actionable', async ({ page }) => {
+	await page.route('**/api/v1/categories', async (route) => {
+		if (route.request().method() !== 'GET') {
+			await route.continue();
+			return;
+		}
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				data: {
+					totalUnread: 0,
+					categories: [
+						{
+							id: 'health-category',
+							userId: 'reader',
+							parentCategoryId: null,
+							name: 'Health checks',
+							slug: 'health-checks',
+							sortOrder: 0,
+							createdAt: '2026-07-15T00:00:00.000Z',
+							updatedAt: '2026-07-15T00:00:00.000Z',
+							feedCount: 1,
+							unreadCount: 0,
+							feeds: [
+								{
+									id: 'broken-feed',
+									userId: 'reader',
+									categoryId: 'health-category',
+									title: 'Broken Feed',
+									feedUrl: 'https://example.com/broken.xml',
+									siteUrl: 'https://example.com',
+									faviconUrl: null,
+									description: 'Feed description remains readable',
+									pollingIntervalMinutes: 60,
+									lastSyncedAt: null,
+									lastSyncError: 'HTTP 403: Forbidden',
+									lastSyncErrorAt: '2026-07-15T10:00:00.000Z',
+									syncStatus: 'error',
+									createdAt: '2026-07-15T00:00:00.000Z',
+									updatedAt: '2026-07-15T10:00:00.000Z',
+									unreadCount: 0,
+								},
+							],
+							children: [],
+						},
+					],
+				},
+			}),
+		});
+	});
+
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+	const healthStatus = page.getByRole('status', { name: '1 feed is not updating' });
+	await expect(healthStatus).toBeVisible();
+	await page.getByRole('button', { name: 'Expand Health checks' }).click();
+
+	const warningIcon = page.getByLabel(/Broken Feed is not updating\. HTTP 403: Forbidden/);
+	await warningIcon.hover();
+	await expect(page.getByRole('tooltip')).toContainText('HTTP 403: Forbidden');
+
+	await page.getByRole('button', { name: 'Dismiss feed health summary' }).click();
+	await expect(healthStatus).toHaveCount(0);
+
+	await page.getByRole('button', { name: 'Broken Feed', exact: true }).hover();
+	await page.getByRole('button', { name: 'Edit Broken Feed' }).click();
+	await expect(page.getByRole('status', { name: 'Feed refresh issue' })).toContainText(
+		'HTTP 403: Forbidden',
+	);
+});
+
 test('reader can add and read a feed through the authenticated fallback relay', async ({
 	page,
 }) => {
