@@ -164,16 +164,26 @@ docker run -d --name self-feed-videocardz-relay --restart unless-stopped \
 CrowdSec's generic `http-crawl-non_statics` scenario treats many distinct,
 successful article-detail URLs as crawler traffic. A reader holding the next
 article shortcut can therefore be banned even though every request is an
-authenticated, successful application action. If CrowdSec consumes the
-Traefik access log, install the narrow parser whitelist from
-`deploy/crowdsec/self-feed-navigation-whitelist.yaml` under
-`/etc/crowdsec/parsers/s02-enrich/` and restart CrowdSec.
+authenticated, successful application action. First-party clients use the
+stable `/api/v1/articles/detail?id=...` path so UUIDs no longer count as
+distinct crawl targets. The legacy UUID path remains available for older
+clients.
+
+The deploy script also discovers running CrowdSec containers, copies the
+narrow parser whitelist from
+`deploy/crowdsec/self-feed-navigation-whitelist.yaml` into the parser config,
+validates the full CrowdSec configuration, and restarts CrowdSec. Set
+`CROWDSEC_CONTAINER_NAME` in the production `.env` if auto-discovery cannot
+identify the container. Set `CROWDSEC_REQUIRED=true` to make deployment fail
+instead of skip when the configured CrowdSec container is missing. For a
+host-installed CrowdSec service, install the same file under
+`/etc/crowdsec/parsers/s02-enrich/` and restart the service.
 
 The whitelist applies only to `GET` responses with status `200` or `304`, only
-on `rss.gustavo.ca`, and only for the exact article-detail UUID route. It does
-not exempt authentication failures, missing routes, admin paths, other hosts,
-or CVE/probing traffic. Change the hostname in the expression when deploying
-under another domain.
+on `rss.gustavo.ca`, and only for exact API or SPA article-detail UUID routes.
+It does not exempt authentication failures, missing routes, admin paths, other
+hosts, or CVE/probing traffic. Change the hostname in the expression when
+deploying under another domain.
 
 The setup helper leaves `/mnt/storage/containers/selfrss/data` owned by
 the deploy user and readable only by that account. The deploy workflow

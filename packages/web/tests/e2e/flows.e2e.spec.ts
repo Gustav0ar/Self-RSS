@@ -1,5 +1,11 @@
 import { createServer } from 'node:http';
-import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
+import {
+	type APIRequestContext,
+	type APIResponse,
+	expect,
+	type Page,
+	test,
+} from '@playwright/test';
 
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://127.0.0.1:3100/api/v1';
 let cachedAdminAccessToken: string | null = null;
@@ -10,6 +16,26 @@ async function loginThroughApi(request: APIRequestContext, email: string, passwo
 	});
 	expect(response.ok()).toBeTruthy();
 	return response.json();
+}
+
+async function registerWithTransientRetry(
+	request: APIRequestContext,
+	email: string,
+	password: string,
+): Promise<APIResponse> {
+	let response: APIResponse | null = null;
+	await expect
+		.poll(async () => {
+			response = await request.post(`${apiBaseUrl}/auth/register`, {
+				data: { email, password },
+			});
+			return response.status();
+		})
+		.toBe(201);
+	if (!response) {
+		throw new Error('Registration did not return a response');
+	}
+	return response;
 }
 
 async function setRegistrationLocked(request: APIRequestContext, locked: boolean) {
@@ -373,7 +399,10 @@ test('rapid keyboard navigation keeps article reads and read-state writes availa
 }) => {
 	const email = `rapid-reader-${Date.now()}@example.com`;
 	const password = 'password123';
-	const articleCount = 35;
+	// CrowdSec's http-crawl-non_statics scenario has a capacity of 40 distinct
+	// paths. Stay well above that boundary so this test cannot pass for the same
+	// reason the original 35-article regression did.
+	const articleCount = 60;
 	const titleFor = (position: number) => `Rapid Article ${String(position).padStart(2, '0')}`;
 	const feedServer = await startMutableFeedServer(
 		feedXml(
@@ -387,10 +416,7 @@ test('rapid keyboard navigation keeps article reads and read-state writes availa
 
 	try {
 		await setRegistrationLocked(request, false);
-		const registerResponse = await request.post(`${apiBaseUrl}/auth/register`, {
-			data: { email, password },
-		});
-		expect(registerResponse.ok()).toBeTruthy();
+		const registerResponse = await registerWithTransientRetry(request, email, password);
 		const registered = await registerResponse.json();
 		const authHeaders = { Authorization: `Bearer ${registered.data.tokens.accessToken}` };
 
@@ -437,8 +463,12 @@ test('rapid keyboard navigation keeps article reads and read-state writes availa
 			.toBe(30);
 
 		const rejectedArticleRequests: Array<{ method: string; status: number; url: string }> = [];
+		const articleDetailRequests: URL[] = [];
 		page.on('response', (response) => {
 			const url = new URL(response.url());
+			if (response.request().method() === 'GET' && url.pathname.includes('/api/v1/articles/')) {
+				articleDetailRequests.push(url);
+			}
 			if (!url.pathname.startsWith('/api/v1/articles/')) return;
 			if (response.status() !== 403 && response.status() !== 429) return;
 			rejectedArticleRequests.push({
@@ -449,6 +479,14 @@ test('rapid keyboard navigation keeps article reads and read-state writes availa
 		});
 
 		await loginThroughUi(page, email, password);
+		const articleListScroll = page.getByTestId('article-list-scroll');
+		await articleListScroll.evaluate((element) => {
+			element.scrollTop = element.scrollHeight;
+		});
+		await expect(page.getByText(`${articleCount} loaded`)).toBeVisible();
+		await articleListScroll.evaluate((element) => {
+			element.scrollTop = 0;
+		});
 		await page.getByRole('button', { name: new RegExp(titleFor(1)) }).click();
 		await expect(page.getByRole('heading', { name: titleFor(1), exact: true })).toBeVisible();
 
@@ -460,6 +498,16 @@ test('rapid keyboard navigation keeps article reads and read-state writes availa
 		}
 
 		await expect.poll(() => rejectedArticleRequests).toEqual([]);
+		await expect
+			.poll(
+				() =>
+					new Set(articleDetailRequests.map((requestUrl) => requestUrl.searchParams.get('id')))
+						.size,
+			)
+			.toBeGreaterThan(40);
+		expect(new Set(articleDetailRequests.map((requestUrl) => requestUrl.pathname))).toEqual(
+			new Set(['/api/v1/articles/detail']),
+		);
 	} finally {
 		await feedServer.stop();
 	}

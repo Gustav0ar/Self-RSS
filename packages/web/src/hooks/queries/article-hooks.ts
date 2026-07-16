@@ -21,9 +21,10 @@ import {
 } from './cache-utils';
 
 function fetchArticle(articleId: string, signal?: AbortSignal) {
-	return apiFetch<ApiResponse<ArticleDetail>>(`/articles/${articleId}`, { signal }).then(
-		(r) => r.data,
-	);
+	return apiFetch<ApiResponse<ArticleDetail>>(
+		`/articles/detail?id=${encodeURIComponent(articleId)}`,
+		{ signal },
+	).then((r) => r.data);
 }
 
 function enrichArticle(articleId: string) {

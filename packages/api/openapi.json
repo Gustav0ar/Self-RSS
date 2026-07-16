@@ -2164,7 +2164,7 @@
 				}
 			}
 		},
-		"/articles/{articleId}": {
+		"/articles/detail": {
 			"get": {
 				"tags": [
 					"Articles"
@@ -2176,11 +2176,12 @@
 				],
 				"parameters": [
 					{
-						"in": "path",
-						"name": "articleId",
+						"in": "query",
+						"name": "id",
 						"required": true,
 						"schema": {
-							"type": "string"
+							"type": "string",
+							"format": "uuid"
 						}
 					}
 				],

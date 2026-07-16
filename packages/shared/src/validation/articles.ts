@@ -27,6 +27,10 @@ export const articleQuerySchema = z.object({
 	limit: z.string().transform(Number).pipe(z.number().int().min(1).max(100)).optional().default(20),
 });
 
+export const articleDetailQuerySchema = z.object({
+	id: z.string().uuid(),
+});
+
 const readStateEventMetadataSchema = z.object({
 	eventId: z.string().min(1),
 	clientId: z.string().min(1).nullable(),
@@ -80,4 +84,5 @@ export const readStateSyncEventSchema = z.discriminatedUnion('type', [
 export type MarkReadInput = z.infer<typeof markReadSchema>;
 export type MarkAllReadInput = z.infer<typeof markAllReadSchema>;
 export type ArticleQueryInput = z.infer<typeof articleQuerySchema>;
+export type ArticleDetailQueryInput = z.infer<typeof articleDetailQuerySchema>;
 export type ReadStateSyncEventInput = z.infer<typeof readStateSyncEventSchema>;

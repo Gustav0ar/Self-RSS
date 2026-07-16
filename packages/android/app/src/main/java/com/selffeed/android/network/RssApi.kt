@@ -91,8 +91,8 @@ interface RssApi {
         @Query("cursor") cursor: String? = null,
     ): ApiListResponse<ArticleListItem>
 
-    @GET("articles/{id}")
-    suspend fun article(@Path("id") id: String): ApiEnvelope<ArticleDetail>
+    @GET("articles/detail")
+    suspend fun article(@Query("id") id: String): ApiEnvelope<ArticleDetail>
 
     @POST("articles/{id}/enrich")
     suspend fun enrichArticle(@Path("id") id: String): ApiEnvelope<EnrichArticleResponse>

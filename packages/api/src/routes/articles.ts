@@ -1,29 +1,19 @@
 import {
+	articleDetailQuerySchema,
 	articleQuerySchema,
 	markAllReadSchema,
 	markReadSchema,
 	searchQuerySchema,
 } from '@self-feed/shared';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import type { ArticleService } from '../services/article.service.js';
 import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.js';
 import { parseBody, parseQuery, parseUuidParam } from '../utils/validation.js';
 
 export function createArticleRoutes(articleService: ArticleService, rateLimiter: RateLimiter) {
 	const routes = new Hono();
-
-	routes.get('/', async (c) => {
-		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+	const getArticleDetail = async (c: Context, articleId: string) => {
 		const userId = c.get('userId');
-		const query = parseQuery(c, articleQuerySchema);
-		const result = await articleService.getArticles(userId, query);
-		return c.json(result);
-	});
-
-	routes.get('/:articleId', async (c) => {
-		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
-		const userId = c.get('userId');
-		const articleId = parseUuidParam(c, 'articleId');
 		const article = await articleService.getArticle(userId, articleId);
 
 		// ETag = hash of content + read state. Both change on re-fetch
@@ -35,6 +25,29 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 			return c.body(null, 304, { ETag: etag });
 		}
 		return c.json({ data: article }, 200, { ETag: etag });
+	};
+
+	routes.get('/', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+		const userId = c.get('userId');
+		const query = parseQuery(c, articleQuerySchema);
+		const result = await articleService.getArticles(userId, query);
+		return c.json(result);
+	});
+
+	// Keep the UUID out of the path used by first-party clients. CrowdSec's
+	// generic crawler scenario counts distinct path segments but ignores query
+	// parameters, so rapid, legitimate reader navigation now remains one path.
+	routes.get('/detail', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+		const { id } = parseQuery(c, articleDetailQuerySchema);
+		return getArticleDetail(c, id);
+	});
+
+	// Backward compatibility for older clients and existing integrations.
+	routes.get('/:articleId', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+		return getArticleDetail(c, parseUuidParam(c, 'articleId'));
 	});
 
 	routes.post('/:articleId/enrich', async (c) => {

@@ -21,6 +21,7 @@ import {
 	useFeeds,
 	useInfiniteArticles,
 	usePreferences,
+	usePrefetchArticle,
 	useSearch,
 	useStats,
 	useSyncAllFeeds,
@@ -250,7 +251,7 @@ describe('buildArticleSearchParams', () => {
 describe('read query cancellation', () => {
 	it('passes React Query abort signals to API reads', async () => {
 		apiFetchMock.mockImplementation(async (path: string) => {
-			if (path === '/articles/article-1') {
+			if (path === '/articles/detail?id=article-1') {
 				return { data: { id: 'article-1' } };
 			}
 			if (path.startsWith('/articles') || path.startsWith('/search')) {
@@ -325,6 +326,34 @@ describe('read query cancellation', () => {
 	});
 });
 
+describe('article detail request identity', () => {
+	it("keeps the HTTP path stable across more than CrowdSec's distinct-path threshold", async () => {
+		apiFetchMock.mockImplementation(async (path: string) => ({
+			data: { id: new URLSearchParams(path.split('?')[1]).get('id') },
+		}));
+		const queryClient = new RealQueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => usePrefetchArticle(), { wrapper });
+
+		await act(async () => {
+			await Promise.all(
+				Array.from({ length: 60 }, (_, index) => result.current(`article-${index + 1}`)),
+			);
+		});
+
+		const detailUrls = apiFetchMock.mock.calls.map(
+			([path]) => new URL(path, 'https://self-feed.test'),
+		);
+		expect(detailUrls).toHaveLength(60);
+		expect(new Set(detailUrls.map((url) => url.pathname))).toEqual(new Set(['/articles/detail']));
+		expect(new Set(detailUrls.map((url) => url.searchParams.get('id'))).size).toBe(60);
+	});
+});
+
 describe('useSyncAllFeeds', () => {
 	it('encodes feed and category priority in the queued refresh request', async () => {
 		apiFetchMock.mockResolvedValue({ data: { queued: true } });
@@ -383,7 +412,7 @@ describe('useWarmVisibleArticles', () => {
 		vi.stubGlobal('Image', FakeImage);
 		apiFetchMock.mockImplementation(async (path: string) => {
 			if (path.endsWith('/enrich')) return { data: { success: true } };
-			const id = path.split('/').at(-1);
+			const id = new URLSearchParams(path.split('?')[1]).get('id');
 			return {
 				data: {
 					id,
@@ -409,7 +438,10 @@ describe('useWarmVisibleArticles', () => {
 		await waitFor(() => {
 			expect(apiFetchMock).toHaveBeenCalledWith('/articles/article-1/enrich', { method: 'POST' });
 		});
-		expect(apiFetchMock).not.toHaveBeenCalledWith('/articles/article-5', expect.anything());
+		expect(apiFetchMock).not.toHaveBeenCalledWith(
+			'/articles/detail?id=article-5',
+			expect.anything(),
+		);
 		expect(loadedImages).toEqual(
 			expect.arrayContaining(['list-1.jpg', 'detail-article-1.jpg', 'media-article-1.jpg']),
 		);

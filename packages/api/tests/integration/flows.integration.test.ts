@@ -390,15 +390,25 @@ describe('API integration - additional flows', () => {
 				token,
 			);
 			const articleId = articles.body.data[0].id;
-			const detail = await authedRequest(`/api/v1/articles/${articleId}`, token);
+			const detail = await authedRequest(
+				`/api/v1/articles/detail?id=${encodeURIComponent(articleId)}`,
+				token,
+			);
 			const etag = detail.response.headers.get('ETag');
 			expect(etag).toBeTruthy();
 
-			const cached = await app.request(`/api/v1/articles/${articleId}`, {
-				headers: { Authorization: `Bearer ${token}`, 'If-None-Match': etag! },
-			});
+			const cached = await app.request(
+				`/api/v1/articles/detail?id=${encodeURIComponent(articleId)}`,
+				{
+					headers: { Authorization: `Bearer ${token}`, 'If-None-Match': etag! },
+				},
+			);
 			expect(cached.status).toBe(304);
 			expect(cached.headers.get('ETag')).toBe(etag);
+
+			const legacyDetail = await authedRequest(`/api/v1/articles/${articleId}`, token);
+			expect(legacyDetail.response.status).toBe(200);
+			expect(legacyDetail.body.data.id).toBe(articleId);
 		} finally {
 			await feedServer.stop();
 		}

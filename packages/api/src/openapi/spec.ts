@@ -660,11 +660,18 @@ export const openApiSpec = {
 				},
 			},
 		},
-		'/articles/{articleId}': {
+		'/articles/detail': {
 			get: {
 				tags: ['Articles'],
 				security: bearerSecurity,
-				parameters: [{ in: 'path', name: 'articleId', required: true, schema: { type: 'string' } }],
+				parameters: [
+					{
+						in: 'query',
+						name: 'id',
+						required: true,
+						schema: { type: 'string', format: 'uuid' },
+					},
+				],
 				responses: { '200': json(apiDataRef('#/components/schemas/ArticleDetail')) },
 			},
 		},

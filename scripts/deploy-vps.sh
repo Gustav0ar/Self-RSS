@@ -156,6 +156,69 @@ normalize_domain_name() {
 	fi
 }
 
+install_crowdsec_navigation_whitelist() {
+	local whitelist_file="$1"
+	local configured_container
+	local required
+	local container
+	local container_id
+	local container_status
+	local crowdsec_ready
+	local -a crowdsec_containers=()
+	configured_container="$(read_env_var CROWDSEC_CONTAINER_NAME)"
+	required="$(read_env_var CROWDSEC_REQUIRED)"
+
+	if [ -n "${configured_container}" ]; then
+		if ! "${CONTAINER_CLI}" inspect "${configured_container}" >/dev/null 2>&1; then
+			echo "Configured CrowdSec container does not exist: ${configured_container}"
+			return 1
+		fi
+		crowdsec_containers+=("${configured_container}")
+	else
+		while IFS= read -r container_id; do
+			[ -n "${container_id}" ] && crowdsec_containers+=("${container_id}")
+		done < <(
+			"${CONTAINER_CLI}" ps --format '{{.ID}} {{.Image}} {{.Names}}' |
+				awk 'tolower($0) ~ /crowdsec/ && tolower($0) !~ /bouncer/ { print $1 }'
+		)
+	fi
+
+	if [ "${#crowdsec_containers[@]}" -eq 0 ]; then
+		if [ "${required}" = "true" ]; then
+			echo "CROWDSEC_REQUIRED=true, but no running CrowdSec container was found"
+			return 1
+		fi
+		echo "No CrowdSec container found; skipping parser installation"
+		return 0
+	fi
+
+	for container in "${crowdsec_containers[@]}"; do
+		echo "Installing SelfFeed navigation whitelist in CrowdSec container ${container}"
+		"${CONTAINER_CLI}" cp \
+			"${whitelist_file}" \
+			"${container}:/etc/crowdsec/parsers/s02-enrich/01-self-feed-navigation-whitelist.yaml"
+		"${CONTAINER_CLI}" exec "${container}" crowdsec -t
+		"${CONTAINER_CLI}" restart "${container}" >/dev/null
+
+		crowdsec_ready=false
+		for _ in $(seq 1 30); do
+			container_status="$("${CONTAINER_CLI}" inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
+			if [ "${container_status}" = "running" ] && \
+				"${CONTAINER_CLI}" exec "${container}" crowdsec -t >/dev/null 2>&1; then
+				echo "CrowdSec navigation whitelist active in ${container}"
+				crowdsec_ready=true
+				break
+			fi
+			sleep 1
+		done
+
+		if [ "${crowdsec_ready}" != "true" ]; then
+			echo "CrowdSec did not recover with a valid parser configuration: ${container}"
+			return 1
+		fi
+	done
+}
+
 curl_public_route() {
 	domain="$1"
 	path="$2"
@@ -286,12 +349,17 @@ curl -fsSL \
 	"${curl_headers[@]}" \
 	-o docker-compose.yml \
 	"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${HEAD_SHA}/docker-compose.yml"
+curl -fsSL \
+	"${curl_headers[@]}" \
+	-o self-feed-navigation-whitelist.yaml \
+	"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${HEAD_SHA}/deploy/crowdsec/self-feed-navigation-whitelist.yaml"
 
 if [ ! -f .env ]; then
 	echo ".env is missing in ${DEPLOY_PATH}; create it with the production secrets before deploying."
 	exit 1
 fi
 normalize_domain_name
+install_crowdsec_navigation_whitelist self-feed-navigation-whitelist.yaml
 
 # Persist non-secret image metadata so manual commands like
 # `docker compose logs` work on the VPS after deployment.
