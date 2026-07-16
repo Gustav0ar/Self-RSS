@@ -37,7 +37,6 @@ interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
 	selectedArticleId: string | null;
-	/** Keep deep-linked articles selected while the surrounding list loads. */
 	fromDeepLink?: boolean;
 	searchQuery?: string;
 	searchScope?: 'all' | 'category';
@@ -54,9 +53,12 @@ export function FeedView({
 	searchScope = 'all',
 	onSelectArticle,
 }: FeedViewProps) {
-	const [unreadOnly, setUnreadOnly] = useState(false);
-	const [sort, setSort] = useState<SortOrder>('latest');
+	const [unreadOnlyOverride, setUnreadOnly] = useState<boolean | null>(null);
+	const [sortOverride, setSort] = useState<SortOrder | null>(null);
 	const { data: prefs } = usePreferences();
+	const preferencesReady = prefs != null;
+	const unreadOnly = unreadOnlyOverride ?? prefs?.hideRead ?? false;
+	const sort = sortOverride ?? normalizeSortPreference(prefs?.defaultSort);
 	const updatePrefs = useUpdatePreferences();
 	const { feedSyncError } = useAppState();
 	const {
@@ -74,28 +76,34 @@ export function FeedView({
 	const { data: categories } = useCategories();
 
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
-		useInfiniteArticles({
-			feedId,
-			categoryId,
-			unreadOnly,
-			sort,
-			limit: 30,
-		});
+		useInfiniteArticles(
+			{
+				feedId,
+				categoryId,
+				unreadOnly,
+				sort,
+				limit: 30,
+			},
+			{ enabled: preferencesReady },
+		);
 	const { data: searchData } = useSearch(
 		searchQuery,
 		searchScope === 'category' ? categoryId : undefined,
 	);
 
-	useSilentArticleRefresh({ feedId, categoryId, unreadOnly, sort, limit: 30 });
+	useSilentArticleRefresh(
+		{ feedId, categoryId, unreadOnly, sort, limit: 30 },
+		{ enabled: preferencesReady },
+	);
 
 	const markRead = useMarkRead();
 	const markReadMutate = markRead.mutate;
 	const markAllRead = useMarkAllRead();
 	const fetchedArticles = useMemo(() => dedupeArticlePages(data?.pages), [data?.pages]);
 	const categoryTree = categories ?? EMPTY_CATEGORY_TREE;
-	const { emptyState, scopeUnreadCount, viewTitle } = useMemo(
-		() => buildFeedViewModel({ categoryId, categoryTree, feedId, feedSyncError, unreadOnly }),
-		[categoryId, categoryTree, feedId, feedSyncError, unreadOnly],
+	const { emptyState, scopeUnreadCount, selectedFeedHealth, viewTitle } = useMemo(
+		() => buildFeedViewModel({ categoryId, categoryTree, feedId, unreadOnly }),
+		[categoryId, categoryTree, feedId, unreadOnly],
 	);
 	const { articles, resetRetainedReadArticles, retainReadArticle } = useRetainedReadArticles({
 		categoryId,
@@ -113,8 +121,7 @@ export function FeedView({
 	const articleIds = useMemo(() => readingQueue.map((a) => a.id), [readingQueue]);
 	const listArticleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	// The article URL (`/articles/:articleId`) can be deep-linked or
-	// bookmarked. The article list is loaded asynchronously, so an
-	// incoming article id may briefly not be in the list while the
+	// bookmarked. The asynchronously loaded article id may briefly not be in the list while the
 	// query resolves. Only "clear" the active article once the list
 	// is fully loaded and the id is genuinely missing — never while
 	// we're still loading, otherwise deep links would flash the empty
@@ -259,22 +266,11 @@ export function FeedView({
 			void refreshFeed(undefined, { force: true, categoryId });
 		}
 	}
-
 	const showListLoader =
 		isLoading ||
 		(isFetching && articles.length === 0) ||
 		(isRefreshingCurrentSelection && articles.length === 0);
 	const unreadBadgeCount = Math.max(scopeUnreadCount, loadedUnreadCount);
-
-	useEffect(() => {
-		if (typeof prefs?.hideRead === 'boolean') {
-			setUnreadOnly(prefs.hideRead);
-		}
-	}, [prefs?.hideRead]);
-
-	useEffect(() => {
-		setSort(normalizeSortPreference(prefs?.defaultSort));
-	}, [prefs?.defaultSort]);
 
 	function handleUnreadOnlyToggle() {
 		const nextUnreadOnly = !unreadOnly;
@@ -286,9 +282,17 @@ export function FeedView({
 	return (
 		<div className="flex h-full min-h-0 flex-col lg:flex-row">
 			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[clamp(23rem,28vw,33rem)] lg:border-b-0 lg:border-r">
-				{feedSyncError ? (
-					<div className="mx-3 mt-3 rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-						{feedSyncError}
+				{feedSyncError || selectedFeedHealth ? (
+					<div
+						className={cn(
+							'mx-3 mt-3 rounded-xl border px-3 py-2 text-sm',
+							feedSyncError || selectedFeedHealth?.severity === 'error'
+								? 'border-destructive/20 bg-destructive/10 text-destructive'
+								: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+						)}
+						role="status"
+					>
+						{feedSyncError ?? selectedFeedHealth?.detail}
 					</div>
 				) : null}
 
@@ -363,11 +367,7 @@ export function FeedView({
 						emptyTitle={emptyState.title}
 						emptyDescription={emptyState.description}
 						emptyAction={
-							feedSyncError ? (
-								<ToolbarButton onClick={handleRefresh} label="Retry refresh">
-									<RefreshCw className="h-3.5 w-3.5" />
-								</ToolbarButton>
-							) : unreadOnly ? (
+							unreadOnly ? (
 								<ToolbarButton onClick={handleUnreadOnlyToggle} label="Show all articles">
 									<Filter className="h-3.5 w-3.5" />
 								</ToolbarButton>

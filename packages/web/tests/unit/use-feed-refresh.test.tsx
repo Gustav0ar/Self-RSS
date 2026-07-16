@@ -9,7 +9,12 @@ import { AppStateProvider } from '../../src/providers/app-state';
 const invalidateReaderQueriesMock = vi.fn();
 const refetchAllFeedsSyncStatusMock = vi.fn();
 const syncAllFeedsMutateAsyncMock = vi.fn();
-const syncFeedMutateAsyncMock = vi.fn();
+let feeds: Array<{
+	id: string;
+	lastSyncedAt: string | null;
+	syncStatus: 'idle' | 'syncing' | 'error';
+	unreadCount: number;
+}> = [];
 
 let allFeedsSyncStatus:
 	| {
@@ -28,7 +33,7 @@ let nowMs = new Date('2026-06-21T12:00:00.000Z').getTime();
 
 vi.mock('../../src/hooks/queries', () => ({
 	invalidateReaderQueries: (...args: unknown[]) => invalidateReaderQueriesMock(...args),
-	useFeeds: () => ({ data: [] }),
+	useFeeds: () => ({ data: feeds }),
 	useSyncAllFeeds: () => ({
 		isPending: false,
 		mutateAsync: syncAllFeedsMutateAsyncMock,
@@ -37,9 +42,6 @@ vi.mock('../../src/hooks/queries', () => ({
 		data: allFeedsSyncStatus,
 		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
 		refetch: refetchAllFeedsSyncStatusMock,
-	}),
-	useSyncFeed: () => ({
-		mutateAsync: syncFeedMutateAsyncMock,
 	}),
 }));
 
@@ -69,6 +71,7 @@ describe('useFeedRefresh', () => {
 		vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 		allFeedsSyncStatus = { queued: false, running: false, active: false };
 		allFeedsSyncStatusUpdatedAt = 0;
+		feeds = [];
 		syncAllFeedsMutateAsyncMock.mockResolvedValue({ data: { accepted: true } });
 	});
 
@@ -87,7 +90,7 @@ describe('useFeedRefresh', () => {
 		});
 
 		expect(result.current.isRefreshingAllFeeds).toBe(true);
-		expect(refetchAllFeedsSyncStatusMock).toHaveBeenCalledTimes(1);
+		expect(refetchAllFeedsSyncStatusMock).not.toHaveBeenCalled();
 
 		allFeedsSyncStatus = { queued: false, running: false, active: false };
 		allFeedsSyncStatusUpdatedAt = nowMs + 1;
@@ -117,7 +120,7 @@ describe('useFeedRefresh', () => {
 		expect(invalidateReaderQueriesMock).not.toHaveBeenCalled();
 	});
 
-	it('prioritizes the selected category and reconciles each article revision', async () => {
+	it('prioritizes the selected category and lets SSE completion reconcile readers', async () => {
 		const queryClient = makeQueryClient();
 		const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 		allFeedsSyncStatus = {
@@ -135,27 +138,62 @@ describe('useFeedRefresh', () => {
 		});
 		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledWith({ categoryId: 'category-1' });
 
-		allFeedsSyncStatus = {
-			queued: false,
-			running: true,
-			active: true,
-			articleRevision: 13,
-		};
+		allFeedsSyncStatus = { queued: false, running: true, active: true, articleRevision: 13 };
 		allFeedsSyncStatusUpdatedAt = nowMs + 1;
 		rerender();
 
-		await waitFor(() => {
-			expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
-		});
-		const firstRevisionInvalidations = invalidateSpy.mock.calls.length;
-		rerender();
-		expect(invalidateSpy).toHaveBeenCalledTimes(firstRevisionInvalidations);
+		expect(invalidateSpy).not.toHaveBeenCalled();
 
-		allFeedsSyncStatus = { ...allFeedsSyncStatus, articleRevision: 14 };
+		allFeedsSyncStatus = { queued: false, running: false, active: false, articleRevision: 14 };
+		allFeedsSyncStatusUpdatedAt = nowMs + 2;
 		rerender();
 		await waitFor(() => {
-			expect(invalidateSpy).toHaveBeenCalledTimes(firstRevisionInvalidations + 1);
+			expect(invalidateReaderQueriesMock).toHaveBeenCalledWith(queryClient);
 		});
+	});
+
+	it('does not retry a failed publisher merely because the feed was selected', async () => {
+		feeds = [
+			{
+				id: 'failed-feed',
+				lastSyncedAt: '2026-06-20T12:00:00.000Z',
+				syncStatus: 'error',
+				unreadCount: 0,
+			},
+		];
+		const queryClient = makeQueryClient();
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		let accepted = true;
+		await act(async () => {
+			accepted = await result.current.refreshFeed('failed-feed');
+		});
+
+		expect(accepted).toBe(false);
+		expect(syncAllFeedsMutateAsyncMock).not.toHaveBeenCalled();
+	});
+
+	it('queues an explicit single-feed refresh instead of calling the synchronous endpoint', async () => {
+		feeds = [
+			{
+				id: 'failed-feed',
+				lastSyncedAt: '2026-06-20T12:00:00.000Z',
+				syncStatus: 'error',
+				unreadCount: 0,
+			},
+		];
+		const queryClient = makeQueryClient();
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		await act(async () => {
+			await result.current.refreshFeed('failed-feed', { force: true });
+		});
+
+		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledWith({ feedId: 'failed-feed' });
 	});
 
 	it('releases the foreground loader when server status stays active too long', async () => {

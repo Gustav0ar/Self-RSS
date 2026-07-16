@@ -125,4 +125,40 @@ describe('shared validation contracts', () => {
 			}),
 		).toMatchObject({ type: 'article.updated', contentVersion: 2 });
 	});
+
+	it('validates feed sync progress and health events', () => {
+		expect(
+			readStateSyncEventSchema.parse({
+				type: 'feed.sync.progress',
+				eventId: uuidA,
+				jobId: uuidB,
+				phase: 'running',
+				scope: { feedId: uuidA },
+				totalFeeds: 1,
+				completedFeeds: 0,
+				syncedFeeds: 0,
+				failedFeeds: 0,
+				skippedFeeds: 0,
+				newArticles: 0,
+				queuedAt: '2026-07-16T12:00:00.000Z',
+				startedAt: '2026-07-16T12:00:01.000Z',
+				error: null,
+				updatedAt: '2026-07-16T12:00:01.000Z',
+			}),
+		).toMatchObject({ type: 'feed.sync.progress', phase: 'running' });
+
+		expect(
+			readStateSyncEventSchema.parse({
+				type: 'feed.health.updated',
+				eventId: uuidA,
+				feedId: uuidB,
+				severity: 'error',
+				syncStatus: 'error',
+				lastSyncedAt: null,
+				lastSyncError: 'Publisher timed out',
+				lastSyncErrorAt: '2026-07-16T12:00:02.000Z',
+				updatedAt: '2026-07-16T12:00:02.000Z',
+			}),
+		).toMatchObject({ type: 'feed.health.updated', severity: 'error' });
+	});
 });

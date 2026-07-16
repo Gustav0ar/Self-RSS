@@ -6,6 +6,7 @@ import type {
 } from '@self-feed/shared';
 import { sortArticlesByDisplayOrder } from '@/components/articles/article-ordering';
 import { categoryPathLabel, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
+import { type FeedHealthIssue, feedHealthIssue } from '@/lib/feed-health';
 
 export interface RetainedReadArticle {
 	article: ArticleListItem;
@@ -21,6 +22,7 @@ export interface FeedViewModel {
 	viewTitle: string;
 	scopeUnreadCount: number;
 	emptyState: FeedViewEmptyState;
+	selectedFeedHealth: FeedHealthIssue | null;
 }
 
 export function dedupeArticlePages(pages: readonly ApiListResponse<ArticleListItem>[] | undefined) {
@@ -44,13 +46,11 @@ export function buildFeedViewModel({
 	categoryId,
 	categoryTree,
 	feedId,
-	feedSyncError,
 	unreadOnly,
 }: {
 	categoryId?: string;
 	categoryTree: readonly CategoryWithCounts[];
 	feedId?: string;
-	feedSyncError: string | null;
 	unreadOnly: boolean;
 }): FeedViewModel {
 	const flatCategories = flattenCategories(categoryTree);
@@ -74,27 +74,20 @@ export function buildFeedViewModel({
 	return {
 		viewTitle,
 		scopeUnreadCount,
-		emptyState: buildEmptyState({ categoryId, feedId, feedSyncError, unreadOnly }),
+		emptyState: buildEmptyState({ categoryId, feedId, unreadOnly }),
+		selectedFeedHealth: selectedFeed ? feedHealthIssue(selectedFeed) : null,
 	};
 }
 
 export function buildEmptyState({
 	categoryId,
 	feedId,
-	feedSyncError,
 	unreadOnly,
 }: {
 	categoryId?: string;
 	feedId?: string;
-	feedSyncError: string | null;
 	unreadOnly: boolean;
 }): FeedViewEmptyState {
-	if (feedSyncError) {
-		return {
-			title: 'Unable to refresh articles',
-			description: feedSyncError,
-		};
-	}
 	if (unreadOnly) {
 		return {
 			title: 'No unread articles',

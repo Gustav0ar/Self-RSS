@@ -10,7 +10,7 @@ describe('event routes', () => {
 
 	it('unregisters the SSE connection when read-state subscription setup fails', async () => {
 		const realtimeService = {
-			subscribeToReadStateEvents: vi.fn(async () => {
+			subscribeToEvents: vi.fn(async () => {
 				throw new Error('redis subscriber unavailable');
 			}),
 		};
@@ -20,7 +20,7 @@ describe('event routes', () => {
 		const response = await app.request('/events/read-state');
 		await response.text().catch(() => undefined);
 
-		expect(realtimeService.subscribeToReadStateEvents).toHaveBeenCalledTimes(1);
+		expect(realtimeService.subscribeToEvents).toHaveBeenCalledTimes(1);
 		expect(sseRegistry.count).toBe(0);
 	});
 });

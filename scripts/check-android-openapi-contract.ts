@@ -45,6 +45,9 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 	intentionallyUnsupported: new Set([
 		operationKey('PATCH', '/categories/reorder'),
 		operationKey('POST', '/admin/users'),
+		// Android remains on the backward-compatible read-state stream until it
+		// adopts the web-only feed progress and health event handling.
+		operationKey('GET', '/events/stream'),
 	]),
 	schemaMappings: {
 		User: 'User',

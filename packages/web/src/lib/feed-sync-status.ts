@@ -12,9 +12,41 @@ export interface FeedSyncAllStatus {
 	completedFeeds?: number;
 	newArticles?: number;
 	articleRevision?: number;
+	syncedFeeds?: number;
+	failedFeeds?: number;
+	skippedFeeds?: number;
+	jobId?: string | null;
+	scope?: { feedId?: string; categoryId?: string };
+	phase?: 'queued' | 'running' | 'completed' | 'failed';
+	error?: string | null;
 }
 
 export const ALL_FEEDS_SYNC_ID = '__all_feeds__';
+
+export function mergeFeedSyncStatus(
+	current: FeedSyncAllStatus | undefined,
+	incoming: FeedSyncAllStatus,
+) {
+	if (!current?.jobId || !incoming.jobId || current.jobId !== incoming.jobId) {
+		return incoming;
+	}
+
+	return feedSyncPhaseRank(resolveStatusPhase(current)) >
+		feedSyncPhaseRank(resolveStatusPhase(incoming))
+		? current
+		: incoming;
+}
+
+function resolveStatusPhase(status: FeedSyncAllStatus) {
+	if (status.phase) return status.phase;
+	if (status.running) return 'running';
+	if (status.queued) return 'queued';
+	return 'completed';
+}
+
+function feedSyncPhaseRank(phase: NonNullable<FeedSyncAllStatus['phase']>) {
+	return phase === 'queued' ? 0 : phase === 'running' ? 1 : 2;
+}
 
 export type FeedRefreshPhase = 'idle' | 'starting' | 'queued' | 'syncing' | 'background';
 
@@ -115,17 +147,8 @@ export function getFeedSyncStatusPollInterval(status: FeedSyncAllStatus | undefi
 		return false;
 	}
 
-	const activeSinceMs = getFeedSyncStatusActiveSince(status);
-	if (!activeSinceMs) {
-		return REFRESH_INTERVALS.SYNC_STATUS_POLL_MS;
-	}
-
-	const elapsedMs = Date.now() - activeSinceMs;
-	if (status.stale || elapsedMs >= REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS) {
-		return REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS;
-	}
-
-	return REFRESH_INTERVALS.SYNC_STATUS_POLL_MS;
+	// Retained for non-SSE clients. The web query no longer calls this function.
+	return REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS;
 }
 
 export function getFeedSyncStatusActiveSince(status: FeedSyncAllStatus | undefined) {

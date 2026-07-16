@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { ReadStateSyncEvent } from '@self-feed/shared';
-import { Hono } from 'hono';
+import type { RealtimeEvent } from '@self-feed/shared';
+import { type Context, Hono } from 'hono';
 import type { RealtimeService } from '../services/realtime.service.js';
 import { sseRegistry } from '../utils/sse-registry.js';
 
@@ -18,7 +18,7 @@ function encodeSse(event: string, data: unknown) {
 export function createEventRoutes(realtimeService: RealtimeService) {
 	const routes = new Hono();
 
-	routes.get('/read-state', (c) => {
+	const stream = (eventName: 'realtime' | 'read-state') => (c: Context) => {
 		const userId = c.get('userId');
 		const encoder = new TextEncoder();
 		let cleanup: (() => void) | null = null;
@@ -70,10 +70,10 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 				abortHandler = close;
 				c.req.raw.signal.addEventListener('abort', abortHandler, { once: true });
 				try {
-					const unsubscribe = await realtimeService.subscribeToReadStateEvents(
+					const unsubscribe = await realtimeService.subscribeToEvents(
 						userId,
-						(event: ReadStateSyncEvent) => {
-							enqueue(encodeSse('read-state', event));
+						(event: RealtimeEvent) => {
+							enqueue(encodeSse(eventName, event));
 						},
 					);
 					if (closed) {
@@ -90,7 +90,7 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 					return;
 				}
 				enqueue(
-					encodeSse('read-state.connected', {
+					encodeSse(`${eventName}.connected`, {
 						connected: true,
 						updatedAt: new Date().toISOString(),
 					}),
@@ -114,7 +114,11 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 			Connection: 'keep-alive',
 			'X-Accel-Buffering': 'no',
 		});
-	});
+	};
+
+	routes.get('/stream', stream('realtime'));
+	// Backward-compatible endpoint for Android and older web deployments.
+	routes.get('/read-state', stream('read-state'));
 
 	return routes;
 }

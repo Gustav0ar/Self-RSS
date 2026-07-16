@@ -173,11 +173,51 @@ export interface ArticleUpdatedEvent {
 	updatedAt: string;
 }
 
-export type ReadStateSyncEvent =
+export interface FeedSyncScope {
+	feedId?: string;
+	categoryId?: string;
+}
+
+export interface FeedSyncProgressEvent {
+	type: 'feed.sync.progress';
+	eventId: string;
+	jobId: string;
+	phase: 'queued' | 'running' | 'completed' | 'failed';
+	scope: FeedSyncScope;
+	totalFeeds: number;
+	completedFeeds: number;
+	syncedFeeds: number;
+	failedFeeds: number;
+	skippedFeeds: number;
+	newArticles: number;
+	queuedAt: string | null;
+	startedAt: string | null;
+	error: string | null;
+	updatedAt: string;
+}
+
+export interface FeedHealthUpdatedEvent {
+	type: 'feed.health.updated';
+	eventId: string;
+	feedId: string;
+	severity: 'healthy' | 'warning' | 'error';
+	syncStatus: 'idle' | 'syncing' | 'error';
+	lastSyncedAt: string | null;
+	lastSyncError: string | null;
+	lastSyncErrorAt: string | null;
+	updatedAt: string;
+}
+
+export type RealtimeEvent =
 	| ArticleReadStateChangedEvent
 	| ArticlesMarkedReadEvent
 	| ArticlesNewEvent
-	| ArticleUpdatedEvent;
+	| ArticleUpdatedEvent
+	| FeedSyncProgressEvent
+	| FeedHealthUpdatedEvent;
+
+/** @deprecated Use RealtimeEvent. Kept for existing clients. */
+export type ReadStateSyncEvent = RealtimeEvent;
 
 // Stats
 export interface StatsResponse {

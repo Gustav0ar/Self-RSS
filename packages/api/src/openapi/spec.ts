@@ -1,6 +1,7 @@
 import { authPaths, authSchemas } from './auth.spec';
 import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
 import { preferencesAndStatsSchemas } from './preferences-stats.spec';
+import { realtimePaths, realtimeSchemas } from './realtime.spec';
 
 export const openApiSpec = {
 	openapi: '3.1.0',
@@ -350,14 +351,7 @@ export const openApiSpec = {
 					updatedAt: { type: 'string', format: 'date-time' },
 				},
 			},
-			ReadStateSyncEvent: {
-				oneOf: [
-					{ $ref: '#/components/schemas/ArticleReadStateChangedEvent' },
-					{ $ref: '#/components/schemas/ArticlesMarkedReadEvent' },
-					{ $ref: '#/components/schemas/ArticlesNewEvent' },
-					{ $ref: '#/components/schemas/ArticleUpdatedEvent' },
-				],
-			},
+			...realtimeSchemas,
 			MarkAllReadResult: {
 				type: 'object',
 				required: ['markedCount', 'feedIds'],
@@ -409,8 +403,13 @@ export const openApiSpec = {
 					'heartbeatAt',
 					'totalFeeds',
 					'completedFeeds',
+					'syncedFeeds',
+					'failedFeeds',
+					'skippedFeeds',
 					'newArticles',
 					'articleRevision',
+					'jobId',
+					'scope',
 				],
 				properties: {
 					queued: { type: 'boolean' },
@@ -422,8 +421,19 @@ export const openApiSpec = {
 					heartbeatAt: { type: 'string', format: 'date-time', nullable: true },
 					totalFeeds: { type: 'integer', minimum: 0 },
 					completedFeeds: { type: 'integer', minimum: 0 },
+					syncedFeeds: { type: 'integer', minimum: 0 },
+					failedFeeds: { type: 'integer', minimum: 0 },
+					skippedFeeds: { type: 'integer', minimum: 0 },
 					newArticles: { type: 'integer', minimum: 0 },
 					articleRevision: { type: 'integer', minimum: 0 },
+					jobId: { type: ['string', 'null'] },
+					scope: {
+						type: 'object',
+						properties: {
+							feedId: { type: 'string', format: 'uuid' },
+							categoryId: { type: 'string', format: 'uuid' },
+						},
+					},
 				},
 			},
 		},
@@ -716,28 +726,7 @@ export const openApiSpec = {
 				responses: { '200': json(apiDataRef('#/components/schemas/MarkAllReadResult')) },
 			},
 		},
-		'/events/read-state': {
-			get: {
-				tags: ['Events'],
-				security: bearerSecurity,
-				description:
-					'Server-sent event stream for read-state, new-article, and article-content changes. Events use event name "read-state" with a ReadStateSyncEvent JSON payload.',
-				responses: {
-					'200': {
-						description: 'Read-state event stream',
-						content: {
-							'text/event-stream': {
-								schema: {
-									type: 'string',
-									description:
-										'SSE stream. Each read-state event data line contains a ReadStateSyncEvent JSON payload.',
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		...realtimePaths,
 		'/search': {
 			get: {
 				tags: ['Search'],

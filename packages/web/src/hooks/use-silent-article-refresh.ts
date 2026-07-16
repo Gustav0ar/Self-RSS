@@ -70,7 +70,10 @@ function useOptionalQueryClient(): QueryClient | null {
  * (only while the tab is visible). Skipped if the cached data is fresher
  * than MIN_FRESH_MS or if a fetch is already in flight.
  */
-export function useSilentArticleRefresh(params: ArticleQueryParams) {
+export function useSilentArticleRefresh(
+	params: ArticleQueryParams,
+	options: { enabled?: boolean } = {},
+) {
 	const qc = useOptionalQueryClient();
 	const feedId = params.feedId;
 	const categoryId = params.categoryId;
@@ -84,6 +87,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 	const inFlightRef = useRef(false);
 	const inFlightControllerRef = useRef<AbortController | null>(null);
 	const lastFetchedAtRef = useRef(0);
+	const enabled = options.enabled ?? true;
 
 	const abortInFlight = useCallback(() => {
 		inFlightControllerRef.current?.abort();
@@ -92,6 +96,7 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 	}, []);
 
 	const refresh = useCallback(async () => {
+		if (!enabled) return;
 		if (!qc) return;
 		if (document.visibilityState !== 'visible') return;
 		if (inFlightRef.current) return;
@@ -121,10 +126,10 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 				lastFetchedAtRef.current = Date.now();
 			}
 		}
-	}, [qc, queryKey, feedId, categoryId, unreadOnly, sort, limit]);
+	}, [enabled, qc, queryKey, feedId, categoryId, unreadOnly, sort, limit]);
 
 	useEffect(() => {
-		if (!qc) return;
+		if (!qc || !enabled) return;
 
 		const onFocus = () => {
 			void refresh();
@@ -143,5 +148,5 @@ export function useSilentArticleRefresh(params: ArticleQueryParams) {
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.clearInterval(interval);
 		};
-	}, [qc, refresh, abortInFlight]);
+	}, [enabled, qc, refresh, abortInFlight]);
 }

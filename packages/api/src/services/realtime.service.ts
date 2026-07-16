@@ -1,22 +1,23 @@
-import { type ReadStateSyncEvent, readStateSyncEventSchema } from '@self-feed/shared';
+import { type RealtimeEvent, realtimeEventSchema } from '@self-feed/shared';
 import type Redis from 'ioredis';
 import { createLogger } from '../utils/logger.js';
 import { getMetricsService, type MetricsService } from './metrics.service.js';
 
-type ReadStateEventHandler = (event: ReadStateSyncEvent) => void;
+type RealtimeEventHandler = (event: RealtimeEvent) => void;
 
 const logger = createLogger('realtime');
 
 export const MAX_CONNECTIONS_PER_USER = 3;
 export const MAX_RECONNECT_ATTEMPTS = 3;
 
-function readStateChannel(userId: string) {
+function realtimeChannel(userId: string) {
+	// Keep the existing channel name so rolling deploys remain compatible.
 	return `events:user:${userId}:read-state`;
 }
 
 export class RealtimeService {
 	private subscriber: Redis | null = null;
-	private handlersByChannel = new Map<string, Set<ReadStateEventHandler>>();
+	private handlersByChannel = new Map<string, Set<RealtimeEventHandler>>();
 	private connecting: Promise<void> | null = null;
 	private connectionsByUser = new Map<string, number>();
 	private reconnectAttempts = 0;
@@ -27,19 +28,31 @@ export class RealtimeService {
 		private metrics: MetricsService = getMetricsService(),
 	) {}
 
-	async publishEvent(userId: string, event: ReadStateSyncEvent) {
-		await this.redis.publish(readStateChannel(userId), JSON.stringify(event));
+	async publishEvent(userId: string, event: RealtimeEvent) {
+		await this.redis.publish(realtimeChannel(userId), JSON.stringify(event));
 	}
 
-	async publishReadStateEvent(userId: string, event: ReadStateSyncEvent) {
+	async publishReadStateEvent(userId: string, event: RealtimeEvent) {
 		await this.publishEvent(userId, event);
+	}
+
+	async subscribeToEvents(userId: string, handler: RealtimeEventHandler): Promise<() => void> {
+		const channel = realtimeChannel(userId);
+		return this.subscribe(channel, userId, handler);
 	}
 
 	async subscribeToReadStateEvents(
 		userId: string,
-		handler: ReadStateEventHandler,
+		handler: RealtimeEventHandler,
 	): Promise<() => void> {
-		const channel = readStateChannel(userId);
+		return this.subscribeToEvents(userId, handler);
+	}
+
+	private async subscribe(
+		channel: string,
+		userId: string,
+		handler: RealtimeEventHandler,
+	): Promise<() => void> {
 		await this.ensureSubscriber();
 
 		// Check per-user connection limit
@@ -169,7 +182,7 @@ export class RealtimeService {
 			return;
 		}
 
-		const parsed = readStateSyncEventSchema.safeParse(event);
+		const parsed = realtimeEventSchema.safeParse(event);
 		if (!parsed.success) {
 			logger.warn('Ignoring invalid read-state event payload');
 			return;
@@ -180,7 +193,7 @@ export class RealtimeService {
 		}
 	}
 
-	private async unsubscribe(channel: string, userId: string, handler: ReadStateEventHandler) {
+	private async unsubscribe(channel: string, userId: string, handler: RealtimeEventHandler) {
 		const handlers = this.handlersByChannel.get(channel);
 		if (!handlers) {
 			return;

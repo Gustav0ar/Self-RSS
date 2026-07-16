@@ -88,9 +88,17 @@ export interface ManualSyncScope {
 	categoryId?: string;
 }
 
-interface SyncProgressValue {
+export interface ManualSyncRequest extends ManualSyncScope {
+	jobId: string;
+	queuedAt: number;
+}
+
+export interface SyncProgressValue {
 	totalFeeds: number;
 	completedFeeds: number;
+	syncedFeeds: number;
+	failedFeeds: number;
+	skippedFeeds: number;
 	newArticles: number;
 }
 
@@ -104,8 +112,13 @@ export interface FeedSyncAllStatus {
 	heartbeatAt: string | null;
 	totalFeeds: number;
 	completedFeeds: number;
+	syncedFeeds: number;
+	failedFeeds: number;
+	skippedFeeds: number;
 	newArticles: number;
 	articleRevision: number;
+	jobId: string | null;
+	scope: ManualSyncScope;
 }
 
 export async function queueManualSyncAllFeeds(
@@ -114,6 +127,8 @@ export async function queueManualSyncAllFeeds(
 	scope: ManualSyncScope = {},
 ) {
 	const now = Date.now();
+	const jobId = crypto.randomUUID();
+	const request: ManualSyncRequest = { ...scope, jobId, queuedAt: now };
 	const didQueue = await redis.eval(
 		QUEUE_SYNC_ALL_FEEDS_SCRIPT,
 		5,
@@ -125,27 +140,39 @@ export async function queueManualSyncAllFeeds(
 		encodeQueuedValue(now),
 		String(MANUAL_SYNC_DEDUPE_TTL_SECONDS),
 		userId,
-		JSON.stringify(scope),
-		JSON.stringify({ totalFeeds: 0, completedFeeds: 0, newArticles: 0 }),
+		JSON.stringify(request),
+		JSON.stringify(emptySyncProgress()),
 	);
 
-	return Number(didQueue) === 1;
+	if (Number(didQueue) === 1) {
+		return { didQueue: true, request };
+	}
+
+	return {
+		didQueue: false,
+		request: await getManualSyncAllFeedsRequest(redis, userId),
+	};
 }
 
 export async function getManualSyncAllFeedsRequest(
 	redis: Redis,
 	userId: string,
-): Promise<ManualSyncScope> {
+): Promise<ManualSyncRequest> {
 	const value = await redis.get(CacheKeys.feedSyncAllRequest(userId));
-	if (!value) return {};
+	if (!value) return { jobId: `legacy-${userId}`, queuedAt: Date.now() };
 	try {
-		const parsed = JSON.parse(value) as ManualSyncScope;
+		const parsed = JSON.parse(value) as Partial<ManualSyncRequest>;
 		return {
 			feedId: typeof parsed.feedId === 'string' ? parsed.feedId : undefined,
 			categoryId: typeof parsed.categoryId === 'string' ? parsed.categoryId : undefined,
+			jobId: typeof parsed.jobId === 'string' ? parsed.jobId : `legacy-${userId}`,
+			queuedAt:
+				typeof parsed.queuedAt === 'number' && Number.isFinite(parsed.queuedAt)
+					? parsed.queuedAt
+					: Date.now(),
 		};
 	} catch {
-		return {};
+		return { jobId: `legacy-${userId}`, queuedAt: Date.now() };
 	}
 }
 
@@ -168,13 +195,15 @@ export async function getManualSyncAllFeedsStatus(
 ): Promise<FeedSyncAllStatus> {
 	const queuedKey = CacheKeys.feedSyncAllQueued(userId);
 	const lockKey = CacheKeys.feedSyncAllLock(userId);
-	const [queuedValue, lockValue, progressValue, revisionValue] = await Promise.all([
+	const [queuedValue, lockValue, progressValue, revisionValue, requestValue] = await Promise.all([
 		redis.get(queuedKey),
 		redis.get(lockKey),
 		redis.get(CacheKeys.feedSyncAllProgress(userId)),
 		redis.get(CacheKeys.articleCacheGeneration(userId)),
+		redis.get(CacheKeys.feedSyncAllRequest(userId)),
 	]);
 	const progress = parseProgressValue(progressValue);
+	const request = parseRequestValue(requestValue, userId);
 	const queuedState = parseQueuedValue(queuedValue);
 	const lockState = parseLockValue(lockValue);
 	const lockStatus = await getManualSyncLockStatus(redis, userId, lockState, lockValue);
@@ -201,8 +230,13 @@ export async function getManualSyncAllFeedsStatus(
 		heartbeatAt: running ? timestampToIso(lockStatus.value?.heartbeatAt) : null,
 		totalFeeds: progress.totalFeeds,
 		completedFeeds: progress.completedFeeds,
+		syncedFeeds: progress.syncedFeeds,
+		failedFeeds: progress.failedFeeds,
+		skippedFeeds: progress.skippedFeeds,
 		newArticles: progress.newArticles,
 		articleRevision: normalizeCounter(revisionValue),
+		jobId: queued || running ? request.jobId : null,
+		scope: queued || running ? syncScope(request) : {},
 	};
 }
 
@@ -289,17 +323,55 @@ export async function releaseManualSyncAllFeedsState(
 }
 
 function parseProgressValue(value: string | null): SyncProgressValue {
-	if (!value) return { totalFeeds: 0, completedFeeds: 0, newArticles: 0 };
+	if (!value) return emptySyncProgress();
 	try {
 		const parsed = JSON.parse(value) as Partial<SyncProgressValue>;
 		return {
 			totalFeeds: normalizeCounter(parsed.totalFeeds),
 			completedFeeds: normalizeCounter(parsed.completedFeeds),
+			syncedFeeds: normalizeCounter(parsed.syncedFeeds),
+			failedFeeds: normalizeCounter(parsed.failedFeeds),
+			skippedFeeds: normalizeCounter(parsed.skippedFeeds),
 			newArticles: normalizeCounter(parsed.newArticles),
 		};
 	} catch {
-		return { totalFeeds: 0, completedFeeds: 0, newArticles: 0 };
+		return emptySyncProgress();
 	}
+}
+
+function emptySyncProgress(): SyncProgressValue {
+	return {
+		totalFeeds: 0,
+		completedFeeds: 0,
+		syncedFeeds: 0,
+		failedFeeds: 0,
+		skippedFeeds: 0,
+		newArticles: 0,
+	};
+}
+
+function parseRequestValue(value: string | null, userId: string): ManualSyncRequest {
+	if (!value) return { jobId: `legacy-${userId}`, queuedAt: Date.now() };
+	try {
+		const parsed = JSON.parse(value) as Partial<ManualSyncRequest>;
+		return {
+			...syncScope(parsed),
+			jobId: typeof parsed.jobId === 'string' ? parsed.jobId : `legacy-${userId}`,
+			queuedAt:
+				typeof parsed.queuedAt === 'number' && Number.isFinite(parsed.queuedAt)
+					? parsed.queuedAt
+					: Date.now(),
+		};
+	} catch {
+		return { jobId: `legacy-${userId}`, queuedAt: Date.now() };
+	}
+}
+
+function syncScope(value: Partial<ManualSyncScope>): ManualSyncScope {
+	const scope: ManualSyncScope = {};
+	if (typeof value.feedId === 'string') scope.feedId = value.feedId;
+	if (typeof value.categoryId === 'string') scope.categoryId = value.categoryId;
+	return scope;
 }
 
 function normalizeCounter(value: unknown) {

@@ -92,7 +92,7 @@ export function SidebarTree({
 	onDeleteFeed,
 }: SidebarTreeProps) {
 	const failedFeeds = uniqueFeeds(uncategorizedFeeds, categoryFeedMap).filter(
-		(feed) => feedHealthIssue(feed) != null,
+		(feed) => feedHealthIssue(feed)?.severity === 'error',
 	);
 	const healthFingerprint = feedHealthFingerprint(failedFeeds);
 	const [dismissedHealthFingerprint, setDismissedHealthFingerprint] = useState<string | null>(null);
@@ -476,7 +476,11 @@ function FeedTreeRow({
 					<div className="flex min-w-0 items-center gap-1.5">
 						<SidebarOverflowText text={feed.title} />
 						{healthIssue ? (
-							<FeedHealthIndicator id={`feed-health-${feed.id}`} warning={healthIssue.warning} />
+							<FeedHealthIndicator
+								id={`feed-health-${feed.id}`}
+								severity={healthIssue.severity}
+								warning={healthIssue.warning}
+							/>
 						) : null}
 					</div>
 				</div>
@@ -502,7 +506,15 @@ function FeedTreeRow({
 	);
 }
 
-function FeedHealthIndicator({ id, warning }: { id: string; warning: string }) {
+function FeedHealthIndicator({
+	id,
+	severity,
+	warning,
+}: {
+	id: string;
+	severity: 'warning' | 'error';
+	warning: string;
+}) {
 	const anchorRef = useRef<HTMLSpanElement>(null);
 	const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
 	const fallbackId = useId();
@@ -517,7 +529,12 @@ function FeedHealthIndicator({ id, warning }: { id: string; warning: string }) {
 	return (
 		<span
 			ref={anchorRef}
-			className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-amber-400 outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"
+			className={cn(
+				'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2',
+				severity === 'error'
+					? 'text-amber-400 focus-visible:ring-amber-300/60'
+					: 'text-muted-foreground focus-visible:ring-muted-foreground/40',
+			)}
 			role="img"
 			aria-label={warning}
 			onMouseEnter={showTooltip}

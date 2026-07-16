@@ -104,7 +104,7 @@ describe('feed sync status reconciliation', () => {
 		});
 	});
 
-	it('rechecks long-running background syncs often enough to clear stale feedback promptly', () => {
+	it('limits non-SSE fallback checks to two requests per minute', () => {
 		expect(
 			getFeedSyncStatusPollInterval({
 				queued: false,
@@ -113,7 +113,7 @@ describe('feed sync status reconciliation', () => {
 				stale: true,
 				startedAt: new Date(Date.now() - 90_000).toISOString(),
 			}),
-		).toBe(REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS);
-		expect(REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS).toBeLessThanOrEqual(5_000);
+		).toBe(REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS);
+		expect(REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS).toBeGreaterThanOrEqual(30_000);
 	});
 });

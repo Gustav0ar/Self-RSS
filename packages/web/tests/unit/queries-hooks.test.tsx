@@ -356,7 +356,11 @@ describe('article detail request identity', () => {
 
 describe('useSyncAllFeeds', () => {
 	it('encodes feed and category priority in the queued refresh request', async () => {
-		apiFetchMock.mockResolvedValue({ data: { queued: true } });
+		apiFetchMock.mockResolvedValue({
+			data: {
+				status: { queued: true, running: false, active: true, jobId: 'job-1', scope: {} },
+			},
+		});
 		const queryClient = new RealQueryClient({
 			defaultOptions: { mutations: { retry: false } },
 		});
@@ -374,9 +378,10 @@ describe('useSyncAllFeeds', () => {
 		});
 	});
 
-	it('uses progress revisions instead of fixed delayed invalidations', async () => {
+	it('stores the queue snapshot without scheduling delayed invalidations', async () => {
 		vi.useFakeTimers();
-		apiFetchMock.mockResolvedValue({ data: { queued: true } });
+		const status = { queued: true, running: false, active: true, jobId: 'job-1', scope: {} };
+		apiFetchMock.mockResolvedValue({ data: { status } });
 		const queryClient = new RealQueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 		});
@@ -395,7 +400,8 @@ describe('useSyncAllFeeds', () => {
 			vi.advanceTimersByTime(15_000);
 		});
 
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
+		expect(queryClient.getQueryData(['feeds', 'sync', 'status'])).toEqual(status);
+		expect(invalidateSpy).not.toHaveBeenCalled();
 		expect(invalidateSpy).toHaveBeenCalledTimes(immediateInvalidations);
 	});
 });

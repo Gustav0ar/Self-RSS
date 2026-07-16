@@ -1,7 +1,7 @@
 import type { ApiResponse, FeedWithCounts, OpmlImportSummary } from '@self-feed/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiDownload, apiFetch } from '@/lib/api';
-import { type FeedSyncAllStatus, getFeedSyncStatusPollInterval } from '@/lib/feed-sync-status';
+import { type FeedSyncAllStatus, mergeFeedSyncStatus } from '@/lib/feed-sync-status';
 import { invalidateReaderQueries } from './cache-utils';
 
 // --- Feeds ---
@@ -9,11 +9,9 @@ import { invalidateReaderQueries } from './cache-utils';
 export function useFeeds(categoryId?: string) {
 	return useQuery({
 		queryKey: ['feeds', categoryId],
-		// Feed health can change in the background without an article event
-		// (timeouts, DNS failures, malformed XML). Keep the sidebar feedback
-		// current without refreshing or disturbing the article list itself.
-		refetchInterval: 60_000,
-		refetchIntervalInBackground: false,
+		// Realtime feed.health.updated events patch this cache. Focus/reconnect
+		// reconciliation covers events missed while the browser was offline.
+		staleTime: 60_000,
 		queryFn: ({ signal }) => {
 			const params = categoryId ? `?categoryId=${categoryId}` : '';
 			return apiFetch<ApiResponse<FeedWithCounts[]>>(`/feeds${params}`, { signal }).then(
@@ -103,11 +101,24 @@ export function useExportOpml() {
 export function useSyncFeed() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (feedId: string) => apiFetch(`/feeds/${feedId}/sync`, { method: 'POST' }),
-		onSuccess: () => {
-			invalidateReaderQueries(qc);
+		mutationFn: (feedId: string) =>
+			apiFetch<ApiResponse<QueuedFeedSyncResult>>(
+				`/feeds/sync?feedId=${encodeURIComponent(feedId)}`,
+				{ method: 'POST' },
+			),
+		onSuccess: (response) => {
+			qc.setQueryData<FeedSyncAllStatus | undefined>(['feeds', 'sync', 'status'], (current) =>
+				mergeFeedSyncStatus(current, response.data.status),
+			);
 		},
 	});
+}
+
+export interface QueuedFeedSyncResult {
+	accepted: true;
+	alreadyQueued: boolean;
+	jobId: string;
+	status: FeedSyncAllStatus;
 }
 
 export function useSyncAllFeeds() {
@@ -119,11 +130,14 @@ export function useSyncAllFeeds() {
 			if (scope?.feedId) query.set('feedId', scope.feedId);
 			if (scope?.categoryId) query.set('categoryId', scope.categoryId);
 			const suffix = query.size > 0 ? `?${query.toString()}` : '';
-			return apiFetch(`/feeds/sync${suffix}`, { method: 'POST' });
+			return apiFetch<ApiResponse<QueuedFeedSyncResult>>(`/feeds/sync${suffix}`, {
+				method: 'POST',
+			});
 		},
-		onSuccess: () => {
-			// The status revision and event stream drive subsequent reconciliations.
-			qc.invalidateQueries({ queryKey: ['articles'] });
+		onSuccess: (response) => {
+			qc.setQueryData<FeedSyncAllStatus | undefined>(['feeds', 'sync', 'status'], (current) =>
+				mergeFeedSyncStatus(current, response.data.status),
+			);
 		},
 	});
 }
@@ -135,8 +149,9 @@ export function useSyncAllFeedsStatus() {
 			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status', { signal }).then(
 				(response) => response.data,
 			),
-		refetchInterval: (query) => getFeedSyncStatusPollInterval(query.state.data),
-		staleTime: 1_000,
+		// SSE is the primary progress transport. This query is only the initial
+		// snapshot and reconnect/focus fallback, never a polling loop.
+		staleTime: 10_000,
 	});
 }
 

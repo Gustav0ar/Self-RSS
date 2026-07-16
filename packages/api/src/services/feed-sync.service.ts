@@ -33,16 +33,16 @@ import {
 	nextFailedSyncRetryAt,
 	normalizeSyncThrowable,
 } from './feed-sync-errors.js';
+import {
+	processNextQueuedFeedSync,
+	publishQueuedFeedSync,
+	publishRealtimeEvent,
+} from './feed-sync-manual-worker.js';
 import { syncScheduledFeeds } from './feed-sync-scheduled.js';
 import {
-	acquireManualSyncAllFeedsLock,
-	getManualSyncAllFeedsRequest,
 	getManualSyncAllFeedsStatus,
 	type ManualSyncScope,
 	queueManualSyncAllFeeds,
-	releaseManualSyncAllFeedsState,
-	startManualSyncAllFeedsHeartbeat,
-	updateManualSyncAllFeedsProgress,
 } from './feed-sync-status.js';
 import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
@@ -413,6 +413,7 @@ export class FeedSyncService {
 			// Update nextSyncAt so the scheduler's index-backed query skips this
 			// feed until it's due (prevents re-fetching every minute).
 			const nextSyncAt = new Date(Date.now() + feed.pollingIntervalMinutes * 60_000);
+			const syncCompletedAt = new Date();
 			const { itemWarning, persistedWarning } = buildPartialSyncWarning(
 				syncWarning,
 				itemProcessingFailures,
@@ -420,9 +421,9 @@ export class FeedSyncService {
 
 			await this.feedRepo.update(feedId, userId, {
 				...feedUpdates,
-				lastSyncedAt: new Date(),
+				lastSyncedAt: syncCompletedAt,
 				lastSyncError: persistedWarning || null,
-				lastSyncErrorAt: persistedWarning ? new Date() : null,
+				lastSyncErrorAt: persistedWarning ? syncCompletedAt : null,
 				nextSyncAt,
 				syncStatus: 'idle',
 			});
@@ -441,10 +442,20 @@ export class FeedSyncService {
 				});
 			}
 			await this.metricsRepo.incrementSyncCount(userId);
+			await publishRealtimeEvent(this.realtimeService, userId, {
+				type: 'feed.health.updated',
+				eventId: crypto.randomUUID(),
+				feedId,
+				severity: persistedWarning ? 'warning' : 'healthy',
+				syncStatus: 'idle',
+				lastSyncedAt: syncCompletedAt.toISOString(),
+				lastSyncError: persistedWarning || null,
+				lastSyncErrorAt: persistedWarning ? syncCompletedAt.toISOString() : null,
+				updatedAt: syncCompletedAt.toISOString(),
+			});
 
-			// Publish realtime event so clients update immediately
-			if (insertedArticles.length > 0 && this.realtimeService)
-				void this.realtimeService.publishEvent(userId, {
+			if (insertedArticles.length > 0)
+				await publishRealtimeEvent(this.realtimeService, userId, {
 					type: 'articles.new',
 					eventId: crypto.randomUUID(),
 					feedId,
@@ -466,16 +477,28 @@ export class FeedSyncService {
 			return { newArticles: insertedArticles.length, total: items.length };
 		} catch (err) {
 			const errorDetails = getSyncErrorDetails(err);
+			const failedAt = new Date();
 			await this.feedRepo.update(feedId, userId, {
 				nextSyncAt: nextFailedSyncRetryAt(feed.pollingIntervalMinutes),
 				lastSyncError: errorDetails.error,
-				lastSyncErrorAt: new Date(),
+				lastSyncErrorAt: failedAt,
 				syncStatus: 'error',
 			});
 			await this.syncRunRepo.complete(run.id, {
 				status: 'failed',
 				itemCount: 0,
 				errorMessage: errorDetails.error,
+			});
+			await publishRealtimeEvent(this.realtimeService, userId, {
+				type: 'feed.health.updated',
+				eventId: crypto.randomUUID(),
+				feedId,
+				severity: 'error',
+				syncStatus: 'error',
+				lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
+				lastSyncError: errorDetails.error,
+				lastSyncErrorAt: failedAt.toISOString(),
+				updatedAt: failedAt.toISOString(),
 			});
 			logger.error('Feed sync failed', { feedId, ...errorDetails });
 			if (err instanceof FeedSyncFetchError) {
@@ -493,6 +516,9 @@ export class FeedSyncService {
 		onProgress?: (progress: {
 			totalFeeds: number;
 			completedFeeds: number;
+			syncedFeeds: number;
+			failedFeeds: number;
+			skippedFeeds: number;
 			newArticles: number;
 		}) => Promise<void> | void,
 	) {
@@ -546,11 +572,7 @@ export class FeedSyncService {
 					deferScopedCacheCleanup: true,
 				}),
 			onProgress: async (progress) => {
-				await onProgress?.({
-					totalFeeds: progress.totalFeeds,
-					completedFeeds: progress.completedFeeds,
-					newArticles: progress.newArticles,
-				});
+				await onProgress?.(progress);
 			},
 			onFeedError: (feed, err) => {
 				const errorDetails = getSyncErrorDetails(err);
@@ -578,13 +600,16 @@ export class FeedSyncService {
 	}
 
 	async queueSyncAllFeeds(userId: string, scope: ManualSyncScope = {}) {
-		const didQueue = await queueManualSyncAllFeeds(this.redis, userId, scope);
-		if (!didQueue) {
-			return { accepted: true, alreadyQueued: true };
-		}
-
-		logger.info('Queued bulk feed sync', { userId });
-		return { accepted: true, alreadyQueued: false };
+		const { didQueue, request } = await queueManualSyncAllFeeds(this.redis, userId, scope);
+		if (didQueue) await publishQueuedFeedSync(this.realtimeService, userId, request);
+		const status = await getManualSyncAllFeedsStatus(this.redis, userId);
+		if (didQueue) logger.info('Queued bulk feed sync', { userId, jobId: request.jobId, scope });
+		return {
+			accepted: true,
+			alreadyQueued: !didQueue,
+			jobId: request.jobId,
+			status,
+		};
 	}
 
 	async getSyncAllFeedsStatus(userId: string) {
@@ -592,39 +617,11 @@ export class FeedSyncService {
 	}
 
 	async processNextQueuedSyncAllFeeds() {
-		// Peek instead of popping. The queue entry is acknowledged atomically
-		// with lock/state release only after the refresh finishes, so a worker
-		// restart cannot silently lose the request.
-		const userId = await this.redis.lindex(CacheKeys.feedSyncAllQueue(), 0);
-		if (!userId) {
-			return null;
-		}
-
-		const ownerToken = await acquireManualSyncAllFeedsLock(this.redis, userId);
-		if (!ownerToken) {
-			logger.warn('Skipping queued bulk feed sync because one is already running', { userId });
-			return { userId, skipped: true as const };
-		}
-
-		const stopHeartbeat = startManualSyncAllFeedsHeartbeat(this.redis, userId, ownerToken);
-
-		try {
-			const scope = await getManualSyncAllFeedsRequest(this.redis, userId);
-			await updateManualSyncAllFeedsProgress(this.redis, userId, {
-				totalFeeds: 0,
-				completedFeeds: 0,
-				newArticles: 0,
-			});
-			logger.info('Starting queued bulk feed sync', { userId });
-			const result = await this.syncAllFeeds(userId, scope, (progress) =>
-				updateManualSyncAllFeedsProgress(this.redis, userId, progress),
-			);
-			logger.info('Queued bulk feed sync complete', { userId, ...result });
-			return { userId, skipped: false as const, result };
-		} finally {
-			stopHeartbeat();
-			await releaseManualSyncAllFeedsState(this.redis, userId, ownerToken);
-		}
+		return processNextQueuedFeedSync({
+			redis: this.redis,
+			realtimeService: this.realtimeService,
+			syncAllFeeds: (userId, scope, onProgress) => this.syncAllFeeds(userId, scope, onProgress),
+		});
 	}
 
 	async syncDueFeeds() {

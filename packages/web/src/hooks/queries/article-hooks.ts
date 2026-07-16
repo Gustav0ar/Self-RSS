@@ -64,7 +64,10 @@ export function useArticles(params: ArticleQueryParams = {}) {
 	});
 }
 
-export function useInfiniteArticles(params: ArticleQueryParams = {}) {
+export function useInfiniteArticles(
+	params: ArticleQueryParams = {},
+	options: { enabled?: boolean } = {},
+) {
 	const limit = params.limit ?? 30;
 	return useInfiniteQuery({
 		queryKey: [
@@ -76,6 +79,7 @@ export function useInfiniteArticles(params: ArticleQueryParams = {}) {
 			limit,
 		],
 		initialPageParam: null as string | null,
+		enabled: options.enabled ?? true,
 		queryFn: ({ pageParam, signal }) => {
 			const qs = buildArticleSearchParams(
 				{

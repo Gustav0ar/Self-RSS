@@ -741,6 +741,9 @@ describe('FeedSyncService', () => {
 			create: vi.fn(async () => ({ id: 'run-1' })),
 			complete: vi.fn(async () => undefined),
 		};
+		const realtimeService = {
+			publishEvent: vi.fn(async (_userId: string, _event: unknown) => undefined),
+		};
 		const service = new FeedSyncService(
 			feedRepo as never,
 			{
@@ -750,6 +753,8 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{ del: vi.fn(async () => 0) } as never,
 			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			undefined,
+			realtimeService as never,
 		);
 		vi.spyOn(
 			service as unknown as { fetchAndParse: () => Promise<unknown> },
@@ -780,6 +785,16 @@ describe('FeedSyncService', () => {
 		expect(syncRunRepo.complete).toHaveBeenCalledWith(
 			'run-1',
 			expect.objectContaining({ status: 'failed' }),
+		);
+		expect(realtimeService.publishEvent).toHaveBeenCalledWith(
+			'user-1',
+			expect.objectContaining({
+				type: 'feed.health.updated',
+				feedId: 'feed-1',
+				severity: 'error',
+				syncStatus: 'error',
+				lastSyncError: 'network failed',
+			}),
 		);
 	});
 
@@ -977,7 +992,9 @@ describe('FeedSyncService', () => {
 		);
 
 		expect(started).toEqual(['selected']);
-		expect(progress).toEqual([{ totalFeeds: 1, completedFeeds: 1, newArticles: 1 }]);
+		expect(progress).toEqual([
+			expect.objectContaining({ totalFeeds: 1, completedFeeds: 1, newArticles: 1 }),
+		]);
 	});
 
 	it('limits an interactive category refresh to feeds in that category', async () => {
@@ -1328,6 +1345,16 @@ describe('FeedSyncService', () => {
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
 			eval: vi.fn(async () => 1),
+			get: vi.fn(async (key: string) => {
+				if (key.includes(':queued:')) return queuedMarker;
+				if (key.includes(':progress:')) {
+					return '{"totalFeeds":0,"completedFeeds":0,"syncedFeeds":0,"failedFeeds":0,"skippedFeeds":0,"newArticles":0}';
+				}
+				return null;
+			}),
+		};
+		const realtimeService = {
+			publishEvent: vi.fn(async (_userId: string, _event: unknown) => undefined),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1336,6 +1363,8 @@ describe('FeedSyncService', () => {
 			{} as never,
 			redis as never,
 			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			undefined,
+			realtimeService as never,
 		);
 
 		const result = await service.queueSyncAllFeeds('user-1');
@@ -1351,10 +1380,19 @@ describe('FeedSyncService', () => {
 			queuedMarker,
 			'1800',
 			'user-1',
-			'{}',
-			'{"totalFeeds":0,"completedFeeds":0,"newArticles":0}',
+			expect.stringContaining('"jobId"'),
+			'{"totalFeeds":0,"completedFeeds":0,"syncedFeeds":0,"failedFeeds":0,"skippedFeeds":0,"newArticles":0}',
 		);
-		expect(result).toEqual({ accepted: true, alreadyQueued: false });
+		expect(result).toMatchObject({
+			accepted: true,
+			alreadyQueued: false,
+			jobId: expect.any(String),
+			status: { active: true, queued: true },
+		});
+		expect(realtimeService.publishEvent).toHaveBeenCalledWith(
+			'user-1',
+			expect.objectContaining({ type: 'feed.sync.progress', phase: 'queued' }),
+		);
 	});
 
 	it('deduplicates already queued bulk refreshes', async () => {
@@ -1362,6 +1400,17 @@ describe('FeedSyncService', () => {
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const redis = {
 			eval: vi.fn(async () => 0),
+			get: vi.fn(async (key: string) => {
+				if (key.includes(':request:')) {
+					return JSON.stringify({ jobId: 'existing-job', queuedAt: noonTimestamp });
+				}
+				if (key.includes(':queued:')) return queuedMarker;
+				if (key.includes(':progress:')) return '{}';
+				return null;
+			}),
+		};
+		const realtimeService = {
+			publishEvent: vi.fn(async (_userId: string, _event: unknown) => undefined),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -1370,6 +1419,8 @@ describe('FeedSyncService', () => {
 			{} as never,
 			redis as never,
 			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			undefined,
+			realtimeService as never,
 		);
 
 		const result = await service.queueSyncAllFeeds('user-1');
@@ -1385,10 +1436,16 @@ describe('FeedSyncService', () => {
 			queuedMarker,
 			'1800',
 			'user-1',
-			'{}',
-			'{"totalFeeds":0,"completedFeeds":0,"newArticles":0}',
+			expect.stringContaining('"jobId"'),
+			'{"totalFeeds":0,"completedFeeds":0,"syncedFeeds":0,"failedFeeds":0,"skippedFeeds":0,"newArticles":0}',
 		);
-		expect(result).toEqual({ accepted: true, alreadyQueued: true });
+		expect(result).toMatchObject({
+			accepted: true,
+			alreadyQueued: true,
+			jobId: 'existing-job',
+			status: { active: true, queued: true },
+		});
+		expect(realtimeService.publishEvent).not.toHaveBeenCalled();
 	});
 
 	it('reports queued bulk refresh status', async () => {
@@ -1408,7 +1465,7 @@ describe('FeedSyncService', () => {
 
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
 		expect(redis.get).toHaveBeenCalledWith('feed:sync-all:lock:user-1');
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: true,
 			running: false,
 			active: true,
@@ -1437,7 +1494,7 @@ describe('FeedSyncService', () => {
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: true,
 			running: false,
 			active: true,
@@ -1472,7 +1529,7 @@ describe('FeedSyncService', () => {
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
 		expect(redis.del).not.toHaveBeenCalled();
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: true,
 			running: false,
 			active: true,
@@ -1503,7 +1560,7 @@ describe('FeedSyncService', () => {
 		const result = await service.getSyncAllFeedsStatus('user-1');
 
 		expect(redis.del).not.toHaveBeenCalled();
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: false,
 			running: true,
 			active: true,
@@ -1579,7 +1636,7 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:lock:user-1',
 			expect.any(String),
 		);
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: true,
 			running: false,
 			active: true,
@@ -1615,7 +1672,7 @@ describe('FeedSyncService', () => {
 			'feed:sync-all:lock:user-1',
 			'1',
 		);
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: false,
 			running: false,
 			active: false,
@@ -1650,7 +1707,7 @@ describe('FeedSyncService', () => {
 
 		expect(redis.call).toHaveBeenCalledWith('LPOS', 'feed:sync-all:queue', 'user-1');
 		expect(redis.del).toHaveBeenCalledWith('feed:sync-all:queued:user-1');
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			queued: false,
 			running: false,
 			active: false,
@@ -1672,6 +1729,9 @@ describe('FeedSyncService', () => {
 			del: vi.fn(async () => 2),
 			eval: vi.fn(async () => 1),
 		};
+		const realtimeService = {
+			publishEvent: vi.fn(async (_userId: string, _event: unknown) => undefined),
+		};
 		const service = new FeedSyncService(
 			{} as never,
 			{} as never,
@@ -1679,6 +1739,8 @@ describe('FeedSyncService', () => {
 			{} as never,
 			redis as never,
 			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			undefined,
+			realtimeService as never,
 		);
 		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds').mockResolvedValue({
 			totalFeeds: 2,
@@ -1720,6 +1782,11 @@ describe('FeedSyncService', () => {
 				newArticles: 3,
 			},
 		});
+		expect(
+			realtimeService.publishEvent.mock.calls.map(
+				([, event]) => (event as { phase?: string }).phase,
+			),
+		).toEqual(['running', 'completed']);
 	});
 
 	it('processes queued bulk refreshes after clearing a stale worker lock', async () => {

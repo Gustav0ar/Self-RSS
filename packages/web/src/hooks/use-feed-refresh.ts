@@ -1,11 +1,10 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
 	invalidateReaderQueries,
 	useFeeds,
 	useSyncAllFeeds,
 	useSyncAllFeedsStatus,
-	useSyncFeed,
 } from '@/hooks/queries';
 import { REFRESH_INTERVALS } from '@/lib/constants';
 import {
@@ -30,17 +29,25 @@ export function useFeedRefresh() {
 		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
 		refetch: refetchAllFeedsSyncStatus,
 	} = useSyncAllFeedsStatus();
-	const syncFeed = useSyncFeed();
+	const { data: isRealtimeConnected = false } = useQuery<boolean>({
+		queryKey: ['realtime', 'connected'],
+		queryFn: () => false,
+		initialData: false,
+		enabled: false,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
 	const { feedSyncError, setFeedSyncError, setSyncingFeedId, syncingFeedId } = useAppState();
-	const [allFeedsRefreshQueuedAt, setAllFeedsRefreshQueuedAt] = useState(0);
+	const [localRefreshQueuedAt, setLocalRefreshQueuedAt] = useState(0);
 	const [untimedStatusActiveSince, setUntimedStatusActiveSince] = useState(0);
 	const [, setRefreshClock] = useState(0);
 	const wasRefreshingAllFeeds = useRef(false);
-	const lastArticleRevision = useRef<number | null>(null);
+	const allFeedsStatus = allFeedsSyncStatus?.scope?.feedId
+		? { ...allFeedsSyncStatus, active: false, queued: false, running: false }
+		: allFeedsSyncStatus;
 	const hasSettledInactiveAllFeedsStatus = hasFreshInactiveFeedSyncStatus({
 		status: allFeedsSyncStatus,
 		statusUpdatedAt: allFeedsSyncStatusUpdatedAt,
-		localQueuedAt: allFeedsRefreshQueuedAt,
+		localQueuedAt: localRefreshQueuedAt,
 		isMutationPending: syncAllFeeds.isPending,
 	});
 	const allFeedsRefreshStatusUpdatedAt =
@@ -48,10 +55,10 @@ export function useFeedRefresh() {
 			? untimedStatusActiveSince
 			: allFeedsSyncStatusUpdatedAt;
 	const allFeedsRefreshActivity = buildAllFeedsRefreshActivity({
-		status: allFeedsSyncStatus,
+		status: allFeedsStatus,
 		statusUpdatedAt: allFeedsRefreshStatusUpdatedAt,
-		localQueuedAt: allFeedsRefreshQueuedAt,
-		isMutationPending: syncAllFeeds.isPending,
+		localQueuedAt: localRefreshQueuedAt,
+		isMutationPending: syncAllFeeds.isPending && syncingFeedId === ALL_FEEDS_SYNC_ID,
 		isLocalRefreshSelected: syncingFeedId === ALL_FEEDS_SYNC_ID,
 		now: Date.now(),
 	});
@@ -68,6 +75,19 @@ export function useFeedRefresh() {
 			return current === 0 ? current : 0;
 		});
 	}, [allFeedsSyncStatus]);
+
+	useEffect(() => {
+		if (!allFeedsSyncStatus?.active) return;
+		const timer = globalThis.setTimeout(
+			() => {
+				void refetchAllFeedsSyncStatus();
+			},
+			isRealtimeConnected
+				? REFRESH_INTERVALS.SYNC_STATUS_CONNECTED_FALLBACK_MS
+				: REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS,
+		);
+		return () => globalThis.clearTimeout(timer);
+	}, [allFeedsSyncStatus, isRealtimeConnected, refetchAllFeedsSyncStatus]);
 
 	useEffect(() => {
 		if (!allFeedsRefreshActivity.isActive) {
@@ -90,12 +110,12 @@ export function useFeedRefresh() {
 	]);
 
 	useEffect(() => {
-		if (syncingFeedId !== ALL_FEEDS_SYNC_ID || !hasSettledInactiveAllFeedsStatus) {
+		if (!syncingFeedId || !hasSettledInactiveAllFeedsStatus) {
 			return;
 		}
 
-		setAllFeedsRefreshQueuedAt(0);
-		setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
+		setLocalRefreshQueuedAt(0);
+		setSyncingFeedId(null);
 	}, [hasSettledInactiveAllFeedsStatus, setSyncingFeedId, syncingFeedId]);
 
 	useEffect(() => {
@@ -103,25 +123,10 @@ export function useFeedRefresh() {
 			return;
 		}
 
-		setAllFeedsRefreshQueuedAt(0);
+		setLocalRefreshQueuedAt(0);
 		setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
 		invalidateReaderQueries(qc);
 	}, [allFeedsRefreshActivity.isTakingLonger, qc, setSyncingFeedId, syncingFeedId]);
-
-	useEffect(() => {
-		if (!allFeedsRefreshActivity.isActive) {
-			return;
-		}
-
-		const revision = allFeedsSyncStatus?.articleRevision;
-		if (revision == null) {
-			return;
-		}
-		if (lastArticleRevision.current != null && revision > lastArticleRevision.current) {
-			qc.invalidateQueries({ queryKey: ['articles'] });
-		}
-		lastArticleRevision.current = Math.max(lastArticleRevision.current ?? 0, revision);
-	}, [allFeedsRefreshActivity.isActive, allFeedsSyncStatus?.articleRevision, qc]);
 
 	useEffect(() => {
 		if (allFeedsRefreshActivity.isActive) {
@@ -134,8 +139,12 @@ export function useFeedRefresh() {
 		}
 
 		wasRefreshingAllFeeds.current = false;
-		invalidateReaderQueries(qc);
-	}, [allFeedsRefreshActivity.isActive, qc]);
+		const wasSettledByRealtimeEvent =
+			allFeedsSyncStatus?.phase === 'completed' || allFeedsSyncStatus?.phase === 'failed';
+		if (!wasSettledByRealtimeEvent) {
+			invalidateReaderQueries(qc);
+		}
+	}, [allFeedsRefreshActivity.isActive, allFeedsSyncStatus?.phase, qc]);
 
 	const refreshFeed = useCallback(
 		async (feedId?: string, options: RefreshOptions = {}) => {
@@ -146,18 +155,16 @@ export function useFeedRefresh() {
 
 				const queuedAt = Date.now();
 				setFeedSyncError(null);
-				setAllFeedsRefreshQueuedAt(queuedAt);
+				setLocalRefreshQueuedAt(queuedAt);
 				setSyncingFeedId(ALL_FEEDS_SYNC_ID);
-				lastArticleRevision.current = allFeedsSyncStatus?.articleRevision ?? 0;
 				setRefreshClock((tick) => tick + 1);
 
 				try {
 					await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
-					void refetchAllFeedsSyncStatus();
 					return true;
 				} catch (error) {
 					setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feeds');
-					setAllFeedsRefreshQueuedAt(0);
+					setLocalRefreshQueuedAt(0);
 					setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
 					return false;
 				}
@@ -170,8 +177,7 @@ export function useFeedRefresh() {
 			const selectedFeed = feeds?.find((feed) => feed.id === feedId);
 			const shouldAutoSync =
 				options.force ||
-				(!!selectedFeed && !selectedFeed.lastSyncedAt && (selectedFeed.unreadCount ?? 0) === 0) ||
-				selectedFeed?.syncStatus === 'error';
+				(!!selectedFeed && !selectedFeed.lastSyncedAt && (selectedFeed.unreadCount ?? 0) === 0);
 			if (!shouldAutoSync) {
 				setFeedSyncError(null);
 				setSyncingFeedId(null);
@@ -179,27 +185,25 @@ export function useFeedRefresh() {
 			}
 
 			setFeedSyncError(null);
+			setLocalRefreshQueuedAt(Date.now());
 			setSyncingFeedId(feedId);
 
 			try {
-				await syncFeed.mutateAsync(feedId);
+				await syncAllFeeds.mutateAsync({ feedId });
 				return true;
 			} catch (error) {
 				setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feed');
-				return false;
-			} finally {
+				setLocalRefreshQueuedAt(0);
 				setSyncingFeedId((current) => (current === feedId ? null : current));
+				return false;
 			}
 		},
 		[
 			feeds,
-			allFeedsSyncStatus?.articleRevision,
 			hasSettledInactiveAllFeedsStatus,
-			refetchAllFeedsSyncStatus,
 			setFeedSyncError,
 			setSyncingFeedId,
 			syncAllFeeds,
-			syncFeed,
 			syncingFeedId,
 		],
 	);
@@ -209,7 +213,10 @@ export function useFeedRefresh() {
 		allFeedsSyncStatus,
 		allFeedsRefreshActivity,
 		isRefreshingAllFeeds,
-		isRefreshingFeed: (feedId?: string) => !!feedId && syncingFeedId === feedId,
+		isRefreshingFeed: (feedId?: string) =>
+			!!feedId &&
+			(syncingFeedId === feedId ||
+				(allFeedsSyncStatus?.active === true && allFeedsSyncStatus.scope?.feedId === feedId)),
 		refreshFeed,
 	};
 }

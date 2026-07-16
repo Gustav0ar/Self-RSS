@@ -162,56 +162,60 @@ async function startMutableFeedServer(initialXml: string) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('all-feeds refresh banner clears after sync status settles', async ({ page }) => {
-	let syncRequested = false;
-	let statusPollsAfterRefresh = 0;
+test('all-feeds refresh uses its queue snapshot without status polling', async ({ page }) => {
+	let statusRequests = 0;
 
-	await page.route('**/api/v1/feeds/sync', async (route) => {
+	await page.route('**/api/v1/feeds/sync**', async (route) => {
 		if (route.request().method() !== 'POST') {
 			await route.continue();
 			return;
 		}
 
-		syncRequested = true;
-		statusPollsAfterRefresh = 0;
 		await route.fulfill({
 			status: 202,
 			contentType: 'application/json',
-			body: JSON.stringify({ data: { accepted: true, alreadyQueued: false } }),
-		});
-	});
-
-	await page.route('**/api/v1/feeds/sync/status', async (route) => {
-		const shouldReportActive = syncRequested && statusPollsAfterRefresh === 0;
-		if (syncRequested) {
-			statusPollsAfterRefresh += 1;
-		}
-
-		await route.fulfill({
-			status: 200,
-			contentType: 'application/json',
 			body: JSON.stringify({
-				data: shouldReportActive
-					? { queued: false, running: true, active: true }
-					: { queued: false, running: false, active: false },
+				data: {
+					accepted: true,
+					alreadyQueued: false,
+					jobId: 'e2e-job',
+					status: {
+						queued: true,
+						running: false,
+						active: true,
+						jobId: 'e2e-job',
+						scope: {},
+						queuedAt: new Date().toISOString(),
+					},
+				},
 			}),
 		});
 	});
 
+	await page.route('**/api/v1/feeds/sync/status', async (route) => {
+		statusRequests += 1;
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({ data: { queued: false, running: false, active: false } }),
+		});
+	});
+
 	await loginThroughUi(page, 'reader@example.com', 'password123');
-	await expect(page.getByText('Loading new articles')).toHaveCount(0);
+	const initialStatusRequests = statusRequests;
 
 	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
 	await refreshButton.click();
 
-	await expect(page.getByText('Loading new articles')).toBeVisible();
-	await expect(page.getByText('Loading new articles')).toHaveCount(0, { timeout: 6_000 });
-	await expect(refreshButton).toBeEnabled();
+	await expect(page.getByText('Refresh queued')).toBeVisible();
+	await page.waitForTimeout(2_000);
+	expect(statusRequests).toBe(initialStatusRequests);
 });
 
-test('all-feeds background sync banner clears after inactive sync status', async ({ page }) => {
-	let syncRequested = false;
-	let statusPollsAfterRefresh = 0;
+test('selecting a failed feed does not retry it, while explicit refresh uses the queue', async ({
+	page,
+}) => {
+	const syncRequests: string[] = [];
 
 	await page.route('**/api/v1/articles**', async (route) => {
 		const url = new URL(route.request().url());
@@ -227,65 +231,95 @@ test('all-feeds background sync banner clears after inactive sync status', async
 		});
 	});
 
-	await page.route('**/api/v1/feeds/sync', async (route) => {
+	await page.route('**/api/v1/categories', async (route) => {
+		if (route.request().method() !== 'GET') {
+			await route.continue();
+			return;
+		}
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				data: {
+					totalUnread: 0,
+					categories: [
+						{
+							id: 'failed-category',
+							userId: 'reader',
+							parentCategoryId: null,
+							name: 'Failed sources',
+							slug: 'failed-sources',
+							sortOrder: 0,
+							createdAt: '2026-07-16T00:00:00.000Z',
+							updatedAt: '2026-07-16T00:00:00.000Z',
+							feedCount: 1,
+							unreadCount: 0,
+							feeds: [
+								{
+									id: 'failed-feed',
+									userId: 'reader',
+									categoryId: 'failed-category',
+									title: 'Failed Feed',
+									feedUrl: 'https://example.com/failed.xml',
+									siteUrl: null,
+									faviconUrl: null,
+									description: null,
+									pollingIntervalMinutes: 60,
+									lastSyncedAt: '2026-07-15T00:00:00.000Z',
+									lastSyncError: 'HTTP 403: Forbidden',
+									lastSyncErrorAt: '2026-07-16T00:00:00.000Z',
+									syncStatus: 'error',
+									createdAt: '2026-07-15T00:00:00.000Z',
+									updatedAt: '2026-07-16T00:00:00.000Z',
+									unreadCount: 0,
+								},
+							],
+							children: [],
+						},
+					],
+				},
+			}),
+		});
+	});
+
+	await page.route('**/api/v1/feeds/sync**', async (route) => {
 		if (route.request().method() !== 'POST') {
 			await route.continue();
 			return;
 		}
 
-		syncRequested = true;
-		statusPollsAfterRefresh = 0;
+		syncRequests.push(route.request().url());
 		await route.fulfill({
 			status: 202,
 			contentType: 'application/json',
-			body: JSON.stringify({ data: { accepted: true, alreadyQueued: false } }),
-		});
-	});
-
-	await page.route('**/api/v1/feeds/sync/status', async (route) => {
-		const shouldReportLongRunning = syncRequested && statusPollsAfterRefresh < 2;
-		if (syncRequested) {
-			statusPollsAfterRefresh += 1;
-		}
-
-		const startedAt = new Date(Date.now() - 90_000).toISOString();
-
-		await route.fulfill({
-			status: 200,
-			contentType: 'application/json',
 			body: JSON.stringify({
-				data: shouldReportLongRunning
-					? {
-							queued: false,
-							running: true,
-							active: true,
-							stale: true,
-							queuedAt: null,
-							startedAt,
-							heartbeatAt: startedAt,
-						}
-					: {
-							queued: false,
-							running: false,
-							active: false,
-							stale: false,
-							queuedAt: null,
-							startedAt: null,
-							heartbeatAt: null,
-						},
+				data: {
+					accepted: true,
+					alreadyQueued: false,
+					jobId: 'single-feed-job',
+					status: {
+						queued: true,
+						running: false,
+						active: true,
+						jobId: 'single-feed-job',
+						scope: { feedId: 'failed-feed' },
+						queuedAt: new Date().toISOString(),
+					},
+				},
 			}),
 		});
 	});
 
 	await loginThroughUi(page, 'reader@example.com', 'password123');
-	await expect(page.getByText('Still syncing in background')).toHaveCount(0);
+	await page.getByRole('button', { name: 'Expand Failed sources' }).click();
+	await page.getByRole('button', { name: 'Failed Feed', exact: true }).click();
+	await page.waitForTimeout(1_000);
+	expect(syncRequests).toHaveLength(0);
 
-	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
-	await refreshButton.click();
-
-	await expect(page.getByText('Still syncing in background')).toBeVisible();
-	await expect(page.getByText('Still syncing in background')).toHaveCount(0, { timeout: 20_000 });
-	await expect(refreshButton).toBeEnabled();
+	await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+	await expect.poll(() => syncRequests.length).toBe(1);
+	expect(new URL(syncRequests[0]!).pathname).toBe('/api/v1/feeds/sync');
+	expect(new URL(syncRequests[0]!).searchParams.get('feedId')).toBe('failed-feed');
 });
 
 test('all-feeds refresh fetches new articles through the real worker queue', async ({

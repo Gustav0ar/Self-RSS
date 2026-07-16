@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { applyReadStateSyncEvent } from '@/hooks/queries';
 import { getClientId } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
-import { streamReadStateEvents } from '@/lib/read-state-events';
+import { streamRealtimeEvents } from '@/lib/read-state-events';
 
 export function getReadStateReconnectDelay(attempt: number) {
 	return Math.min(
@@ -32,10 +32,11 @@ export function useReadStateSync(enabled: boolean) {
 			}
 
 			controller = new AbortController();
-			void streamReadStateEvents({
+			void streamRealtimeEvents({
 				signal: controller.signal,
 				onConnected: () => {
 					reconnectAttempt = 0;
+					qc.setQueryData(['realtime', 'connected'], true);
 					// Redis Pub/Sub is intentionally ephemeral. Reconcile every active
 					// cache family after reconnect so events lost while offline cannot
 					// leave the reader or counts stale.
@@ -45,6 +46,7 @@ export function useReadStateSync(enabled: boolean) {
 					qc.invalidateQueries({ queryKey: ['feeds'] });
 					qc.invalidateQueries({ queryKey: ['categories'] });
 					qc.invalidateQueries({ queryKey: ['stats'] });
+					qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
 				},
 				onEvent: (event) => {
 					reconnectAttempt = 0;
@@ -52,6 +54,7 @@ export function useReadStateSync(enabled: boolean) {
 				},
 			})
 				.catch(() => {
+					qc.setQueryData(['realtime', 'connected'], false);
 					// Reconnect below unless this was an intentional shutdown.
 				})
 				.finally(() => {
@@ -68,6 +71,7 @@ export function useReadStateSync(enabled: boolean) {
 
 		return () => {
 			stopped = true;
+			qc.setQueryData(['realtime', 'connected'], false);
 			if (reconnectTimer) {
 				clearTimeout(reconnectTimer);
 			}

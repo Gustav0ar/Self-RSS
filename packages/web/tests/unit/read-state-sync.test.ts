@@ -110,23 +110,23 @@ describe('read-state sync', () => {
 		const body = new ReadableStream({
 			start(controller) {
 				const encoder = new TextEncoder();
-				controller.enqueue(encoder.encode('event: read-state.connected\ndata: {}\n\n'));
-				controller.enqueue(encoder.encode('event: read-state\ndata: {not-json}\n\n'));
-				controller.enqueue(encoder.encode('event: read-state\ndata: {"type":"unknown.event"}\n\n'));
+				controller.enqueue(encoder.encode('event: realtime.connected\ndata: {}\n\n'));
+				controller.enqueue(encoder.encode('event: realtime\ndata: {not-json}\n\n'));
+				controller.enqueue(encoder.encode('event: realtime\ndata: {"type":"unknown.event"}\n\n'));
 				controller.enqueue(
 					encoder.encode(
-						'event: read-state\ndata: {"type":"article.read_state_changed","articleId":"article-1","feedId":"feed-1","isRead":true}\n\n',
+						'event: realtime\ndata: {"type":"article.read_state_changed","articleId":"article-1","feedId":"feed-1","isRead":true}\n\n',
 					),
 				);
 				controller.enqueue(
 					encoder.encode(
-						'event: read-state\ndata: {"type":"articles.marked_read","eventId":"event-invalid","feedIds":["feed-1"],"scope":{},"markedCount":-1,"clientId":null,"updatedAt":"2026-06-01T00:00:00.000Z"}\n\n',
+						'event: realtime\ndata: {"type":"articles.marked_read","eventId":"event-invalid","feedIds":["feed-1"],"scope":{},"markedCount":-1,"clientId":null,"updatedAt":"2026-06-01T00:00:00.000Z"}\n\n',
 					),
 				);
 				controller.enqueue(
 					encoder.encode(
 						[
-							'event: read-state',
+							'event: realtime',
 							'data: {"type":"article.read_state_changed","eventId":"event-1","articleId":"article-1","feedId":"feed-1","isRead":true,"source":"manual","clientId":"other-client","updatedAt":"2026-06-01T00:00:00.000Z"}',
 							'',
 							'',
@@ -149,6 +149,7 @@ describe('read-state sync', () => {
 			});
 
 			const headers = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+			expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/events/stream');
 			expect(headers.get('Authorization')).toBe('Bearer access-token');
 			expect(headers.get('X-Self-Feed-Client-Id')).toBeTruthy();
 			expect(received).toEqual([
@@ -455,5 +456,100 @@ describe('read-state sync', () => {
 		expect(getReadStateReconnectDelay(0)).toBe(1000);
 		expect(getReadStateReconnectDelay(1)).toBe(2000);
 		expect(getReadStateReconnectDelay(10)).toBe(30000);
+	});
+
+	it('applies SSE feed progress and health without polling or refetching feed lists', () => {
+		const qc = createQueryClient();
+		const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+		qc.setQueryData(
+			['feeds'],
+			[
+				{
+					id: 'feed-1',
+					feedUrl: 'https://example.com/feed.xml',
+					syncStatus: 'idle',
+					lastSyncedAt: null,
+					lastSyncError: null,
+					lastSyncErrorAt: null,
+				},
+			],
+		);
+
+		applyReadStateSyncEvent(
+			qc,
+			{
+				type: 'feed.sync.progress',
+				eventId: 'event-progress',
+				jobId: 'job-1',
+				phase: 'running',
+				scope: { feedId: 'feed-1' },
+				totalFeeds: 1,
+				completedFeeds: 0,
+				syncedFeeds: 0,
+				failedFeeds: 0,
+				skippedFeeds: 0,
+				newArticles: 0,
+				queuedAt: '2026-07-16T12:00:00.000Z',
+				startedAt: '2026-07-16T12:00:01.000Z',
+				error: null,
+				updatedAt: '2026-07-16T12:00:01.000Z',
+			},
+			{ clientId: 'this-client' },
+		);
+		expect(qc.getQueryData(['feeds', 'sync', 'status'])).toMatchObject({
+			active: true,
+			jobId: 'job-1',
+			completedFeeds: 0,
+		});
+		expect(invalidateSpy).not.toHaveBeenCalled();
+
+		applyReadStateSyncEvent(
+			qc,
+			{
+				type: 'feed.health.updated',
+				eventId: 'event-health',
+				feedId: 'feed-1',
+				severity: 'error',
+				syncStatus: 'error',
+				lastSyncedAt: null,
+				lastSyncError: 'The publisher timed out',
+				lastSyncErrorAt: '2026-07-16T12:00:02.000Z',
+				updatedAt: '2026-07-16T12:00:02.000Z',
+			},
+			{ clientId: 'this-client' },
+		);
+		expect(qc.getQueryData<Array<{ lastSyncError: string }>>(['feeds'])?.[0]).toMatchObject({
+			syncStatus: 'error',
+			lastSyncError: 'The publisher timed out',
+		});
+		expect(invalidateSpy).not.toHaveBeenCalled();
+
+		applyReadStateSyncEvent(
+			qc,
+			{
+				type: 'feed.sync.progress',
+				eventId: 'event-completed',
+				jobId: 'job-1',
+				phase: 'completed',
+				scope: { feedId: 'feed-1' },
+				totalFeeds: 1,
+				completedFeeds: 1,
+				syncedFeeds: 0,
+				failedFeeds: 1,
+				skippedFeeds: 0,
+				newArticles: 0,
+				queuedAt: '2026-07-16T12:00:00.000Z',
+				startedAt: '2026-07-16T12:00:01.000Z',
+				error: null,
+				updatedAt: '2026-07-16T12:00:03.000Z',
+			},
+			{ clientId: 'this-client' },
+		);
+		expect(qc.getQueryData(['feeds', 'sync', 'status'])).toMatchObject({
+			active: false,
+			phase: 'completed',
+			failedFeeds: 1,
+		});
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
 	});
 });

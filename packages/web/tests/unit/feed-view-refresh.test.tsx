@@ -20,6 +20,7 @@ let hideReadPreference = false;
 let defaultSortPreference = 'latest';
 let keyboardShortcutsEnabled = true;
 let autoMarkReadMode = 'on_navigate';
+let preferencesLoaded = true;
 const categories = [
 	{
 		id: 'category-1',
@@ -57,18 +58,20 @@ const categories = [
 
 vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
-	useInfiniteArticles: (params: unknown) => useInfiniteArticlesMock(params),
+	useInfiniteArticles: (...args: unknown[]) => useInfiniteArticlesMock(...args),
 	useSearch: () => ({ data: undefined }),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	usePreferences: () => ({
-		data: {
-			hideRead: hideReadPreference,
-			defaultSort: defaultSortPreference,
-			keyboardShortcutsEnabled,
-			autoMarkReadMode,
-			density: 'comfortable',
-		},
+		data: preferencesLoaded
+			? {
+					hideRead: hideReadPreference,
+					defaultSort: defaultSortPreference,
+					keyboardShortcutsEnabled,
+					autoMarkReadMode,
+					density: 'comfortable',
+				}
+			: undefined,
 	}),
 	usePrefetchArticle: () => vi.fn(),
 	useWarmNextArticles: () => warmNextArticlesMock,
@@ -141,6 +144,7 @@ describe('FeedView refresh', () => {
 		defaultSortPreference = 'latest';
 		keyboardShortcutsEnabled = true;
 		autoMarkReadMode = 'on_navigate';
+		preferencesLoaded = true;
 		articleListProps = null;
 		useInfiniteArticlesMock.mockReturnValue({
 			data: {
@@ -273,6 +277,7 @@ describe('FeedView refresh', () => {
 		await waitFor(() => {
 			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
 				expect.objectContaining({ unreadOnly: true }),
+				{ enabled: true },
 			);
 		});
 	});
@@ -286,6 +291,7 @@ describe('FeedView refresh', () => {
 		await waitFor(() => {
 			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
 				expect.objectContaining({ unreadOnly: true }),
+				{ enabled: true },
 			);
 		});
 	});
@@ -298,8 +304,29 @@ describe('FeedView refresh', () => {
 		await waitFor(() => {
 			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
 				expect.objectContaining({ sort: 'oldest' }),
+				{ enabled: true },
 			);
 		});
+	});
+
+	it('does not issue an article request until preferences are hydrated', () => {
+		preferencesLoaded = false;
+		const view = render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ unreadOnly: false, sort: 'latest' }),
+			{ enabled: false },
+		);
+
+		hideReadPreference = true;
+		defaultSortPreference = 'oldest';
+		preferencesLoaded = true;
+		view.rerender(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
+			expect.objectContaining({ unreadOnly: true, sort: 'oldest' }),
+			{ enabled: true },
+		);
 	});
 
 	it('disables keyboard navigation when the preference is off', () => {
@@ -360,6 +387,7 @@ describe('FeedView refresh', () => {
 		await waitFor(() => {
 			expect(useInfiniteArticlesMock).toHaveBeenLastCalledWith(
 				expect.objectContaining({ unreadOnly: true }),
+				{ enabled: true },
 			);
 		});
 

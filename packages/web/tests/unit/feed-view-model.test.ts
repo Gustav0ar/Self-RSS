@@ -121,7 +121,6 @@ describe('feed view model helpers', () => {
 			buildFeedViewModel({
 				categoryTree,
 				feedId: 'feed-2',
-				feedSyncError: null,
 				unreadOnly: false,
 			}),
 		).toMatchObject({ viewTitle: 'Child Feed', scopeUnreadCount: 3 });
@@ -130,7 +129,6 @@ describe('feed view model helpers', () => {
 			buildFeedViewModel({
 				categoryTree,
 				categoryId: 'child-category',
-				feedSyncError: null,
 				unreadOnly: false,
 			}),
 		).toMatchObject({ viewTitle: 'Parent / Child', scopeUnreadCount: 3 });
@@ -235,16 +233,15 @@ describe('feed view model helpers', () => {
 		).toBe('article-orphan');
 	});
 
-	it('prioritizes sync errors over scope-specific empty-state copy', () => {
+	it('keeps article empty-state copy independent from refresh errors', () => {
 		expect(
 			buildEmptyState({
 				feedId: 'feed-1',
-				feedSyncError: 'Fetch failed',
 				unreadOnly: true,
 			}),
 		).toEqual({
-			title: 'Unable to refresh articles',
-			description: 'Fetch failed',
+			title: 'No unread articles',
+			description: 'Turn off the unread filter to review older stories in this view.',
 		});
 	});
 });

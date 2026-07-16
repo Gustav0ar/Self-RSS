@@ -1,4 +1,4 @@
-import { type ReadStateSyncEvent, readStateSyncEventSchema } from '@self-feed/shared';
+import { type RealtimeEvent, realtimeEventSchema } from '@self-feed/shared';
 import { getAccessToken, getClientId, refreshAccessToken } from './api';
 
 const API_BASE = '/api/v1';
@@ -61,7 +61,7 @@ export function createSseParser(onMessage: SseMessageHandler) {
 	};
 }
 
-async function fetchReadStateStream(signal: AbortSignal) {
+async function fetchRealtimeStream(signal: AbortSignal) {
 	if (!getAccessToken()) {
 		await refreshAccessToken();
 	}
@@ -75,7 +75,7 @@ async function fetchReadStateStream(signal: AbortSignal) {
 		headers.set('Authorization', `Bearer ${token}`);
 	}
 
-	let response = await fetch(`${API_BASE}/events/read-state`, {
+	let response = await fetch(`${API_BASE}/events/stream`, {
 		headers,
 		credentials: 'include',
 		signal,
@@ -86,7 +86,7 @@ async function fetchReadStateStream(signal: AbortSignal) {
 		if (refreshedToken) {
 			headers.set('Authorization', `Bearer ${refreshedToken}`);
 		}
-		response = await fetch(`${API_BASE}/events/read-state`, {
+		response = await fetch(`${API_BASE}/events/stream`, {
 			headers,
 			credentials: 'include',
 			signal,
@@ -94,30 +94,30 @@ async function fetchReadStateStream(signal: AbortSignal) {
 	}
 
 	if (!response.ok || !response.body) {
-		throw new Error(`Read-state stream failed: ${response.status}`);
+		throw new Error(`Realtime stream failed: ${response.status}`);
 	}
 
 	return response.body;
 }
 
-export async function streamReadStateEvents({
+export async function streamRealtimeEvents({
 	signal,
 	onEvent,
 	onConnected,
 }: {
 	signal: AbortSignal;
-	onEvent: (event: ReadStateSyncEvent) => void;
+	onEvent: (event: RealtimeEvent) => void;
 	onConnected?: () => void;
 }) {
-	const body = await fetchReadStateStream(signal);
+	const body = await fetchRealtimeStream(signal);
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	const parser = createSseParser((eventName, data) => {
-		if (eventName === 'read-state.connected') {
+		if (eventName === 'realtime.connected') {
 			onConnected?.();
 			return;
 		}
-		if (eventName !== 'read-state') {
+		if (eventName !== 'realtime') {
 			return;
 		}
 
@@ -128,7 +128,7 @@ export async function streamReadStateEvents({
 			return;
 		}
 
-		const result = readStateSyncEventSchema.safeParse(parsed);
+		const result = realtimeEventSchema.safeParse(parsed);
 		if (result.success) {
 			onEvent(result.data);
 		}
@@ -148,3 +148,6 @@ export async function streamReadStateEvents({
 		reader.releaseLock();
 	}
 }
+
+/** @deprecated Use streamRealtimeEvents. */
+export const streamReadStateEvents = streamRealtimeEvents;

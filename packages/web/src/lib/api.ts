@@ -6,6 +6,22 @@ const REQUEST_TIMEOUT_MS = 45_000;
 const CLIENT_ID_STORAGE_KEY = 'self-feed-client-id';
 const AUTH_LOST_MESSAGE = 'Authentication was lost. Please sign in again.';
 
+export class ApiClientError extends Error {
+	readonly summary: string;
+
+	constructor(
+		readonly code: string,
+		summary: string,
+		readonly status: number,
+		readonly details?: unknown,
+	) {
+		const detail = typeof details === 'string' ? details.trim() : '';
+		super(detail && detail !== summary ? `${summary}: ${detail}` : summary);
+		this.name = 'ApiClientError';
+		this.summary = summary;
+	}
+}
+
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let authLostHandler: ((message: string) => void) | null = null;
@@ -166,9 +182,13 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 }
 
 async function throwApiError(res: Response): Promise<never> {
-	const body = await res.json().catch(() => null);
-	const message = body?.error?.message ?? `API error: ${res.status}`;
-	throw new Error(message);
+	const body = (await res.json().catch(() => null)) as {
+		error?: { code?: unknown; message?: unknown; details?: unknown };
+	} | null;
+	const message =
+		typeof body?.error?.message === 'string' ? body.error.message : `API error: ${res.status}`;
+	const code = typeof body?.error?.code === 'string' ? body.error.code : 'API_ERROR';
+	throw new ApiClientError(code, message, res.status, body?.error?.details);
 }
 
 function parseContentDispositionFilename(header: string | null) {

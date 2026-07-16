@@ -1220,9 +1220,15 @@ describe('API integration', () => {
 				},
 			);
 			expect(sync.response.status).toBe(202);
-			expect(sync.body.data).toEqual({
+			expect(sync.body.data).toMatchObject({
 				accepted: true,
 				alreadyQueued: false,
+				jobId: expect.any(String),
+				status: {
+					active: true,
+					queued: true,
+					scope: { feedId: secondFeed.body.data.id },
+				},
 			});
 
 			const queuedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
@@ -1235,6 +1241,8 @@ describe('API integration', () => {
 				totalFeeds: 0,
 				completedFeeds: 0,
 				newArticles: 0,
+				jobId: sync.body.data.jobId,
+				scope: { feedId: secondFeed.body.data.id },
 			});
 			expect(queuedStatus.body.data.queuedAt).toEqual(expect.any(String));
 			expect(queuedStatus.body.data.startedAt).toBeNull();
@@ -1269,9 +1277,10 @@ describe('API integration', () => {
 				method: 'POST',
 			});
 			expect(duplicateSync.response.status).toBe(202);
-			expect(duplicateSync.body.data).toEqual({
+			expect(duplicateSync.body.data).toMatchObject({
 				accepted: true,
 				alreadyQueued: true,
+				jobId: sync.body.data.jobId,
 			});
 			await expect(redis.llen(CacheKeys.feedSyncAllQueue())).resolves.toBe(1);
 
@@ -1311,7 +1320,7 @@ describe('API integration', () => {
 
 			const completedStatus = await authedRequest('/api/v1/feeds/sync/status', token);
 			expect(completedStatus.response.status).toBe(200);
-			expect(completedStatus.body.data).toEqual({
+			expect(completedStatus.body.data).toMatchObject({
 				queued: false,
 				running: false,
 				active: false,

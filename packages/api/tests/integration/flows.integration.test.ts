@@ -529,6 +529,25 @@ describe('API integration - additional flows', () => {
 				lastSyncError: failedSync.body.error.details,
 				lastSyncErrorAt: expect.any(String),
 			});
+
+			const queuedRetry = await authedRequest(
+				`/api/v1/feeds/sync?feedId=${feed.body.data.id}`,
+				token,
+				{ method: 'POST' },
+			);
+			expect(queuedRetry.response.status).toBe(202);
+			expect(queuedRetry.body.data).toMatchObject({
+				accepted: true,
+				alreadyQueued: false,
+				jobId: expect.any(String),
+				status: { active: true, scope: { feedId: feed.body.data.id } },
+			});
+
+			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
+			expect(queuedResult).toMatchObject({
+				skipped: false,
+				result: { totalFeeds: 1, failedFeeds: 1, syncedFeeds: 0 },
+			});
 		} finally {
 			await feedServer.stop();
 		}

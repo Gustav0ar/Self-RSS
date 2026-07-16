@@ -113,6 +113,20 @@ describe('SidebarTree feed sync warnings', () => {
 		expect(screen.queryByLabelText(/Phoronix is not updating/)).toBeNull();
 	});
 
+	it('does not count a successful partial-sync warning as a broken feed', () => {
+		renderTree([
+			feed({
+				syncStatus: 'idle',
+				lastSyncedAt: '2026-07-16T12:00:00.000Z',
+				lastSyncError: 'Skipped 1 malformed article item',
+				lastSyncErrorAt: '2026-07-16T12:00:00.000Z',
+			}),
+		]);
+
+		expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
+		expect(screen.getByLabelText(/Phoronix updated with a warning/)).toBeTruthy();
+	});
+
 	it('still opens the feed when the warning icon is present', () => {
 		const onSelectFeed = vi.fn();
 		render(

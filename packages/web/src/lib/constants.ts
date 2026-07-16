@@ -1,10 +1,10 @@
 // Timing constants
 export const REFRESH_INTERVALS = {
-	SYNC_STATUS_POLL_MS: 750,
-	// Long-running syncs stay non-blocking, but completion should still be
-	// reflected promptly instead of leaving stale progress visible for tens
-	// of seconds after the worker has finished.
-	SYNC_STATUS_BACKGROUND_POLL_MS: 5_000,
+	// SSE drives sync progress. These are low-frequency safety reconciliations
+	// for a disconnected stream or a rare missed event.
+	SYNC_STATUS_FALLBACK_MS: 30_000,
+	SYNC_STATUS_CONNECTED_FALLBACK_MS: 60_000,
+	SYNC_STATUS_BACKGROUND_POLL_MS: 30_000,
 	SYNC_STATUS_FOREGROUND_TIMEOUT_MS: 75_000,
 	ARTICLE_STALE_MS: 30_000,
 	CACHE_GC_MS: 5 * 60_000,

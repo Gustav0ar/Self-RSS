@@ -1,4 +1,4 @@
-import type { ReadStateSyncEvent } from '@self-feed/shared';
+import type { RealtimeEvent } from '@self-feed/shared';
 import type { QueryClient } from '@tanstack/react-query';
 import {
 	applyArticleReadState,
@@ -8,6 +8,7 @@ import {
 	updateFeedArticlesReadStateInCachedQuery,
 	updateOpenArticleByFeed,
 } from './article-cache-updates';
+import { applyFeedRealtimeEvent } from './feed-realtime-cache';
 import {
 	applyStatsDelta,
 	applyUnreadCountDelta,
@@ -22,19 +23,15 @@ export * from './unread-count-cache';
 
 export function applyReadStateSyncEvent(
 	qc: QueryClient,
-	event: ReadStateSyncEvent,
+	event: RealtimeEvent,
 	options: { clientId: string },
 ) {
-	// Handle new articles event - invalidate caches to show new articles
-	if (event.type === 'articles.new') {
-		// Invalidate article list to show new articles
-		qc.invalidateQueries({ queryKey: ['articles'] });
-		// Invalidate feed counts since new articles affect unread counts
-		qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
-		// Invalidate categories since new articles affect category counts
-		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
-		// Invalidate stats
-		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+	if (
+		event.type === 'feed.sync.progress' ||
+		event.type === 'feed.health.updated' ||
+		event.type === 'articles.new'
+	) {
+		applyFeedRealtimeEvent(qc, event);
 		return;
 	}
 	if (event.type === 'article.updated') {

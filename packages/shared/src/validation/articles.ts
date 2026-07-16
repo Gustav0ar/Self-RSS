@@ -74,15 +74,56 @@ export const articleUpdatedEventSchema = z.object({
 	updatedAt: z.string().min(1),
 });
 
-export const readStateSyncEventSchema = z.discriminatedUnion('type', [
+const feedSyncScopeSchema = z.object({
+	categoryId: z.string().min(1).optional(),
+	feedId: z.string().min(1).optional(),
+});
+
+export const feedSyncProgressEventSchema = z.object({
+	type: z.literal('feed.sync.progress'),
+	eventId: z.string().min(1),
+	jobId: z.string().min(1),
+	phase: z.enum(['queued', 'running', 'completed', 'failed']),
+	scope: feedSyncScopeSchema,
+	totalFeeds: z.number().int().nonnegative(),
+	completedFeeds: z.number().int().nonnegative(),
+	syncedFeeds: z.number().int().nonnegative(),
+	failedFeeds: z.number().int().nonnegative(),
+	skippedFeeds: z.number().int().nonnegative(),
+	newArticles: z.number().int().nonnegative(),
+	queuedAt: z.string().min(1).nullable(),
+	startedAt: z.string().min(1).nullable(),
+	error: z.string().min(1).nullable(),
+	updatedAt: z.string().min(1),
+});
+
+export const feedHealthUpdatedEventSchema = z.object({
+	type: z.literal('feed.health.updated'),
+	eventId: z.string().min(1),
+	feedId: z.string().min(1),
+	severity: z.enum(['healthy', 'warning', 'error']),
+	syncStatus: z.enum(['idle', 'syncing', 'error']),
+	lastSyncedAt: z.string().min(1).nullable(),
+	lastSyncError: z.string().min(1).nullable(),
+	lastSyncErrorAt: z.string().min(1).nullable(),
+	updatedAt: z.string().min(1),
+});
+
+export const realtimeEventSchema = z.discriminatedUnion('type', [
 	articleReadStateChangedEventSchema,
 	articlesMarkedReadEventSchema,
 	articlesNewEventSchema,
 	articleUpdatedEventSchema,
+	feedSyncProgressEventSchema,
+	feedHealthUpdatedEventSchema,
 ]);
+
+/** @deprecated Use realtimeEventSchema. Kept for existing clients. */
+export const readStateSyncEventSchema = realtimeEventSchema;
 
 export type MarkReadInput = z.infer<typeof markReadSchema>;
 export type MarkAllReadInput = z.infer<typeof markAllReadSchema>;
 export type ArticleQueryInput = z.infer<typeof articleQuerySchema>;
 export type ArticleDetailQueryInput = z.infer<typeof articleDetailQuerySchema>;
-export type ReadStateSyncEventInput = z.infer<typeof readStateSyncEventSchema>;
+export type RealtimeEventInput = z.infer<typeof realtimeEventSchema>;
+export type ReadStateSyncEventInput = RealtimeEventInput;

@@ -272,6 +272,25 @@ describe('api module', () => {
 			await expect(apiFetch('/test')).rejects.toThrow('Resource not found');
 		});
 
+		it('preserves actionable API error details for feed failures', async () => {
+			const fetchMock = vi.fn(
+				async () =>
+					new Response(
+						'{"error":{"code":"BAD_GATEWAY","message":"Could not fetch or parse the feed URL","details":"The feed publisher denied access from this server (HTTP 403: Forbidden)"}}',
+						{ status: 502 },
+					),
+			);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/test', { method: 'POST' })).rejects.toMatchObject({
+				code: 'BAD_GATEWAY',
+				status: 502,
+				details: 'The feed publisher denied access from this server (HTTP 403: Forbidden)',
+				message:
+					'Could not fetch or parse the feed URL: The feed publisher denied access from this server (HTTP 403: Forbidden)',
+			});
+		});
+
 		it('throws generic error when response body has no error message', async () => {
 			const fetchMock = vi.fn(async () => new Response('', { status: 500 }));
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
