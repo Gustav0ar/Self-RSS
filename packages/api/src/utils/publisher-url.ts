@@ -1,6 +1,8 @@
 import { JSDOM, VirtualConsole } from 'jsdom';
 
 const virtualConsole = new VirtualConsole();
+const publisherDom = new JSDOM('', { virtualConsole });
+const publisherDocument = publisherDom.window.document;
 
 export function resolvePublisherUrl(
 	rawValue: unknown,
@@ -28,7 +30,10 @@ export function resolvePublisherHtmlUrls(html: string, ...baseCandidates: unknow
 	const bases = baseCandidates.flatMap((candidate) =>
 		typeof candidate === 'string' && candidate.trim() ? [candidate.trim()] : [],
 	);
-	const document = new JSDOM(`<body>${html}</body>`, { virtualConsole }).window.document;
+	// Reuse one lightweight parsing document. Constructing a JSDOM for every feed
+	// item leaves a large native allocator footprint even after window.close().
+	const template = publisherDocument.createElement('template');
+	template.innerHTML = html;
 	const urlAttributes = [
 		'href',
 		'src',
@@ -41,29 +46,33 @@ export function resolvePublisherHtmlUrls(html: string, ...baseCandidates: unknow
 		'data-embed-url',
 	];
 
-	for (const element of document.body.querySelectorAll('*')) {
-		for (const attribute of urlAttributes) {
-			if (!element.hasAttribute(attribute)) continue;
-			const resolved = resolvePublisherUrl(element.getAttribute(attribute), ...bases);
-			if (resolved) element.setAttribute(attribute, resolved);
-			else element.removeAttribute(attribute);
+	try {
+		for (const element of template.content.querySelectorAll('*')) {
+			for (const attribute of urlAttributes) {
+				if (!element.hasAttribute(attribute)) continue;
+				const resolved = resolvePublisherUrl(element.getAttribute(attribute), ...bases);
+				if (resolved) element.setAttribute(attribute, resolved);
+				else element.removeAttribute(attribute);
+			}
+			for (const attribute of ['srcset', 'data-srcset', 'data-lazy-srcset']) {
+				const value = element.getAttribute(attribute);
+				if (!value) continue;
+				const resolved = value
+					.split(',')
+					.map((entry) => {
+						const [url, ...descriptor] = entry.trim().split(/\s+/);
+						const absolute = resolvePublisherUrl(url, ...bases);
+						return absolute ? [absolute, ...descriptor].join(' ') : null;
+					})
+					.filter((entry): entry is string => entry != null)
+					.join(', ');
+				if (resolved) element.setAttribute(attribute, resolved);
+				else element.removeAttribute(attribute);
+			}
 		}
-		for (const attribute of ['srcset', 'data-srcset', 'data-lazy-srcset']) {
-			const value = element.getAttribute(attribute);
-			if (!value) continue;
-			const resolved = value
-				.split(',')
-				.map((entry) => {
-					const [url, ...descriptor] = entry.trim().split(/\s+/);
-					const absolute = resolvePublisherUrl(url, ...bases);
-					return absolute ? [absolute, ...descriptor].join(' ') : null;
-				})
-				.filter((entry): entry is string => entry != null)
-				.join(', ');
-			if (resolved) element.setAttribute(attribute, resolved);
-			else element.removeAttribute(attribute);
-		}
-	}
 
-	return document.body.innerHTML;
+		return template.innerHTML;
+	} finally {
+		template.replaceChildren();
+	}
 }

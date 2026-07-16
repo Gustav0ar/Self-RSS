@@ -1032,6 +1032,41 @@ describe('FeedSyncService', () => {
 		});
 	});
 
+	it('bounds full refresh parsing to two feeds at a time', async () => {
+		const feedRepo = {
+			findAllByUser: vi.fn(async () =>
+				Array.from({ length: 6 }, (_, index) => ({ id: `feed-${index + 1}` })),
+			),
+		};
+		const service = new FeedSyncService(
+			feedRepo as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 8,
+				allowPrivateHosts: false,
+			},
+		);
+		let active = 0;
+		let maximumActive = 0;
+		vi.spyOn(service, 'syncFeed').mockImplementation(async () => {
+			active++;
+			maximumActive = Math.max(maximumActive, active);
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			active--;
+			return { newArticles: 0, total: 1 };
+		});
+
+		const result = await service.syncAllFeeds('user-1');
+
+		expect(maximumActive).toBe(2);
+		expect(result.syncedFeeds).toBe(6);
+	});
+
 	it('ignores feeds that are already locked instead of retrying the load command', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () => [{ id: 'feed-1', syncStatus: 'idle' }]),

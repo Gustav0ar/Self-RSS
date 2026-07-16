@@ -698,34 +698,41 @@ function normalizeLazyMedia(root: Element) {
 export function extractArticleContentFromPage(pageHtml: unknown): string | null {
 	const normalizedHtml = normalizeHtmlInput(pageHtml);
 	if (!normalizedHtml.trim()) return null;
-	const document = new JSDOM(normalizedHtml, { virtualConsole }).window.document;
-	const content = document.querySelector(
-		'article .entry-content, article .post-content, .entry-content, .post-content',
-	);
+	// Use the module's shared parsing window. A fresh JSDOM per article retains a
+	// substantial native allocator footprint across a busy enrichment queue.
+	const template = window.document.createElement('template');
+	template.innerHTML = normalizedHtml;
+	try {
+		const content = template.content.querySelector(
+			'article .entry-content, article .post-content, .entry-content, .post-content',
+		);
 
-	if (!content) return null;
+		if (!content) return null;
 
-	const clone = content.cloneNode(true) as Element;
-	normalizeLazyMedia(clone);
-	removeVideoLoaderPlaceholders(clone);
-	for (const iframe of clone.querySelectorAll('iframe')) {
-		const src = iframe.getAttribute('src')?.trim() ?? '';
-		if (!toEmbedUrl(src)) {
-			iframe.remove();
+		const clone = content.cloneNode(true) as Element;
+		normalizeLazyMedia(clone);
+		removeVideoLoaderPlaceholders(clone);
+		for (const iframe of clone.querySelectorAll('iframe')) {
+			const src = iframe.getAttribute('src')?.trim() ?? '';
+			if (!toEmbedUrl(src)) {
+				iframe.remove();
+			}
 		}
-	}
-	clone.querySelectorAll(ARTICLE_CHROME_SELECTORS).forEach((element) => {
-		element.remove();
-	});
+		clone.querySelectorAll(ARTICLE_CHROME_SELECTORS).forEach((element) => {
+			element.remove();
+		});
 
-	for (const element of clone.querySelectorAll('p, div, section, article')) {
-		if (element.childElementCount > 0) continue;
-		if (element.textContent?.trim()) continue;
-		element.remove();
-	}
+		for (const element of clone.querySelectorAll('p, div, section, article')) {
+			if (element.childElementCount > 0) continue;
+			if (element.textContent?.trim()) continue;
+			element.remove();
+		}
 
-	const html = clone.innerHTML.trim();
-	return html || null;
+		const html = clone.innerHTML.trim();
+		return html || null;
+	} finally {
+		template.replaceChildren();
+	}
 }
 
 export function extractMediaFromHtml(html: unknown) {
