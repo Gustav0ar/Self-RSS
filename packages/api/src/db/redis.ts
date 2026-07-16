@@ -53,6 +53,7 @@ export const CacheKeys = {
 	feedSyncLock: (feedId: string) => `feed:sync:lock:${feedId}`,
 	feedFetchLock: (feedUrlFingerprint: string) => `feed:fetch:lock:${feedUrlFingerprint}`,
 	prefetchedFeed: (feedUrlFingerprint: string) => `feed:prefetched:${feedUrlFingerprint}`,
+	delayedFeedSyncs: () => 'feed:sync:delayed',
 	// Pre-computed article cache (populated during background sync)
 	articleListCache: (userId: string) => `articles:list:${userId}`,
 	articleListCacheMeta: (userId: string) => `articles:meta:${userId}`,

@@ -27,6 +27,7 @@ import { fetchArticlePageContent } from './article-source-fetcher.js';
 import { acquireFeedSyncGuards, consumePrefetchedFeed } from './feed-fetch-guard.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
+import { deferFeedSyncUntilCooldown, processDueDelayedFeedSync } from './feed-sync-delayed.js';
 import {
 	buildPartialSyncWarning,
 	FeedSyncFetchError,
@@ -64,6 +65,7 @@ interface SyncFeedOptions {
 	fetchTimeoutMs?: number;
 	fetchMaxRetries?: number;
 	deferScopedCacheCleanup?: boolean;
+	deferIfThrottled?: boolean;
 }
 
 interface PendingArticleEnrichment {
@@ -76,7 +78,6 @@ interface PendingArticleEnrichment {
 }
 
 type FeedItemRecord = Record<string, unknown>;
-
 const FEED_SYNC_ITEM_CONCURRENCY = 5;
 const ARTICLE_ENRICHMENT_CONCURRENCY = 4;
 const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
@@ -91,7 +92,6 @@ const FEED_VALIDATOR_TTL_SECONDS = 15 * 60;
 // affects dead workers, allowing their unfinished feeds to resume promptly.
 const FEED_SYNC_LOCK_TTL_SECONDS = 60;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
-
 export class FeedSyncService {
 	private parser: RSSParser;
 	constructor(
@@ -128,6 +128,9 @@ export class FeedSyncService {
 				feedId,
 				userId,
 			});
+			if (options.deferIfThrottled) {
+				await deferFeedSyncUntilCooldown(this.redis, feed.feedUrl, { feedId, userId });
+			}
 			return { newArticles: 0, total: 0, skipped: true as const };
 		}
 
@@ -572,10 +575,11 @@ export class FeedSyncService {
 					forceFetch: true,
 					// Leave slow publishers for the robust background scheduler.
 					fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
-					// One delayed retry absorbs connection resets and short publisher
-					// outages. 4xx/429 responses are never retried inline.
-					fetchMaxRetries: 1,
+					// Publisher requests are never retried inline. Throttled work is
+					// resumed by the durable delayed queue after its cooldown expires.
+					fetchMaxRetries: 0,
 					deferScopedCacheCleanup: true,
+					deferIfThrottled: true,
 				}),
 			onProgress: async (progress) => {
 				await onProgress?.(progress);
@@ -626,13 +630,25 @@ export class FeedSyncService {
 	async getSyncAllFeedsStatus(userId: string) {
 		return getManualSyncAllFeedsStatus(this.redis, userId);
 	}
-
 	async processNextQueuedSyncAllFeeds() {
 		return processNextQueuedFeedSync({
 			redis: this.redis,
 			realtimeService: this.realtimeService,
 			syncAllFeeds: (userId, scope, onProgress) => this.syncAllFeeds(userId, scope, onProgress),
 		});
+	}
+
+	async processNextDelayedFeedSync() {
+		return processDueDelayedFeedSync(this.redis, (request) =>
+			this.syncFeed(request.feedId, request.userId, {
+				enrichArticles: true,
+				warmArticleCache: true,
+				forceFetch: true,
+				fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
+				fetchMaxRetries: 0,
+				deferIfThrottled: true,
+			}),
+		);
 	}
 
 	async syncDueFeeds() {

@@ -69,6 +69,7 @@ export function startQueuedSyncWorker(
 
 		coordinator.isRunning = true;
 		try {
+			await syncService.processNextDelayedFeedSync();
 			await syncService.processNextQueuedSyncAllFeeds();
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));

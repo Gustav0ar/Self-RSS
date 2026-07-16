@@ -109,6 +109,7 @@ describe('scheduler error handling', () => {
 	describe('startQueuedSyncWorker', () => {
 		it('logs errors when processNextQueuedSyncAllFeeds throws', async () => {
 			const syncService = {
+				processNextDelayedFeedSync: vi.fn().mockResolvedValue(null),
 				processNextQueuedSyncAllFeeds: vi
 					.fn()
 					.mockRejectedValue(new Error('Queue processing error')),
@@ -137,6 +138,7 @@ describe('scheduler error handling', () => {
 			const scheduledCoordinator = { isRunning: true };
 			const queuedCoordinator = { isRunning: false };
 			const syncService = {
+				processNextDelayedFeedSync: vi.fn().mockResolvedValue(null),
 				processNextQueuedSyncAllFeeds: vi.fn().mockResolvedValue(null),
 			};
 

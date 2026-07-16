@@ -537,6 +537,8 @@ describe('FeedSyncService', () => {
 	});
 
 	it('skips a feed sync when the per-feed lock is already held', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T12:00:00.000Z'));
 		const feedRepo = {
 			findById: vi.fn(async () => ({
 				id: 'feed-1',
@@ -552,6 +554,8 @@ describe('FeedSyncService', () => {
 		const redis = {
 			set: vi.fn(async () => null),
 			del: vi.fn(async () => 0),
+			ttl: vi.fn(async () => 42),
+			zadd: vi.fn(async () => 1),
 		};
 		const service = new FeedSyncService(
 			feedRepo as never,
@@ -567,7 +571,7 @@ describe('FeedSyncService', () => {
 			},
 		);
 
-		const result = await service.syncFeed('feed-1', 'user-1');
+		const result = await service.syncFeed('feed-1', 'user-1', { deferIfThrottled: true });
 
 		expect(redis.set).toHaveBeenCalledWith(
 			'feed:sync:lock:feed-1',
@@ -579,6 +583,13 @@ describe('FeedSyncService', () => {
 		expect(syncRunRepo.create).not.toHaveBeenCalled();
 		expect(feedRepo.update).not.toHaveBeenCalled();
 		expect(result).toEqual({ newArticles: 0, total: 0, skipped: true });
+		expect(redis.ttl).toHaveBeenCalledWith(expect.stringMatching(/^feed:fetch:lock:/));
+		expect(redis.zadd).toHaveBeenCalledWith(
+			'feed:sync:delayed',
+			new Date('2026-07-16T12:00:43.000Z').getTime(),
+			JSON.stringify({ feedId: 'feed-1', userId: 'user-1' }),
+		);
+		vi.useRealTimers();
 	});
 
 	it('uses a URL-scoped lock and retains it for a one-minute fetch cooldown', async () => {
@@ -990,24 +1001,27 @@ describe('FeedSyncService', () => {
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 1,
+			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
+			deferIfThrottled: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 1,
+			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
+			deferIfThrottled: true,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 1,
+			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
+			deferIfThrottled: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 3,
@@ -1049,8 +1063,9 @@ describe('FeedSyncService', () => {
 			warmArticleCache: false,
 			forceFetch: true,
 			fetchTimeoutMs: 5_000,
-			fetchMaxRetries: 1,
+			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
+			deferIfThrottled: true,
 		});
 		expect(result).toEqual({
 			totalFeeds: 1,
@@ -1150,8 +1165,9 @@ describe('FeedSyncService', () => {
 			expect(call[2]).toMatchObject({
 				warmArticleCache: false,
 				fetchTimeoutMs: 10_000,
-				fetchMaxRetries: 1,
+				fetchMaxRetries: 0,
 				deferScopedCacheCleanup: true,
+				deferIfThrottled: true,
 			});
 		}
 	});
@@ -1484,8 +1500,9 @@ describe('FeedSyncService', () => {
 				warmArticleCache: false,
 				forceFetch: true,
 				fetchTimeoutMs: 5_000,
-				fetchMaxRetries: 1,
+				fetchMaxRetries: 0,
 				deferScopedCacheCleanup: true,
+				deferIfThrottled: true,
 			});
 		}
 

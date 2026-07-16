@@ -129,7 +129,9 @@ function feedXml(items: Array<{ title: string; guid: string; pubDate: string }>)
 
 async function startMutableFeedServer(initialXml: string) {
 	let xml = initialXml;
+	let requestCount = 0;
 	const server = createServer((_request, response) => {
+		requestCount += 1;
 		response.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' });
 		response.end(xml);
 	});
@@ -151,6 +153,9 @@ async function startMutableFeedServer(initialXml: string) {
 		url: `http://127.0.0.1:${address.port}/feed.xml`,
 		setXml(nextXml: string) {
 			xml = nextXml;
+		},
+		getRequestCount() {
+			return requestCount;
 		},
 		stop() {
 			return new Promise<void>((resolve, reject) => {
@@ -326,6 +331,7 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 	page,
 	request,
 }) => {
+	test.setTimeout(110_000);
 	const email = `worker-refresh-${Date.now()}@example.com`;
 	const password = 'password123';
 	const feedServer = await startMutableFeedServer(
@@ -371,6 +377,7 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 			headers: authHeaders,
 		});
 		expect(initialSyncResponse.ok()).toBeTruthy();
+		expect(feedServer.getRequestCount()).toBe(1);
 
 		feedServer.setXml(
 			feedXml([
@@ -399,9 +406,17 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
 		await refreshResponse;
 
+		// Feed creation prefetches the source and the first sync consumes that body.
+		// An immediate manual refresh must not issue a second publisher request.
+		await expect.poll(() => feedServer.getRequestCount()).toBe(1);
+		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
+
+		// Once the one-minute publisher cooldown expires, the delayed worker performs the
+		// next eligible fetch and the connected UI receives the new article via SSE.
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toBeVisible({
-			timeout: 15_000,
+			timeout: 100_000,
 		});
+		expect(feedServer.getRequestCount()).toBe(2);
 		await expect(page.getByText('Loading new articles')).toHaveCount(0);
 	} finally {
 		await feedServer.stop();

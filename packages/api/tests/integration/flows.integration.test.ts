@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { closeDb, getDb } from '../../src/db/client.js';
-import { closeRedis, getRedis } from '../../src/db/redis.js';
+import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
 import { feedFetchLockKey, prefetchedFeedKey } from '../../src/services/feed-fetch-guard.js';
 import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
@@ -544,6 +544,27 @@ describe('API integration - additional flows', () => {
 				skipped: false,
 				result: { totalFeeds: 1, failedFeeds: 0, skippedFeeds: 1, syncedFeeds: 0 },
 			});
+
+			const delayedMember = JSON.stringify({
+				feedId: feed.body.data.id,
+				userId: registered.body.data.user.id,
+			});
+			expect(await redis.zscore(CacheKeys.delayedFeedSyncs(), delayedMember)).not.toBeNull();
+			feedServer.setXml(`<?xml version="1.0" encoding="UTF-8"?>
+				<rss version="2.0"><channel>
+					<title>Recovered Feed</title><link>https://example.com</link>
+					<item><title>Recovered Story</title><guid>recovered-story</guid></item>
+				</channel></rss>`);
+			await redis.del(feedFetchLockKey(feedServer.url));
+			await redis.zadd(CacheKeys.delayedFeedSyncs(), 0, delayedMember);
+
+			const delayedResult = await deps.services.feedSync.processNextDelayedFeedSync();
+			expect(delayedResult).toMatchObject({
+				feedId: feed.body.data.id,
+				userId: registered.body.data.user.id,
+				result: { newArticles: 1, total: 1 },
+			});
+			expect(await redis.zscore(CacheKeys.delayedFeedSyncs(), delayedMember)).toBeNull();
 		} finally {
 			await feedServer.stop();
 		}
