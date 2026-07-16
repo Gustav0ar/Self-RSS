@@ -36,7 +36,7 @@ const relayServer = Bun.serve({
 	port: relayPort,
 	fetch: createFeedRelayHandler({
 		token: relayToken,
-		fetchImpl: async () =>
+		upstreamFetch: async () =>
 			new Response(relayFeedXml, {
 				status: 200,
 				headers: { 'Content-Type': 'application/rss+xml; charset=utf-8' },

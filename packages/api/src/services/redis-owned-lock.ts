@@ -12,6 +12,9 @@ const RELEASE_OWNED_LOCK_SCRIPT = `
 if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 	return 0
 end
+if tonumber(ARGV[2]) > 0 then
+	return redis.call("EXPIRE", KEYS[1], ARGV[2])
+end
 return redis.call("DEL", KEYS[1])
 `;
 
@@ -24,6 +27,7 @@ interface OwnedRedisLockOptions {
 	redis: RedisLockClient;
 	key: string;
 	ttlSeconds: number;
+	releaseCooldownSeconds?: number;
 	heartbeatIntervalMs?: number;
 	onRenewError?: (error: unknown) => void;
 	onReleaseError?: (error: unknown) => void;
@@ -33,6 +37,7 @@ export async function acquireOwnedRedisLock({
 	redis,
 	key,
 	ttlSeconds,
+	releaseCooldownSeconds = 0,
 	heartbeatIntervalMs = (ttlSeconds * 1000) / 3,
 	onRenewError,
 	onReleaseError,
@@ -59,7 +64,13 @@ export async function acquireOwnedRedisLock({
 		if (heartbeat) clearInterval(heartbeat);
 		if (typeof redis.eval !== 'function') return;
 		try {
-			await redis.eval(RELEASE_OWNED_LOCK_SCRIPT, 1, key, ownerToken);
+			await redis.eval(
+				RELEASE_OWNED_LOCK_SCRIPT,
+				1,
+				key,
+				ownerToken,
+				String(releaseCooldownSeconds),
+			);
 		} catch (error) {
 			onReleaseError?.(error);
 		}

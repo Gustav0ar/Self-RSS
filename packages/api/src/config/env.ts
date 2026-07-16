@@ -70,16 +70,12 @@ const rawEnvSchema = z
 			});
 		}
 
-		const relaySettings = [
-			Boolean(env.FEED_FETCH_RELAY_URL),
-			Boolean(env.FEED_FETCH_RELAY_TOKEN),
-			env.FEED_FETCH_RELAY_HOSTS.split(',').some((host) => host.trim().length > 0),
-		];
+		const relaySettings = [Boolean(env.FEED_FETCH_RELAY_URL), Boolean(env.FEED_FETCH_RELAY_TOKEN)];
 		if (relaySettings.some(Boolean) && !relaySettings.every(Boolean)) {
 			ctx.addIssue({
 				code: 'custom',
 				path: ['FEED_FETCH_RELAY_URL'],
-				message: 'Feed fetch relay URL, token, and hosts must be configured together',
+				message: 'Feed fetch relay URL and token must be configured together',
 			});
 		}
 

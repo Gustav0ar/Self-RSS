@@ -1,3 +1,4 @@
+import type Redis from 'ioredis';
 import RSSParser from 'rss-parser';
 import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
@@ -7,8 +8,12 @@ import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { fetchFeedWithRelayFallback } from '../utils/feed-fetch-relay.js';
-import { fetchWithRetry } from '../utils/retry.js';
 import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
+import {
+	acquireFeedFetchGuard,
+	cachePrefetchedFeed,
+	readPrefetchedFeed,
+} from './feed-fetch-guard.js';
 import { getSyncErrorDetails } from './feed-sync-errors.js';
 
 interface FeedMetadata {
@@ -31,6 +36,7 @@ export class FeedService {
 		private categoryRepo: CategoryRepository,
 		private articleRepo: ArticleRepository,
 		private config: FeedFetchConfig,
+		private redis?: Redis,
 	) {
 		this.parser = new RSSParser({
 			timeout: 15_000,
@@ -163,29 +169,34 @@ export class FeedService {
 	}
 
 	private async fetchFeedMetadata(feedUrl: string): Promise<FeedMetadata> {
+		const cached = this.redis ? await readPrefetchedFeed(this.redis, feedUrl) : null;
+		if (cached) return this.parseFeedMetadata(cached.text);
+
+		const releaseFeedFetchLock = this.redis
+			? await acquireFeedFetchGuard(this.redis, feedUrl)
+			: async () => undefined;
+		if (!releaseFeedFetchLock) {
+			throw AppError.tooManyRequests('This feed was fetched recently; try again in one minute');
+		}
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), 15_000);
 		try {
-			const response = await fetchWithRetry(
-				() =>
-					fetchFeedWithRelayFallback(
-						feedUrl,
-						{
-							signal: controller.signal,
-							headers: createFeedFetchHeaders(),
-						},
-						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
-						{
-							relayUrl: this.config.relayUrl,
-							relayToken: this.config.relayToken,
-							allowedHosts: this.config.allowedHosts,
-						},
-					),
-				{ maxRetries: 3 },
-				{ operation: 'fetchFeedMetadata', feedUrl },
+			const response = await fetchFeedWithRelayFallback(
+				feedUrl,
+				{
+					signal: controller.signal,
+					headers: createFeedFetchHeaders(),
+				},
+				{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+				{
+					relayUrl: this.config.relayUrl,
+					relayToken: this.config.relayToken,
+					allowedHosts: this.config.allowedHosts,
+				},
 			);
 			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+				await response.body?.cancel().catch(() => undefined);
+				throw response;
 			}
 
 			const contentLength = response.headers?.get?.('content-length');
@@ -198,19 +209,31 @@ export class FeedService {
 				this.config.maxContentLength,
 				controller,
 			);
-			const parsed = await this.parser.parseString(text);
-
-			return {
-				title: parsed.title?.trim() ?? '',
-				siteUrl: parsed.link ?? null,
-				faviconUrl: parsed.image?.url ?? null,
-				description: parsed.description ?? null,
-			};
+			const metadata = await this.parseFeedMetadata(text);
+			if (this.redis) {
+				await cachePrefetchedFeed(this.redis, feedUrl, {
+					text,
+					etag: response.headers.get('etag'),
+					lastModified: response.headers.get('last-modified'),
+				});
+			}
+			return metadata;
 		} catch (error) {
 			const errorDetails = getSyncErrorDetails(error);
 			throw AppError.badRequest('Could not fetch or parse the feed URL', errorDetails.error);
 		} finally {
 			clearTimeout(timeout);
+			await releaseFeedFetchLock();
 		}
+	}
+
+	private async parseFeedMetadata(text: string): Promise<FeedMetadata> {
+		const parsed = await this.parser.parseString(text);
+		return {
+			title: parsed.title?.trim() ?? '',
+			siteUrl: parsed.link ?? null,
+			faviconUrl: parsed.image?.url ?? null,
+			description: parsed.description ?? null,
+		};
 	}
 }

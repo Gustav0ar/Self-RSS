@@ -3,6 +3,7 @@ import { fetchWithValidatedRedirects, type RemoteFetchSecurityOptions } from './
 export interface FeedFetchRelayConfig {
 	relayUrl?: string;
 	relayToken?: string;
+	/** @deprecated Relay targets are authenticated and SSRF-validated instead. */
 	allowedHosts?: readonly string[];
 }
 
@@ -12,6 +13,7 @@ interface FeedFetchRelayDeps {
 }
 
 const RELAY_HTTP_STATUSES = new Set([401, 403, 429]);
+const LEGACY_VIDEOCARDZ_FEED_URL = 'https://videocardz.com/rss-feed';
 const RELAY_REQUEST_HEADERS = [
 	'accept',
 	'cache-control',
@@ -20,19 +22,16 @@ const RELAY_REQUEST_HEADERS = [
 	'pragma',
 ] as const;
 
-function normalizeHostname(value: string) {
-	return value.trim().toLowerCase().replace(/\.$/, '');
+function canUseRelay(config: FeedFetchRelayConfig) {
+	return Boolean(config.relayUrl && config.relayToken);
 }
 
-function canUseRelay(input: string, config: FeedFetchRelayConfig) {
-	if (!config.relayUrl || !config.relayToken || !config.allowedHosts?.length) return false;
-	const hostname = normalizeHostname(new URL(input).hostname);
-	return config.allowedHosts.some((allowedHost) => normalizeHostname(allowedHost) === hostname);
-}
-
-function relayHeaders(init: RequestInit, token: string) {
+function relayHeaders(init: RequestInit, token: string, targetUrl: string) {
 	const incoming = new Headers(init.headers);
-	const headers = new Headers({ Authorization: `Bearer ${token}` });
+	const headers = new Headers({
+		Authorization: `Bearer ${token}`,
+		'X-Self-Feed-Target': targetUrl,
+	});
 	for (const headerName of RELAY_REQUEST_HEADERS) {
 		const value = incoming.get(headerName);
 		if (value) headers.set(headerName, value);
@@ -49,18 +48,27 @@ export async function fetchFeedWithRelayFallback(
 ) {
 	const directFetch = deps.directFetch ?? fetchWithValidatedRedirects;
 	const directResponse = await directFetch(input, init, securityOptions);
-	if (!RELAY_HTTP_STATUSES.has(directResponse.status) || !canUseRelay(input, config)) {
+	if (!RELAY_HTTP_STATUSES.has(directResponse.status) || !canUseRelay(config)) {
 		return directResponse;
 	}
 
 	await directResponse.body?.cancel().catch(() => undefined);
 	try {
-		return await (deps.fetchImpl ?? fetch)(config.relayUrl!, {
+		const relayResponse = await (deps.fetchImpl ?? fetch)(config.relayUrl!, {
 			method: 'GET',
-			headers: relayHeaders(init, config.relayToken!),
+			headers: relayHeaders(init, config.relayToken!, input),
 			redirect: 'error',
 			signal: init.signal,
 		});
+		if (
+			relayResponse.ok &&
+			new URL(input).toString() !== LEGACY_VIDEOCARDZ_FEED_URL &&
+			relayResponse.headers.get('x-self-feed-relay') !== 'generic'
+		) {
+			await relayResponse.body?.cancel().catch(() => undefined);
+			throw new Error('configured relay does not support generic feed targets');
+		}
+		return relayResponse;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Feed relay request failed: ${message}`);

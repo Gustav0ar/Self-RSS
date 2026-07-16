@@ -81,7 +81,7 @@ describe('getEnv', () => {
 		expect(getEnv().TRUSTED_PROXY_HOPS).toBe(2);
 	});
 
-	it('parses an explicitly allowlisted feed fetch relay', () => {
+	it('parses an authenticated feed fetch relay and keeps the legacy host setting compatible', () => {
 		applyEnv({
 			FEED_FETCH_RELAY_URL: 'http://192.0.2.10:18080/videocardz/rss-feed',
 			FEED_FETCH_RELAY_TOKEN: 'relay-token-with-more-than-thirty-two-characters',
@@ -94,14 +94,24 @@ describe('getEnv', () => {
 		expect(env.FEED_FETCH_RELAY_HOSTS).toEqual(['videocardz.com']);
 	});
 
-	it('requires the feed relay URL, token, and hosts together', () => {
+	it('requires the feed relay URL and token together', () => {
 		applyEnv({
 			FEED_FETCH_RELAY_URL: 'http://192.0.2.10:18080/videocardz/rss-feed',
 			FEED_FETCH_RELAY_TOKEN: undefined,
 			FEED_FETCH_RELAY_HOSTS: 'videocardz.com',
 		});
 
-		expect(() => getEnv()).toThrowError(/relay URL, token, and hosts must be configured together/);
+		expect(() => getEnv()).toThrowError(/relay URL and token must be configured together/);
+	});
+
+	it('does not require a static host list for SSRF-validated relay targets', () => {
+		applyEnv({
+			FEED_FETCH_RELAY_URL: 'http://192.0.2.10:18080/feed',
+			FEED_FETCH_RELAY_TOKEN: 'relay-token-with-more-than-thirty-two-characters',
+			FEED_FETCH_RELAY_HOSTS: '',
+		});
+
+		expect(getEnv().FEED_FETCH_RELAY_HOSTS).toEqual([]);
 	});
 
 	it('accepts development placeholder values', () => {

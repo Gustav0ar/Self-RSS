@@ -11,7 +11,9 @@ import { acquireOwnedRedisLock } from '../../src/services/redis-owned-lock.js';
 const redisUrl = process.env.REDIS_URL;
 if (!redisUrl) throw new Error('Integration tests require REDIS_URL');
 
-const redis = new Redis(normalizeRedisUrl(redisUrl), { maxRetriesPerRequest: 3 });
+const redis = new Redis(normalizeRedisUrl(redisUrl), {
+	maxRetriesPerRequest: 3,
+});
 const userId = 'lock-ownership-integration-user';
 const lockKey = CacheKeys.feedSyncAllLock(userId);
 const queuedKey = CacheKeys.feedSyncAllQueued(userId);
@@ -54,6 +56,26 @@ describe('manual feed sync Redis lock ownership', () => {
 		expect(await redis.get(reusableLockKey)).toBeNull();
 	});
 
+	it('enforces an owned cooldown after work completes', async () => {
+		const release = await acquireOwnedRedisLock({
+			redis: redis as never,
+			key: reusableLockKey,
+			ttlSeconds: 60,
+			releaseCooldownSeconds: 60,
+			heartbeatIntervalMs: 60_000,
+		});
+		await release?.();
+
+		expect(await redis.ttl(reusableLockKey)).toBeGreaterThan(0);
+		expect(
+			await acquireOwnedRedisLock({
+				redis: redis as never,
+				key: reusableLockKey,
+				ttlSeconds: 60,
+			}),
+		).toBeNull();
+	});
+
 	it('prevents an expired owner from renewing or releasing a replacement owner lock', async () => {
 		const ownerA = await acquireManualSyncAllFeedsLock(redis, userId);
 		expect(ownerA).toEqual(expect.any(String));
@@ -68,7 +90,9 @@ describe('manual feed sync Redis lock ownership', () => {
 		expect(await renewManualSyncAllFeedsLock(redis, userId, ownerA!)).toBe(false);
 		expect(Number(await releaseManualSyncAllFeedsState(redis, userId, ownerA!))).toBe(0);
 
-		const activeLock = JSON.parse((await redis.get(lockKey))!) as { ownerToken: string };
+		const activeLock = JSON.parse((await redis.get(lockKey))!) as {
+			ownerToken: string;
+		};
 		expect(activeLock.ownerToken).toBe(ownerB);
 		expect(await redis.exists(queuedKey, requestKey)).toBe(2);
 
@@ -87,7 +111,9 @@ describe('manual feed sync Redis lock ownership', () => {
 		const newOwner = await acquireManualSyncAllFeedsLock(redis, userId);
 
 		expect(newOwner).toEqual(expect.any(String));
-		const activeLock = JSON.parse((await redis.get(lockKey))!) as { ownerToken: string };
+		const activeLock = JSON.parse((await redis.get(lockKey))!) as {
+			ownerToken: string;
+		};
 		expect(activeLock.ownerToken).toBe(newOwner);
 	});
 });

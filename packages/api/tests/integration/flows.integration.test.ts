@@ -5,6 +5,7 @@ import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { closeRedis, getRedis } from '../../src/db/redis.js';
+import { feedFetchLockKey, prefetchedFeedKey } from '../../src/services/feed-fetch-guard.js';
 import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
@@ -180,7 +181,7 @@ async function startRelayFallbackServers(initialXml: string, token: string) {
 		}
 		res.writeHead(200, {
 			'Content-Type': 'application/rss+xml; charset=utf-8',
-			'X-Self-Feed-Relay': 'videocardz',
+			'X-Self-Feed-Relay': 'generic',
 		});
 		res.end(xml);
 	});
@@ -269,8 +270,7 @@ describe('API integration - additional flows', () => {
 				method: 'POST',
 			});
 			expect(sync.response.status).toBe(200);
-			expect(feedServer.userAgents).toHaveLength(2);
-			expect(feedServer.userAgents).toEqual([FEED_FETCH_USER_AGENT, FEED_FETCH_USER_AGENT]);
+			expect(feedServer.userAgents).toEqual([FEED_FETCH_USER_AGENT]);
 		} finally {
 			await feedServer.stop();
 		}
@@ -330,12 +330,6 @@ describe('API integration - additional flows', () => {
 			expect(feed.response.status).toBe(201);
 			expect(feed.body.data.title).toBe('VideoCardz Test Feed');
 
-			servers.setXml(`<?xml version="1.0"?>
-				<rss version="2.0"><channel>
-					<title>VideoCardz Test Feed</title><link>https://videocardz.com</link>
-					<item><title>New story</title><link>https://videocardz.com/newz/new</link><guid>new</guid></item>
-					<item><title>Initial story</title><link>https://videocardz.com/newz/initial</link><guid>initial</guid></item>
-				</channel></rss>`);
 			const sync = await authorizedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, {
 				method: 'POST',
 			});
@@ -344,12 +338,12 @@ describe('API integration - additional flows', () => {
 				`/api/v1/articles?feedId=${feed.body.data.id}&limit=10`,
 			);
 			expect(articles.response.status).toBe(200);
-			expect(articles.body.data.map((article: { title: string }) => article.title)).toEqual(
-				expect.arrayContaining(['Initial story', 'New story']),
-			);
-			expect(servers.directRequests).toBe(2);
-			expect(servers.relayRequests).toBe(2);
-			expect(servers.relayAuthorizations).toEqual([`Bearer ${relayToken}`, `Bearer ${relayToken}`]);
+			expect(articles.body.data.map((article: { title: string }) => article.title)).toEqual([
+				'Initial story',
+			]);
+			expect(servers.directRequests).toBe(1);
+			expect(servers.relayRequests).toBe(1);
+			expect(servers.relayAuthorizations).toEqual([`Bearer ${relayToken}`]);
 		} finally {
 			await relayDeps.services.realtime.close();
 			await servers.stop();
@@ -460,6 +454,7 @@ describe('API integration - additional flows', () => {
 					'<p>Story body with a much longer updated article body that exceeds the refresh threshold by more than eighty characters and should update the stored content hash.</p>',
 				),
 			);
+			await redis.del(feedFetchLockKey(feedServer.url));
 			await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, { method: 'POST' });
 
 			const changed = await app.request(`/api/v1/articles/${articleId}`, {
@@ -511,6 +506,7 @@ describe('API integration - additional flows', () => {
 			});
 
 			feedServer.setXml('not xml');
+			await redis.del(feedFetchLockKey(feedServer.url), prefetchedFeedKey(feedServer.url));
 			const failedSync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
 				method: 'POST',
 			});
@@ -546,7 +542,7 @@ describe('API integration - additional flows', () => {
 			const queuedResult = await deps.services.feedSync.processNextQueuedSyncAllFeeds();
 			expect(queuedResult).toMatchObject({
 				skipped: false,
-				result: { totalFeeds: 1, failedFeeds: 1, syncedFeeds: 0 },
+				result: { totalFeeds: 1, failedFeeds: 0, skippedFeeds: 1, syncedFeeds: 0 },
 			});
 		} finally {
 			await feedServer.stop();

@@ -24,6 +24,7 @@ import {
 } from '../utils/sanitizer.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import { fetchArticlePageContent } from './article-source-fetcher.js';
+import { acquireFeedSyncGuards, consumePrefetchedFeed } from './feed-fetch-guard.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
 import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import {
@@ -46,7 +47,6 @@ import {
 } from './feed-sync-status.js';
 import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
-import { acquireOwnedRedisLock } from './redis-owned-lock.js';
 
 const logger = createLogger();
 
@@ -122,9 +122,12 @@ export class FeedSyncService {
 			return null;
 		}
 
-		const releaseFeedLock = await this.tryAcquireFeedSyncLock(feedId);
-		if (!releaseFeedLock) {
-			logger.info('Skipping feed sync because another sync is already running', { feedId, userId });
+		const releaseFeedLocks = await acquireFeedSyncGuards(this.redis, feedId, feed.feedUrl);
+		if (!releaseFeedLocks) {
+			logger.info('Skipping feed sync because it is active or in its one-minute cooldown', {
+				feedId,
+				userId,
+			});
 			return { newArticles: 0, total: 0, skipped: true as const };
 		}
 
@@ -140,7 +143,10 @@ export class FeedSyncService {
 			const ignoreCache = options.forceFetch === true || articleCount === 0 || isProxyFeed;
 			const fetchOptions =
 				options.fetchTimeoutMs != null || options.fetchMaxRetries != null
-					? { timeoutMs: options.fetchTimeoutMs, maxRetries: options.fetchMaxRetries }
+					? {
+							timeoutMs: options.fetchTimeoutMs,
+							maxRetries: options.fetchMaxRetries,
+						}
 					: null;
 			const fetchForSync = (url: string, bypassCache: boolean) =>
 				fetchOptions
@@ -506,7 +512,7 @@ export class FeedSyncService {
 			}
 			throw normalizeSyncThrowable(err, errorDetails);
 		} finally {
-			await releaseFeedLock();
+			await releaseFeedLocks();
 		}
 	}
 
@@ -603,7 +609,12 @@ export class FeedSyncService {
 		const { didQueue, request } = await queueManualSyncAllFeeds(this.redis, userId, scope);
 		if (didQueue) await publishQueuedFeedSync(this.realtimeService, userId, request);
 		const status = await getManualSyncAllFeedsStatus(this.redis, userId);
-		if (didQueue) logger.info('Queued bulk feed sync', { userId, jobId: request.jobId, scope });
+		if (didQueue)
+			logger.info('Queued bulk feed sync', {
+				userId,
+				jobId: request.jobId,
+				scope,
+			});
 		return {
 			accepted: true,
 			alreadyQueued: !didQueue,
@@ -849,6 +860,8 @@ export class FeedSyncService {
 	): Promise<RSSParser.Output<FeedItemRecord>> {
 		const etagKey = CacheKeys.feedEtag(feedUrl);
 		const lastModKey = CacheKeys.feedLastModified(feedUrl);
+		const prefetched = await consumePrefetchedFeed(this.redis, feedUrl, FEED_VALIDATOR_TTL_SECONDS);
+		if (prefetched) return this.parser.parseString(prefetched);
 
 		const [etag, lastMod] = ignoreCache
 			? [null, null]
@@ -878,7 +891,10 @@ export class FeedSyncService {
 							signal: controller.signal,
 							headers,
 						},
-						{ allowPrivateHosts: this.config.allowPrivateHosts, maxRedirects: 3 },
+						{
+							allowPrivateHosts: this.config.allowPrivateHosts,
+							maxRedirects: 3,
+						},
 						{
 							relayUrl: this.config.relayUrl,
 							relayToken: this.config.relayToken,
@@ -919,7 +935,7 @@ export class FeedSyncService {
 				}
 			},
 			{
-				maxRetries: options.maxRetries ?? 1,
+				maxRetries: 0,
 				baseDelayMs: 2_000,
 				maxDelayMs: 10_000,
 			},
@@ -998,33 +1014,6 @@ export class FeedSyncService {
 		await this.redis.del(
 			...articleIds.map((articleId) => CacheKeys.articleDetail(userId, articleId)),
 		);
-	}
-
-	private async tryAcquireFeedSyncLock(feedId: string): Promise<(() => Promise<void>) | null> {
-		const redis = this.redis as unknown as {
-			set?: (...args: unknown[]) => Promise<unknown>;
-			eval?: (...args: unknown[]) => Promise<unknown>;
-		};
-		if (typeof redis.set !== 'function') {
-			logger.warn('Feed sync lock unavailable because Redis set is not configured', { feedId });
-		}
-		return acquireOwnedRedisLock({
-			redis,
-			key: CacheKeys.feedSyncLock(feedId),
-			ttlSeconds: FEED_SYNC_LOCK_TTL_SECONDS,
-			onRenewError: (error) => {
-				logger.warn('Failed to renew feed sync lock', {
-					feedId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			},
-			onReleaseError: (error) => {
-				logger.warn('Failed to release feed sync lock', {
-					feedId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			},
-		});
 	}
 
 	private parsePublishedAt(value: unknown): Date | null {

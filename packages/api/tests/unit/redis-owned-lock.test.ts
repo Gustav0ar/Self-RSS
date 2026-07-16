@@ -12,7 +12,11 @@ describe('acquireOwnedRedisLock', () => {
 			eval: vi.fn(async () => 0),
 		};
 
-		const release = await acquireOwnedRedisLock({ redis, key: 'lock', ttlSeconds: 30 });
+		const release = await acquireOwnedRedisLock({
+			redis,
+			key: 'lock',
+			ttlSeconds: 30,
+		});
 
 		expect(release).toBeNull();
 		expect(redis.eval).not.toHaveBeenCalled();
@@ -47,6 +51,30 @@ describe('acquireOwnedRedisLock', () => {
 			1,
 			'lock',
 			ownerToken,
+			'0',
+		);
+	});
+
+	it('keeps the owned key for the requested cooldown instead of deleting it', async () => {
+		const redis = {
+			set: vi.fn(async (..._args: unknown[]) => 'OK'),
+			eval: vi.fn(async () => 1),
+		};
+		const release = await acquireOwnedRedisLock({
+			redis,
+			key: 'feed-fetch-lock',
+			ttlSeconds: 60,
+			releaseCooldownSeconds: 60,
+		});
+		const ownerToken = redis.set.mock.calls[0]?.[1];
+
+		await release?.();
+		expect(redis.eval).toHaveBeenLastCalledWith(
+			expect.stringContaining('EXPIRE'),
+			1,
+			'feed-fetch-lock',
+			ownerToken,
+			'60',
 		);
 	});
 
@@ -61,8 +89,8 @@ describe('acquireOwnedRedisLock', () => {
 			eval: vi.fn(async (...args: unknown[]) => {
 				const script = args[0];
 				if (typeof script !== 'string') throw new Error('Expected a Redis script');
-				if (script.includes('EXPIRE')) throw renewalError;
-				throw releaseError;
+				if (script.includes('DEL')) throw releaseError;
+				throw renewalError;
 			}),
 		};
 

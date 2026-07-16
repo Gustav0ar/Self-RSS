@@ -64,6 +64,7 @@ describe('fetchFeedWithRelayFallback', () => {
 		expect(url).toBe(relayConfig.relayUrl);
 		expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
 		expect(headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+		expect(headers.get('x-self-feed-target')).toBe('https://videocardz.com/rss-feed');
 		expect(headers.get('if-none-match')).toBe('"feed-v1"');
 		expect(headers.get('x-do-not-forward')).toBeNull();
 	});
@@ -84,7 +85,7 @@ describe('fetchFeedWithRelayFallback', () => {
 		expect(response).toBe(relayResponse);
 	});
 
-	it('does not relay server failures or unallowlisted hosts', async () => {
+	it('does not relay server failures', async () => {
 		const relayFetch = vi.fn();
 		const serverFailure = new Response(null, { status: 503 });
 		expect(
@@ -100,39 +101,47 @@ describe('fetchFeedWithRelayFallback', () => {
 			),
 		).toBe(serverFailure);
 
-		const unrelatedBlock = new Response(null, { status: 403 });
-		expect(
-			await fetchFeedWithRelayFallback(
-				'https://example.com/feed',
-				{},
-				securityOptions,
-				relayConfig,
-				{
-					directFetch: vi.fn(async () => unrelatedBlock) as never,
-					fetchImpl: relayFetch as never,
-				},
-			),
-		).toBe(unrelatedBlock);
 		expect(relayFetch).not.toHaveBeenCalled();
 	});
 
-	it('does not treat subdomains as implicitly allowlisted', async () => {
-		const relayFetch = vi.fn();
-		const response = new Response(null, { status: 403 });
+	it('relays any authenticated public feed after a direct access block', async () => {
+		const relayFetch = vi.fn(
+			async (_input: string | URL | Request, _init?: RequestInit) =>
+				new Response('<rss />', { headers: { 'X-Self-Feed-Relay': 'generic' } }),
+		);
+		await fetchFeedWithRelayFallback(
+			'https://publisher.example/feed.xml',
+			{},
+			securityOptions,
+			relayConfig,
+			{
+				directFetch: vi.fn(async () => new Response(null, { status: 403 })) as never,
+				fetchImpl: relayFetch as never,
+			},
+		);
 
-		expect(
-			await fetchFeedWithRelayFallback(
-				'https://news.videocardz.com/rss-feed',
+		const headers = new Headers(relayFetch.mock.calls[0]?.[1]?.headers);
+		expect(headers.get('x-self-feed-target')).toBe('https://publisher.example/feed.xml');
+	});
+
+	it('rejects an old fixed-upstream relay for non-VideoCardz targets', async () => {
+		await expect(
+			fetchFeedWithRelayFallback(
+				'https://publisher.example/feed.xml',
 				{},
 				securityOptions,
 				relayConfig,
 				{
-					directFetch: vi.fn(async () => response) as never,
-					fetchImpl: relayFetch as never,
+					directFetch: vi.fn(async () => new Response(null, { status: 403 })) as never,
+					fetchImpl: vi.fn(
+						async () =>
+							new Response('<rss><title>Wrong feed</title></rss>', {
+								headers: { 'X-Self-Feed-Relay': 'videocardz' },
+							}),
+					) as never,
 				},
 			),
-		).toBe(response);
-		expect(relayFetch).not.toHaveBeenCalled();
+		).rejects.toThrow('configured relay does not support generic feed targets');
 	});
 
 	it('surfaces relay transport failures without exposing credentials', async () => {

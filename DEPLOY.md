@@ -135,29 +135,38 @@ proxy with no upstream proxy, set `TRUSTED_PROXY_HOPS=0`. Do not increase
 this value unless every hop counted from the right side of
 `X-Forwarded-For` is controlled by your infrastructure.
 
-The optional feed relay is a narrow fallback for publishers that reject the
-VPS address. The API and worker always try the publisher directly first and
-use the relay only after a `401`, `403`, or `429` response from an exact host
-listed in `FEED_FETCH_RELAY_HOSTS`. This means a temporary publisher block
-automatically stops using the relay as soon as direct requests recover.
+The optional feed relay is an authenticated fallback for publishers that reject
+the VPS address. The API and worker try the publisher directly and use the relay
+only after a `401`, `403`, or `429`. The target is sent in a private request
+header, never in the relay URL, and the relay independently blocks credentials,
+non-HTTP schemes, private/local addresses, DNS rebinding, and unsafe redirects.
+`FEED_FETCH_RELAY_HOSTS` is retained only for compatibility and may be empty.
 
-For the built-in VideoCardz relay, set `FEED_FETCH_RELAY_URL` to the private
-relay endpoint ending in `/videocardz/rss-feed`, set
-`FEED_FETCH_RELAY_HOSTS=videocardz.com`, and use the same random value of at
-least 32 characters for `FEED_FETCH_RELAY_TOKEN` on the VPS and
-`FEED_RELAY_TOKEN` on the relay host. The relay accepts no arbitrary target
-URL; it can fetch only `https://videocardz.com/rss-feed`. Keep it on a private
-network and bind its published port only to that network interface.
+Set `FEED_FETCH_RELAY_URL` to the private relay endpoint ending in `/feed` (the
+legacy `/videocardz/rss-feed` path also accepts generic targets), and use the
+same random value of at least 32 characters for `FEED_FETCH_RELAY_TOKEN` on the
+VPS and `FEED_RELAY_TOKEN` on the relay host. Keep the relay on a private network
+and bind its published port only to that network interface. Each target is
+coalesced and cached for at least one minute by the relay. The API also uses a
+Redis URL-scoped one-minute lease, so several accounts, app instances, manual
+refreshes, and scheduled syncs cannot flood the same publisher.
 
 The API container image can run the relay as a separate container:
 
 ```bash
-docker run -d --name self-feed-videocardz-relay --restart unless-stopped \
-  --publish <private-interface-ip>:18080:8080 \
-  --env FEED_RELAY_PORT=8080 \
-  --env FEED_RELAY_TOKEN='<same-random-token>' \
-  ghcr.io/gustav0ar/self-feed-api:<image-tag> start:feed-relay
+docker run -d --name self-feed-relay --restart unless-stopped \
+	--publish <private-interface-ip>:18080:8080 \
+	--env FEED_RELAY_PORT=8080 \
+	--env FEED_RELAY_TOKEN='<same-random-token>' \
+	--env FEED_RELAY_MAX_CONTENT_LENGTH=5242880 \
+	ghcr.io/gustav0ar/self-feed-api:<image-tag> start:feed-relay
 ```
+
+When upgrading the old fixed VideoCardz relay, recreate that container with the
+new image before enabling other blocked publishers. New API versions verify the
+`X-Self-Feed-Relay: generic` response marker and reject an old fixed relay for a
+different target, preventing content from one feed from being stored under
+another feed.
 
 ### CrowdSec and rapid article navigation
 

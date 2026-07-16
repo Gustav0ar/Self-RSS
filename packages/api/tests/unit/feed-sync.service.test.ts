@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchArticlePageContent } from '../../src/services/article-source-fetcher.js';
+import { acquireFeedFetchGuard } from '../../src/services/feed-fetch-guard.js';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
+import { acquireOwnedRedisLock } from '../../src/services/redis-owned-lock.js';
 import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 
 describe('FeedSyncService', () => {
@@ -27,7 +29,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		await service.queueArticleEnrichment('article-visible');
@@ -46,7 +53,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 		const resolveSpy = vi
 			.spyOn(
@@ -98,7 +110,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 
@@ -121,7 +136,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -142,7 +162,9 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
@@ -191,7 +213,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 		const syncRunRepo = {
@@ -211,7 +236,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 		vi.spyOn(
 			service as unknown as { fetchAndParse: () => Promise<unknown> },
@@ -268,7 +298,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 		const syncRunRepo = {
@@ -281,7 +314,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
 			{ set: vi.fn(async () => 'OK'), del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -386,7 +424,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
 			{ set: vi.fn(async () => 'OK'), del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 		vi.spyOn(
 			service as unknown as {
@@ -443,10 +486,17 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 		vi.spyOn(
-			service as unknown as { resolveEnrichedArticleHtml: () => Promise<string | null> },
+			service as unknown as {
+				resolveEnrichedArticleHtml: () => Promise<string | null>;
+			},
 			'resolveEnrichedArticleHtml',
 		).mockResolvedValue(
 			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="../about">About</a><img src="images/hero.jpg"><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
@@ -509,7 +559,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.syncFeed('feed-1', 'user-1');
@@ -524,6 +579,26 @@ describe('FeedSyncService', () => {
 		expect(syncRunRepo.create).not.toHaveBeenCalled();
 		expect(feedRepo.update).not.toHaveBeenCalled();
 		expect(result).toEqual({ newArticles: 0, total: 0, skipped: true });
+	});
+
+	it('uses a URL-scoped lock and retains it for a one-minute fetch cooldown', async () => {
+		const redis = {
+			set: vi.fn(async (..._args: unknown[]) => 'OK'),
+			eval: vi.fn(async () => 1),
+		};
+		const release = await acquireFeedFetchGuard(redis as never, 'https://example.com/feed.xml');
+		const [lockKey, ownerToken] = redis.set.mock.calls[0]!;
+
+		expect(lockKey).toMatch(/^feed:fetch:lock:[a-f0-9]{64}$/);
+		expect(redis.set).toHaveBeenCalledWith(lockKey, ownerToken, 'EX', 60, 'NX');
+		await release?.();
+		expect(redis.eval).toHaveBeenLastCalledWith(
+			expect.stringContaining('EXPIRE'),
+			1,
+			lockKey,
+			ownerToken,
+			'60',
+		);
 	});
 
 	it('does not let an expired per-feed lock owner release its replacement', async () => {
@@ -541,20 +616,12 @@ describe('FeedSyncService', () => {
 				return 1;
 			}),
 		};
-		const service = new FeedSyncService(
-			{} as never,
-			{} as never,
-			{} as never,
-			{} as never,
-			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
-		);
 		const acquire = () =>
-			(
-				service as unknown as {
-					tryAcquireFeedSyncLock: (feedId: string) => Promise<(() => Promise<void>) | null>;
-				}
-			).tryAcquireFeedSyncLock('feed-1');
+			acquireOwnedRedisLock({
+				redis: redis as never,
+				key: 'feed:sync:lock:feed-1',
+				ttlSeconds: 60,
+			});
 
 		const releaseA = await acquire();
 		const ownerA = storedOwner;
@@ -614,7 +681,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -636,7 +708,9 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
@@ -688,7 +762,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
 			{ del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		vi.spyOn(
@@ -752,7 +831,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{} as never,
 			{ del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 			undefined,
 			realtimeService as never,
 		);
@@ -821,9 +905,17 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			{} as never,
 			{ del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
-		const response = new Response(null, { status: 404, statusText: 'Not Found' });
+		const response = new Response(null, {
+			status: 404,
+			statusText: 'Not Found',
+		});
 		vi.spyOn(
 			service as unknown as { fetchAndParse: () => Promise<unknown> },
 			'fetchAndParse',
@@ -871,7 +963,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const syncFeedSpy = vi.spyOn(service, 'syncFeed');
@@ -932,7 +1029,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const syncFeedSpy = vi
@@ -974,14 +1076,23 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 		const started: string[] = [];
 		vi.spyOn(service, 'syncFeed').mockImplementation(async (feedId) => {
 			started.push(feedId);
 			return { newArticles: 1, total: 1 };
 		});
-		const progress: Array<{ totalFeeds: number; completedFeeds: number; newArticles: number }> = [];
+		const progress: Array<{
+			totalFeeds: number;
+			completedFeeds: number;
+			newArticles: number;
+		}> = [];
 
 		await service.syncAllFeeds(
 			'user-1',
@@ -993,7 +1104,11 @@ describe('FeedSyncService', () => {
 
 		expect(started).toEqual(['selected']);
 		expect(progress).toEqual([
-			expect.objectContaining({ totalFeeds: 1, completedFeeds: 1, newArticles: 1 }),
+			expect.objectContaining({
+				totalFeeds: 1,
+				completedFeeds: 1,
+				newArticles: 1,
+			}),
 		]);
 	});
 
@@ -1012,7 +1127,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 30_000, maxContentLength: 1_000_000, concurrency: 8, allowPrivateHosts: false },
+			{
+				timeoutMs: 30_000,
+				maxContentLength: 1_000_000,
+				concurrency: 8,
+				allowPrivateHosts: false,
+			},
 		);
 		const started: string[] = [];
 		const syncFeedSpy = vi.spyOn(service, 'syncFeed').mockImplementation(async (feedId) => {
@@ -1020,7 +1140,9 @@ describe('FeedSyncService', () => {
 			return { newArticles: 0, total: 1 };
 		});
 
-		const result = await service.syncAllFeeds('user-1', { categoryId: 'category' });
+		const result = await service.syncAllFeeds('user-1', {
+			categoryId: 'category',
+		});
 
 		expect(started).toEqual(['category-1', 'category-2']);
 		expect(result.totalFeeds).toBe(2);
@@ -1055,11 +1177,19 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 			articleCache as never,
 		);
 
-		vi.spyOn(service, 'syncFeed').mockResolvedValue({ newArticles: 2, total: 2 });
+		vi.spyOn(service, 'syncFeed').mockResolvedValue({
+			newArticles: 2,
+			total: 2,
+		});
 
 		const result = await service.syncAllFeeds('user-1');
 
@@ -1085,7 +1215,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const syncFeedSpy = vi.spyOn(service, 'syncFeed');
@@ -1125,7 +1260,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 30_000, maxContentLength: 1_000_000, concurrency: 5, allowPrivateHosts: false },
+			{
+				timeoutMs: 30_000,
+				maxContentLength: 1_000_000,
+				concurrency: 5,
+				allowPrivateHosts: false,
+			},
 		);
 		let releaseSlow: (() => void) | undefined;
 		const started: string[] = [];
@@ -1143,7 +1283,11 @@ describe('FeedSyncService', () => {
 		await vi.waitFor(() => expect(started).toEqual(['slow', 'fast-1', 'fast-2']));
 		releaseSlow?.();
 
-		await expect(syncPromise).resolves.toEqual({ total: 3, succeeded: 3, failed: 0 });
+		await expect(syncPromise).resolves.toEqual({
+			total: 3,
+			succeeded: 3,
+			failed: 0,
+		});
 	});
 
 	it('expires publisher validators quickly so stale ETags cannot hide articles for days', async () => {
@@ -1157,7 +1301,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: true,
+			},
 		);
 		vi.stubGlobal(
 			'fetch',
@@ -1199,8 +1348,7 @@ describe('FeedSyncService', () => {
 		);
 	});
 
-	it('retries one transient feed interruption after a bounded delay', async () => {
-		vi.useFakeTimers();
+	it('does not burst-retry a transient feed interruption inside the one-minute window', async () => {
 		const redis = {
 			get: vi.fn(async () => null),
 			set: vi.fn(async () => 'OK'),
@@ -1211,7 +1359,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: true,
+			},
 		);
 		const fetchMock = vi
 			.fn()
@@ -1224,23 +1377,18 @@ describe('FeedSyncService', () => {
 			);
 		vi.stubGlobal('fetch', fetchMock);
 
-		const fetchPromise = (
-			service as unknown as {
-				fetchAndParse: (
-					url: string,
-					ignoreCache: boolean,
-					options: { maxRetries: number },
-				) => Promise<{ title?: string }>;
-			}
-		).fetchAndParse('https://example.com/feed.xml', true, { maxRetries: 1 });
-		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-
-		await vi.advanceTimersByTimeAsync(1_999);
+		await expect(
+			(
+				service as unknown as {
+					fetchAndParse: (
+						url: string,
+						ignoreCache: boolean,
+						options: { maxRetries: number },
+					) => Promise<{ title?: string }>;
+				}
+			).fetchAndParse('https://example.com/feed.xml', true, { maxRetries: 1 }),
+		).rejects.toThrow('fetch connection reset');
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-		await vi.advanceTimersByTimeAsync(1);
-
-		await expect(fetchPromise).resolves.toMatchObject({ title: 'Recovered' });
-		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it('recovers stale syncing feeds before scheduled sync selection', async () => {
@@ -1259,7 +1407,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 3, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 3,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.syncDueFeeds();
@@ -1284,7 +1437,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			{} as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const started: string[] = [];
@@ -1362,7 +1520,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 			undefined,
 			realtimeService as never,
 		);
@@ -1402,7 +1565,10 @@ describe('FeedSyncService', () => {
 			eval: vi.fn(async () => 0),
 			get: vi.fn(async (key: string) => {
 				if (key.includes(':request:')) {
-					return JSON.stringify({ jobId: 'existing-job', queuedAt: noonTimestamp });
+					return JSON.stringify({
+						jobId: 'existing-job',
+						queuedAt: noonTimestamp,
+					});
 				}
 				if (key.includes(':queued:')) return queuedMarker;
 				if (key.includes(':progress:')) return '{}';
@@ -1418,7 +1584,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 			undefined,
 			realtimeService as never,
 		);
@@ -1458,7 +1629,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1488,7 +1664,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1522,7 +1703,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1554,7 +1740,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1577,7 +1768,11 @@ describe('FeedSyncService', () => {
 			get: vi.fn(async (key: string) => {
 				if (key.includes(':lock:')) return String(Date.now());
 				if (key.includes(':progress:')) {
-					return JSON.stringify({ totalFeeds: 8, completedFeeds: 3, newArticles: 5 });
+					return JSON.stringify({
+						totalFeeds: 8,
+						completedFeeds: 3,
+						newArticles: 5,
+					});
 				}
 				if (key === 'articles:gen:user-1') return '42';
 				return null;
@@ -1590,7 +1785,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1625,7 +1825,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1661,7 +1866,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1700,7 +1910,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const result = await service.getSyncAllFeedsStatus('user-1');
@@ -1738,7 +1953,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 			undefined,
 			realtimeService as never,
 		);
@@ -1805,7 +2025,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds').mockResolvedValue({
 			totalFeeds: 1,
@@ -1861,7 +2086,12 @@ describe('FeedSyncService', () => {
 			{} as never,
 			{} as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 		const syncAllSpy = vi.spyOn(service, 'syncAllFeeds');
 
@@ -1900,7 +2130,12 @@ describe('FeedSyncService', () => {
 			} as never,
 			{ incrementSyncCount: vi.fn(async () => undefined) } as never,
 			{ del: vi.fn(async () => 0) } as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi
@@ -1957,7 +2192,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 2,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -1974,12 +2214,16 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
 
-		const result = await service.syncFeed('feed-1', 'user-1', { enrichArticles: false });
+		const result = await service.syncFeed('feed-1', 'user-1', {
+			enrichArticles: false,
+		});
 
 		expect(articleRepo.findExistingGuids).toHaveBeenCalledWith('feed-1', ['guid-1', 'guid-2']);
 		expect(articleRepo.findByFeedAndGuids).not.toHaveBeenCalled();
@@ -2029,7 +2273,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -2050,7 +2299,9 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
@@ -2076,7 +2327,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 
@@ -2099,7 +2353,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -2149,7 +2408,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 
@@ -2172,7 +2434,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -2194,7 +2461,9 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
@@ -2225,7 +2494,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 
@@ -2248,7 +2520,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -2269,7 +2546,9 @@ describe('FeedSyncService', () => {
 
 		const enrichSpy = vi
 			.spyOn(
-				service as unknown as { enrichArticlesInBackground: () => Promise<void> },
+				service as unknown as {
+					enrichArticlesInBackground: () => Promise<void>;
+				},
 				'enrichArticlesInBackground',
 			)
 			.mockResolvedValue(undefined);
@@ -2305,7 +2584,10 @@ describe('FeedSyncService', () => {
 			findByFeedAndGuids: vi.fn(async () => []),
 			persistSyncResults: vi.fn(
 				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+					articlesToInsert.map((item, index) => ({
+						id: `article-${index + 1}`,
+						...item,
+					})),
 			),
 		};
 
@@ -2328,7 +2610,12 @@ describe('FeedSyncService', () => {
 			syncRunRepo as never,
 			metricsRepo as never,
 			redis as never,
-			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: false,
+			},
 		);
 
 		const fetchAndParseSpy = vi.spyOn(
@@ -2423,7 +2710,11 @@ describe('FeedSyncService', () => {
 		try {
 			const content = await fetchArticlePageContent(
 				'https://www.naointendo.com.br/posts/12345-test-post',
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, allowPrivateHosts: true },
+				{
+					timeoutMs: 5_000,
+					maxContentLength: 1_000_000,
+					allowPrivateHosts: true,
+				},
 			);
 
 			expect(content).toContain(
@@ -2472,7 +2763,12 @@ describe('FeedSyncService', () => {
 				{} as never,
 				{} as never,
 				{} as never,
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 2, allowPrivateHosts: false },
+				{
+					timeoutMs: 5_000,
+					maxContentLength: 1_000_000,
+					concurrency: 2,
+					allowPrivateHosts: false,
+				},
 			);
 
 			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
@@ -2508,7 +2804,12 @@ describe('FeedSyncService', () => {
 				{} as never,
 				{} as never,
 				{} as never,
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+				{
+					timeoutMs: 5_000,
+					maxContentLength: 1_000_000,
+					concurrency: 1,
+					allowPrivateHosts: false,
+				},
 			);
 
 			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
@@ -2531,7 +2832,12 @@ describe('FeedSyncService', () => {
 				{} as never,
 				{} as never,
 				{} as never,
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+				{
+					timeoutMs: 5_000,
+					maxContentLength: 1_000_000,
+					concurrency: 1,
+					allowPrivateHosts: false,
+				},
 			);
 
 			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
@@ -2562,7 +2868,12 @@ describe('FeedSyncService', () => {
 				{} as never,
 				{} as never,
 				{} as never,
-				{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
+				{
+					timeoutMs: 5_000,
+					maxContentLength: 1_000_000,
+					concurrency: 1,
+					allowPrivateHosts: false,
+				},
 			);
 
 			const syncFeedSpy = vi.spyOn(service, 'syncFeed');
