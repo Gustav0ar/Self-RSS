@@ -264,10 +264,9 @@ export async function fetchWithValidatedRedirects(
 	const maxRedirects = options.maxRedirects ?? 3;
 	let current = await validateRemoteUrl(input, options, lookupFn);
 
-	// Per-redirect timeout. The caller's `init.signal` only cancels the
-	// initial request; subsequent redirects inherit no signal and a
-	// slow remote can stall the worker indefinitely. Compose both
-	// signals so the caller's deadline still applies on every hop.
+	// The composite signal remains attached after response headers arrive.
+	// That matters for feeds which start a response and then stall its body:
+	// the caller's deadline must still destroy the underlying request.
 	const callerSignal = init.signal;
 	const perRedirectTimeoutMs = 10_000;
 
@@ -277,21 +276,16 @@ export async function fetchWithValidatedRedirects(
 			() => perRedirectController.abort(new Error('Redirect timeout')),
 			perRedirectTimeoutMs,
 		);
-		const onCallerAbort = () => perRedirectController.abort(callerSignal?.reason);
-		if (callerSignal) {
-			if (callerSignal.aborted) {
-				perRedirectController.abort(callerSignal.reason);
-			} else {
-				callerSignal.addEventListener('abort', onCallerAbort, { once: true });
-			}
-		}
+		const requestSignal = callerSignal
+			? AbortSignal.any([callerSignal, perRedirectController.signal])
+			: perRedirectController.signal;
 
 		let response: Response;
 		try {
 			const requestInit = {
 				...init,
 				redirect: 'manual',
-				signal: perRedirectController.signal,
+				signal: requestSignal,
 			} satisfies RequestInit;
 			response =
 				deps.fetchImpl || options.allowPrivateHosts
@@ -299,9 +293,6 @@ export async function fetchWithValidatedRedirects(
 					: await fetchWithPinnedLookup(current, requestInit);
 		} finally {
 			clearTimeout(perRedirectTimer);
-			if (callerSignal) {
-				callerSignal.removeEventListener('abort', onCallerAbort);
-			}
 		}
 
 		if (!isRedirectStatus(response.status)) {

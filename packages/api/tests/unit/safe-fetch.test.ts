@@ -77,6 +77,35 @@ describe('assertSafeRemoteUrl', () => {
 });
 
 describe('fetchWithValidatedRedirects', () => {
+	it('keeps the caller abort signal attached after response headers arrive', async () => {
+		const callerController = new AbortController();
+		let requestSignal!: AbortSignal;
+		const response = await fetchWithValidatedRedirects(
+			'https://example.com/feed.xml',
+			{ signal: callerController.signal },
+			{ allowPrivateHosts: false, maxRedirects: 0 },
+			{
+				lookupFn: lookupAll([{ address: '93.184.216.34', family: 4 }]),
+				fetchImpl: async (_input, init) => {
+					if (!init?.signal) throw new Error('Expected a request signal');
+					requestSignal = init.signal;
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(new TextEncoder().encode('<rss>'));
+							},
+						}),
+					);
+				},
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(requestSignal.aborted).toBe(false);
+		callerController.abort();
+		expect(requestSignal.aborted).toBe(true);
+	});
+
 	it('follows safe redirects', async () => {
 		const responses = [
 			new Response(null, {

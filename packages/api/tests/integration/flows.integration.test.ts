@@ -107,8 +107,15 @@ async function startFeedServer(xml: string) {
 
 async function startMutableFeedServer(initialXml: string) {
 	let xml = initialXml;
+	let hanging = false;
+	let requestCount = 0;
 	const server = createServer((_req, res) => {
+		requestCount += 1;
 		res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
+		if (hanging) {
+			res.write(xml.slice(0, 32));
+			return;
+		}
 		res.end(xml);
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -121,12 +128,29 @@ async function startMutableFeedServer(initialXml: string) {
 		setXml(nextXml: string) {
 			xml = nextXml;
 		},
+		setHanging(nextHanging: boolean) {
+			hanging = nextHanging;
+		},
+		getRequestCount() {
+			return requestCount;
+		},
 		async stop() {
-			await new Promise<void>((resolve, reject) =>
-				server.close((error) => (error ? reject(error) : resolve())),
-			);
+			await new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+				server.closeAllConnections();
+			});
 		},
 	};
+}
+
+function regressionFeedXml(channelTitle: string, items: Array<{ guid: string; title: string }>) {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+		<rss version="2.0"><channel>
+			<title>${channelTitle}</title><link>https://example.com</link>
+			${items
+				.map((item) => `<item><title>${item.title}</title><guid>${item.guid}</guid></item>`)
+				.join('')}
+		</channel></rss>`;
 }
 
 async function startBrowserCompatibleFeedServer(xml: string) {
@@ -569,6 +593,86 @@ describe('API integration - additional flows', () => {
 			await feedServer.stop();
 		}
 	});
+
+	it('finishes a bulk refresh and stores healthy articles when another feed stalls mid-response', async () => {
+		const registered = await registerUser('stalled-bulk-refresh@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Stalled bulk refresh' }),
+		});
+		const stalledServer = await startMutableFeedServer(
+			regressionFeedXml('A Stalled Feed', [{ guid: 'stalled-initial', title: 'Stalled initial' }]),
+		);
+		const healthyServer = await startMutableFeedServer(
+			regressionFeedXml('B Healthy Feed', [{ guid: 'healthy-initial', title: 'Healthy initial' }]),
+		);
+
+		try {
+			const stalledFeed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: stalledServer.url,
+				}),
+			});
+			const healthyFeed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: healthyServer.url,
+				}),
+			});
+
+			await authedRequest(`/api/v1/feeds/${stalledFeed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			await authedRequest(`/api/v1/feeds/${healthyFeed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+
+			stalledServer.setHanging(true);
+			healthyServer.setXml(
+				regressionFeedXml('B Healthy Feed', [
+					{ guid: 'healthy-new', title: 'Healthy new article' },
+					{ guid: 'healthy-initial', title: 'Healthy initial' },
+				]),
+			);
+			await redis.del(
+				CacheKeys.feedSyncLock(stalledFeed.body.data.id),
+				CacheKeys.feedSyncLock(healthyFeed.body.data.id),
+				feedFetchLockKey(stalledServer.url),
+				feedFetchLockKey(healthyServer.url),
+				prefetchedFeedKey(stalledServer.url),
+				prefetchedFeedKey(healthyServer.url),
+			);
+
+			const result = await Promise.race([
+				deps.services.feedSync.syncAllFeeds(registered.body.data.user.id),
+				new Promise<never>((_resolve, reject) =>
+					setTimeout(() => reject(new Error('Bulk refresh did not finish')), 8_000),
+				),
+			]);
+
+			expect(result).toMatchObject({
+				totalFeeds: 2,
+				syncedFeeds: 1,
+				failedFeeds: 1,
+				newArticles: 1,
+			});
+			expect(stalledServer.getRequestCount()).toBe(2);
+			expect(healthyServer.getRequestCount()).toBe(2);
+			const articles = await authedRequest(
+				`/api/v1/articles?feedId=${healthyFeed.body.data.id}&limit=10`,
+				token,
+			);
+			expect(articles.body.data.map((article: { title: string }) => article.title)).toContain(
+				'Healthy new article',
+			);
+		} finally {
+			await Promise.all([stalledServer.stop(), healthyServer.stop()]);
+		}
+	}, 12_000);
 
 	it('returns 404 for an article that does not exist or belongs to another user', async () => {
 		const userA = await registerUser('article-404-a@example.com');

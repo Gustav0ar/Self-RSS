@@ -129,10 +129,15 @@ function feedXml(items: Array<{ title: string; guid: string; pubDate: string }>)
 
 async function startMutableFeedServer(initialXml: string) {
 	let xml = initialXml;
+	let hanging = false;
 	let requestCount = 0;
 	const server = createServer((_request, response) => {
 		requestCount += 1;
 		response.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' });
+		if (hanging) {
+			response.write(xml.slice(0, 32));
+			return;
+		}
 		response.end(xml);
 	});
 
@@ -154,12 +159,16 @@ async function startMutableFeedServer(initialXml: string) {
 		setXml(nextXml: string) {
 			xml = nextXml;
 		},
+		setHanging(nextHanging: boolean) {
+			hanging = nextHanging;
+		},
 		getRequestCount() {
 			return requestCount;
 		},
 		stop() {
 			return new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
+				server.closeAllConnections();
 			});
 		},
 	};
@@ -331,9 +340,18 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 	page,
 	request,
 }) => {
-	test.setTimeout(110_000);
+	test.setTimeout(125_000);
 	const email = `worker-refresh-${Date.now()}@example.com`;
 	const password = 'password123';
+	const stalledFeedServer = await startMutableFeedServer(
+		feedXml([
+			{
+				title: 'Initial Stalled Story',
+				guid: 'initial-stalled-story',
+				pubDate: 'Tue, 07 Jan 2025 10:00:00 GMT',
+			},
+		]),
+	);
 	const feedServer = await startMutableFeedServer(
 		feedXml([
 			{
@@ -361,6 +379,25 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		});
 		expect(categoryResponse.ok()).toBeTruthy();
 		const category = await categoryResponse.json();
+		const stalledFeedResponse = await request.post(`${apiBaseUrl}/feeds`, {
+			headers: authHeaders,
+			data: {
+				categoryId: category.data.id,
+				feedUrl: stalledFeedServer.url,
+				title: 'A Stalled Worker Feed',
+			},
+		});
+		expect(stalledFeedResponse.ok()).toBeTruthy();
+		const stalledFeed = await stalledFeedResponse.json();
+		const stalledInitialSync = await request.post(
+			`${apiBaseUrl}/feeds/${stalledFeed.data.id}/sync`,
+			{ headers: authHeaders },
+		);
+		expect(stalledInitialSync.ok()).toBeTruthy();
+		expect(stalledFeedServer.getRequestCount()).toBe(1);
+		// Give this feed the earlier cooldown expiry so it is claimed before the
+		// healthy source when the delayed queue resumes the refresh.
+		await page.waitForTimeout(1_200);
 
 		const feedResponse = await request.post(`${apiBaseUrl}/feeds`, {
 			headers: authHeaders,
@@ -378,6 +415,7 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		});
 		expect(initialSyncResponse.ok()).toBeTruthy();
 		expect(feedServer.getRequestCount()).toBe(1);
+		stalledFeedServer.setHanging(true);
 
 		feedServer.setXml(
 			feedXml([
@@ -409,6 +447,7 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		// Feed creation prefetches the source and the first sync consumes that body.
 		// An immediate manual refresh must not issue a second publisher request.
 		await expect.poll(() => feedServer.getRequestCount()).toBe(1);
+		await expect.poll(() => stalledFeedServer.getRequestCount()).toBe(1);
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
 
 		// Once the one-minute publisher cooldown expires, the delayed worker performs the
@@ -417,9 +456,10 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 			timeout: 100_000,
 		});
 		expect(feedServer.getRequestCount()).toBe(2);
+		expect(stalledFeedServer.getRequestCount()).toBe(2);
 		await expect(page.getByText('Loading new articles')).toHaveCount(0);
 	} finally {
-		await feedServer.stop();
+		await Promise.all([stalledFeedServer.stop(), feedServer.stop()]);
 	}
 });
 
