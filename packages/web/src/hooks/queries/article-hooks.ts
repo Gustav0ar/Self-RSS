@@ -167,6 +167,7 @@ export function useWarmNextArticles() {
 export function useWarmVisibleArticles() {
 	const qc = useQueryClient();
 	const lastCandidateKey = useRef('');
+	const enrichmentRequestedArticleIds = useRef(new Set<string>());
 
 	return useCallback(
 		(candidates: readonly { id: string; heroImageUrl: string | null }[]) => {
@@ -197,7 +198,11 @@ export function useWarmVisibleArticles() {
 						]),
 					);
 					for (const detail of details) {
-						if (detail.contentStatus === 'enrichment_pending') {
+						if (
+							detail.contentStatus === 'enrichment_pending' &&
+							!enrichmentRequestedArticleIds.current.has(detail.id)
+						) {
+							enrichmentRequestedArticleIds.current.add(detail.id);
 							void enrichArticle(detail.id).catch(() => undefined);
 						}
 					}

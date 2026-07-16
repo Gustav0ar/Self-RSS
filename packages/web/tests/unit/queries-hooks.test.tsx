@@ -450,6 +450,19 @@ describe('useWarmVisibleArticles', () => {
 		expect(
 			apiFetchMock.mock.calls.filter(([path]) => path === '/articles/article-1/enrich'),
 		).toHaveLength(1);
+
+		act(() => result.current(candidates.slice(1)));
+		await waitFor(() => {
+			expect(apiFetchMock).toHaveBeenCalledWith('/articles/detail?id=article-5', {
+				signal: expect.any(AbortSignal),
+			});
+		});
+		act(() => result.current(candidates));
+		await waitFor(() => {
+			expect(
+				apiFetchMock.mock.calls.filter(([path]) => path === '/articles/article-1/enrich'),
+			).toHaveLength(1);
+		});
 		vi.unstubAllGlobals();
 	});
 });
