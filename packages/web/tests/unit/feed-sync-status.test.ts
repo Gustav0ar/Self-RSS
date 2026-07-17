@@ -82,6 +82,32 @@ describe('feed sync status reconciliation', () => {
 		});
 	});
 
+	it('shows an animated loading state for refreshes discovered from the backend', () => {
+		const startedAt = Date.parse('2026-06-21T12:00:00.000Z');
+
+		expect(
+			buildAllFeedsRefreshActivity({
+				status: {
+					...inactiveStatus,
+					running: true,
+					active: true,
+					startedAt: new Date(startedAt).toISOString(),
+				},
+				statusUpdatedAt: startedAt + 1_000,
+				localQueuedAt: 0,
+				isMutationPending: false,
+				isLocalRefreshSelected: false,
+				now: startedAt + 5_000,
+			}),
+		).toMatchObject({
+			phase: 'syncing',
+			isActive: true,
+			isBlocking: true,
+			isTakingLonger: false,
+			shouldShowStatus: true,
+		});
+	});
+
 	it('ignores a stale local all-feeds selection when the server status is inactive', () => {
 		const statusUpdatedAt = Date.parse('2026-06-21T12:00:00.000Z');
 

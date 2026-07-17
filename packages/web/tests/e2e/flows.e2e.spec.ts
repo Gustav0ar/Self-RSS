@@ -226,6 +226,34 @@ test('all-feeds refresh uses its queue snapshot without status polling', async (
 	expect(statusRequests).toBe(initialStatusRequests);
 });
 
+test('an active backend refresh restores the loading animation after page load', async ({
+	page,
+}) => {
+	await page.route('**/api/v1/feeds/sync/status', async (route) => {
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				data: {
+					queued: true,
+					running: false,
+					active: true,
+					jobId: 'restored-job',
+					scope: {},
+					queuedAt: new Date().toISOString(),
+				},
+			}),
+		});
+	});
+
+	await loginThroughUi(page, 'reader@example.com', 'password123');
+
+	await expect(page.getByText('Refresh queued')).toBeVisible();
+	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
+	await expect(refreshButton).toBeDisabled();
+	await expect(refreshButton.locator('svg')).toHaveClass(/animate-spin/);
+});
+
 test('selecting a failed feed does not retry it, while explicit refresh uses the queue', async ({
 	page,
 }) => {

@@ -239,6 +239,100 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `reconcileSyncStatus restores loading UX for a backend refresh`() = runTest {
+        val active = FeedSyncAllStatus(
+            queued = false,
+            running = true,
+            active = true,
+            stale = false,
+            totalFeeds = 6,
+            completedFeeds = 2,
+            newArticles = 3,
+            articleRevision = 9,
+        )
+        coEvery { repository.syncAllFeedsStatus() } returnsMany listOf(
+            AppResult.Success(active),
+            AppResult.Success(active),
+            AppResult.Success(completedSyncStatus().copy(articleRevision = 9)),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.reconcileSyncStatus()
+
+        assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals(6, viewModel.state.value.syncTotalFeeds)
+        assertEquals(2, viewModel.state.value.syncCompletedFeeds)
+        assertEquals(9L, viewModel.state.value.articleRevision)
+
+        advanceTimeBy(750L)
+        runCurrent()
+
+        assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals(1L, viewModel.state.value.syncRevision)
+    }
+
+    @Test
+    fun `transient status failure keeps the backend refresh animation visible`() = runTest {
+        val active = FeedSyncAllStatus(
+            queued = false,
+            running = true,
+            active = true,
+            stale = false,
+            totalFeeds = 2,
+            completedFeeds = 1,
+        )
+        coEvery { repository.syncAllFeedsStatus() } returnsMany listOf(
+            AppResult.Error("temporary status failure"),
+            AppResult.Success(active),
+            AppResult.Success(completedSyncStatus()),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+
+        assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals("Refreshing feeds in the background", viewModel.state.value.statusMessage)
+        assertNull(viewModel.state.value.errorMessage)
+
+        advanceTimeBy(750L)
+        runCurrent()
+        assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals(1, viewModel.state.value.syncCompletedFeeds)
+
+        advanceTimeBy(750L)
+        runCurrent()
+        assertEquals(false, viewModel.state.value.syncInBackground)
+    }
+
+    @Test
+    fun `status monitoring is bounded when status requests keep failing`() = runTest {
+        coEvery { repository.syncAllFeedsStatus() } returns AppResult.Error("status unavailable")
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+        assertEquals(true, viewModel.state.value.syncInBackground)
+
+        advanceTimeBy(330_000L)
+        runCurrent()
+
+        assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals("Feed refresh status timed out. Please try again.", viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `stale backend status stops the animation with an actionable error`() = runTest {
+        coEvery { repository.syncAllFeedsStatus() } returns AppResult.Success(
+            completedSyncStatus().copy(stale = true),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+
+        assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals("Feed sync stalled. Please try again.", viewModel.state.value.errorMessage)
+    }
+
+    @Test
     fun `importOpml exposes a result summary and refreshes subscription data`() = runTest {
         coEvery { repository.importOpml(any(), any()) } returns AppResult.Success(
             OpmlImportSummary(

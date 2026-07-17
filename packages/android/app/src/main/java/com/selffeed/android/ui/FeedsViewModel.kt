@@ -9,6 +9,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.CreateCategoryRequest
 import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.network.UpdateCategoryRequest
@@ -24,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -58,6 +60,7 @@ class FeedsViewModel @Inject constructor(
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
     private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
+    private var syncMonitorJob: Job? = null
 
     fun loadCategories() {
         viewModelScope.launch {
@@ -83,6 +86,34 @@ class FeedsViewModel @Inject constructor(
                 is AppResult.Success -> _state.update { it.copy(feeds = result.data) }
                 // Background health polling must not replace an otherwise
                 // usable cached drawer with a global connection error.
+                is AppResult.Error -> Unit
+            }
+        }
+    }
+
+    /** Restores refresh UX for work started by another client or WorkManager. */
+    fun reconcileSyncStatus() {
+        if (_state.value.loading || syncMonitorJob?.isActive == true) return
+        viewModelScope.launch {
+            when (val status = repository.syncAllFeedsStatus()) {
+                is AppResult.Success -> {
+                    if (status.data.stale) {
+                        _state.update {
+                            it.copy(
+                                loading = false,
+                                syncInBackground = false,
+                                errorMessage = "Feed sync stalled. Please try again.",
+                            )
+                        }
+                        return@launch
+                    }
+                    if (status.data.active) {
+                        publishActiveSync(status.data)
+                        startSyncMonitor()
+                    }
+                }
+                // This is background reconciliation. Existing offline/error UX
+                // remains authoritative when the server cannot be reached.
                 is AppResult.Error -> Unit
             }
         }
@@ -220,7 +251,7 @@ class FeedsViewModel @Inject constructor(
                                 statusMessage = "Refreshing feeds in the background",
                             )
                         }
-                        monitorQueuedSync()
+                        startSyncMonitor()
                     }
                     is AppResult.Error -> _state.update {
                         it.copy(
@@ -244,28 +275,59 @@ class FeedsViewModel @Inject constructor(
                             statusMessage = "Refreshing feeds in the background",
                         )
                     }
-                    monitorQueuedSync()
+                    startSyncMonitor()
                 }
                 is AppResult.Error -> _state.update { it.copy(loading = false, errorMessage = result.message) }
             }
         }
     }
 
+    private fun startSyncMonitor() {
+        if (syncMonitorJob?.isActive == true) return
+        syncMonitorJob = viewModelScope.launch { monitorQueuedSync() }
+    }
+
+    private fun publishActiveSync(status: FeedSyncAllStatus) {
+        _state.update {
+            it.copy(
+                loading = false,
+                syncInBackground = true,
+                syncTotalFeeds = status.totalFeeds,
+                syncCompletedFeeds = status.completedFeeds,
+                syncNewArticles = status.newArticles,
+                statusMessage = backgroundSyncMessage(status.completedFeeds, status.totalFeeds),
+            )
+        }
+        if (status.articleRevision > _state.value.articleRevision) {
+            _state.update { it.copy(articleRevision = status.articleRevision) }
+        }
+    }
+
     private suspend fun monitorQueuedSync() {
         var poll = 0
+        var elapsedMs = 0L
         var reportedLongRunningSync = false
         while (currentCoroutineContext().isActive) {
+            if (elapsedMs >= SYNC_STATUS_MAX_MONITOR_MS) {
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        syncInBackground = false,
+                        errorMessage = "Feed refresh status timed out. Please try again.",
+                    )
+                }
+                return
+            }
             when (val status = repository.syncAllFeedsStatus()) {
                 is AppResult.Success -> {
-                    _state.update {
-                        it.copy(
-                            syncTotalFeeds = status.data.totalFeeds,
-                            syncCompletedFeeds = status.data.completedFeeds,
-                            syncNewArticles = status.data.newArticles,
-                        )
-                    }
-                    if (status.data.articleRevision > _state.value.articleRevision) {
-                        _state.update { it.copy(articleRevision = status.data.articleRevision) }
+                    if (status.data.stale) {
+                        _state.update {
+                            it.copy(
+                                syncInBackground = false,
+                                errorMessage = "Feed sync stalled. Please try again.",
+                            )
+                        }
+                        return
                     }
                     if (!status.data.active) {
                         _state.update {
@@ -282,24 +344,19 @@ class FeedsViewModel @Inject constructor(
                         refreshFeedHealth()
                         return
                     }
-                    if (status.data.stale) {
-                        _state.update {
-                            it.copy(
-                                syncInBackground = false,
-                                errorMessage = "Feed sync stalled. Please try again.",
-                            )
-                        }
-                        return
-                    }
+                    publishActiveSync(status.data)
                 }
                 is AppResult.Error -> {
+                    // A transient status request must not make an active backend
+                    // refresh disappear from the UI. Keep the animation visible
+                    // and retry within the bounded backend deadline.
                     _state.update {
                         it.copy(
-                            syncInBackground = false,
-                            errorMessage = status.message,
+                            loading = false,
+                            syncInBackground = true,
+                            statusMessage = "Refreshing feeds in the background",
                         )
                     }
-                    return
                 }
             }
 
@@ -312,7 +369,14 @@ class FeedsViewModel @Inject constructor(
                 reportedLongRunningSync = true
                 _state.update { it.copy(statusMessage = "Feed refresh is taking longer than usual") }
             }
-            delay(if (poll < SYNC_STATUS_MAX_FAST_POLLS) SYNC_STATUS_FAST_POLL_MS else SYNC_STATUS_SLOW_POLL_MS)
+            val delayMs = if (poll < SYNC_STATUS_MAX_FAST_POLLS) {
+                SYNC_STATUS_FAST_POLL_MS
+            } else {
+                SYNC_STATUS_SLOW_POLL_MS
+            }
+            val boundedDelayMs = minOf(delayMs, SYNC_STATUS_MAX_MONITOR_MS - elapsedMs)
+            delay(boundedDelayMs)
+            elapsedMs += boundedDelayMs
         }
     }
 
@@ -320,6 +384,7 @@ class FeedsViewModel @Inject constructor(
         const val SYNC_STATUS_FAST_POLL_MS = 750L
         const val SYNC_STATUS_SLOW_POLL_MS = 10_000L
         const val SYNC_STATUS_MAX_FAST_POLLS = 400
+        const val SYNC_STATUS_MAX_MONITOR_MS = 5 * 60_000L + 30_000L
         const val REFRESH_QUEUE_TIMEOUT_MS = 4_000L
 
         fun backgroundSyncMessage(completed: Int, total: Int): String =

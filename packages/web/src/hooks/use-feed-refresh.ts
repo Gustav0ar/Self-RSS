@@ -177,6 +177,10 @@ export function useFeedRefresh() {
 					await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
 					return true;
 				} catch (error) {
+					const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
+					if (reconciledStatus?.data?.active) {
+						return true;
+					}
 					setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feeds');
 					setLocalRefreshQueuedAt(0);
 					setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
@@ -204,6 +208,10 @@ export function useFeedRefresh() {
 				await syncAllFeeds.mutateAsync({ feedId });
 				return true;
 			} catch (error) {
+				const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
+				if (reconciledStatus?.data?.active) {
+					return true;
+				}
 				setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feed');
 				setLocalRefreshQueuedAt(0);
 				setSyncingFeedId((current) => (current === feedId ? null : current));
@@ -213,6 +221,7 @@ export function useFeedRefresh() {
 		[
 			feeds,
 			hasSettledInactiveAllFeedsStatus,
+			refetchAllFeedsSyncStatus,
 			setFeedSyncError,
 			setSyncingFeedId,
 			syncAllFeeds,

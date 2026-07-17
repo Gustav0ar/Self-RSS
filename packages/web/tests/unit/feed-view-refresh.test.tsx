@@ -267,10 +267,11 @@ describe('FeedView refresh', () => {
 		allFeedsRefreshIsTakingLonger = true;
 		allFeedsRefreshShouldShowStatus = true;
 
-		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+		const { container } = render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
 
 		expect(screen.getByText('Still syncing in background')).toBeTruthy();
 		expect(screen.getByText('Articles will update as new stories arrive')).toBeTruthy();
+		expect(container.querySelector('.animate-spin')).toBeTruthy();
 
 		const refreshButton = screen.getByRole('button', { name: 'Refresh' });
 		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);

@@ -54,6 +54,7 @@ fun SelfFeedAppRoute(
                 articlesViewModel.clearSessionReadStateMemory()
                 feedsViewModel.loadCategories()
                 feedsViewModel.loadFeeds()
+                feedsViewModel.reconcileSyncStatus()
                 settingsViewModel.loadPreferences()
                 settingsViewModel.loadStats()
                 settingsViewModel.loadAuthSessions()
@@ -136,6 +137,7 @@ fun SelfFeedAppRoute(
             while (true) {
                 delay(60_000L)
                 feedsViewModel.refreshFeedHealth()
+                feedsViewModel.reconcileSyncStatus()
             }
         }
 
@@ -215,6 +217,7 @@ fun SelfFeedAppRoute(
                 onRefreshVisibleData = {
                     feedsViewModel.loadCategories()
                     feedsViewModel.loadFeeds()
+                    feedsViewModel.reconcileSyncStatus()
                     settingsViewModel.loadStats()
                 },
                 onHideReadChanged = {

@@ -128,7 +128,10 @@ export function buildAllFeedsRefreshActivity({
 		(statusUpdatedAt > 0 ? statusUpdatedAt : now);
 	const elapsedMs = Math.max(0, now - activeSinceMs);
 	const isTakingLonger = status?.stale === true || elapsedMs >= foregroundTimeoutMs;
-	const isForeground = localActive && !isTakingLonger;
+	// A refresh can be started by another tab/client or restored after a page
+	// reload. Server activity is still foreground UX state even when this hook
+	// did not create the local mutation that discovered it.
+	const isForeground = !isTakingLonger;
 	const phase = resolveRefreshPhase(status, isMutationPending, isTakingLonger);
 
 	return {

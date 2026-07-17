@@ -73,6 +73,9 @@ describe('useFeedRefresh', () => {
 		allFeedsSyncStatusUpdatedAt = 0;
 		feeds = [];
 		syncAllFeedsMutateAsyncMock.mockResolvedValue({ data: { accepted: true } });
+		refetchAllFeedsSyncStatusMock.mockResolvedValue({
+			data: { queued: false, running: false, active: false },
+		});
 	});
 
 	afterEach(() => {
@@ -118,6 +121,26 @@ describe('useFeedRefresh', () => {
 
 		expect(result.current.isRefreshingAllFeeds).toBe(true);
 		expect(invalidateReaderQueriesMock).not.toHaveBeenCalled();
+	});
+
+	it('restores the loading animation when an active refresh is discovered from the backend', () => {
+		allFeedsSyncStatus = {
+			queued: true,
+			running: false,
+			active: true,
+			queuedAt: new Date(nowMs).toISOString(),
+		};
+		allFeedsSyncStatusUpdatedAt = nowMs + 1;
+		const queryClient = makeQueryClient();
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		expect(result.current.isRefreshingAllFeeds).toBe(true);
+		expect(result.current.allFeedsRefreshActivity).toMatchObject({
+			phase: 'queued',
+			shouldShowStatus: true,
+		});
 	});
 
 	it('prioritizes the selected category and lets SSE completion reconcile readers', async () => {
@@ -271,5 +294,25 @@ describe('useFeedRefresh', () => {
 		expect(accepted).toBe(false);
 		expect(result.current.isRefreshingAllFeeds).toBe(false);
 		expect(result.current.feedSyncError).toBe('Worker unavailable');
+	});
+
+	it('keeps loading when the queue response fails after the backend accepted the refresh', async () => {
+		syncAllFeedsMutateAsyncMock.mockRejectedValue(new Error('Response interrupted'));
+		refetchAllFeedsSyncStatusMock.mockResolvedValue({
+			data: { queued: true, running: false, active: true },
+		});
+		const queryClient = makeQueryClient();
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		let accepted = false;
+		await act(async () => {
+			accepted = await result.current.refreshFeed(undefined, { force: true });
+		});
+
+		expect(accepted).toBe(true);
+		expect(result.current.isRefreshingAllFeeds).toBe(true);
+		expect(result.current.feedSyncError).toBeNull();
 	});
 });

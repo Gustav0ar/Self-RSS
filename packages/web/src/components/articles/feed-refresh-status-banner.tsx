@@ -1,6 +1,5 @@
 import { RefreshCw } from 'lucide-react';
 import type { AllFeedsRefreshActivity, FeedSyncAllStatus } from '@/lib/feed-sync-status';
-import { cn } from '@/lib/utils';
 
 interface FeedRefreshStatusBannerProps {
 	feedId?: string;
@@ -23,7 +22,6 @@ export function FeedRefreshStatusBanner({
 	}
 
 	const isLongBackgroundSync = !feedId && allFeedsRefreshActivity.isTakingLonger;
-	const animateStatus = !isLongBackgroundSync;
 	const title = feedId
 		? 'Loading new articles'
 		: isLongBackgroundSync
@@ -46,10 +44,8 @@ export function FeedRefreshStatusBanner({
 		>
 			<div className="flex min-w-0 items-center gap-3">
 				<div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-					{animateStatus ? (
-						<span className="absolute h-8 w-8 animate-ping rounded-full bg-primary/20" />
-					) : null}
-					<RefreshCw className={cn('relative h-4 w-4', animateStatus && 'animate-spin')} />
+					<span className="absolute h-8 w-8 animate-ping rounded-full bg-primary/20" />
+					<RefreshCw className="relative h-4 w-4 animate-spin" />
 				</div>
 				<div className="min-w-0 flex-1">
 					<p className="truncate text-sm font-medium text-foreground">{title}</p>
@@ -57,12 +53,7 @@ export function FeedRefreshStatusBanner({
 				</div>
 			</div>
 			<div className="mt-3 h-1 overflow-hidden rounded-full bg-background/60">
-				<div
-					className={cn(
-						'h-full w-full rounded-full bg-primary/70',
-						animateStatus && 'animate-pulse',
-					)}
-				/>
+				<div className="h-full w-full animate-pulse rounded-full bg-primary/70" />
 			</div>
 		</div>
 	);
