@@ -340,7 +340,7 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 	page,
 	request,
 }) => {
-	test.setTimeout(125_000);
+	test.setTimeout(170_000);
 	const email = `worker-refresh-${Date.now()}@example.com`;
 	const password = 'password123';
 	const stalledFeedServer = await startMutableFeedServer(
@@ -450,10 +450,20 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		await expect.poll(() => stalledFeedServer.getRequestCount()).toBe(1);
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
 
-		// Once the one-minute publisher cooldown expires, the delayed worker performs the
-		// next eligible fetch and the connected UI receives the new article via SSE.
+		// A refresh inside the two-minute freshness window is intentionally skipped rather
+		// than deferred. Once the window expires, another user action starts the real fetch.
+		await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled();
+		await page.waitForTimeout(121_000);
+		const retryResponse = page.waitForResponse(
+			(response) =>
+				response.url().includes('/api/v1/feeds/sync') &&
+				response.request().method() === 'POST' &&
+				response.status() === 202,
+		);
+		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+		await retryResponse;
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toBeVisible({
-			timeout: 100_000,
+			timeout: 20_000,
 		});
 		expect(feedServer.getRequestCount()).toBe(2);
 		expect(stalledFeedServer.getRequestCount()).toBe(2);

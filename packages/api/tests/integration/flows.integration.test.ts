@@ -630,6 +630,11 @@ describe('API integration - additional flows', () => {
 			await authedRequest(`/api/v1/feeds/${healthyFeed.body.data.id}/sync`, token, {
 				method: 'POST',
 			});
+			db.run(sql`
+				UPDATE feeds
+				SET last_synced_at = unixepoch() - 121
+				WHERE id IN (${stalledFeed.body.data.id}, ${healthyFeed.body.data.id})
+			`);
 
 			stalledServer.setHanging(true);
 			healthyServer.setXml(

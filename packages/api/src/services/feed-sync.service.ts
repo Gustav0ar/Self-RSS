@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { MessageChannel } from 'node:worker_threads';
 import type Redis from 'ioredis';
 import RSSParser from 'rss-parser';
 import { CacheKeys } from '../db/redis.js';
@@ -26,7 +27,6 @@ import type { ArticleCacheService } from './article-cache.service.js';
 import { fetchArticlePageContent } from './article-source-fetcher.js';
 import { acquireFeedSyncGuards, consumePrefetchedFeed } from './feed-fetch-guard.js';
 import { isKnownProxyFeedUrl, resolveStaleProxyFeed } from './feed-proxy-recovery.js';
-import { syncFeedsForBulk } from './feed-sync-bulk.js';
 import { deferFeedSyncUntilCooldown, processDueDelayedFeedSync } from './feed-sync-delayed.js';
 import {
 	buildPartialSyncWarning,
@@ -35,6 +35,7 @@ import {
 	nextFailedSyncRetryAt,
 	normalizeSyncThrowable,
 } from './feed-sync-errors.js';
+import { type ManualSyncProgress, syncManualFeedBatch } from './feed-sync-manual-bulk.js';
 import {
 	processNextQueuedFeedSync,
 	publishQueuedFeedSync,
@@ -66,6 +67,8 @@ interface SyncFeedOptions {
 	fetchMaxRetries?: number;
 	deferScopedCacheCleanup?: boolean;
 	deferIfThrottled?: boolean;
+	signal?: AbortSignal;
+	skipIfSyncedWithinMs?: number;
 }
 
 interface PendingArticleEnrichment {
@@ -84,7 +87,6 @@ const ARTICLE_ENRICHMENT_CONCURRENCY = 1;
 const ARTICLE_ENRICHMENT_MAX_ATTEMPTS = 5;
 const ARTICLE_ENRICHMENT_RETRY_BASE_MS = 30_000;
 const MANUAL_FEED_SYNC_TIMEOUT_MS = 10_000;
-const MANUAL_FEED_SYNC_MAX_CONCURRENCY = 1;
 const SCHEDULED_FEED_SYNC_TIMEOUT_MS = 15_000;
 const SCHEDULED_FEED_SYNC_MAX_CONCURRENCY = 1;
 const SCHEDULED_FEED_SYNC_BATCH_SIZE = 50;
@@ -93,6 +95,17 @@ const FEED_VALIDATOR_TTL_SECONDS = 15 * 60;
 // affects dead workers, allowing their unfinished feeds to resume promptly.
 const FEED_SYNC_LOCK_TTL_SECONDS = 60;
 const STALE_SYNCING_FEED_MS = (FEED_SYNC_LOCK_TTL_SECONDS + 5 * 60) * 1000;
+function yieldToEventLoop() {
+	return new Promise<void>((resolve) => {
+		const channel = new MessageChannel();
+		channel.port1.on('message', () => {
+			channel.port1.close();
+			channel.port2.close();
+			resolve();
+		});
+		channel.port2.postMessage(undefined);
+	});
+}
 export class FeedSyncService {
 	private parser: RSSParser;
 	constructor(
@@ -115,17 +128,26 @@ export class FeedSyncService {
 			headers: createFeedFetchHeaders(),
 		});
 	}
-
 	async syncFeed(feedId: string, userId: string, options: SyncFeedOptions = {}) {
+		options.signal?.throwIfAborted();
 		const feed = await this.feedRepo.findById(feedId, userId);
 		if (!feed) {
 			logger.warn('Feed not found for sync', { feedId, userId });
 			return null;
 		}
+		options.signal?.throwIfAborted();
+		if (
+			options.skipIfSyncedWithinMs != null &&
+			feed.lastSyncedAt != null &&
+			Date.now() - feed.lastSyncedAt.getTime() < options.skipIfSyncedWithinMs
+		) {
+			logger.info('Skipping recently updated feed', { feedId, userId });
+			return { newArticles: 0, total: 0, skipped: true as const };
+		}
 
 		const releaseFeedLocks = await acquireFeedSyncGuards(this.redis, feedId, feed.feedUrl);
 		if (!releaseFeedLocks) {
-			logger.info('Skipping feed sync because it is active or in its one-minute cooldown', {
+			logger.info('Skipping feed sync because it is active or in its two-minute cooldown', {
 				feedId,
 				userId,
 			});
@@ -146,10 +168,11 @@ export class FeedSyncService {
 			const isProxyFeed = isKnownProxyFeedUrl(feed.feedUrl);
 			const ignoreCache = options.forceFetch === true || articleCount === 0 || isProxyFeed;
 			const fetchOptions =
-				options.fetchTimeoutMs != null || options.fetchMaxRetries != null
+				options.fetchTimeoutMs != null || options.fetchMaxRetries != null || options.signal != null
 					? {
 							timeoutMs: options.fetchTimeoutMs,
 							maxRetries: options.fetchMaxRetries,
+							signal: options.signal,
 						}
 					: null;
 			const fetchForSync = (url: string, bypassCache: boolean) =>
@@ -166,6 +189,7 @@ export class FeedSyncService {
 				fetchAndParse: fetchForSync,
 			});
 			const parsed = proxyResolution?.parsed ?? initialParsed;
+			options.signal?.throwIfAborted();
 			const effectiveFeedUrl = proxyResolution?.feedUrl ?? feed.feedUrl;
 			const syncWarning = proxyResolution?.warning ?? null;
 			const parsedTitle = this.normalizeText(parsed.title)?.trim() ?? null;
@@ -333,6 +357,7 @@ export class FeedSyncService {
 			};
 
 			for (let i = 0; i < items.length; i += FEED_SYNC_ITEM_CONCURRENCY) {
+				options.signal?.throwIfAborted();
 				const batch = items.slice(i, i + FEED_SYNC_ITEM_CONCURRENCY);
 				const batchResults = await Promise.allSettled(
 					batch.map((item, index) => processItem(item, i + index)),
@@ -345,7 +370,9 @@ export class FeedSyncService {
 						});
 					}
 				});
+				await yieldToEventLoop();
 			}
+			options.signal?.throwIfAborted();
 			if (itemProcessingFailures.length > 0) {
 				logger.warn('Feed sync skipped malformed article items', {
 					feedId,
@@ -523,14 +550,7 @@ export class FeedSyncService {
 	async syncAllFeeds(
 		userId: string,
 		scope: ManualSyncScope = {},
-		onProgress?: (progress: {
-			totalFeeds: number;
-			completedFeeds: number;
-			syncedFeeds: number;
-			failedFeeds: number;
-			skippedFeeds: number;
-			newArticles: number;
-		}) => Promise<void> | void,
+		onProgress?: (progress: ManualSyncProgress) => Promise<void> | void,
 	) {
 		const feeds = await this.feedRepo.findAllByUser(userId);
 		const categoryFeedIds = scope.categoryId
@@ -538,35 +558,11 @@ export class FeedSyncService {
 					(await this.feedRepo.findByCategory(userId, scope.categoryId)).map((feed) => feed.id),
 				)
 			: new Set<string>();
-		// Feed scope wins over category scope when both legacy parameters are present.
-		const scopedFeeds = scope.feedId
-			? feeds.filter((feed) => feed.id === scope.feedId)
-			: scope.categoryId
-				? feeds.filter((feed) => categoryFeedIds.has(feed.id))
-				: feeds;
-		const syncableFeeds = [...scopedFeeds].sort((left, right) => {
-			const priority = (feed: (typeof feeds)[number]) => {
-				if (scope.feedId === feed.id) return 0;
-				if (categoryFeedIds.has(feed.id)) return 1;
-				return 2;
-			};
-			return priority(left) - priority(right);
-		});
-
-		if (syncableFeeds.length === 0) {
-			return {
-				totalFeeds: 0,
-				syncedFeeds: 0,
-				failedFeeds: 0,
-				skippedFeeds: 0,
-				newArticles: 0,
-			};
-		}
-
-		const bulkResult = await syncFeedsForBulk({
-			feeds: syncableFeeds,
-			concurrency: Math.min(this.config.concurrency, MANUAL_FEED_SYNC_MAX_CONCURRENCY),
-			syncFeed: (feed) =>
+		const bulkResult = await syncManualFeedBatch({
+			feeds,
+			categoryFeedIds,
+			scope,
+			syncFeed: (feed, controls) =>
 				this.syncFeed(feed.id, userId, {
 					enrichArticles: true,
 					// Warm the full user cache once after the batch.
@@ -581,6 +577,7 @@ export class FeedSyncService {
 					fetchMaxRetries: 0,
 					deferScopedCacheCleanup: true,
 					deferIfThrottled: true,
+					...controls,
 				}),
 			onProgress: async (progress) => {
 				await onProgress?.(progress);
@@ -604,10 +601,7 @@ export class FeedSyncService {
 			this.warmArticleCacheInBackground(userId, { operation: 'bulkFeedSync' });
 		}
 
-		return {
-			totalFeeds: syncableFeeds.length,
-			...bulkResult,
-		};
+		return bulkResult;
 	}
 
 	async queueSyncAllFeeds(userId: string, scope: ManualSyncScope = {}) {
@@ -873,8 +867,9 @@ export class FeedSyncService {
 	private async fetchAndParse(
 		feedUrl: string,
 		ignoreCache = false,
-		options: { timeoutMs?: number; maxRetries?: number } = {},
+		options: { timeoutMs?: number; maxRetries?: number; signal?: AbortSignal } = {},
 	): Promise<RSSParser.Output<FeedItemRecord>> {
+		options.signal?.throwIfAborted();
 		const etagKey = CacheKeys.feedEtag(feedUrl);
 		const lastModKey = CacheKeys.feedLastModified(feedUrl);
 		const prefetched = await consumePrefetchedFeed(this.redis, feedUrl, FEED_VALIDATOR_TTL_SECONDS);
@@ -901,11 +896,14 @@ export class FeedSyncService {
 					options.timeoutMs ?? this.config.timeoutMs,
 				);
 
+				const signal = options.signal
+					? AbortSignal.any([controller.signal, options.signal])
+					: controller.signal;
 				try {
 					const response = await fetchFeedWithRelayFallback(
 						feedUrl,
 						{
-							signal: controller.signal,
+							signal,
 							headers,
 						},
 						{
@@ -963,7 +961,9 @@ export class FeedSyncService {
 			return { items: [] };
 		}
 
+		options.signal?.throwIfAborted();
 		const parsed = (await this.parser.parseString(result.text)) as RSSParser.Output<FeedItemRecord>;
+		options.signal?.throwIfAborted();
 		// Some publishers return stale validators for hours or days. Expiring
 		// them frequently preserves cheap conditional polling while guaranteeing
 		// a regular unconditional fetch that can discover those articles.
