@@ -1032,7 +1032,7 @@ describe('FeedSyncService', () => {
 		});
 	});
 
-	it('bounds full refresh parsing to two feeds at a time', async () => {
+	it('serializes full refresh parsing so one feed cannot starve another feed timer', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () =>
 				Array.from({ length: 6 }, (_, index) => ({ id: `feed-${index + 1}` })),
@@ -1063,7 +1063,7 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncAllFeeds('user-1');
 
-		expect(maximumActive).toBe(2);
+		expect(maximumActive).toBe(1);
 		expect(result.syncedFeeds).toBe(6);
 	});
 
@@ -1296,7 +1296,7 @@ describe('FeedSyncService', () => {
 		expect(result).toEqual({ total: 3, succeeded: 2, failed: 1 });
 	});
 
-	it('does not let a slow scheduled feed block later healthy feeds', async () => {
+	it('serializes scheduled feed parsing so one feed cannot starve another feed timer', async () => {
 		const feedRepo = {
 			resetStaleSyncing: vi.fn(async () => []),
 			findDueForSync: vi.fn(async () => [
@@ -1331,7 +1331,7 @@ describe('FeedSyncService', () => {
 		});
 
 		const syncPromise = service.syncDueFeeds();
-		await vi.waitFor(() => expect(started).toEqual(['slow', 'fast-1', 'fast-2']));
+		await vi.waitFor(() => expect(started).toEqual(['slow']));
 		releaseSlow?.();
 
 		await expect(syncPromise).resolves.toEqual({
@@ -1339,6 +1339,7 @@ describe('FeedSyncService', () => {
 			succeeded: 3,
 			failed: 0,
 		});
+		expect(started).toEqual(['slow', 'fast-1', 'fast-2']);
 	});
 
 	it('expires publisher validators quickly so stale ETags cannot hide articles for days', async () => {
