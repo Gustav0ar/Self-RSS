@@ -2,6 +2,15 @@ function abortReason(signal: AbortSignal) {
 	return signal.reason ?? new DOMException('The operation was aborted', 'AbortError');
 }
 
+/**
+ * Start releasing an unused response body without making the caller wait for
+ * the stream implementation's cancellation promise. Some Node/Bun web-stream
+ * adapters can leave that promise pending after the underlying socket closes.
+ */
+export function cancelResponseBody(response: Response) {
+	void response.body?.cancel().catch(() => undefined);
+}
+
 function raceWithAbort<T>(
 	operation: Promise<T>,
 	signal: AbortSignal | undefined,
@@ -62,7 +71,7 @@ export async function readResponseTextWithinLimit(
 		totalBytes += value.byteLength;
 		if (totalBytes > maxBytes) {
 			controller?.abort();
-			await reader.cancel().catch(() => undefined);
+			void reader.cancel().catch(() => undefined);
 			throw new Error('Feed content exceeds maximum size');
 		}
 
@@ -101,7 +110,7 @@ export async function readResponseBytesWithinLimit(
 		totalBytes += value.byteLength;
 		if (totalBytes > maxBytes) {
 			controller?.abort();
-			await reader.cancel().catch(() => undefined);
+			void reader.cancel().catch(() => undefined);
 			throw new Error('Feed content exceeds maximum size');
 		}
 		chunks.push(value);

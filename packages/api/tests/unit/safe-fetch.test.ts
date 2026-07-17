@@ -155,6 +155,31 @@ describe('fetchWithValidatedRedirects', () => {
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 
+	it('does not wait for a redirect body cancellation that never settles', async () => {
+		const cancel = vi.fn(() => new Promise<void>(() => undefined));
+		const redirectBody = new ReadableStream({ cancel });
+		const fetchImpl = fetchSequence([
+			new Response(redirectBody, {
+				status: 302,
+				headers: { location: 'https://feeds.example.com/feed.xml' },
+			}),
+			new Response('<rss />', { status: 200 }),
+		]);
+
+		const response = await fetchWithValidatedRedirects(
+			'https://example.com/redirect',
+			{},
+			{ allowPrivateHosts: false, maxRedirects: 3 },
+			{
+				fetchImpl,
+				lookupFn: async () => [{ address: '93.184.216.34', family: 4 as const }],
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
 	it('validates DNS before delegating to an injected fetch implementation', async () => {
 		const server = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'application/xml' });

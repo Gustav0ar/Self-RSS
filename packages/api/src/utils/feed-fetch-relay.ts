@@ -1,3 +1,4 @@
+import { cancelResponseBody } from './bounded-response.js';
 import { fetchWithValidatedRedirects, type RemoteFetchSecurityOptions } from './safe-fetch.js';
 
 export interface FeedFetchRelayConfig {
@@ -52,7 +53,7 @@ export async function fetchFeedWithRelayFallback(
 		return directResponse;
 	}
 
-	await directResponse.body?.cancel().catch(() => undefined);
+	cancelResponseBody(directResponse);
 	try {
 		const relayResponse = await (deps.fetchImpl ?? fetch)(config.relayUrl!, {
 			method: 'GET',
@@ -65,7 +66,7 @@ export async function fetchFeedWithRelayFallback(
 			new URL(input).toString() !== LEGACY_VIDEOCARDZ_FEED_URL &&
 			relayResponse.headers.get('x-self-feed-relay') !== 'generic'
 		) {
-			await relayResponse.body?.cancel().catch(() => undefined);
+			cancelResponseBody(relayResponse);
 			throw new Error('configured relay does not support generic feed targets');
 		}
 		return relayResponse;

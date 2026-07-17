@@ -69,6 +69,27 @@ describe('fetchFeedWithRelayFallback', () => {
 		expect(headers.get('x-do-not-forward')).toBeNull();
 	});
 
+	it('does not wait for direct response cancellation before using the relay', async () => {
+		const cancel = vi.fn(() => new Promise<void>(() => undefined));
+		const relayResponse = new Response('<rss />', { status: 200 });
+
+		const response = await fetchFeedWithRelayFallback(
+			'https://videocardz.com/rss-feed',
+			{},
+			securityOptions,
+			relayConfig,
+			{
+				directFetch: vi.fn(
+					async () => new Response(new ReadableStream({ cancel }), { status: 403 }),
+				) as never,
+				fetchImpl: vi.fn(async () => relayResponse) as never,
+			},
+		);
+
+		expect(response).toBe(relayResponse);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
 	it.each([401, 429])('uses the relay after direct HTTP %s', async (status) => {
 		const relayResponse = new Response('<rss />', { status: 200 });
 		const response = await fetchFeedWithRelayFallback(

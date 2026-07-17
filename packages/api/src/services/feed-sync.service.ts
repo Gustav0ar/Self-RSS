@@ -7,7 +7,7 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository, SyncRunRepository } from '../repositories/settings.repository.js';
 import { createArticleContentHash } from '../utils/article-hash.js';
-import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import { cancelResponseBody, readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { fetchFeedWithRelayFallback } from '../utils/feed-fetch-relay.js';
@@ -925,13 +925,13 @@ export class FeedSyncService {
 					}
 
 					if (!response.ok) {
-						await response.body?.cancel().catch(() => undefined);
+						cancelResponseBody(response);
 						throw response;
 					}
 
 					const contentLength = response.headers?.get?.('content-length');
 					if (contentLength && Number.parseInt(contentLength, 10) > this.config.maxContentLength) {
-						await response.body?.cancel().catch(() => undefined);
+						cancelResponseBody(response);
 						throw new Error('Feed content exceeds maximum size');
 					}
 

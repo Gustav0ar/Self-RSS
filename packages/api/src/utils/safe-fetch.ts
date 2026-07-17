@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { AppError } from '../middleware/errors.js';
+import { cancelResponseBody } from './bounded-response.js';
 
 export interface RemoteFetchSecurityOptions {
 	allowPrivateHosts: boolean;
@@ -300,7 +301,7 @@ export async function fetchWithValidatedRedirects(
 		}
 		// Redirect bodies are never consumed. Cancel them explicitly so the
 		// underlying connection can be released before the next hop.
-		await response.body?.cancel().catch(() => undefined);
+		cancelResponseBody(response);
 
 		if (redirectCount === maxRedirects) {
 			throw AppError.badRequest('Feed URL exceeded the maximum number of redirects');
