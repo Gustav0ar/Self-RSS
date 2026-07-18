@@ -364,7 +364,7 @@ test('selecting a failed feed does not retry it, while explicit refresh uses the
 	expect(new URL(syncRequests[0]!).searchParams.get('feedId')).toBe('failed-feed');
 });
 
-test('all-feeds refresh fetches new articles through the real worker queue', async ({
+test('all-feeds refresh respects publisher cooldown through the real worker queue', async ({
 	page,
 	request,
 }) => {
@@ -478,10 +478,9 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		await expect.poll(() => stalledFeedServer.getRequestCount()).toBe(1);
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
 
-		// A refresh inside the two-minute freshness window is intentionally skipped rather
-		// than deferred. Once the window expires, another user action starts the real fetch.
+		// Publisher-safe refreshes keep a fifteen-minute cooldown. Repeated user actions
+		// complete without contacting either publisher again or keeping the UI blocked.
 		await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled();
-		await page.waitForTimeout(121_000);
 		const retryResponse = page.waitForResponse(
 			(response) =>
 				response.url().includes('/api/v1/feeds/sync') &&
@@ -490,11 +489,9 @@ test('all-feeds refresh fetches new articles through the real worker queue', asy
 		);
 		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
 		await retryResponse;
-		await expect(page.getByRole('button', { name: /New Worker Story/ })).toBeVisible({
-			timeout: 20_000,
-		});
-		expect(feedServer.getRequestCount()).toBe(2);
-		expect(stalledFeedServer.getRequestCount()).toBe(2);
+		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
+		expect(feedServer.getRequestCount()).toBe(1);
+		expect(stalledFeedServer.getRequestCount()).toBe(1);
 		await expect(page.getByText('Loading new articles')).toHaveCount(0);
 	} finally {
 		await Promise.all([stalledFeedServer.stop(), feedServer.stop()]);

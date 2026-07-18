@@ -3,6 +3,10 @@ import { getEnv } from './config/index.js';
 import { closeDb, getDb } from './db/client.js';
 import { closeRedis, getRedis } from './db/redis.js';
 import {
+	selectFeedPipelineWorkers,
+	startDurableIngestionRuntime,
+} from './jobs/durable-ingestion-runtime.js';
+import {
 	startArticleEnrichmentWorker,
 	startCacheWarmer,
 	startQueuedSyncWorker,
@@ -55,6 +59,7 @@ try {
 		relayUrl: env.FEED_FETCH_RELAY_URL,
 		relayToken: env.FEED_FETCH_RELAY_TOKEN,
 		allowedHosts: env.FEED_FETCH_RELAY_HOSTS,
+		pipelineMode: env.FEED_PIPELINE_MODE,
 	});
 
 	// Keep scheduled due-feed syncs and user-triggered queue drains independent.
@@ -66,18 +71,32 @@ try {
 	// Start the user queue first. Its initial drain marks the coordinator active
 	// synchronously, so startup cannot launch a scheduled batch on top of a
 	// pending manual refresh.
-	const stopQueuedSyncWorker = startQueuedSyncWorker(
-		deps.services.feedSync,
-		undefined,
-		queuedSyncCoordinator,
-		() => articleEnrichmentCoordinator.isRunning,
-	);
-	const stopSyncScheduler = startSyncScheduler(
-		deps.services.feedSync,
-		undefined,
-		dueSyncCoordinator,
-		() => queuedSyncCoordinator.isRunning || articleEnrichmentCoordinator.isRunning,
-	);
+	const pipelineWorkers = selectFeedPipelineWorkers(env.FEED_PIPELINE_MODE);
+	const durableRuntime = pipelineWorkers.durablePublisherWorkers
+		? startDurableIngestionRuntime(deps, {
+				timeoutMs: env.FEED_SYNC_TIMEOUT_MS,
+				maxContentLength: env.FEED_MAX_CONTENT_LENGTH,
+				concurrency: env.FEED_SYNC_CONCURRENCY,
+				allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
+				contact: env.ADMIN_EMAIL,
+			})
+		: null;
+	const stopQueuedSyncWorker = pipelineWorkers.legacyPublisherWorkers
+		? startQueuedSyncWorker(
+				deps.services.feedSync,
+				undefined,
+				queuedSyncCoordinator,
+				() => articleEnrichmentCoordinator.isRunning,
+			)
+		: () => undefined;
+	const stopSyncScheduler = pipelineWorkers.legacyPublisherWorkers
+		? startSyncScheduler(
+				deps.services.feedSync,
+				undefined,
+				dueSyncCoordinator,
+				() => queuedSyncCoordinator.isRunning || articleEnrichmentCoordinator.isRunning,
+			)
+		: () => undefined;
 	const stopArticleEnrichmentWorker = startArticleEnrichmentWorker(
 		deps.services.feedSync,
 		undefined,
@@ -156,6 +175,7 @@ try {
 		stopRetentionCleanup();
 		stopCacheWarmer();
 		stopWorkerHeartbeat();
+		await durableRuntime?.stop();
 
 		// Step 2: Wait for any in-flight syncs to complete
 		logger.info('Waiting for in-flight syncs to complete');
@@ -181,7 +201,10 @@ try {
 	process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
 	process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 
-	logger.info('API worker started', { env: env.NODE_ENV });
+	logger.info('API worker started', {
+		env: env.NODE_ENV,
+		feedPipelineMode: env.FEED_PIPELINE_MODE,
+	});
 } catch (err) {
 	logger.error('Failed to start worker', {
 		message: err instanceof Error ? err.message : String(err),

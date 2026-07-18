@@ -75,6 +75,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 				'Authorization',
 				'X-Self-Feed-Client-Id',
 				'X-Self-Feed-Device-Name',
+				'Idempotency-Key',
 			],
 			exposeHeaders: ['X-Request-Id'],
 			maxAge: 86400,
@@ -109,6 +110,7 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 				deps.services.opmlExport,
 				deps.services.opmlImport,
 				deps.rateLimiter,
+				deps.services.durableFeed,
 			),
 		);
 

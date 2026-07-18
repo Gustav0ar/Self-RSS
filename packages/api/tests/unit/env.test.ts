@@ -21,6 +21,16 @@ afterEach(() => {
 });
 
 describe('getEnv', () => {
+	it('defaults the feed pipeline to legacy and validates an explicit v2 rollout', () => {
+		applyEnv({ FEED_PIPELINE_MODE: undefined });
+		expect(getEnv().FEED_PIPELINE_MODE).toBe('legacy');
+
+		applyEnv({ FEED_PIPELINE_MODE: 'v2' });
+		expect(getEnv().FEED_PIPELINE_MODE).toBe('v2');
+
+		applyEnv({ FEED_PIPELINE_MODE: 'canary' });
+		expect(() => getEnv()).toThrowError(/FEED_PIPELINE_MODE/);
+	});
 	it('defaults ALLOW_REGISTRATION open outside production and closed in production', () => {
 		applyEnv({ NODE_ENV: 'development' });
 		expect(getEnv().ALLOW_REGISTRATION).toBe(true);

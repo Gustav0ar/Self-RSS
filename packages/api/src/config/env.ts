@@ -40,6 +40,7 @@ const rawEnvSchema = z
 		ADMIN_EMAIL: z.string().email().optional(),
 		ADMIN_PASSWORD: z.string().min(8).optional(),
 		FEED_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(5),
+		FEED_PIPELINE_MODE: z.enum(['legacy', 'v2']).default('legacy'),
 		FEED_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
 		FEED_MAX_CONTENT_LENGTH: z.coerce.number().int().min(1024).default(5242880),
 		FEED_ALLOW_PRIVATE_HOSTS: booleanCoercible.default(false),

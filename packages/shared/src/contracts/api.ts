@@ -84,6 +84,44 @@ export interface FeedWithCounts extends Feed {
 	unreadCount: number;
 }
 
+export interface DurableFeedRefreshItemStatus {
+	feedId: string | null;
+	sourceId: string | null;
+	jobId: string | null;
+	status: string;
+	feedTitle: string | null;
+	errorCode: string | null;
+	errorDetails: string | null;
+	nextEligibleAt: string | null;
+	publisherRequestStarted: boolean;
+	lastFetchAt: string | null;
+}
+
+export interface DurableFeedRefreshStatus {
+	requestId: string | null;
+	status: 'pending' | 'running' | 'completed' | 'completed_with_errors';
+	queued: boolean;
+	running: boolean;
+	active: boolean;
+	stale: boolean;
+	queuedAt: string | null;
+	startedAt: string | null;
+	heartbeatAt: string | null;
+	totalFeeds: number;
+	completedFeeds: number;
+	syncedFeeds: number;
+	failedFeeds: number;
+	skippedFeeds: number;
+	pendingFeeds: number;
+	runningFeeds: number;
+	deadFeeds: number;
+	newArticles: number;
+	articleRevision: number;
+	jobId: string | null;
+	scope: { feedId?: string; categoryId?: string };
+	items: DurableFeedRefreshItemStatus[];
+}
+
 export interface OpmlImportWarning {
 	code: string;
 	message: string;

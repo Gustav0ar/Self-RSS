@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { selectFeedPipelineWorkers } from '../../src/jobs/durable-ingestion-runtime.js';
 import { classifyNetworkError } from '../../src/services/durable-feed-worker.js';
 import {
 	runNonOverlappingLoop,
@@ -6,6 +7,16 @@ import {
 } from '../../src/services/durable-worker-loop.js';
 
 describe('durable worker core', () => {
+	it('selects exactly one publisher pipeline for every supported rollout mode', () => {
+		expect(selectFeedPipelineWorkers('legacy')).toEqual({
+			legacyPublisherWorkers: true,
+			durablePublisherWorkers: false,
+		});
+		expect(selectFeedPipelineWorkers('v2')).toEqual({
+			legacyPublisherWorkers: false,
+			durablePublisherWorkers: true,
+		});
+	});
 	it('classifies nested DNS and TLS causes without relying on a top-level code', () => {
 		expect(
 			classifyNetworkError(

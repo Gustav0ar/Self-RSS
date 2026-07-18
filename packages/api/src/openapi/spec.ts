@@ -1,4 +1,5 @@
 import { authPaths, authSchemas } from './auth.spec';
+import { durableFeedPaths, durableFeedSchemas } from './durable-feeds.spec';
 import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
 import { preferencesAndStatsSchemas } from './preferences-stats.spec';
 import { realtimePaths, realtimeSchemas } from './realtime.spec';
@@ -70,6 +71,7 @@ export const openApiSpec = {
 				},
 			},
 			...authSchemas,
+			...durableFeedSchemas,
 			AppSettings: {
 				type: 'object',
 				required: ['registrationLocked'],
@@ -140,7 +142,41 @@ export const openApiSpec = {
 					lastSyncError: { type: ['string', 'null'] },
 					lastSyncErrorAt: { type: ['string', 'null'], format: 'date-time' },
 					nextSyncAt: { type: 'string', format: 'date-time' },
-					syncStatus: { type: 'string', enum: ['idle', 'syncing', 'error'] },
+					syncStatus: {
+						type: 'string',
+						enum: [
+							'idle',
+							'syncing',
+							'error',
+							'pending',
+							'backoff',
+							'paused',
+							'discovery_required',
+							'replacement_pending',
+						],
+					},
+					lifecycleStatus: {
+						type: 'string',
+						enum: [
+							'pending',
+							'active',
+							'backoff',
+							'paused',
+							'error',
+							'discovery_required',
+							'replacement_pending',
+						],
+					},
+					sourceId: { type: ['string', 'null'], format: 'uuid' },
+					pendingSourceId: { type: ['string', 'null'], format: 'uuid' },
+					pendingFeedUrl: { type: ['string', 'null'], format: 'uri' },
+					sourceState: { type: ['string', 'null'] },
+					sourceErrorCode: { type: ['string', 'null'] },
+					sourceErrorDetails: { type: ['string', 'null'] },
+					lastFetchAt: { type: ['string', 'null'], format: 'date-time' },
+					lastSuccessAt: { type: ['string', 'null'], format: 'date-time' },
+					nextEligibleFetchAt: { type: ['string', 'null'], format: 'date-time' },
+					replacementRequestedAt: { type: ['string', 'null'], format: 'date-time' },
 					createdAt: { type: 'string', format: 'date-time' },
 					updatedAt: { type: 'string', format: 'date-time' },
 				},
@@ -391,55 +427,11 @@ export const openApiSpec = {
 					},
 				},
 			},
-			FeedSyncAllStatus: {
-				type: 'object',
-				required: [
-					'queued',
-					'running',
-					'active',
-					'stale',
-					'queuedAt',
-					'startedAt',
-					'heartbeatAt',
-					'totalFeeds',
-					'completedFeeds',
-					'syncedFeeds',
-					'failedFeeds',
-					'skippedFeeds',
-					'newArticles',
-					'articleRevision',
-					'jobId',
-					'scope',
-				],
-				properties: {
-					queued: { type: 'boolean' },
-					running: { type: 'boolean' },
-					active: { type: 'boolean' },
-					stale: { type: 'boolean' },
-					queuedAt: { type: 'string', format: 'date-time', nullable: true },
-					startedAt: { type: 'string', format: 'date-time', nullable: true },
-					heartbeatAt: { type: 'string', format: 'date-time', nullable: true },
-					totalFeeds: { type: 'integer', minimum: 0 },
-					completedFeeds: { type: 'integer', minimum: 0 },
-					syncedFeeds: { type: 'integer', minimum: 0 },
-					failedFeeds: { type: 'integer', minimum: 0 },
-					skippedFeeds: { type: 'integer', minimum: 0 },
-					newArticles: { type: 'integer', minimum: 0 },
-					articleRevision: { type: 'integer', minimum: 0 },
-					jobId: { type: ['string', 'null'] },
-					scope: {
-						type: 'object',
-						properties: {
-							feedId: { type: 'string', format: 'uuid' },
-							categoryId: { type: 'string', format: 'uuid' },
-						},
-					},
-				},
-			},
 		},
 	},
 	paths: {
 		...authPaths,
+		...durableFeedPaths,
 		'/categories': {
 			get: {
 				tags: ['Categories'],
@@ -575,6 +567,8 @@ export const openApiSpec = {
 		'/feeds/{feedId}': {
 			patch: {
 				tags: ['Feeds'],
+				description:
+					'Non-URL edits apply immediately. In v2 a URL change validates asynchronously while the old source remains usable; successful validation atomically removes old articles/read rows and activates the replacement.',
 				security: bearerSecurity,
 				parameters: [{ in: 'path', name: 'feedId', required: true, schema: { type: 'string' } }],
 				requestBody: json({
@@ -600,6 +594,7 @@ export const openApiSpec = {
 				tags: ['Feeds'],
 				security: bearerSecurity,
 				parameters: [
+					{ in: 'header', name: 'Idempotency-Key', schema: { type: 'string', maxLength: 255 } },
 					{ in: 'query', name: 'feedId', schema: { type: 'string', format: 'uuid' } },
 					{ in: 'query', name: 'categoryId', schema: { type: 'string', format: 'uuid' } },
 				],
@@ -610,6 +605,9 @@ export const openApiSpec = {
 			get: {
 				tags: ['Feeds'],
 				security: bearerSecurity,
+				parameters: [
+					{ in: 'query', name: 'requestId', schema: { type: 'string', format: 'uuid' } },
+				],
 				responses: {
 					'200': json(apiDataRef('#/components/schemas/FeedSyncAllStatus')),
 				},
@@ -620,7 +618,10 @@ export const openApiSpec = {
 				tags: ['Feeds'],
 				security: bearerSecurity,
 				parameters: [{ in: 'path', name: 'feedId', required: true, schema: { type: 'string' } }],
-				responses: { '200': json({ type: 'object' }) },
+				responses: {
+					'200': json({ type: 'object' }),
+					'202': json({ type: 'object' }),
+				},
 			},
 		},
 		'/articles': {

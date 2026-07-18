@@ -4,6 +4,7 @@ import { ArticleRepository } from '../repositories/article.repository.js';
 import { AuthSessionRepository } from '../repositories/auth-session.repository.js';
 import { CategoryRepository } from '../repositories/category.repository.js';
 import { FeedRepository } from '../repositories/feed.repository.js';
+import { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
 import { PreferencesRepository } from '../repositories/preferences.repository.js';
 import {
 	AppSettingsRepository,
@@ -16,6 +17,7 @@ import { ArticleService } from '../services/article.service.js';
 import { ArticleCacheService } from '../services/article-cache.service.js';
 import { AuthService } from '../services/auth.service.js';
 import { CategoryService } from '../services/category.service.js';
+import { DurableFeedFacadeService } from '../services/durable-feed-facade.service.js';
 import { FeedService } from '../services/feed.service.js';
 import { FeedSyncService } from '../services/feed-sync.service.js';
 import { getMetricsService, type MetricsService } from '../services/metrics.service.js';
@@ -35,6 +37,7 @@ export interface AppDeps {
 		authSession: AuthSessionRepository;
 		category: CategoryRepository;
 		feed: FeedRepository;
+		feedIngestion: FeedIngestionRepository;
 		article: ArticleRepository;
 		settings: AppSettingsRepository;
 		auditLog: AuditLogRepository;
@@ -47,6 +50,7 @@ export interface AppDeps {
 		category: CategoryService;
 		feed: FeedService;
 		feedSync: FeedSyncService;
+		durableFeed: DurableFeedFacadeService;
 		opmlExport: OpmlExportService;
 		opmlImport: OpmlImportService;
 		article: ArticleService;
@@ -71,6 +75,7 @@ export function createDeps(
 		relayUrl?: string;
 		relayToken?: string;
 		allowedHosts?: readonly string[];
+		pipelineMode?: 'legacy' | 'v2';
 	},
 ): AppDeps {
 	const repos = {
@@ -78,6 +83,7 @@ export function createDeps(
 		authSession: new AuthSessionRepository(db),
 		category: new CategoryRepository(db),
 		feed: new FeedRepository(db),
+		feedIngestion: new FeedIngestionRepository(db),
 		article: new ArticleRepository(db),
 		settings: new AppSettingsRepository(db),
 		auditLog: new AuditLogRepository(db),
@@ -91,6 +97,7 @@ export function createDeps(
 		maxContentLength: 5242880,
 		concurrency: 5,
 		allowPrivateHosts: false,
+		pipelineMode: 'legacy' as const,
 	};
 
 	// Build dependencies in topological order: caches first, then services that
@@ -102,6 +109,12 @@ export function createDeps(
 
 	// Realtime must be created before FeedSync since it depends on it
 	const realtime = new RealtimeService(redis, metrics);
+	const durableFeed = new DurableFeedFacadeService(
+		db,
+		repos.feed,
+		repos.category,
+		repos.feedIngestion,
+	);
 	const feedSync = new FeedSyncService(
 		repos.feed,
 		repos.article,
@@ -120,7 +133,16 @@ export function createDeps(
 	const services: AppDeps['services'] = {
 		auth: new AuthService(repos.user, repos.authSession, repos.settings, tokenUtils, redis),
 		category: new CategoryService(repos.category, repos.feed, repos.article),
-		feed: new FeedService(repos.feed, repos.category, repos.article, resolvedSyncConfig, redis),
+		feed: new FeedService(
+			repos.feed,
+			repos.category,
+			repos.article,
+			resolvedSyncConfig,
+			redis,
+			durableFeed,
+			resolvedSyncConfig.pipelineMode ?? 'legacy',
+		),
+		durableFeed,
 		opmlExport: new OpmlExportService(repos.category, repos.feed),
 		opmlImport,
 		preferences: new PreferencesService(repos.preferences),

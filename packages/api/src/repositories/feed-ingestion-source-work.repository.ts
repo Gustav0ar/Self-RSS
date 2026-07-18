@@ -163,8 +163,13 @@ export class FeedIngestionSourceWorkRepository {
 				sql`EXISTS (
 					SELECT 1 FROM feed_fetch_snapshots recoverable_snapshot
 					WHERE recoverable_snapshot.id = ${feedFetchJobs.snapshotId}
-					AND recoverable_snapshot.parse_state IN ('pending', 'failed')
-					AND recoverable_snapshot.raw_body IS NOT NULL
+					AND (
+						recoverable_snapshot.parse_state = 'parsed'
+						OR (
+							recoverable_snapshot.parse_state IN ('pending', 'failed')
+							AND recoverable_snapshot.raw_body IS NOT NULL
+						)
+					)
 				)`,
 			);
 			const candidate = tx

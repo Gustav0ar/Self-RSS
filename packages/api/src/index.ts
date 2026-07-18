@@ -55,6 +55,7 @@ try {
 		relayUrl: env.FEED_FETCH_RELAY_URL,
 		relayToken: env.FEED_FETCH_RELAY_TOKEN,
 		allowedHosts: env.FEED_FETCH_RELAY_HOSTS,
+		pipelineMode: env.FEED_PIPELINE_MODE,
 	});
 	const app = createApp(deps, tokenUtils, {
 		requireWorkerHeartbeat: env.REQUIRE_WORKER_HEARTBEAT,

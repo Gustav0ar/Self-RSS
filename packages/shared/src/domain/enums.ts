@@ -35,6 +35,11 @@ export const SyncStatus = {
 	IDLE: 'idle',
 	SYNCING: 'syncing',
 	ERROR: 'error',
+	PENDING: 'pending',
+	BACKOFF: 'backoff',
+	PAUSED: 'paused',
+	DISCOVERY_REQUIRED: 'discovery_required',
+	REPLACEMENT_PENDING: 'replacement_pending',
 } as const;
 export type SyncStatus = (typeof SyncStatus)[keyof typeof SyncStatus];
 

@@ -1,5 +1,7 @@
 import { createFeedSchema, importOpmlSchema, updateFeedSchema } from '@self-feed/shared';
 import { Hono } from 'hono';
+import { AppError } from '../middleware/errors.js';
+import type { DurableFeedFacadeService } from '../services/durable-feed-facade.service.js';
 import type { FeedService } from '../services/feed.service.js';
 import type { FeedSyncService } from '../services/feed-sync.service.js';
 import type { OpmlExportService } from '../services/opml-export.service.js';
@@ -20,6 +22,7 @@ export function createFeedRoutes(
 	opmlExportService: OpmlExportService,
 	opmlImportService: OpmlImportService,
 	rateLimiter: RateLimiter,
+	durableFeedService?: DurableFeedFacadeService,
 ) {
 	const routes = new Hono();
 
@@ -135,18 +138,49 @@ export function createFeedRoutes(
 		await enforceRateLimit(c, rateLimiter, 'feed-sync-all', RATE_LIMITS.feedSync);
 		const userId = c.get('userId');
 		const searchParams = new URL(c.req.url).searchParams;
-		const result = await syncService.queueSyncAllFeeds(userId, {
+		const scope = {
 			feedId: searchParams.get('feedId') ?? undefined,
 			categoryId: searchParams.get('categoryId') ?? undefined,
-		});
+		};
+		const result =
+			feedService.usesDurablePipeline() && durableFeedService
+				? await durableFeedService.queueRefresh(userId, scope, c.req.header('idempotency-key'))
+				: await syncService.queueSyncAllFeeds(userId, scope);
 		return c.json({ data: result }, 202);
 	});
 
 	routes.get('/sync/status', async (c) => {
 		await enforceRateLimit(c, rateLimiter, 'feeds-read', RATE_LIMITS.feedsRead);
 		const userId = c.get('userId');
-		const status = await syncService.getSyncAllFeedsStatus(userId);
+		const requestId = new URL(c.req.url).searchParams.get('requestId');
+		const status =
+			feedService.usesDurablePipeline() && durableFeedService
+				? await durableFeedService.getRefreshStatus(userId, requestId)
+				: await syncService.getSyncAllFeedsStatus(userId);
 		return c.json({ data: status });
+	});
+
+	routes.get('/discovery/:requestId', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-read', RATE_LIMITS.feedsRead);
+		if (!feedService.usesDurablePipeline() || !durableFeedService) {
+			throw AppError.notFound('Feed discovery is unavailable in legacy feed mode');
+		}
+		const userId = c.get('userId');
+		const requestId = parseUuidParam(c, 'requestId');
+		return c.json({ data: await durableFeedService.listDiscoveryCandidates(userId, requestId) });
+	});
+
+	routes.post('/discovery/candidates/:candidateId/select', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-mutate', RATE_LIMITS.feedsMutate);
+		if (!feedService.usesDurablePipeline() || !durableFeedService) {
+			throw AppError.notFound('Feed discovery is unavailable in legacy feed mode');
+		}
+		const userId = c.get('userId');
+		const candidateId = parseUuidParam(c, 'candidateId');
+		return c.json(
+			{ data: await durableFeedService.selectDiscoveryCandidate(userId, candidateId) },
+			202,
+		);
 	});
 
 	routes.patch('/:feedId', async (c) => {
@@ -165,12 +199,29 @@ export function createFeedRoutes(
 		return c.json({ data: { success: true } });
 	});
 
+	routes.post('/:feedId/replacement/cancel', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-mutate', RATE_LIMITS.feedsMutate);
+		if (!feedService.usesDurablePipeline() || !durableFeedService) {
+			throw AppError.notFound('Feed replacement cancellation is unavailable in legacy feed mode');
+		}
+		const userId = c.get('userId');
+		const feedId = parseUuidParam(c, 'feedId');
+		return c.json({ data: await feedService.cancelReplacementWithCounts(userId, feedId) });
+	});
+
 	routes.post('/:feedId/sync', async (c) => {
 		await enforceRateLimit(c, rateLimiter, 'feed-sync', RATE_LIMITS.feedSync);
 		const userId = c.get('userId');
 		const feedId = parseUuidParam(c, 'feedId');
-		const result = await syncService.syncFeed(feedId, userId);
-		return c.json({ data: result });
+		if (feedService.usesDurablePipeline() && durableFeedService) {
+			const result = await durableFeedService.queueRefresh(
+				userId,
+				{ feedId },
+				c.req.header('idempotency-key'),
+			);
+			return c.json({ data: result }, 202);
+		}
+		return c.json({ data: await syncService.syncFeed(feedId, userId) });
 	});
 
 	return routes;

@@ -19,13 +19,15 @@ export async function aggregateRefreshRequest(db: Database, requestId: string, n
 		const totalItems = [...counts.values()].reduce((total, count) => total + count, 0);
 		const terminalItems = completedItems + failedItems + deadItems;
 		const status =
-			totalItems > 0 && terminalItems === totalItems
-				? failedItems + deadItems > 0
-					? 'completed_with_errors'
-					: 'completed'
-				: runningItems > 0
-					? 'running'
-					: 'pending';
+			totalItems === 0
+				? 'completed'
+				: terminalItems === totalItems
+					? failedItems + deadItems > 0
+						? 'completed_with_errors'
+						: 'completed'
+					: runningItems > 0
+						? 'running'
+						: 'pending';
 
 		return tx
 			.update(feedRefreshRequests)
@@ -38,7 +40,7 @@ export async function aggregateRefreshRequest(db: Database, requestId: string, n
 				failedItems,
 				deadItems,
 				startedAt: runningItems > 0 || terminalItems > 0 ? now : undefined,
-				completedAt: terminalItems === totalItems && totalItems > 0 ? now : null,
+				completedAt: terminalItems === totalItems ? now : null,
 				updatedAt: now,
 			})
 			.where(eq(feedRefreshRequests.id, requestId))

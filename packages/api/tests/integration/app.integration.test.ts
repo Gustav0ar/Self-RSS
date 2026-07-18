@@ -1,13 +1,22 @@
 import { createServer } from 'node:http';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
-import { auditLogs, authSessions, users } from '../../src/db/schema.js';
+import {
+	articles,
+	auditLogs,
+	authSessions,
+	feedFetchJobs,
+	feedOrigins,
+	users,
+} from '../../src/db/schema.js';
+import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
+import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -31,6 +40,14 @@ const deps = createDeps(db, redis, tokenUtils, {
 	allowPrivateHosts: true,
 });
 const app = createApp(deps, tokenUtils);
+const v2Deps = createDeps(db, redis, tokenUtils, {
+	timeoutMs: 5000,
+	maxContentLength: 1024 * 1024,
+	concurrency: 4,
+	allowPrivateHosts: true,
+	pipelineMode: 'v2',
+});
+const v2App = createApp(v2Deps, tokenUtils);
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -42,6 +59,12 @@ function getCookieHeader(response: Response) {
 async function resetDatabase() {
 	db.run(sql.raw('PRAGMA foreign_keys = OFF;'));
 	const tables = [
+		'feed_discovery_candidates',
+		'feed_refresh_request_items',
+		'feed_snapshot_deliveries',
+		'feed_fetch_snapshots',
+		'feed_fetch_jobs',
+		'feed_refresh_requests',
 		'audit_logs',
 		'auth_sessions',
 		'sync_runs',
@@ -49,6 +72,8 @@ async function resetDatabase() {
 		'article_reads',
 		'articles',
 		'feeds',
+		'feed_sources',
+		'feed_origins',
 		'categories',
 		'user_metrics_daily',
 		'user_preferences',
@@ -90,6 +115,18 @@ async function authedRequest(path: string, token: string, init: RequestInit = {}
 			'Content-Type': 'application/json',
 		},
 	});
+}
+
+async function v2AuthedRequest(path: string, token: string, init: RequestInit = {}) {
+	const response = await v2App.request(path, {
+		...init,
+		headers: {
+			...(init.headers ?? {}),
+			Authorization: `Bearer ${token}`,
+			'Content-Type': 'application/json',
+		},
+	});
+	return { response, body: await response.json().catch(() => null) };
 }
 
 async function authedFormRequest(path: string, token: string, body: FormData) {
@@ -212,6 +249,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
 	await deps.services.realtime.close();
+	await v2Deps.services.realtime.close();
 	await closeRedis();
 	await closeDb();
 });
@@ -1487,5 +1525,112 @@ describe('API integration', () => {
 		const blockedRegister = await registerUser('second@example.com');
 		expect(blockedRegister.response.status).toBe(403);
 		expect(blockedRegister.body.error.message).toContain('Registration is currently closed');
+	});
+
+	it('queues v2 creates and refreshes without inline or duplicate publisher fetches', async () => {
+		const publisher = await startFeedServer(
+			'<rss version="2.0"><channel><title>Durable publisher</title><link>https://example.com</link><item><guid>durable-1</guid><title>Durable item</title></item></channel></rss>',
+		);
+		try {
+			const first = await registerUser('durable-first@example.com');
+			const firstToken = first.body.data.tokens.accessToken;
+			const firstCategory = await v2AuthedRequest('/api/v1/categories', firstToken, {
+				method: 'POST',
+				body: JSON.stringify({ name: 'Durable first' }),
+			});
+			const second = await registerUser('durable-second@example.com');
+			const secondToken = second.body.data.tokens.accessToken;
+			const secondCategory = await v2AuthedRequest('/api/v1/categories', secondToken, {
+				method: 'POST',
+				body: JSON.stringify({ name: 'Durable second' }),
+			});
+
+			const [firstCreate, secondCreate] = await Promise.all([
+				v2AuthedRequest('/api/v1/feeds', firstToken, {
+					method: 'POST',
+					body: JSON.stringify({
+						categoryId: firstCategory.body.data.id,
+						feedUrl: publisher.url,
+					}),
+				}),
+				v2AuthedRequest('/api/v1/feeds', secondToken, {
+					method: 'POST',
+					body: JSON.stringify({
+						categoryId: secondCategory.body.data.id,
+						feedUrl: publisher.url,
+					}),
+				}),
+			]);
+			expect(firstCreate.response.status).toBe(201);
+			expect(secondCreate.response.status).toBe(201);
+			expect(firstCreate.body.data).toMatchObject({
+				syncStatus: 'pending',
+				lifecycleStatus: 'pending',
+				sourceId: null,
+			});
+			expect(publisher.requestCount).toBe(0);
+			expect(
+				(await db.select().from(feedFetchJobs)).filter((job) =>
+					['queued', 'running'].includes(job.status),
+				),
+			).toHaveLength(1);
+
+			const worker = new DurableFeedWorker(v2Deps.repos.feedIngestion, {
+				workerId: 'v2-api-worker',
+				allowPrivateHosts: true,
+				originStartGapSeconds: 0,
+				handleDiscovery: (input) => v2Deps.services.durableFeed.persistDiscoveryCandidates(input),
+			});
+			expect(await worker.drainOnce()).toBe(1);
+			expect(publisher.requestCount).toBe(1);
+			const delivery = new FeedSnapshotDeliveryService(
+				v2Deps.repos.feedIngestion,
+				v2Deps.repos.article,
+			);
+			expect(await delivery.drainOnce('v2-api-delivery', { limit: 10 })).toBe(2);
+			expect(await db.select().from(articles)).toHaveLength(2);
+
+			const idempotencyHeaders = { 'Idempotency-Key': 'durable-refresh-1' };
+			const queued = await v2AuthedRequest('/api/v1/feeds/sync', firstToken, {
+				method: 'POST',
+				headers: idempotencyHeaders,
+			});
+			const duplicate = await v2AuthedRequest('/api/v1/feeds/sync', firstToken, {
+				method: 'POST',
+				headers: idempotencyHeaders,
+			});
+			expect(queued.response.status).toBe(202);
+			expect(duplicate.body.data.requestId).toBe(queued.body.data.requestId);
+			expect(duplicate.body.data.alreadyQueued).toBe(true);
+			expect(queued.body.data.status).toMatchObject({ queued: true, active: true });
+			await redis.flushall();
+			const persistedStatus = await v2AuthedRequest(
+				`/api/v1/feeds/sync/status?requestId=${queued.body.data.requestId}`,
+				firstToken,
+			);
+			expect(persistedStatus.body.data).toMatchObject({
+				requestId: queued.body.data.requestId,
+				queued: true,
+				active: true,
+			});
+
+			const source = await db.query.feedSources.findFirst();
+			const blockedUntil = new Date(Date.now() + 2 * 60 * 60_000);
+			await db
+				.update(feedOrigins)
+				.set({ blockedUntil, blockReason: 'http_429' })
+				.where(eq(feedOrigins.id, source!.originId));
+			expect(await worker.drainOnce()).toBe(0);
+			expect(publisher.requestCount).toBe(1);
+			const status = await v2AuthedRequest(
+				`/api/v1/feeds/sync/status?requestId=${queued.body.data.requestId}`,
+				firstToken,
+			);
+			expect(status.body.data.items[0].nextEligibleAt).toBe(
+				new Date(Math.floor(blockedUntil.getTime() / 1_000) * 1_000).toISOString(),
+			);
+		} finally {
+			await publisher.stop();
+		}
 	});
 });

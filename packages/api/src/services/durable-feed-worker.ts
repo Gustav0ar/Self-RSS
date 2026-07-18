@@ -2,6 +2,10 @@ import type { FeedIngestionRepository } from '../repositories/feed-ingestion.rep
 import { cancelResponseBody, readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
 import {
+	buildFallbackDiscoveryCandidates,
+	discoverFeedsFromHtml,
+} from './feed-discovery-parser.js';
+import {
 	classifyFetchFailure,
 	type FetchFailureKind,
 	parseRetryAfter,
@@ -58,6 +62,13 @@ export interface DurableFeedWorkerOptions {
 	now?: () => Date;
 	afterRawPersisted?: (snapshotId: string) => void | Promise<void>;
 	parseSnapshot?: (snapshotId: string, now: Date) => Promise<NormalizedFeedPayload>;
+	handleDiscovery?: (input: {
+		jobId: string;
+		sourceId: string;
+		finalUrl: string;
+		candidates: ReturnType<typeof discoverFeedsFromHtml>;
+		now: Date;
+	}) => Promise<unknown>;
 }
 
 export class DurableFeedWorker {
@@ -116,10 +127,21 @@ export class DurableFeedWorker {
 		try {
 			const context = await this.repository.findFetchJobContext(claim.job.id);
 			if (!context) throw new Error('Claimed feed fetch job context disappeared');
-			if (
-				context.snapshot &&
-				(context.snapshot.parseState === 'pending' || context.snapshot.parseState === 'failed')
-			) {
+			if (context.snapshot) {
+				if (
+					context.snapshot.rawBody &&
+					this.isHtml(context.snapshot.contentType, context.snapshot.rawBody) &&
+					this.options.handleDiscovery
+				) {
+					await this.completeDiscovery(
+						claim,
+						context.snapshot.id,
+						context.snapshot.finalUrl,
+						context.snapshot.rawBody,
+						now,
+					);
+					return;
+				}
 				const parsed = await parserSemaphore.run(() =>
 					this.parseSnapshot(context.snapshot!.id, now),
 				);
@@ -201,6 +223,16 @@ export class DurableFeedWorker {
 				await this.options.afterRawPersisted?.(snapshotId);
 			} catch (error) {
 				throw new RawSnapshotPersistedCrash(error);
+			}
+			if (this.isHtml(response.headers.get('content-type'), body) && this.options.handleDiscovery) {
+				await this.completeDiscovery(
+					claim,
+					snapshotId,
+					response.url || claim.source.requestedUrl,
+					body,
+					now,
+				);
+				return;
 			}
 			const parsed = await parserSemaphore.run(() => this.parseSnapshot(snapshotId, now));
 			await this.completeParsed(claim, parsed, response.status, now, forceUnconditional, response);
@@ -327,6 +359,72 @@ export class DurableFeedWorker {
 			now,
 		);
 		await this.repository.aggregateRefreshRequestsForJob(claim.job.id, now);
+	}
+
+	private async completeDiscovery(
+		claim: ClaimedFetch,
+		snapshotId: string,
+		finalUrl: string,
+		body: string,
+		now: Date,
+	) {
+		const candidates = [
+			...discoverFeedsFromHtml(body, finalUrl),
+			...buildFallbackDiscoveryCandidates(finalUrl),
+		];
+		const unique = [...new Map(candidates.map((candidate) => [candidate.url, candidate])).values()];
+		await this.options.handleDiscovery?.({
+			jobId: claim.job.id,
+			sourceId: claim.source.id,
+			finalUrl,
+			candidates: unique,
+			now,
+		});
+		await this.repository.markSnapshotParseFailed(
+			snapshotId,
+			{
+				code: 'discovery_required',
+				details: 'The fetched URL is HTML and requires feed discovery selection',
+			},
+			now,
+		);
+		const retryAt = new Date(now.getTime() + WEEK_MS);
+		await this.repository.finishFetchJob(
+			claim.job.id,
+			this.workerId,
+			{
+				status: 'completed',
+				completesWithoutDelivery: true,
+				source: {
+					state: 'paused',
+					nextFetchAt: retryAt,
+					backoffUntil: retryAt,
+					lastHttpStatus: 200,
+					lastFetchAt: now,
+					lastErrorCode: 'discovery_required',
+					lastErrorDetails: 'The URL is a website; select an advertised feed',
+				},
+			},
+			now,
+		);
+		await this.repository.updatePendingFeedFailure(
+			claim.source.id,
+			{
+				status: 'discovery_required',
+				code: 'discovery_required',
+				details: 'The URL is a website; select an advertised feed',
+				retryAt,
+			},
+			now,
+		);
+		await this.repository.failRefreshItemsForJob(
+			claim.job.id,
+			{
+				code: 'discovery_required',
+				details: 'The URL is a website; select an advertised feed',
+			},
+			now,
+		);
 	}
 
 	private async handleThrownFailure(
@@ -458,7 +556,25 @@ export class DurableFeedWorker {
 			},
 			now,
 		);
-		await this.repository.aggregateRefreshRequestsForJob(claim.job.id, now);
+		await this.repository.updatePendingFeedFailure(
+			claim.source.id,
+			{
+				status: policy.state === 'paused' ? 'paused' : 'backoff',
+				code: errorCode,
+				details: input.details,
+				retryAt: policy.nextAttemptAt,
+			},
+			now,
+		);
+		if (status === 'completed' && terminalParseFailure) {
+			await this.repository.failRefreshItemsForJob(
+				claim.job.id,
+				{ code: errorCode, details: input.details },
+				now,
+			);
+		} else {
+			await this.repository.aggregateRefreshRequestsForJob(claim.job.id, now);
+		}
 	}
 
 	private now() {
@@ -469,6 +585,13 @@ export class DurableFeedWorker {
 		return (
 			this.options.parseSnapshot?.(snapshotId, now) ??
 			this.snapshotParser.parsePersistedSnapshot(snapshotId, now)
+		);
+	}
+
+	private isHtml(contentType: string | null, body: string) {
+		return (
+			/text\/html|application\/xhtml/i.test(contentType ?? '') ||
+			/<html\b|<!doctype\s+html/i.test(body.slice(0, 2_048))
 		);
 	}
 }

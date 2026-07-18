@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, lt, lte, or, sql } from 'drizzle-orm';
 import {
+	articles,
 	feedFetchJobs,
 	feedFetchSnapshots,
 	feedOrigins,
@@ -266,35 +267,77 @@ export class FeedIngestionRepository extends FeedIngestionDeliveryWorkRepository
 				.where(eq(feedFetchSnapshots.id, snapshotId))
 				.get();
 			if (!snapshot) return null;
-			if (snapshot.parseState === 'parsed') return snapshot;
 
 			const retainUntil = new Date(now.getTime() + 24 * 60 * 60 * 1_000);
-			const updated = tx
-				.update(feedFetchSnapshots)
-				.set({
-					parseState: 'parsed',
-					parseErrorCode: null,
-					parseErrorDetails: null,
-					normalizedPayload: data.normalizedPayload,
-					normalizedPayloadBytes: Buffer.byteLength(data.normalizedPayload),
-					normalizedPayloadHash: data.normalizedPayloadHash,
-					parserVersion: data.parserVersion,
-					rawBodyHash: data.rawBodyHash,
-					rawBody: null,
-					rawBodyBytes: 0,
-					bodyExpiresAt: null,
-					retainUntil,
-					cleanupAfter: retainUntil,
-				})
-				.where(
-					and(
-						eq(feedFetchSnapshots.id, snapshotId),
-						inArray(feedFetchSnapshots.parseState, ['pending', 'failed']),
-					),
-				)
-				.returning()
-				.get();
+			const updated =
+				snapshot.parseState === 'parsed'
+					? snapshot
+					: tx
+							.update(feedFetchSnapshots)
+							.set({
+								parseState: 'parsed',
+								parseErrorCode: null,
+								parseErrorDetails: null,
+								normalizedPayload: data.normalizedPayload,
+								normalizedPayloadBytes: Buffer.byteLength(data.normalizedPayload),
+								normalizedPayloadHash: data.normalizedPayloadHash,
+								parserVersion: data.parserVersion,
+								rawBodyHash: data.rawBodyHash,
+								rawBody: null,
+								rawBodyBytes: 0,
+								bodyExpiresAt: null,
+								retainUntil,
+								cleanupAfter: retainUntil,
+							})
+							.where(
+								and(
+									eq(feedFetchSnapshots.id, snapshotId),
+									inArray(feedFetchSnapshots.parseState, ['pending', 'failed']),
+								),
+							)
+							.returning()
+							.get();
 			if (!updated) return snapshot;
+
+			const source = tx
+				.select()
+				.from(feedSources)
+				.where(eq(feedSources.id, snapshot.sourceId))
+				.get();
+			const pendingFeeds = tx
+				.select()
+				.from(feeds)
+				.where(eq(feeds.pendingSourceId, snapshot.sourceId))
+				.all();
+			let parsedTitle: string | null = null;
+			try {
+				parsedTitle =
+					(JSON.parse(data.normalizedPayload) as { source?: { title?: string | null } }).source
+						?.title ?? null;
+			} catch {
+				// The normalized payload was validated by the parser; keep the existing title on corruption.
+			}
+			for (const feed of pendingFeeds) {
+				if (feed.sourceId) {
+					tx.delete(articles).where(eq(articles.feedId, feed.id)).run();
+				}
+				tx.update(feeds)
+					.set({
+						sourceId: snapshot.sourceId,
+						pendingSourceId: null,
+						feedUrl: source?.normalizedUrl ?? feed.feedUrl,
+						title: feed.customTitle ?? parsedTitle ?? feed.title,
+						replacementRequestedAt: null,
+						refreshBlockedUntil: null,
+						syncStatus: 'idle',
+						lastSyncError: null,
+						lastSyncErrorCode: null,
+						lastSyncErrorAt: null,
+						updatedAt: now,
+					})
+					.where(eq(feeds.id, feed.id))
+					.run();
+			}
 
 			const subscriptions = tx
 				.select({ id: feeds.id })
@@ -318,6 +361,51 @@ export class FeedIngestionRepository extends FeedIngestionDeliveryWorkRepository
 			}
 			return updated;
 		});
+	}
+
+	async updatePendingFeedFailure(
+		sourceId: string,
+		data: { status: string; code: string; details?: string; retryAt?: Date | null },
+		now = new Date(),
+	) {
+		return this.db
+			.update(feeds)
+			.set({
+				syncStatus: data.status,
+				refreshBlockedUntil: data.retryAt,
+				lastSyncErrorCode: data.code,
+				lastSyncError: data.details ?? data.code,
+				lastSyncErrorAt: now,
+				updatedAt: now,
+			})
+			.where(eq(feeds.pendingSourceId, sourceId))
+			.returning();
+	}
+
+	async failRefreshItemsForJob(
+		jobId: string,
+		error: { code: string; details?: string },
+		now = new Date(),
+	) {
+		const requestIds = await this.db
+			.selectDistinct({ requestId: feedRefreshRequestItems.requestId })
+			.from(feedRefreshRequestItems)
+			.where(eq(feedRefreshRequestItems.jobId, jobId));
+		await this.db
+			.update(feedRefreshRequestItems)
+			.set({
+				status: 'failed',
+				completedAt: now,
+				lastErrorCode: error.code,
+				lastErrorDetails: error.details,
+				updatedAt: now,
+			})
+			.where(eq(feedRefreshRequestItems.jobId, jobId));
+		return aggregateRefreshRequests(
+			this.db,
+			requestIds.map((request) => request.requestId),
+			now,
+		);
 	}
 
 	async cleanupExpiredSnapshots(now = new Date()) {

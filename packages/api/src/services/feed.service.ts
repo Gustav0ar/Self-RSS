@@ -9,6 +9,7 @@ import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { fetchFeedWithRelayFallback } from '../utils/feed-fetch-relay.js';
 import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
+import type { DurableFeedFacadeService } from './durable-feed-facade.service.js';
 import {
 	acquireFeedFetchGuard,
 	cachePrefetchedFeed,
@@ -37,12 +38,18 @@ export class FeedService {
 		private articleRepo: ArticleRepository,
 		private config: FeedFetchConfig,
 		private redis?: Redis,
+		private durableFacade?: DurableFeedFacadeService,
+		private pipelineMode: 'legacy' | 'v2' = 'legacy',
 	) {
 		this.parser = new RSSParser({
 			timeout: 15_000,
 			maxRedirects: 3,
 			headers: createFeedFetchHeaders(),
 		});
+	}
+
+	usesDurablePipeline() {
+		return this.pipelineMode === 'v2' && Boolean(this.durableFacade);
 	}
 
 	async getAll(userId: string) {
@@ -61,6 +68,13 @@ export class FeedService {
 	}
 
 	async create(userId: string, data: { categoryId: string; feedUrl: string; title?: string }) {
+		if (this.pipelineMode === 'v2' && this.durableFacade) {
+			const pending = await this.durableFacade.createPendingFeed(userId, data);
+			return Object.assign(pending.feed, {
+				ingestionRequestId: pending.requestId,
+				ingestionJobId: pending.jobId,
+			});
+		}
 		const category = await this.categoryRepo.findById(data.categoryId, userId);
 		if (!category) {
 			throw AppError.notFound('Category not found');
@@ -117,7 +131,11 @@ export class FeedService {
 			syncStatus?: string;
 			lastSyncError?: string | null;
 			lastSyncErrorAt?: Date | null;
+			customTitle?: string | null;
 		} = { ...data };
+		if (this.pipelineMode === 'v2' && data.title !== undefined) {
+			updates.customTitle = data.title.trim();
+		}
 
 		if (data.categoryId) {
 			const category = await this.categoryRepo.findById(data.categoryId, userId);
@@ -127,6 +145,27 @@ export class FeedService {
 		}
 
 		if (data.feedUrl !== undefined) {
+			if (this.pipelineMode === 'v2' && this.durableFacade && data.feedUrl !== feed.feedUrl) {
+				const immediate = { ...data };
+				delete immediate.feedUrl;
+				if (Object.keys(immediate).length > 0) {
+					await this.feedRepo.update(feedId, userId, {
+						...immediate,
+						customTitle: immediate.title?.trim(),
+					});
+				}
+				const replacement = await this.durableFacade.requestReplacement(
+					userId,
+					feedId,
+					data.feedUrl,
+				);
+				return Object.assign(replacement.feed, {
+					ingestionRequestId: replacement.requestId,
+					ingestionJobId: replacement.jobId,
+					replacementWarning:
+						'Existing articles remain available until the new source validates; activation replaces them atomically.',
+				});
+			}
 			if (data.feedUrl === feed.feedUrl) {
 				delete updates.feedUrl;
 			} else {
@@ -173,6 +212,15 @@ export class FeedService {
 		return this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feedId) ?? 0);
 	}
 
+	async cancelReplacementWithCounts(userId: string, feedId: string) {
+		if (!this.usesDurablePipeline() || !this.durableFacade) {
+			throw AppError.notFound('Feed replacement cancellation is unavailable in legacy feed mode');
+		}
+		const unreadCountByFeedId = await this.articleRepo.unreadCountByFeed(userId, [feedId]);
+		const feed = await this.durableFacade.cancelReplacement(userId, feedId);
+		return this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feedId) ?? 0);
+	}
+
 	async delete(userId: string, feedId: string) {
 		const feed = await this.feedRepo.findById(feedId, userId);
 		if (!feed) throw AppError.notFound('Feed not found');
@@ -195,17 +243,22 @@ export class FeedService {
 			feeds.map((feed) => feed.id),
 		);
 
-		return feeds.map((feed) =>
-			this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feed.id) ?? 0),
+		return Promise.all(
+			feeds.map((feed) => this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feed.id) ?? 0)),
 		);
 	}
 
-	private serializeFeedWithCount(
+	private async serializeFeedWithCount(
 		feed: NonNullable<Awaited<ReturnType<FeedRepository['findById']>>>,
 		unreadCount: number,
 	) {
+		const lifecycle =
+			this.pipelineMode === 'v2' && this.durableFacade
+				? await this.durableFacade.lifecycleForFeed(feed)
+				: {};
 		return {
 			...feed,
+			...lifecycle,
 			unreadCount,
 			createdAt: feed.createdAt.toISOString(),
 			updatedAt: feed.updatedAt.toISOString(),

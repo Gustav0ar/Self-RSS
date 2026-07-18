@@ -24,13 +24,16 @@ export function shouldAutoSyncSelectedFeed(
 	feed:
 		| {
 				lastSyncedAt: string | null;
-				syncStatus: 'idle' | 'syncing' | 'error';
+				syncStatus: string;
 				unreadCount?: number;
 		  }
 		| undefined,
 ) {
 	return (
-		!!feed && feed.syncStatus !== 'error' && !feed.lastSyncedAt && (feed.unreadCount ?? 0) === 0
+		!!feed &&
+		(feed.syncStatus === 'idle' || feed.syncStatus === 'syncing') &&
+		!feed.lastSyncedAt &&
+		(feed.unreadCount ?? 0) === 0
 	);
 }
 

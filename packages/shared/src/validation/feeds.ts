@@ -13,6 +13,10 @@ export const updateFeedSchema = z.object({
 	pollingIntervalMinutes: z.number().int().min(5).max(1440).optional(),
 });
 
+export const selectFeedDiscoveryCandidateSchema = z.object({
+	candidateId: z.string().uuid(),
+});
+
 export const importOpmlSchema = z.object({
 	filename: z.string().min(1).max(255),
 	content: z.string().min(1).max(1_000_000),

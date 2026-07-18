@@ -62,6 +62,36 @@ export interface Feed {
 	lastSyncError: string | null;
 	lastSyncErrorAt: string | null;
 	syncStatus: SyncStatus;
+	lifecycleStatus?:
+		| 'pending'
+		| 'active'
+		| 'backoff'
+		| 'paused'
+		| 'error'
+		| 'discovery_required'
+		| 'replacement_pending'
+		| string;
+	sourceId?: string | null;
+	pendingSourceId?: string | null;
+	pendingFeedUrl?: string | null;
+	sourceState?: string | null;
+	sourceErrorCode?: string | null;
+	sourceErrorDetails?: string | null;
+	lastFetchAt?: string | null;
+	lastSuccessAt?: string | null;
+	nextEligibleFetchAt?: string | null;
+	replacementRequestedAt?: string | null;
+	discovery?: {
+		required: boolean;
+		candidates: Array<{
+			id: string;
+			requestId: string;
+			url: string;
+			title: string | null;
+			type: string;
+			expiresAt: string;
+		}>;
+	};
 	createdAt: string;
 	updatedAt: string;
 }
