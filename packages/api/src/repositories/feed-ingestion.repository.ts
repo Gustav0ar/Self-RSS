@@ -8,6 +8,7 @@ import {
 	feedRefreshRequests,
 	feedSnapshotDeliveries,
 	feedSources,
+	feeds,
 } from '../db/schema.js';
 
 type OriginInsert = typeof feedOrigins.$inferInsert;
@@ -173,8 +174,10 @@ export class FeedIngestionRepository {
 					? tx.query.feedFetchSnapshots.findFirst({
 							where: eq(feedFetchSnapshots.jobId, data.jobId),
 						})
-					: undefined);
-			if (!snapshot) throw new Error('Snapshot conflicted without a matching job snapshot');
+					: tx.query.feedFetchSnapshots.findFirst({
+							where: eq(feedFetchSnapshots.id, data.id ?? ''),
+						}));
+			if (!snapshot) throw new Error('Snapshot conflict did not resolve to an existing snapshot');
 			if (data.jobId) {
 				tx.update(feedFetchJobs)
 					.set({ snapshotId: snapshot.id, updatedAt: new Date() })
@@ -200,6 +203,140 @@ export class FeedIngestionRepository {
 		});
 		if (!existing) throw new Error('Snapshot delivery conflict did not resolve to an existing row');
 		return { delivery: existing, created: false };
+	}
+
+	async findSnapshot(snapshotId: string) {
+		return this.db.query.feedFetchSnapshots.findFirst({
+			where: eq(feedFetchSnapshots.id, snapshotId),
+		});
+	}
+
+	async markSnapshotParseFailed(
+		snapshotId: string,
+		error: { code: string; details: string },
+		now = new Date(),
+	) {
+		return this.db
+			.update(feedFetchSnapshots)
+			.set({
+				parseState: 'failed',
+				parseErrorCode: error.code,
+				parseErrorDetails: error.details,
+				cleanupAfter: new Date(now.getTime() + 48 * 60 * 60 * 1_000),
+			})
+			.where(
+				and(
+					eq(feedFetchSnapshots.id, snapshotId),
+					inArray(feedFetchSnapshots.parseState, ['pending', 'failed']),
+				),
+			)
+			.returning()
+			.get();
+	}
+
+	async markSnapshotParseSucceeded(
+		snapshotId: string,
+		data: {
+			normalizedPayload: string;
+			normalizedPayloadHash: string;
+			parserVersion: string;
+			rawBodyHash: string;
+		},
+		now = new Date(),
+	) {
+		return this.db.transaction((tx) => {
+			const snapshot = tx
+				.select()
+				.from(feedFetchSnapshots)
+				.where(eq(feedFetchSnapshots.id, snapshotId))
+				.get();
+			if (!snapshot) return null;
+			if (snapshot.parseState === 'parsed') return snapshot;
+
+			const retainUntil = new Date(now.getTime() + 24 * 60 * 60 * 1_000);
+			const updated = tx
+				.update(feedFetchSnapshots)
+				.set({
+					parseState: 'parsed',
+					parseErrorCode: null,
+					parseErrorDetails: null,
+					normalizedPayload: data.normalizedPayload,
+					normalizedPayloadBytes: Buffer.byteLength(data.normalizedPayload),
+					normalizedPayloadHash: data.normalizedPayloadHash,
+					parserVersion: data.parserVersion,
+					rawBodyHash: data.rawBodyHash,
+					rawBody: null,
+					rawBodyBytes: 0,
+					bodyExpiresAt: null,
+					retainUntil,
+					cleanupAfter: retainUntil,
+				})
+				.where(
+					and(
+						eq(feedFetchSnapshots.id, snapshotId),
+						inArray(feedFetchSnapshots.parseState, ['pending', 'failed']),
+					),
+				)
+				.returning()
+				.get();
+			if (!updated) return snapshot;
+
+			const subscriptions = tx
+				.select({ id: feeds.id })
+				.from(feeds)
+				.where(eq(feeds.sourceId, snapshot.sourceId))
+				.all();
+			if (subscriptions.length > 0) {
+				tx.insert(feedSnapshotDeliveries)
+					.values(
+						subscriptions.map((feed) => ({
+							id: crypto.randomUUID(),
+							snapshotId,
+							feedId: feed.id,
+							availableAt: now,
+							createdAt: now,
+							updatedAt: now,
+						})),
+					)
+					.onConflictDoNothing()
+					.run();
+			}
+			return updated;
+		});
+	}
+
+	async cleanupExpiredSnapshots(now = new Date()) {
+		return this.db.transaction((tx) => {
+			const expiredBodies = tx
+				.update(feedFetchSnapshots)
+				.set({
+					rawBody: null,
+					rawBodyBytes: 0,
+					parseState: 'expired',
+					parseErrorCode: 'raw_body_expired',
+					parseErrorDetails: 'Raw body expired before parsing completed',
+					cleanupAfter: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+				})
+				.where(
+					and(
+						inArray(feedFetchSnapshots.parseState, ['pending', 'failed']),
+						lte(feedFetchSnapshots.bodyExpiresAt, now),
+					),
+				)
+				.returning({ id: feedFetchSnapshots.id })
+				.all();
+			const deleted = tx
+				.delete(feedFetchSnapshots)
+				.where(
+					and(
+						inArray(feedFetchSnapshots.parseState, ['parsed', 'expired']),
+						lte(feedFetchSnapshots.cleanupAfter, now),
+					),
+				)
+				.returning({ id: feedFetchSnapshots.id })
+				.all();
+			return { expiredBodies, deleted };
+		});
 	}
 
 	async createRefreshRequest(

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom Fixture</title><subtitle>Atom description</subtitle><link href="https://atom.example/"/><id>urn:atom:fixture</id><updated>2025-05-01T00:00:00Z</updated>
+  <entry><title>Atom story</title><id>atom-1</id><link href="/Story"/><author><name>Lin</name></author><published>2025-05-02T03:04:05Z</published><updated>2025-05-03T04:05:06Z</updated><category term="Science"/><content type="html">&lt;p&gt;Atom body&lt;/p&gt;</content></entry>
+</feed>

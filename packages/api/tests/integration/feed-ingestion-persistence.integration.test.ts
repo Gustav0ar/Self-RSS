@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../src/db/migrations.js';
 import * as schema from '../../src/db/schema.js';
 import { FeedIngestionRepository } from '../../src/repositories/feed-ingestion.repository.js';
+import { FeedSnapshotParserService } from '../../src/services/feed-snapshot-parser.service.js';
+import { parseNormalizedFeed } from '../../src/services/normalized-feed-parser.js';
 
 const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../../drizzle');
 const tempDirs: string[] = [];
@@ -342,5 +344,161 @@ describe('durable feed ingestion persistence', () => {
 				.get(),
 		).toEqual({ snapshot_id: null });
 		expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+	});
+
+	it('stores raw before parsing, retries without fetch, fans out once, and bounds retention', async () => {
+		const { sqlite, db, repository } = await setupDatabase();
+		const origin = await repository.upsertOrigin({
+			id: 'snapshot-origin',
+			scheme: 'https',
+			host: 'snapshot.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'snapshot-source',
+			normalizedUrl: 'https://snapshot.example.com/feed.xml',
+			requestedUrl: 'https://snapshot.example.com/feed.xml',
+			originId: origin.id,
+		});
+		const now = new Date('2026-07-18T00:00:00Z');
+		await db.insert(schema.feeds).values([
+			{
+				id: 'snapshot-feed-1',
+				userId: 'user-1',
+				categoryId: 'category-1',
+				title: 'One',
+				feedUrl: source.requestedUrl,
+				sourceId: source.id,
+				nextSyncAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+			{
+				id: 'snapshot-feed-2',
+				userId: 'user-1',
+				categoryId: 'category-1',
+				title: 'Two',
+				feedUrl: `${source.requestedUrl}?two`,
+				sourceId: source.id,
+				nextSyncAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+		]);
+		await repository.enqueueJob({
+			id: 'snapshot-job',
+			sourceId: source.id,
+			originId: origin.id,
+			kind: 'scheduled',
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const raw =
+			'<rss version="2.0"><channel><title>Stored</title><link>https://snapshot.example.com</link><item><guid>one</guid><title>One</title></item></channel></rss>';
+		let parserAttempts = 0;
+		const parser = vi.fn(async (...args: Parameters<typeof parseNormalizedFeed>) => {
+			parserAttempts += 1;
+			if (parserAttempts === 1) throw new Error('simulated parser crash');
+			return parseNormalizedFeed(...args);
+		});
+		const service = new FeedSnapshotParserService(repository, parser);
+		const fetchMock = vi.fn();
+		await service.persistRawResponse({
+			id: 'snapshot-retry',
+			sourceId: source.id,
+			jobId: 'snapshot-job',
+			finalUrl: source.requestedUrl,
+			status: 200,
+			body: raw,
+			fetchedAt: now,
+			headers: new Headers({ etag: '"v1"', 'content-type': 'application/rss+xml' }),
+		});
+		expect(await repository.findSnapshot('snapshot-retry')).toMatchObject({
+			parseState: 'pending',
+			rawBody: raw,
+			rawBodyBytes: Buffer.byteLength(raw),
+			etag: '"v1"',
+		});
+		await expect(service.parsePersistedSnapshot('snapshot-retry', now)).rejects.toThrow(
+			'simulated parser crash',
+		);
+		expect(await repository.findSnapshot('snapshot-retry')).toMatchObject({
+			parseState: 'failed',
+			rawBody: raw,
+		});
+		const parsed = await service.parsePersistedSnapshot(
+			'snapshot-retry',
+			new Date(now.getTime() + 60_000),
+		);
+		expect(parsed.source.title).toBe('Stored');
+		expect(await repository.findSnapshot('snapshot-retry')).toMatchObject({
+			parseState: 'parsed',
+			rawBody: null,
+			rawBodyBytes: 0,
+			parserVersion: parsed.parserVersion,
+			normalizedPayloadHash: parsed.normalizedPayloadHash,
+		});
+		expect(
+			sqlite
+				.query<{ count: number }, []>(
+					"SELECT count(*) AS count FROM feed_snapshot_deliveries WHERE snapshot_id = 'snapshot-retry'",
+				)
+				.get()?.count,
+		).toBe(2);
+		await service.parsePersistedSnapshot('snapshot-retry', new Date(now.getTime() + 120_000));
+		expect(parser).toHaveBeenCalledTimes(2);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(
+			(await service.cleanupExpired(new Date(now.getTime() + 23 * 60 * 60_000))).deleted,
+		).toEqual([]);
+		expect(
+			(await service.cleanupExpired(new Date(now.getTime() + 25 * 60 * 60_000))).deleted,
+		).toEqual([{ id: 'snapshot-retry' }]);
+
+		const failingService = new FeedSnapshotParserService(repository);
+		const expiringSnapshot = await failingService.persistRawResponse({
+			id: 'snapshot-expiring',
+			sourceId: source.id,
+			finalUrl: source.requestedUrl,
+			status: 200,
+			body: 'garbage',
+			fetchedAt: now,
+		});
+		const duplicateSnapshot = await failingService.persistRawResponse({
+			id: 'snapshot-expiring',
+			sourceId: source.id,
+			finalUrl: source.requestedUrl,
+			status: 200,
+			body: 'garbage',
+			fetchedAt: now,
+		});
+		expect(duplicateSnapshot.id).toBe(expiringSnapshot.id);
+		expect(
+			sqlite
+				.query<{ count: number }, []>(
+					"SELECT count(*) AS count FROM feed_fetch_snapshots WHERE id = 'snapshot-expiring'",
+				)
+				.get()?.count,
+		).toBe(1);
+		await expect(
+			failingService.parsePersistedSnapshot('snapshot-expiring', now),
+		).rejects.toBeTruthy();
+		await failingService.cleanupExpired(new Date(now.getTime() + 23 * 60 * 60_000));
+		expect(await repository.findSnapshot('snapshot-expiring')).toMatchObject({
+			rawBody: 'garbage',
+		});
+		const expiration = await failingService.cleanupExpired(
+			new Date(now.getTime() + 25 * 60 * 60_000),
+		);
+		expect(expiration.expiredBodies).toEqual([{ id: 'snapshot-expiring' }]);
+		expect(await repository.findSnapshot('snapshot-expiring')).toMatchObject({
+			parseState: 'expired',
+			rawBody: null,
+			rawBodyBytes: 0,
+		});
+		expect(
+			(await failingService.cleanupExpired(new Date(now.getTime() + 50 * 60 * 60_000))).deleted,
+		).toEqual([{ id: 'snapshot-expiring' }]);
 	});
 });

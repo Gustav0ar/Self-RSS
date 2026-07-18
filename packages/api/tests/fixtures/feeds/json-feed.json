@@ -1,0 +1,24 @@
+{
+	"version": "https://jsonfeed.org/version/1.1",
+	"title": "JSON Fixture",
+	"home_page_url": "https://json.example/",
+	"feed_url": "https://json.example/feed.json",
+	"description": "JSON description",
+	"icon": "https://json.example/icon.png",
+	"items": [
+		{
+			"id": "json-1",
+			"url": "https://json.example/story",
+			"title": "JSON story",
+			"authors": [{ "name": "Mina" }],
+			"content_html": "<p>JSON body</p>",
+			"summary": "JSON summary",
+			"date_published": "2025-06-07T08:09:10Z",
+			"date_modified": "2025-06-08T09:10:11Z",
+			"tags": ["News", "JSON"],
+			"attachments": [
+				{ "url": "https://json.example/video.mp4", "mime_type": "video/mp4", "size_in_bytes": 456 }
+			]
+		}
+	]
+}

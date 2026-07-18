@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:sy="http://purl.org/rss/1.0/modules/syndication/">
+  <channel>
+    <title>RSS Fixture</title><link>https://example.com/</link><description>RSS description</description>
+    <language>en-US</language><ttl>30</ttl><sy:updatePeriod>daily</sy:updatePeriod><sy:updateFrequency>4</sy:updateFrequency>
+    <image><url>https://example.com/icon.png</url></image>
+    <item><guid>rss-1</guid><title>RSS item</title><link>/posts/One</link><dc:creator>Ada</dc:creator>
+      <pubDate>Tue, 04 Mar 2025 05:06:07 GMT</pubDate><category>Tech</category>
+      <enclosure url="https://cdn.example.com/audio.mp3" type="audio/mpeg" length="123" />
+      <content:encoded><![CDATA[<p>Hello <script>bad()</script><img src="/hero.jpg"></p>]]></content:encoded>
+    </item>
+    <item><title>Fallback identity</title><dc:date>2025-03-05T06:07:08Z</dc:date><description>Same body</description></item>
+    <item><title>Fallback identity</title><dc:date>2025-03-05T06:07:08Z</dc:date><description>Same body</description></item>
+  </channel>
+</rss>
