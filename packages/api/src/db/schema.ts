@@ -235,6 +235,7 @@ export const feedSources = sqliteTable(
 		lastModified: text('last_modified'),
 		lastHttpStatus: integer('last_http_status'),
 		lastFetchAt: timestamp('last_fetch_at'),
+		lastUnconditionalFetchAt: timestamp('last_unconditional_fetch_at'),
 		lastSuccessAt: timestamp('last_success_at'),
 		lastChangeAt: timestamp('last_change_at'),
 		nextFetchAt: timestamp('next_fetch_at')
@@ -641,6 +642,8 @@ export const feedFetchSnapshots = sqliteTable(
 		finalUrl: text('final_url').notNull(),
 		httpStatus: integer('http_status'),
 		contentType: text('content_type'),
+		cacheControl: text('cache_control'),
+		expires: text('expires'),
 		etag: text('etag'),
 		lastModified: text('last_modified'),
 		rawBody: text('raw_body'),

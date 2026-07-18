@@ -1,5 +1,4 @@
 import { and, asc, desc, eq, gte, inArray, lt, lte, or, sql } from 'drizzle-orm';
-import type { Database } from '../db/client.js';
 import {
 	feedFetchJobs,
 	feedFetchSnapshots,
@@ -10,6 +9,11 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
+import { FeedIngestionDeliveryWorkRepository } from './feed-ingestion-delivery-work.repository.js';
+import {
+	aggregateRefreshRequest as aggregateRefreshRequestRecord,
+	aggregateRefreshRequests,
+} from './refresh-request-aggregation.js';
 
 type OriginInsert = typeof feedOrigins.$inferInsert;
 type SourceInsert = typeof feedSources.$inferInsert;
@@ -23,9 +27,7 @@ export interface RefreshRequestItemInput {
 	jobId?: string | null;
 }
 
-export class FeedIngestionRepository {
-	constructor(private db: Database) {}
-
+export class FeedIngestionRepository extends FeedIngestionDeliveryWorkRepository {
 	async upsertOrigin(data: OriginInsert) {
 		const now = new Date();
 		const [origin] = await this.db
@@ -158,6 +160,19 @@ export class FeedIngestionRepository {
 				.returning()
 				.get();
 		});
+	}
+
+	/** Enqueue a bounded, oldest-due batch. The active-source unique index is the final guard. */
+	async aggregateRefreshRequestsForJob(jobId: string, now = new Date()) {
+		const requestIds = await this.db
+			.selectDistinct({ requestId: feedRefreshRequestItems.requestId })
+			.from(feedRefreshRequestItems)
+			.where(eq(feedRefreshRequestItems.jobId, jobId));
+		return aggregateRefreshRequests(
+			this.db,
+			requestIds.map((item) => item.requestId),
+			now,
+		);
 	}
 
 	async createSnapshot(data: SnapshotInsert) {
@@ -370,48 +385,7 @@ export class FeedIngestionRepository {
 	}
 
 	async aggregateRefreshRequest(requestId: string, now = new Date()) {
-		return this.db.transaction((tx) => {
-			const grouped = tx
-				.select({ status: feedRefreshRequestItems.status, count: sql<number>`count(*)` })
-				.from(feedRefreshRequestItems)
-				.where(eq(feedRefreshRequestItems.requestId, requestId))
-				.groupBy(feedRefreshRequestItems.status)
-				.all();
-			const counts = new Map(grouped.map((row) => [row.status, Number(row.count)]));
-			const pendingItems = counts.get('pending') ?? 0;
-			const runningItems = counts.get('running') ?? 0;
-			const completedItems = counts.get('completed') ?? 0;
-			const failedItems = counts.get('failed') ?? 0;
-			const deadItems = counts.get('dead') ?? 0;
-			const totalItems = [...counts.values()].reduce((total, count) => total + count, 0);
-			const terminalItems = completedItems + failedItems + deadItems;
-			const status =
-				totalItems > 0 && terminalItems === totalItems
-					? failedItems + deadItems > 0
-						? 'completed_with_errors'
-						: 'completed'
-					: runningItems > 0
-						? 'running'
-						: 'pending';
-
-			return tx
-				.update(feedRefreshRequests)
-				.set({
-					status,
-					totalItems,
-					pendingItems,
-					runningItems,
-					completedItems,
-					failedItems,
-					deadItems,
-					startedAt: runningItems > 0 || terminalItems > 0 ? now : undefined,
-					completedAt: terminalItems === totalItems && totalItems > 0 ? now : null,
-					updatedAt: now,
-				})
-				.where(eq(feedRefreshRequests.id, requestId))
-				.returning()
-				.get();
-		});
+		return aggregateRefreshRequestRecord(this.db, requestId, now);
 	}
 
 	async updateRefreshItemStatus(

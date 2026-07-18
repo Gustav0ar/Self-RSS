@@ -440,6 +440,14 @@ export class ArticleRepository {
 		});
 	}
 
+	async findByFeedGuids(feedId: string, guids: string[]) {
+		if (guids.length === 0) return [];
+		return this.db
+			.select()
+			.from(articles)
+			.where(and(eq(articles.feedId, feedId), inArray(articles.guid, guids)));
+	}
+
 	/**
 	 * Persist the results of a feed sync in a single transaction: insert any
 	 * new articles, store their media rows, and apply content updates to
@@ -456,10 +464,16 @@ export class ArticleRepository {
 		articlesToInsert: (typeof articles.$inferInsert)[];
 		articlesToUpdate: {
 			id: string;
+			canonicalUrl?: string | null;
+			title?: string;
+			author?: string | null;
 			contentHtml: string | null;
 			contentText: string | null;
 			excerpt: string | null;
 			heroImageUrl: string | null;
+			publishedAt?: Date | null;
+			fetchedAt?: Date;
+			incrementContentVersion?: boolean;
 			hash: string;
 		}[];
 		mediaByGuid: Map<string, (typeof articleMedia.$inferInsert)[]>;
@@ -493,11 +507,19 @@ export class ArticleRepository {
 			for (const update of params.articlesToUpdate) {
 				tx.update(articles)
 					.set({
+						canonicalUrl: update.canonicalUrl,
+						title: update.title,
+						author: update.author,
 						contentHtml: update.contentHtml,
 						contentText: update.contentText,
 						excerpt: update.excerpt,
 						heroImageUrl: update.heroImageUrl,
+						publishedAt: update.publishedAt,
+						fetchedAt: update.fetchedAt,
 						hash: update.hash,
+						contentVersion: update.incrementContentVersion
+							? sql`${articles.contentVersion} + 1`
+							: undefined,
 					})
 					.where(eq(articles.id, update.id))
 					.run();

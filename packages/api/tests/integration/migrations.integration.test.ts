@@ -208,7 +208,9 @@ function copyMigrationsBeforeDurableIngestion(baseDir: string) {
 		dialect: string;
 		entries: { tag: string }[];
 	};
-	journal.entries = journal.entries.filter((entry) => entry.tag !== '0017_smiling_naoko');
+	journal.entries = journal.entries.filter(
+		(entry) => entry.tag !== '0017_smiling_naoko' && entry.tag !== '0018_nifty_dragon_man',
+	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
 }
@@ -333,6 +335,7 @@ describe('SQLite migrations', () => {
 				sqlite
 					.query(
 						`SELECT normalized_url, min_interval_seconds, consecutive_failure_count,
+						 last_unconditional_fetch_at,
 						 last_error_code, last_error_details
 						 FROM feed_sources`,
 					)
@@ -341,6 +344,7 @@ describe('SQLite migrations', () => {
 				normalized_url: legacyUrl.trim(),
 				min_interval_seconds: 900,
 				consecutive_failure_count: 1,
+				last_unconditional_fetch_at: null,
 				last_error_code: 'legacy_sync_error',
 				last_error_details: 'Legacy publisher failure',
 			});

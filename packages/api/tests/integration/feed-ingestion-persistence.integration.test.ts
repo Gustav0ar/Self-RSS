@@ -4,19 +4,29 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../src/db/migrations.js';
 import * as schema from '../../src/db/schema.js';
+import { ArticleRepository } from '../../src/repositories/article.repository.js';
 import { FeedIngestionRepository } from '../../src/repositories/feed-ingestion.repository.js';
+import { DurableFeedScheduler } from '../../src/services/durable-feed-scheduler.js';
+import {
+	DurableFeedWorker,
+	type DurableFeedWorkerOptions,
+} from '../../src/services/durable-feed-worker.js';
+import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
 import { FeedSnapshotParserService } from '../../src/services/feed-snapshot-parser.service.js';
 import { parseNormalizedFeed } from '../../src/services/normalized-feed-parser.js';
 
 const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../../drizzle');
 const tempDirs: string[] = [];
 const databases: BunDatabase[] = [];
+const servers: ReturnType<typeof Bun.serve>[] = [];
 
 afterEach(() => {
+	for (const server of servers.splice(0)) server.stop(true);
 	for (const database of databases.splice(0)) database.close(false);
 	for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -412,13 +422,20 @@ describe('durable feed ingestion persistence', () => {
 			status: 200,
 			body: raw,
 			fetchedAt: now,
-			headers: new Headers({ etag: '"v1"', 'content-type': 'application/rss+xml' }),
+			headers: new Headers({
+				etag: '"v1"',
+				'content-type': 'application/rss+xml',
+				'cache-control': 'public, max-age=7200',
+				expires: 'Sat, 18 Jul 2026 04:00:00 GMT',
+			}),
 		});
 		expect(await repository.findSnapshot('snapshot-retry')).toMatchObject({
 			parseState: 'pending',
 			rawBody: raw,
 			rawBodyBytes: Buffer.byteLength(raw),
 			etag: '"v1"',
+			cacheControl: 'public, max-age=7200',
+			expires: 'Sat, 18 Jul 2026 04:00:00 GMT',
 		});
 		await expect(service.parsePersistedSnapshot('snapshot-retry', now)).rejects.toThrow(
 			'simulated parser crash',
@@ -432,6 +449,10 @@ describe('durable feed ingestion persistence', () => {
 			new Date(now.getTime() + 60_000),
 		);
 		expect(parsed.source.title).toBe('Stored');
+		expect(parsed.publisherHints).toMatchObject({
+			httpMaxAgeSeconds: 7200,
+			httpExpiresSeconds: 14_340,
+		});
 		expect(await repository.findSnapshot('snapshot-retry')).toMatchObject({
 			parseState: 'parsed',
 			rawBody: null,
@@ -500,5 +521,884 @@ describe('durable feed ingestion persistence', () => {
 		expect(
 			(await failingService.cleanupExpired(new Date(now.getTime() + 50 * 60 * 60_000))).deleted,
 		).toEqual([{ id: 'snapshot-expiring' }]);
+	});
+
+	it('schedules gradually and claims with source/origin eligibility, leases, and a start gap', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'claim-origin',
+			scheme: 'https',
+			host: 'claim.example.com',
+			port: 443,
+		});
+		for (let index = 0; index < 7; index += 1) {
+			await repository.upsertSource({
+				id: `claim-source-${index}`,
+				normalizedUrl: `https://claim.example.com/feed-${index}.xml`,
+				requestedUrl: `https://claim.example.com/feed-${index}.xml`,
+				originId: origin.id,
+				nextFetchAt: now,
+			});
+		}
+		const scheduler = new DurableFeedScheduler(repository, { batchSize: 3, jitter: () => 0 });
+		expect(await scheduler.tick(now)).toHaveLength(3);
+		expect(await scheduler.tick(now)).toHaveLength(3);
+		expect(await scheduler.tick(now)).toHaveLength(1);
+		expect(await scheduler.tick(now)).toHaveLength(0);
+
+		const first = await repository.claimEligibleFetchJob('claim-worker-1', 30, now, 5);
+		expect(first).not.toBeNull();
+		expect(await repository.claimEligibleFetchJob('claim-worker-2', 30, now, 5)).toBeNull();
+		await repository.finishFetchJob(
+			first!.job.id,
+			'claim-worker-1',
+			{
+				status: 'completed',
+				source: { nextFetchAt: new Date(now.getTime() + 86_400_000) },
+			},
+			now,
+		);
+		expect(
+			await repository.claimEligibleFetchJob(
+				'claim-worker-2',
+				30,
+				new Date(now.getTime() + 4_000),
+				5,
+			),
+		).toBeNull();
+		expect(
+			await repository.claimEligibleFetchJob(
+				'claim-worker-2',
+				1,
+				new Date(now.getTime() + 5_000),
+				5,
+			),
+		).not.toBeNull();
+
+		const running = await db.query.feedFetchJobs.findFirst({
+			where: (job, { eq }) => eq(job.leaseOwner, 'claim-worker-2'),
+		});
+		expect(running).toMatchObject({ status: 'running', attempts: 1 });
+		expect(
+			await repository.claimEligibleFetchJob(
+				'claim-worker-3',
+				30,
+				new Date(now.getTime() + 7_000),
+				0,
+			),
+		).toBeNull();
+		expect(
+			await repository.claimEligibleFetchJob(
+				'claim-worker-3',
+				30,
+				new Date(now.getTime() + 10_000),
+				0,
+			),
+		).not.toBeNull();
+		expect(
+			await repository.claimEligibleFetchJob(
+				'claim-worker-4',
+				30,
+				new Date(now.getTime() + 40_000),
+				0,
+			),
+		).not.toBeNull();
+	});
+
+	it('bounds publisher concurrency at four and serializes parsing across many origins', async () => {
+		const { repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		for (let index = 0; index < 20; index += 1) {
+			const origin = await repository.upsertOrigin({
+				id: `parallel-origin-${index}`,
+				scheme: 'https',
+				host: `parallel-${index}.example.com`,
+				port: 443,
+			});
+			await repository.upsertSource({
+				id: `parallel-source-${index}`,
+				normalizedUrl: `https://parallel-${index}.example.com/feed.xml`,
+				requestedUrl: `https://parallel-${index}.example.com/feed.xml`,
+				originId: origin.id,
+				nextFetchAt: now,
+			});
+		}
+		await new DurableFeedScheduler(repository, { batchSize: 100 }).tick(now);
+		let activeNetwork = 0;
+		let maxNetwork = 0;
+		let activeParsers = 0;
+		let maxParsers = 0;
+		let requests = 0;
+		const parser = new FeedSnapshotParserService(repository);
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'parallel-worker',
+			networkConcurrency: 4,
+			originStartGapSeconds: 0,
+			now: () => now,
+			fetch: async () => {
+				requests += 1;
+				activeNetwork += 1;
+				maxNetwork = Math.max(maxNetwork, activeNetwork);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				activeNetwork -= 1;
+				return new Response(
+					'<rss version="2.0"><channel><title>Parallel</title><item><guid>one</guid><title>One</title></item></channel></rss>',
+					{ headers: { 'content-type': 'application/rss+xml' } },
+				);
+			},
+			parseSnapshot: async (snapshotId, parseNow) => {
+				activeParsers += 1;
+				maxParsers = Math.max(maxParsers, activeParsers);
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				try {
+					return await parser.parsePersistedSnapshot(snapshotId, parseNow);
+				} finally {
+					activeParsers -= 1;
+				}
+			},
+		});
+		let processed = 0;
+		do {
+			processed = await worker.drainOnce();
+		} while (processed > 0);
+		expect(requests).toBe(20);
+		expect(maxNetwork).toBe(4);
+		expect(maxParsers).toBe(1);
+	});
+
+	it('reconciles refresh parents when final-attempt leases expire', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const expiredAt = new Date(now.getTime() - 1_000);
+		const origin = await repository.upsertOrigin({
+			id: 'exhausted-origin',
+			scheme: 'https',
+			host: 'exhausted.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'exhausted-source',
+			normalizedUrl: 'https://exhausted.example.com/feed.xml',
+			requestedUrl: 'https://exhausted.example.com/feed.xml',
+			originId: origin.id,
+			nextFetchAt: now,
+		});
+		await db.insert(schema.feeds).values({
+			id: 'exhausted-feed',
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: 'Exhausted delivery',
+			feedUrl: source.requestedUrl,
+			sourceId: source.id,
+			nextSyncAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const fetchJob = await repository.enqueueJob({
+			id: 'exhausted-fetch-job',
+			sourceId: source.id,
+			originId: origin.id,
+			kind: 'manual',
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await db
+			.update(schema.feedFetchJobs)
+			.set({
+				status: 'running',
+				attempts: 3,
+				maxAttempts: 3,
+				leaseOwner: 'lost-fetch-worker',
+				leaseExpiresAt: expiredAt,
+			})
+			.where(eq(schema.feedFetchJobs.id, fetchJob.job.id));
+		const fetchRefresh = await repository.createRefreshRequest(
+			{
+				id: 'exhausted-fetch-refresh',
+				userId: 'user-1',
+				scopeType: 'all',
+				requestedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+			[{ feedId: 'exhausted-feed', sourceId: source.id, jobId: fetchJob.job.id }],
+		);
+		expect(await repository.claimEligibleFetchJob('cleanup-worker', 30, now, 0)).toBeNull();
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, fetchRefresh.id),
+			}),
+		).toMatchObject({
+			status: 'completed_with_errors',
+			pendingItems: 0,
+			deadItems: 1,
+		});
+
+		const deliveryJob = await repository.enqueueJob({
+			id: 'exhausted-delivery-job',
+			sourceId: source.id,
+			originId: origin.id,
+			kind: 'manual',
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const snapshot = await repository.createSnapshot({
+			id: 'exhausted-delivery-snapshot',
+			sourceId: source.id,
+			jobId: deliveryJob.job.id,
+			fetchedAt: now,
+			finalUrl: source.requestedUrl,
+			httpStatus: 200,
+			parseState: 'parsed',
+			normalizedPayload: '{}',
+			createdAt: now,
+		});
+		await repository.createSnapshotDelivery({
+			id: 'exhausted-delivery',
+			snapshotId: snapshot.id,
+			feedId: 'exhausted-feed',
+			status: 'running',
+			attempts: 3,
+			maxAttempts: 3,
+			leaseOwner: 'lost-delivery-worker',
+			leaseExpiresAt: expiredAt,
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const deliveryRefresh = await repository.createRefreshRequest(
+			{
+				id: 'exhausted-delivery-refresh',
+				userId: 'user-1',
+				scopeType: 'feed',
+				scopeFeedId: 'exhausted-feed',
+				requestedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+			[{ feedId: 'exhausted-feed', sourceId: source.id, jobId: deliveryJob.job.id }],
+		);
+		expect(await repository.claimNextDelivery('delivery-cleanup-worker', 30, now)).toBeNull();
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, deliveryRefresh.id),
+			}),
+		).toMatchObject({
+			status: 'completed_with_errors',
+			pendingItems: 0,
+			deadItems: 1,
+		});
+	});
+
+	it('fetches a shared source once, delivers per subscription, and preserves reads/enriched content', async () => {
+		const { sqlite, db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		sqlite.exec(`
+			INSERT INTO users (id, email, password_hash, role, is_active, created_at, updated_at)
+			VALUES ('user-2', 'second@example.com', 'hash', 'user', 1, 1700000000, 1700000000);
+			INSERT INTO categories (id, user_id, name, slug, sort_order, created_at, updated_at)
+			VALUES ('category-2', 'user-2', 'News', 'news', 0, 1700000000, 1700000000);
+		`);
+		let publisherRequests = 0;
+		const server = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch() {
+				publisherRequests += 1;
+				return new Response(
+					'<rss version="2.0"><channel><title>Shared</title><link>https://publisher.example</link><item><guid>shared-1</guid><title>Shared one</title><description><![CDATA[<p>Thin body</p>]]></description></item></channel></rss>',
+					{ headers: { etag: '"shared-v1"', 'content-type': 'application/rss+xml' } },
+				);
+			},
+		});
+		servers.push(server);
+		const sourceUrl = new URL('/feed.xml', server.url).toString();
+		const parsedUrl = new URL(sourceUrl);
+		const origin = await repository.upsertOrigin({
+			id: 'shared-origin',
+			scheme: 'http',
+			host: parsedUrl.hostname,
+			port: Number(parsedUrl.port),
+		});
+		const source = await repository.upsertSource({
+			id: 'shared-source',
+			normalizedUrl: sourceUrl,
+			requestedUrl: sourceUrl,
+			originId: origin.id,
+			nextFetchAt: now,
+		});
+		await db.insert(schema.feeds).values([
+			{
+				id: 'shared-feed-1',
+				userId: 'user-1',
+				categoryId: 'category-1',
+				title: 'Original one',
+				customTitle: 'Custom one',
+				feedUrl: sourceUrl,
+				sourceId: source.id,
+				nextSyncAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+			{
+				id: 'shared-feed-2',
+				userId: 'user-2',
+				categoryId: 'category-2',
+				title: 'Original two',
+				feedUrl: `${sourceUrl}?reader=2`,
+				sourceId: source.id,
+				nextSyncAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+		]);
+		await new DurableFeedScheduler(repository).tick(now);
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'shared-fetch-worker',
+			allowPrivateHosts: true,
+			originStartGapSeconds: 0,
+			now: () => now,
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(publisherRequests).toBe(1);
+		expect(await db.select().from(schema.feedSnapshotDeliveries)).toHaveLength(2);
+
+		const committed: string[] = [];
+		const deliveries = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db), {
+			afterCommit: ({ feedId }) => {
+				committed.push(feedId);
+			},
+		});
+		expect(await deliveries.drainOnce('delivery-worker', { limit: 10, now })).toBe(2);
+		const articles = await db.select().from(schema.articles);
+		expect(articles).toHaveLength(2);
+		expect(new Set(articles.map((article) => article.feedId))).toEqual(
+			new Set(['shared-feed-1', 'shared-feed-2']),
+		);
+		expect(committed.sort()).toEqual(['shared-feed-1', 'shared-feed-2']);
+		expect(
+			await db.query.feeds.findFirst({ where: (feed, { eq }) => eq(feed.id, 'shared-feed-1') }),
+		).toMatchObject({ title: 'Custom one', customTitle: 'Custom one' });
+
+		const firstArticle = articles.find((article) => article.feedId === 'shared-feed-1')!;
+		await db.insert(schema.articleReads).values({
+			userId: 'user-1',
+			articleId: firstArticle.id,
+			readAt: now,
+		});
+		await db
+			.update(schema.articles)
+			.set({
+				contentHtml: `<p>${'enriched '.repeat(100)}</p>`,
+				contentText: 'enriched '.repeat(100),
+				hash: 'enriched-hash',
+				contentStatus: 'full_ready',
+			})
+			.where(eq(schema.articles.id, firstArticle.id));
+		const firstDelivery = await db.query.feedSnapshotDeliveries.findFirst({
+			where: (delivery, { eq }) => eq(delivery.feedId, 'shared-feed-1'),
+		});
+		await db
+			.update(schema.feedSnapshotDeliveries)
+			.set({ status: 'pending', availableAt: now, completedAt: null, attempts: 0 })
+			.where(eq(schema.feedSnapshotDeliveries.id, firstDelivery!.id));
+		await deliveries.drainOnce('delivery-replay', { limit: 1, now });
+		expect(
+			await db.query.articles.findFirst({
+				where: (article, { eq }) => eq(article.id, firstArticle.id),
+			}),
+		).toMatchObject({ id: firstArticle.id, hash: 'enriched-hash', contentStatus: 'full_ready' });
+		expect(await db.select().from(schema.articleReads)).toHaveLength(1);
+		expect(publisherRequests).toBe(1);
+
+		const secondDelivery = await db.query.feedSnapshotDeliveries.findFirst({
+			where: (delivery, { eq }) => eq(delivery.feedId, 'shared-feed-2'),
+		});
+		await db
+			.update(schema.feedSnapshotDeliveries)
+			.set({ status: 'pending', availableAt: now, completedAt: null, attempts: 0 })
+			.where(eq(schema.feedSnapshotDeliveries.id, secondDelivery!.id));
+		let failLocally = true;
+		const locallyFailing = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db), {
+			beforePersist() {
+				if (failLocally) {
+					failLocally = false;
+					throw new Error('local database fault');
+				}
+			},
+		});
+		expect(await locallyFailing.drainOnce('delivery-local-failure', { limit: 1, now })).toBe(1);
+		expect(
+			await db.query.feedSnapshotDeliveries.findFirst({
+				where: (delivery, { eq }) => eq(delivery.id, secondDelivery!.id),
+			}),
+		).toMatchObject({ status: 'pending', attempts: 1 });
+		expect(
+			await locallyFailing.drainOnce('delivery-local-retry', {
+				limit: 1,
+				now: new Date(now.getTime() + 61_000),
+			}),
+		).toBe(1);
+		expect(publisherRequests).toBe(1);
+
+		await db
+			.update(schema.feedSnapshotDeliveries)
+			.set({ status: 'pending', availableAt: now, completedAt: null, attempts: 0 })
+			.where(eq(schema.feedSnapshotDeliveries.id, secondDelivery!.id));
+		const callbackFailure = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db), {
+			afterCommit() {
+				throw new Error('cache unavailable');
+			},
+		});
+		await expect(
+			callbackFailure.drainOnce('delivery-callback-failure', { limit: 1, now }),
+		).rejects.toThrow('cache unavailable');
+		expect(
+			await db.query.feedSnapshotDeliveries.findFirst({
+				where: (delivery, { eq }) => eq(delivery.id, secondDelivery!.id),
+			}),
+		).toMatchObject({ status: 'completed' });
+		expect(publisherRequests).toBe(1);
+	});
+
+	it('uses validators until the weekly unconditional boundary and completes 304 refreshes', async () => {
+		const { db, repository } = await setupDatabase();
+		let clock = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'validator-origin',
+			scheme: 'https',
+			host: 'validator.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'validator-source',
+			normalizedUrl: 'https://validator.example.com/feed.xml',
+			requestedUrl: 'https://validator.example.com/feed.xml',
+			originId: origin.id,
+			etag: '"validator-v1"',
+			lastModified: 'Fri, 17 Jul 2026 00:00:00 GMT',
+			lastUnconditionalFetchAt: new Date(clock.getTime() - 6 * 24 * 60 * 60_000),
+			nextFetchAt: clock,
+		});
+		await db.insert(schema.feeds).values({
+			id: 'validator-feed',
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: 'Validator',
+			feedUrl: source.requestedUrl,
+			sourceId: source.id,
+			nextSyncAt: clock,
+			createdAt: clock,
+			updatedAt: clock,
+		});
+		const refresh = await repository.createRefreshRequest(
+			{
+				id: 'validator-refresh',
+				userId: 'user-1',
+				idempotencyKey: 'validator-refresh-key',
+				scopeType: 'feed',
+				scopeFeedId: 'validator-feed',
+				requestedAt: clock,
+				createdAt: clock,
+				updatedAt: clock,
+			},
+			[{ feedId: 'validator-feed', sourceId: source.id }],
+		);
+		const firstJob = await repository.enqueueJob({
+			id: 'validator-job-1',
+			sourceId: source.id,
+			originId: origin.id,
+			refreshRequestId: refresh.id,
+			kind: 'manual',
+			priority: 100,
+			availableAt: clock,
+			createdAt: clock,
+			updatedAt: clock,
+		});
+		await repository.linkRefreshItemsToJob(source.id, firstJob.job.id, clock);
+		const requestHeaders: Headers[] = [];
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'validator-worker',
+			originStartGapSeconds: 0,
+			now: () => clock,
+			fetch: async (_url, init) => {
+				requestHeaders.push(new Headers(init.headers));
+				return new Response(null, { status: 304 });
+			},
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(requestHeaders[0]?.get('if-none-match')).toBe('"validator-v1"');
+		expect(await db.select().from(schema.feedSnapshotDeliveries)).toHaveLength(0);
+		expect(await repository.aggregateRefreshRequest(refresh.id, clock)).toMatchObject({
+			status: 'completed',
+			completedItems: 1,
+			pendingItems: 0,
+		});
+
+		clock = new Date(clock.getTime() + 24 * 60 * 60_000);
+		await db
+			.update(schema.feedSources)
+			.set({ nextFetchAt: clock, backoffUntil: null })
+			.where(eq(schema.feedSources.id, source.id));
+		await new DurableFeedScheduler(repository).tick(clock);
+		expect(await worker.drainOnce()).toBe(1);
+		expect(requestHeaders[1]?.has('if-none-match')).toBe(false);
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({ lastUnconditionalFetchAt: clock });
+	});
+
+	it('blocks an origin on 429 without inline retry and manual priority cannot bypass it', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'rate-origin',
+			scheme: 'https',
+			host: 'rate.example.com',
+			port: 443,
+		});
+		for (let index = 0; index < 2; index += 1) {
+			const source = await repository.upsertSource({
+				id: `rate-source-${index}`,
+				normalizedUrl: `https://rate.example.com/feed-${index}.xml`,
+				requestedUrl: `https://rate.example.com/feed-${index}.xml`,
+				originId: origin.id,
+				nextFetchAt: now,
+			});
+			await repository.enqueueJob({
+				id: `rate-job-${index}`,
+				sourceId: source.id,
+				originId: origin.id,
+				kind: index === 1 ? 'manual' : 'scheduled',
+				priority: index === 1 ? 100 : 0,
+				availableAt: now,
+				createdAt: now,
+				updatedAt: now,
+			});
+		}
+		let requests = 0;
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'rate-worker',
+			networkConcurrency: 4,
+			originStartGapSeconds: 0,
+			now: () => now,
+			fetch: async () => {
+				requests += 1;
+				return new Response('slow down', { status: 429, headers: { 'retry-after': '3600' } });
+			},
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(requests).toBe(1);
+		expect(await worker.drainOnce()).toBe(0);
+		expect(requests).toBe(1);
+		expect(
+			await db.query.feedOrigins.findFirst({ where: (row, { eq }) => eq(row.id, origin.id) }),
+		).toMatchObject({
+			retryAfterUntil: new Date(now.getTime() + 3_600_000),
+			blockedUntil: new Date(now.getTime() + 3_600_000),
+		});
+		expect(
+			await repository.claimEligibleFetchJob(
+				'bypass-worker',
+				60,
+				new Date(now.getTime() + 30_000),
+				0,
+			),
+		).toBeNull();
+	});
+
+	it('recovers a raw snapshot after lease expiry without another publisher request', async () => {
+		const { db, repository } = await setupDatabase();
+		let clock = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'crash-origin',
+			scheme: 'https',
+			host: 'crash.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'crash-source',
+			normalizedUrl: 'https://crash.example.com/feed.xml',
+			requestedUrl: 'https://crash.example.com/feed.xml',
+			originId: origin.id,
+			etag: '"crash-v1"',
+			lastUnconditionalFetchAt: new Date(clock.getTime() - 8 * 24 * 60 * 60_000),
+			nextFetchAt: clock,
+		});
+		await db.insert(schema.feeds).values({
+			id: 'crash-feed',
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: 'Crash',
+			feedUrl: source.requestedUrl,
+			sourceId: source.id,
+			nextSyncAt: clock,
+			createdAt: clock,
+			updatedAt: clock,
+		});
+		await new DurableFeedScheduler(repository).tick(clock);
+		let requests = 0;
+		const fetchImpl: NonNullable<DurableFeedWorkerOptions['fetch']> = async () => {
+			requests += 1;
+			return new Response(
+				'<rss version="2.0"><channel><title>Crash</title><item><guid>crash-one</guid><title>One</title></item></channel></rss>',
+				{ headers: { 'content-type': 'application/rss+xml' } },
+			);
+		};
+		const crashing = new DurableFeedWorker(repository, {
+			workerId: 'crashing-worker',
+			leaseSeconds: 1,
+			originStartGapSeconds: 5,
+			now: () => clock,
+			fetch: fetchImpl,
+			afterRawPersisted() {
+				throw new Error('simulated process crash');
+			},
+		});
+		await expect(crashing.drainOnce()).rejects.toThrow('simulated process crash');
+		expect(requests).toBe(1);
+		expect(await db.select().from(schema.feedFetchSnapshots)).toHaveLength(1);
+		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({ status: 'running' });
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({ lastUnconditionalFetchAt: clock });
+
+		clock = new Date(clock.getTime() + 2_000);
+		const recovered = new DurableFeedWorker(repository, {
+			workerId: 'recovery-worker',
+			leaseSeconds: 30,
+			originStartGapSeconds: 5,
+			now: () => clock,
+			fetch: fetchImpl,
+		});
+		expect(await recovered.drainOnce()).toBe(1);
+		expect(requests).toBe(1);
+		expect(await db.select().from(schema.feedSnapshotDeliveries)).toHaveLength(1);
+		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({ status: 'completed' });
+	});
+
+	it('releases caller-aborted work without consuming attempts or counting publisher failure', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'abort-origin',
+			scheme: 'https',
+			host: 'abort.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'abort-source',
+			normalizedUrl: 'https://abort.example.com/feed.xml',
+			requestedUrl: 'https://abort.example.com/feed.xml',
+			originId: origin.id,
+			nextFetchAt: now,
+		});
+		await repository.enqueueJob({
+			id: 'abort-job',
+			sourceId: source.id,
+			originId: origin.id,
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const controller = new AbortController();
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'abort-worker',
+			originStartGapSeconds: 0,
+			now: () => now,
+			fetch: async (_url, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					const requestSignal = init.signal!;
+					requestSignal.addEventListener('abort', () => reject(requestSignal.reason), {
+						once: true,
+					});
+				}),
+		});
+		const draining = worker.drainOnce(controller.signal);
+		setTimeout(() => controller.abort(new Error('deploy stop')), 5);
+		expect(await draining).toBe(1);
+		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({
+			status: 'queued',
+			attempts: 0,
+			leaseOwner: null,
+			availableAt: new Date(now.getTime() + 15 * 60_000),
+		});
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({ consecutiveFailureCount: 0 });
+		expect(
+			await db.query.feedOrigins.findFirst({ where: (row, { eq }) => eq(row.id, origin.id) }),
+		).toMatchObject({ consecutiveFailureCount: 0 });
+	});
+
+	it('bounds stalled publisher requests and applies one transport failure without inline retry', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'timeout-origin',
+			scheme: 'https',
+			host: 'timeout.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'timeout-source',
+			normalizedUrl: 'https://timeout.example.com/feed.xml',
+			requestedUrl: 'https://timeout.example.com/feed.xml',
+			originId: origin.id,
+			nextFetchAt: now,
+		});
+		await repository.enqueueJob({
+			id: 'timeout-job',
+			sourceId: source.id,
+			originId: origin.id,
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		let requests = 0;
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'timeout-worker',
+			originStartGapSeconds: 0,
+			requestTimeoutMs: 10,
+			now: () => now,
+			fetch: async (_url, init) => {
+				requests += 1;
+				return new Promise<Response>((_resolve, reject) => {
+					const requestSignal = init.signal!;
+					requestSignal.addEventListener('abort', () => reject(requestSignal.reason), {
+						once: true,
+					});
+				});
+			},
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(requests).toBe(1);
+		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({
+			status: 'queued',
+			attempts: 1,
+		});
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({ consecutiveFailureCount: 1, lastErrorCode: 'network' });
+		expect(
+			await db.query.feedOrigins.findFirst({ where: (row, { eq }) => eq(row.id, origin.id) }),
+		).toMatchObject({
+			consecutiveFailureCount: 1,
+			blockedUntil: new Date(now.getTime() + 15 * 60_000),
+		});
+	});
+
+	it('tracks changed and unchanged normalized hashes for adaptive cadence', async () => {
+		const { db, repository } = await setupDatabase();
+		let clock = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'hash-origin',
+			scheme: 'https',
+			host: 'hash.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'hash-source',
+			normalizedUrl: 'https://hash.example.com/feed.xml',
+			requestedUrl: 'https://hash.example.com/feed.xml',
+			originId: origin.id,
+			nextFetchAt: clock,
+		});
+		let title = 'Version one';
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'hash-worker',
+			originStartGapSeconds: 0,
+			now: () => clock,
+			fetch: async () =>
+				new Response(
+					`<rss version="2.0"><channel><title>Hash</title><item><guid>one</guid><title>${title}</title></item></channel></rss>`,
+					{ headers: { 'content-type': 'application/rss+xml' } },
+				),
+		});
+		await new DurableFeedScheduler(repository).tick(clock);
+		await worker.drainOnce();
+		const first = await db.query.feedSources.findFirst({
+			where: (row, { eq }) => eq(row.id, source.id),
+		});
+		expect(first).toMatchObject({ consecutiveUnchangedCount: 0, lastChangeAt: clock });
+
+		clock = new Date(clock.getTime() + 15 * 60_000);
+		await db
+			.update(schema.feedSources)
+			.set({ nextFetchAt: clock })
+			.where(eq(schema.feedSources.id, source.id));
+		await new DurableFeedScheduler(repository).tick(clock);
+		await worker.drainOnce();
+		const unchanged = await db.query.feedSources.findFirst({
+			where: (row, { eq }) => eq(row.id, source.id),
+		});
+		expect(unchanged).toMatchObject({
+			consecutiveUnchangedCount: 1,
+			lastChangeAt: first!.lastChangeAt,
+			normalizedPayloadHash: first!.normalizedPayloadHash,
+		});
+
+		title = 'Version two';
+		clock = new Date(clock.getTime() + 15 * 60_000);
+		await db
+			.update(schema.feedSources)
+			.set({ nextFetchAt: clock })
+			.where(eq(schema.feedSources.id, source.id));
+		await new DurableFeedScheduler(repository).tick(clock);
+		await worker.drainOnce();
+		const changed = await db.query.feedSources.findFirst({
+			where: (row, { eq }) => eq(row.id, source.id),
+		});
+		expect(changed).toMatchObject({ consecutiveUnchangedCount: 0, lastChangeAt: clock });
+		expect(changed?.normalizedPayloadHash).not.toBe(first?.normalizedPayloadHash);
+	});
+
+	it('pauses and opens the source circuit on a permanent parse threshold without penalizing origin', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const origin = await repository.upsertOrigin({
+			id: 'permanent-origin',
+			scheme: 'https',
+			host: 'permanent.example.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'permanent-source',
+			normalizedUrl: 'https://permanent.example.com/feed.xml',
+			requestedUrl: 'https://permanent.example.com/feed.xml',
+			originId: origin.id,
+			consecutiveFailureCount: 2,
+			nextFetchAt: now,
+		});
+		await repository.enqueueJob({
+			id: 'permanent-job',
+			sourceId: source.id,
+			originId: origin.id,
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'permanent-worker',
+			originStartGapSeconds: 0,
+			now: () => now,
+			fetch: async () => new Response('not a feed', { status: 200 }),
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({
+			state: 'paused',
+			circuitState: 'open',
+			consecutiveFailureCount: 3,
+			nextFetchAt: new Date(now.getTime() + 7 * 24 * 60 * 60_000),
+		});
+		expect(
+			await db.query.feedOrigins.findFirst({ where: (row, { eq }) => eq(row.id, origin.id) }),
+		).toMatchObject({ consecutiveFailureCount: 0, circuitState: 'closed' });
+		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({ status: 'completed' });
 	});
 });

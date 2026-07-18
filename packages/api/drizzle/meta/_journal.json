@@ -120,6 +120,13 @@
       "when": 1784344279786,
       "tag": "0017_smiling_naoko",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1784346676671,
+      "tag": "0018_nifty_dragon_man",
+      "breakpoints": true
     }
   ]
 }

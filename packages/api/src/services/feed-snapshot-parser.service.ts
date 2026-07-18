@@ -32,6 +32,8 @@ export class FeedSnapshotParserService {
 			finalUrl: input.finalUrl,
 			httpStatus: input.status,
 			contentType: input.headers?.get('content-type'),
+			cacheControl: input.headers?.get('cache-control'),
+			expires: input.headers?.get('expires'),
 			etag: input.headers?.get('etag'),
 			lastModified: input.headers?.get('last-modified'),
 			rawBody: input.body,
@@ -59,6 +61,8 @@ export class FeedSnapshotParserService {
 		try {
 			const headers = new Headers();
 			if (snapshot.contentType) headers.set('content-type', snapshot.contentType);
+			if (snapshot.cacheControl) headers.set('cache-control', snapshot.cacheControl);
+			if (snapshot.expires) headers.set('expires', snapshot.expires);
 			if (snapshot.etag) headers.set('etag', snapshot.etag);
 			if (snapshot.lastModified) headers.set('last-modified', snapshot.lastModified);
 			const parsed = await this.parser(snapshot.rawBody, {
