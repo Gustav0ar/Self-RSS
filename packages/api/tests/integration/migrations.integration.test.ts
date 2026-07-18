@@ -199,7 +199,168 @@ function copyMigrationFolder(baseDir: string) {
 	return folder;
 }
 
+function copyMigrationsBeforeDurableIngestion(baseDir: string) {
+	const folder = join(baseDir, 'pre-durable-drizzle');
+	cpSync(migrationsFolder, folder, { recursive: true });
+	const journalPath = join(folder, 'meta/_journal.json');
+	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+		version: string;
+		dialect: string;
+		entries: { tag: string }[];
+	};
+	journal.entries = journal.entries.filter((entry) => entry.tag !== '0017_smiling_naoko');
+	writeFileSync(journalPath, JSON.stringify(journal));
+	return folder;
+}
+
 describe('SQLite migrations', () => {
+	it('backfills shared source identity without changing subscriptions, articles, or reads', async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-durable-migration-'));
+		tempDirs.push(tempDir);
+		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
+		sqlite.exec('PRAGMA foreign_keys = ON;');
+
+		try {
+			const db = drizzle(sqlite, { schema });
+			applyMigrations(db, {
+				migrationsFolder: copyMigrationsBeforeDurableIngestion(tempDir),
+			});
+			const now = 1_700_000_000;
+			for (const [id, email] of [
+				['user-1', 'migration-reader-1@example.com'],
+				['user-2', 'migration-reader-2@example.com'],
+			] as const) {
+				sqlite
+					.query(
+						`INSERT INTO users
+						 (id, email, password_hash, role, is_active, created_at, updated_at)
+						 VALUES (?, ?, 'hash', 'user', 1, ?, ?)`,
+					)
+					.run(id, email, now, now);
+				sqlite
+					.query(
+						`INSERT INTO categories
+						 (id, user_id, name, slug, sort_order, created_at, updated_at)
+						 VALUES (?, ?, 'News', 'news', 0, ?, ?)`,
+					)
+					.run(`category-${id}`, id, now, now);
+			}
+			const legacyUrl = '  HTTPS://Example.COM/feed.xml  ';
+			sqlite
+				.query(
+					`INSERT INTO feeds
+					 (id, user_id, category_id, title, feed_url, polling_interval_minutes,
+					  last_synced_at, next_sync_at, sync_status, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+				)
+				.run(
+					'feed-user-1',
+					'user-1',
+					'category-user-1',
+					'Reader one title',
+					legacyUrl,
+					5,
+					now - 60,
+					now,
+					now,
+					now,
+				);
+			sqlite
+				.query(
+					`INSERT INTO feeds
+					 (id, user_id, category_id, title, feed_url, polling_interval_minutes,
+					  last_sync_error, last_sync_error_at, next_sync_at, sync_status, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'error', ?, ?)`,
+				)
+				.run(
+					'feed-user-2',
+					'user-2',
+					'category-user-2',
+					'Reader two title',
+					legacyUrl.trim(),
+					10,
+					'Legacy publisher failure',
+					now - 30,
+					now,
+					now,
+					now,
+				);
+			sqlite
+				.query(
+					`INSERT INTO articles
+					 (id, feed_id, guid, title, fetched_at, hash)
+					 VALUES ('article-legacy', 'feed-user-1', 'guid-legacy', 'Preserved', ?, 'hash')`,
+				)
+				.run(now);
+			sqlite
+				.query(
+					`INSERT INTO article_reads (user_id, article_id, read_at, source)
+					 VALUES ('user-1', 'article-legacy', ?, 'manual')`,
+				)
+				.run(now);
+
+			applyMigrations(db, { migrationsFolder });
+			applyMigrations(db, { migrationsFolder });
+
+			expect(countRows(sqlite, 'feeds')).toBe(2);
+			expect(countRows(sqlite, 'feed_sources')).toBe(1);
+			expect(countRows(sqlite, 'feed_origins')).toBe(1);
+			expect(sqlite.query('SELECT scheme, host, port FROM feed_origins').get()).toEqual({
+				scheme: 'https',
+				host: 'example.com',
+				port: 443,
+			});
+			expect(countRows(sqlite, 'articles')).toBe(1);
+			expect(countRows(sqlite, 'article_reads')).toBe(1);
+			const feedRows = sqlite
+				.query<{ id: string; source_id: string; custom_title: string }, []>(
+					'SELECT id, source_id, custom_title FROM feeds ORDER BY id',
+				)
+				.all();
+			expect(feedRows).toEqual([
+				{
+					id: 'feed-user-1',
+					source_id: 'source:feed-user-1',
+					custom_title: 'Reader one title',
+				},
+				{
+					id: 'feed-user-2',
+					source_id: 'source:feed-user-1',
+					custom_title: 'Reader two title',
+				},
+			]);
+			expect(
+				sqlite
+					.query(
+						`SELECT normalized_url, min_interval_seconds, consecutive_failure_count,
+						 last_error_code, last_error_details
+						 FROM feed_sources`,
+					)
+					.get(),
+			).toMatchObject({
+				normalized_url: legacyUrl.trim(),
+				min_interval_seconds: 900,
+				consecutive_failure_count: 1,
+				last_error_code: 'legacy_sync_error',
+				last_error_details: 'Legacy publisher failure',
+			});
+			expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+
+			sqlite.query('DELETE FROM feed_sources WHERE id = ?').run('source:feed-user-1');
+			expect(countRows(sqlite, 'feeds')).toBe(2);
+			expect(countRows(sqlite, 'articles')).toBe(1);
+			expect(
+				sqlite
+					.query<{ count: number }, []>(
+						'SELECT count(*) AS count FROM feeds WHERE source_id IS NULL',
+					)
+					.get()?.count,
+			).toBe(2);
+		} finally {
+			sqlite.close();
+		}
+	});
+
 	it('preserves feeds and articles when applying the category self-reference migration', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-migration-'));
 		tempDirs.push(tempDir);

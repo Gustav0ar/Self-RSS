@@ -17,6 +17,11 @@ const SOURCE_ROOTS = ['packages/api/src', 'packages/web/src', 'packages/shared/s
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.sh']);
 const DEFAULT_MAX_LINES = 650;
 const FILE_LINE_BUDGETS: Record<string, FileLineBudget> = {
+	'packages/api/src/db/schema.ts': {
+		maxLines: 900,
+		reason:
+			'Drizzle keeps cross-domain table and relation declarations together; split schema modules before adding another persistence domain.',
+	},
 	'packages/api/src/services/feed-sync.service.ts': {
 		maxLines: 1100,
 		reason:
