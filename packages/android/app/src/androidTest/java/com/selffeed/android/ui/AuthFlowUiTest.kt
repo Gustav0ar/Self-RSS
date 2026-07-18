@@ -8,11 +8,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.paging.PagingData
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -137,7 +139,7 @@ class AuthFlowUiTest {
 
     @Test
     fun serverField_isSubmittedWithLogin() {
-        val capturedServers = mutableListOf<String>()
+        var capturedServer: String? = null
 
         composeRule.setContent {
             SelfFeedTheme {
@@ -148,7 +150,7 @@ class AuthFlowUiTest {
                     registrationEnabled = true,
                     errorMessage = null,
                     onModeChange = { mode = it },
-                    onLogin = { _, _, server -> capturedServers.add(server) },
+                    onLogin = { _, _, server -> capturedServer = server },
                     onRegister = { _, _, _ -> },
                 )
             }
@@ -158,10 +160,14 @@ class AuthFlowUiTest {
         composeRule.onNodeWithText("Server").performTextInput("rss.example.com")
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
-        composeRule.onNodeWithText("Continue").performScrollTo().assertIsDisplayed().performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000) { capturedServers.isNotEmpty() }
-
-        assert(capturedServers.last() == "rss.example.com") { "Submitted server should match input" }
+        composeRule
+            .onNodeWithText("Continue")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.runOnIdle {
+            assertEquals("rss.example.com", capturedServer)
+        }
     }
 
     @Test
