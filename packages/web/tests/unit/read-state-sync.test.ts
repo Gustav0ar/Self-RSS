@@ -497,7 +497,7 @@ describe('read-state sync', () => {
 		expect(feedCollectionInvalidation?.[1]).toEqual({ cancelRefetch: false });
 	});
 
-	it('applies SSE feed progress and health without polling or refetching feed lists', () => {
+	it('applies SSE feed progress and schedules bounded health reconciliation', () => {
 		const qc = createQueryClient();
 		const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
 		qc.setQueryData(
@@ -561,7 +561,19 @@ describe('read-state sync', () => {
 			syncStatus: 'error',
 			lastSyncError: 'The publisher timed out',
 		});
-		expect(invalidateSpy).not.toHaveBeenCalled();
+		expect(invalidateSpy).toHaveBeenCalledWith({
+			predicate: expect.any(Function),
+			refetchType: 'none',
+		});
+		expect(invalidateSpy).toHaveBeenCalledWith({
+			queryKey: ['categories'],
+			refetchType: 'none',
+		});
+		expect(invalidateSpy).toHaveBeenCalledWith({
+			queryKey: ['stats'],
+			refetchType: 'none',
+		});
+		invalidateSpy.mockClear();
 
 		applyReadStateSyncEvent(
 			qc,

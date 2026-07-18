@@ -58,13 +58,19 @@ function FeedDialogContent({
 				);
 				return;
 			} else if (feed) {
-				await updateFeed.mutateAsync({
+				const response = await updateFeed.mutateAsync({
 					id: feed.id,
 					feedUrl: feedUrl.trim(),
 					categoryId,
 					title: title.trim() || undefined,
 					pollingIntervalMinutes: Number(pollingIntervalMinutes),
 				});
+				if (response.data.lifecycleStatus === 'replacement_pending') {
+					setSuccessMessage(
+						'Replacement validation is queued; the current source remains active until validation succeeds.',
+					);
+					return;
+				}
 			}
 			onClose();
 		} catch (submitError) {

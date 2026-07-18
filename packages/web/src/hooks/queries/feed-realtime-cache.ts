@@ -3,7 +3,16 @@ import type { QueryClient } from '@tanstack/react-query';
 import { type FeedSyncAllStatus, mergeFeedSyncStatus } from '@/lib/feed-sync-status';
 import { invalidateReaderQueries } from './cache-query-helpers';
 
-const articleRefreshTimers = new WeakMap<QueryClient, ReturnType<typeof setTimeout>>();
+interface PendingReaderRefresh {
+	timer: ReturnType<typeof setTimeout>;
+	includeArticles: boolean;
+}
+
+const readerRefreshTimers = new WeakMap<QueryClient, PendingReaderRefresh>();
+const feedListQueries = {
+	predicate: (query: { queryKey: readonly unknown[] }) =>
+		query.queryKey[0] === 'feeds' && query.queryKey[1] !== 'sync',
+};
 
 export function applyFeedRealtimeEvent(qc: QueryClient, event: RealtimeEvent) {
 	if (event.type === 'feed.sync.progress') {
@@ -37,30 +46,49 @@ export function applyFeedRealtimeEvent(qc: QueryClient, event: RealtimeEvent) {
 	}
 
 	if (event.type === 'feed.health.updated') {
-		qc.setQueriesData({ queryKey: ['feeds'] }, (value) => updateFeedHealth(value, event));
+		qc.setQueriesData(feedListQueries, (value) => updateFeedHealth(value, event));
 		qc.setQueriesData({ queryKey: ['categories'] }, (value) => updateFeedHealth(value, event));
+		qc.invalidateQueries({ ...feedListQueries, refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		scheduleReaderRefresh(qc, false);
 		return true;
 	}
 
 	if (event.type === 'articles.new') {
 		qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
-		scheduleArticleRefresh(qc);
-		qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
+		qc.invalidateQueries({ ...feedListQueries, refetchType: 'none' });
 		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
 		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		scheduleReaderRefresh(qc, true);
 		return true;
 	}
 
 	return false;
 }
 
-function scheduleArticleRefresh(qc: QueryClient) {
-	if (articleRefreshTimers.has(qc)) return;
-	const timer = globalThis.setTimeout(() => {
-		articleRefreshTimers.delete(qc);
-		void qc.refetchQueries({ queryKey: ['articles'], type: 'active' });
-	}, 250);
-	articleRefreshTimers.set(qc, timer);
+function scheduleReaderRefresh(qc: QueryClient, includeArticles: boolean) {
+	const existing = readerRefreshTimers.get(qc);
+	if (existing) {
+		existing.includeArticles ||= includeArticles;
+		return;
+	}
+	const pending: PendingReaderRefresh = {
+		includeArticles,
+		timer: globalThis.setTimeout(() => {
+			readerRefreshTimers.delete(qc);
+			const refreshes = [
+				qc.refetchQueries({ ...feedListQueries, type: 'active' }),
+				qc.refetchQueries({ queryKey: ['categories'], type: 'active' }),
+				qc.refetchQueries({ queryKey: ['stats'], type: 'active' }),
+			];
+			if (pending.includeArticles) {
+				refreshes.push(qc.refetchQueries({ queryKey: ['articles'], type: 'active' }));
+			}
+			void Promise.all(refreshes);
+		}, 250),
+	};
+	readerRefreshTimers.set(qc, pending);
 }
 
 function updateFeedHealth(value: unknown, event: FeedHealthUpdatedEvent): unknown {

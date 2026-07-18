@@ -169,7 +169,7 @@ describe('FeedDialog - edit mode', () => {
 	});
 
 	it('submits only the editable fields on save', async () => {
-		updateMutateAsync.mockResolvedValue({});
+		updateMutateAsync.mockResolvedValue({ data: { lifecycleStatus: 'active' } });
 
 		render(
 			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={vi.fn()} />,
@@ -192,5 +192,35 @@ describe('FeedDialog - edit mode', () => {
 				pollingIntervalMinutes: 60,
 			});
 		});
+	});
+
+	it('keeps the dialog open while a replacement source is validated', async () => {
+		updateMutateAsync.mockResolvedValue({
+			data: {
+				lifecycleStatus: 'replacement_pending',
+				ingestionRequestId: 'request-1',
+			},
+		});
+		const onClose = vi.fn();
+
+		render(
+			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={onClose} />,
+		);
+
+		fireEvent.change(screen.getByLabelText('Feed URL'), {
+			target: { value: 'https://example.com/replacement.xml' },
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+		await waitFor(() => {
+			expect(
+				screen.getByText(
+					'Replacement validation is queued; the current source remains active until validation succeeds.',
+				),
+			).toBeTruthy();
+		});
+		expect(onClose).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+		expect(onClose).toHaveBeenCalledOnce();
 	});
 });
