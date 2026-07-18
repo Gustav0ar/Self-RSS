@@ -204,7 +204,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun syncFeed(id: String): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
     override suspend fun syncAllFeeds(feedId: String?, categoryId: String?): AppResult<SyncResponse> =
         AppResult.Success(SyncResponse(syncedFeeds = 1))
-    override suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus> = AppResult.Success(
+    override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> = AppResult.Success(
         FeedSyncAllStatus(
             queued = false,
             running = false,
@@ -212,6 +212,12 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             stale = false,
         ),
     )
+    override suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts> =
+        AppResult.Error("Not supported in fake")
+
+    override suspend fun cancelFeedReplacement(feedId: String): AppResult<FeedWithCounts> =
+        AppResult.Error("Not supported in fake")
+
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray) =
         AppResult.Error("Not supported in fake")
 
