@@ -316,7 +316,11 @@ class FeedsViewModelTest {
         runCurrent()
 
         assertEquals(false, viewModel.state.value.syncInBackground)
-        assertEquals("Feed refresh status timed out. Please try again.", viewModel.state.value.errorMessage)
+        assertNull(viewModel.state.value.errorMessage)
+        assertEquals(
+            "Refresh continues on the server; progress will be checked on the next app status check.",
+            viewModel.state.value.statusMessage,
+        )
     }
 
     @Test
@@ -329,7 +333,11 @@ class FeedsViewModelTest {
         viewModel.syncAllFeeds()
 
         assertEquals(false, viewModel.state.value.syncInBackground)
-        assertEquals("Feed sync stalled. Please try again.", viewModel.state.value.errorMessage)
+        assertNull(viewModel.state.value.errorMessage)
+        assertEquals(
+            "Refresh progress is stale; the server will reconcile it before another overlapping refresh.",
+            viewModel.state.value.statusMessage,
+        )
     }
 
     @Test

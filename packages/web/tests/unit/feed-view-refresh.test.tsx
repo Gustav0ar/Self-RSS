@@ -85,6 +85,8 @@ vi.mock('../../src/hooks/queries', () => ({
 	useWarmNextArticles: () => warmNextArticlesMock,
 	useWarmVisibleArticles: () => vi.fn(),
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
+	useSelectFeedDiscoveryCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useCancelFeedReplacement: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock('../../src/hooks/use-feed-refresh', () => ({
@@ -104,12 +106,13 @@ vi.mock('../../src/hooks/use-feed-refresh', () => ({
 		},
 		allFeedsSyncStatus: {
 			queued: false,
-			running: isRefreshingAllFeeds,
-			active: isRefreshingAllFeeds,
+			running: isRefreshingAllFeeds || allFeedsRefreshIsTakingLonger,
+			active: isRefreshingAllFeeds || allFeedsRefreshIsTakingLonger,
 		},
 		feedSyncError: null,
 		isRefreshingAllFeeds,
 		isRefreshingFeed: () => false,
+		isRefreshBlockedByActiveRequest: () => isRefreshingAllFeeds || allFeedsRefreshIsTakingLonger,
 		refreshFeed,
 	}),
 }));
@@ -263,7 +266,7 @@ describe('FeedView refresh', () => {
 		expect(screen.getByText('Article list')).toBeTruthy();
 	});
 
-	it('shows long all-feeds syncs as background work without blocking refresh', () => {
+	it('shows long all-feeds syncs as background work while blocking duplicates', () => {
 		allFeedsRefreshIsTakingLonger = true;
 		allFeedsRefreshShouldShowStatus = true;
 
@@ -271,13 +274,13 @@ describe('FeedView refresh', () => {
 
 		expect(screen.getByText('Still syncing in background')).toBeTruthy();
 		expect(screen.getByText('Articles will update as new stories arrive')).toBeTruthy();
-		expect(container.querySelector('.animate-spin')).toBeTruthy();
+		expect(container.querySelector('.motion-safe\\:animate-spin')).toBeTruthy();
 
 		const refreshButton = screen.getByRole('button', { name: 'Refresh' });
-		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
+		expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
 
 		fireEvent.click(refreshButton);
-		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true });
+		expect(refreshFeed).not.toHaveBeenCalled();
 	});
 
 	it('opens article URLs with the active feed context in a new tab', () => {

@@ -72,7 +72,16 @@ interface RssApi {
     ): ApiEnvelope<SyncResponse>
 
     @GET("feeds/sync/status")
-    suspend fun syncAllFeedsStatus(): ApiEnvelope<FeedSyncAllStatus>
+    suspend fun syncAllFeedsStatus(@Query("requestId") requestId: String? = null): ApiEnvelope<FeedSyncAllStatus>
+
+    @GET("feeds/discovery/{requestId}")
+    suspend fun discoveryCandidates(@Path("requestId") requestId: String): ApiEnvelope<List<FeedDiscoveryCandidate>>
+
+    @POST("feeds/discovery/candidates/{candidateId}/select")
+    suspend fun selectDiscoveryCandidate(@Path("candidateId") candidateId: String): ApiEnvelope<DiscoverySelectionResponse>
+
+    @POST("feeds/{feedId}/replacement/cancel")
+    suspend fun cancelFeedReplacement(@Path("feedId") feedId: String): ApiEnvelope<FeedWithCounts>
 
     @Multipart
     @POST("feeds/import/opml")

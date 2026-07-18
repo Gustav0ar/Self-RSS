@@ -262,13 +262,34 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
-        feedRemote.syncAllFeeds(feedId, categoryId)
+        feedRemote.syncAllFeeds(feedId, categoryId).also { response ->
+            response.requestId?.let(sessionStore::setFeedRefreshRequestId)
+        }
     }
 
-    override suspend fun syncAllFeedsStatus() = safeReadCall {
-        feedRemote.syncAllFeedsStatus().also { status ->
+    override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall {
+        val trackedRequestId = requestId ?: sessionStore.getFeedRefreshRequestId()?.takeIf(String::isNotBlank)
+        val trackedStatus = feedRemote.syncAllFeedsStatus(trackedRequestId)
+        val status = if (trackedRequestId != null && trackedStatus.requestId != trackedRequestId) {
+            sessionStore.setFeedRefreshRequestId(null)
+            feedRemote.syncAllFeedsStatus(null)
+        } else trackedStatus
+        status.also {
+            if (status.active) status.requestId?.let(sessionStore::setFeedRefreshRequestId)
             if (!status.active) invalidateFeedAndArticleRuntimeCaches()
         }
+    }
+
+    override suspend fun selectDiscoveryCandidate(candidateId: String) = safeCall {
+        val selection = feedRemote.selectDiscoveryCandidate(candidateId)
+        sessionStore.setFeedRefreshRequestId(selection.requestId)
+        feedRemote.feeds(null).first { it.id == selection.feedId }.also {
+            invalidateFeedAndArticleCaches()
+        }
+    }
+
+    override suspend fun cancelFeedReplacement(feedId: String) = safeCall {
+        feedRemote.cancelFeedReplacement(feedId).also { invalidateFeedAndArticleCaches() }
     }
 
     override suspend fun importOpml(fileName: String, fileBytes: ByteArray) = safeCall {

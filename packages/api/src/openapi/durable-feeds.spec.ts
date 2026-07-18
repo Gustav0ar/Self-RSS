@@ -1,6 +1,28 @@
 import { apiDataRef, bearerSecurity, json } from './helpers';
 
 export const durableFeedSchemas = {
+	FeedDiscoveryPresentation: {
+		type: 'object',
+		required: ['required', 'candidates'],
+		properties: {
+			required: { type: 'boolean' },
+			candidates: {
+				type: 'array',
+				items: {
+					type: 'object',
+					required: ['id', 'requestId', 'url', 'title', 'type', 'expiresAt'],
+					properties: {
+						id: { type: 'string', format: 'uuid' },
+						requestId: { type: 'string', format: 'uuid' },
+						url: { type: 'string', format: 'uri' },
+						title: { type: ['string', 'null'] },
+						type: { type: 'string' },
+						expiresAt: { type: 'string', format: 'date-time' },
+					},
+				},
+			},
+		},
+	},
 	FeedRefreshItemStatus: {
 		type: 'object',
 		required: [

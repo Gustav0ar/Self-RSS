@@ -50,8 +50,8 @@ describe('FeedDialog - add mode', () => {
 		vi.clearAllMocks();
 	});
 
-	it('submits a new feed and closes the dialog on success', async () => {
-		createMutateAsync.mockResolvedValue({});
+	it('submits a new feed and honestly confirms queued validation', async () => {
+		createMutateAsync.mockResolvedValue({ data: { lifecycleStatus: 'pending' } });
 		const onClose = vi.fn();
 
 		render(<FeedDialog mode="create" categories={sampleCategories} onClose={onClose} />);
@@ -71,7 +71,10 @@ describe('FeedDialog - add mode', () => {
 				title: undefined,
 			});
 		});
-		expect(onClose).toHaveBeenCalled();
+		expect(screen.getByText(/Validation is queued/)).toBeTruthy();
+		expect(onClose).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+		expect(onClose).toHaveBeenCalledOnce();
 	});
 
 	it('surfaces the server error on failure', async () => {

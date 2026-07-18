@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
 import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
+import { FeedToolbarButton as ToolbarButton } from '@/components/articles/feed-toolbar-button';
 import {
 	buildFeedViewModel,
 	dedupeArticlePages,
@@ -23,6 +24,7 @@ import {
 	useWarmNextArticles,
 	useWarmVisibleArticles,
 } from '@/hooks/queries';
+import { useFeedLifecycleActions } from '@/hooks/use-feed-lifecycle-actions';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
 import { useSilentArticleRefresh } from '@/hooks/use-silent-article-refresh';
@@ -67,6 +69,7 @@ export function FeedView({
 		allFeedsSyncStatus,
 		isRefreshingAllFeeds,
 		isRefreshingFeed,
+		isRefreshBlockedByActiveRequest,
 		refreshFeed,
 	} = useFeedRefresh();
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
@@ -102,10 +105,20 @@ export function FeedView({
 	const markAllRead = useMarkAllRead();
 	const fetchedArticles = useMemo(() => dedupeArticlePages(data?.pages), [data?.pages]);
 	const categoryTree = categories ?? EMPTY_CATEGORY_TREE;
-	const { emptyState, scopeUnreadCount, selectedFeedHealth, viewTitle } = useMemo(
+	const { emptyState, scopeUnreadCount, selectedFeed, selectedFeedHealth, viewTitle } = useMemo(
 		() => buildFeedViewModel({ categoryId, categoryTree, feedId, unreadOnly }),
 		[categoryId, categoryTree, feedId, unreadOnly],
 	);
+	const {
+		error: lifecycleActionError,
+		lifecycle: selectedLifecycle,
+		isPending: lifecycleActionPending,
+		handleSelectCandidate,
+		handleCancelReplacement,
+	} = useFeedLifecycleActions(selectedFeed);
+	const refreshBlocked = selectedLifecycle?.refreshBlocked ?? false;
+	const refreshActionBlocked =
+		refreshBlocked || (isRefreshBlockedByActiveRequest?.(feedId, categoryId) ?? false);
 	const { articles, resetRetainedReadArticles, retainReadArticle } = useRetainedReadArticles({
 		categoryId,
 		feedId,
@@ -260,6 +273,7 @@ export function FeedView({
 	}
 
 	function handleRefresh() {
+		if (refreshActionBlocked) return;
 		resetRetainedReadArticles();
 		if (feedId) {
 			void refreshFeed(feedId, { force: true });
@@ -267,6 +281,7 @@ export function FeedView({
 			void refreshFeed(undefined, { force: true, categoryId });
 		}
 	}
+
 	const showListLoader =
 		isLoading ||
 		(isFetching && articles.length === 0) ||
@@ -283,7 +298,14 @@ export function FeedView({
 	return (
 		<div className="flex h-full min-h-0 flex-col lg:flex-row">
 			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[clamp(23rem,28vw,33rem)] lg:border-b-0 lg:border-r">
-				<FeedHealthBanner appError={feedSyncError} sourceIssue={selectedFeedHealth} />
+				<FeedHealthBanner
+					appError={lifecycleActionError ?? feedSyncError}
+					sourceIssue={selectedFeedHealth}
+					feed={selectedFeed}
+					onSelectCandidate={(candidateId) => void handleSelectCandidate(candidateId)}
+					onCancelReplacement={() => void handleCancelReplacement()}
+					isActionPending={lifecycleActionPending}
+				/>
 
 				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
 					<div className="flex items-start justify-between gap-3">
@@ -324,8 +346,9 @@ export function FeedView({
 						</ToolbarButton>
 						<ToolbarButton
 							onClick={handleRefresh}
-							label="Refresh"
-							disabled={isRefreshingCurrentSelection}
+							label={refreshBlocked ? 'Refresh unavailable' : 'Refresh'}
+							disabled={isRefreshingCurrentSelection || refreshActionBlocked}
+							title={selectedLifecycle?.refreshGuidance ?? undefined}
 						>
 							<RefreshCw
 								className={cn('h-3.5 w-3.5', isRefreshingCurrentSelection && 'animate-spin')}
@@ -364,7 +387,8 @@ export function FeedView({
 								<ToolbarButton
 									onClick={handleRefresh}
 									label="Refresh articles"
-									disabled={isRefreshingCurrentSelection}
+									disabled={isRefreshingCurrentSelection || refreshActionBlocked}
+									title={selectedLifecycle?.refreshGuidance ?? undefined}
 								>
 									<RefreshCw className="h-3.5 w-3.5" />
 								</ToolbarButton>
@@ -382,37 +406,5 @@ export function FeedView({
 				/>
 			</div>
 		</div>
-	);
-}
-
-function ToolbarButton({
-	active,
-	onClick,
-	label,
-	children,
-	disabled,
-	className,
-}: {
-	active?: boolean;
-	onClick: () => void;
-	label: string;
-	children: React.ReactNode;
-	disabled?: boolean;
-	className?: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			className={cn(
-				'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50',
-				active && 'bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:bg-primary',
-				className,
-			)}
-		>
-			{children}
-			{label}
-		</button>
 	);
 }

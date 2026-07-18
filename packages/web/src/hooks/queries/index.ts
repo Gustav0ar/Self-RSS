@@ -55,12 +55,14 @@ export {
 } from './category-hooks';
 // Re-export feed hooks
 export {
+	useCancelFeedReplacement,
 	useCreateFeed,
 	useDeleteFeed,
 	useExportOpml,
 	useFeeds,
 	useImportOpml,
 	useQueryClient,
+	useSelectFeedDiscoveryCandidate,
 	useSyncAllFeeds,
 	useSyncAllFeedsStatus,
 	useSyncFeed,

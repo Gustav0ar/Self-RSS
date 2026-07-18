@@ -54,7 +54,9 @@ interface FeedRepository {
     suspend fun deleteFeed(id: String): AppResult<Boolean>
     suspend fun syncFeed(id: String): AppResult<SyncResponse>
     suspend fun syncAllFeeds(feedId: String? = null, categoryId: String? = null): AppResult<SyncResponse>
-    suspend fun syncAllFeedsStatus(): AppResult<FeedSyncAllStatus>
+    suspend fun syncAllFeedsStatus(requestId: String? = null): AppResult<FeedSyncAllStatus>
+    suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts>
+    suspend fun cancelFeedReplacement(feedId: String): AppResult<FeedWithCounts>
     suspend fun importOpml(fileName: String, fileBytes: ByteArray): AppResult<OpmlImportSummary>
     suspend fun exportOpml(): AppResult<String>
 }

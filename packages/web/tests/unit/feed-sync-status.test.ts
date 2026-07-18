@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { REFRESH_INTERVALS } from '../../src/lib/constants';
 import {
 	buildAllFeedsRefreshActivity,
 	type FeedSyncAllStatus,
 	getFeedSyncStatusPollInterval,
 	hasFreshInactiveFeedSyncStatus,
+	readLastFeedRefreshRequestId,
+	rememberFeedRefreshRequestId,
 } from '../../src/lib/feed-sync-status';
 
 const inactiveStatus: FeedSyncAllStatus = {
@@ -18,6 +20,19 @@ const inactiveStatus: FeedSyncAllStatus = {
 };
 
 describe('feed sync status reconciliation', () => {
+	it('scopes persisted refresh requests by account', () => {
+		const storage = new Map<string, string>();
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => storage.get(key) ?? null,
+			setItem: (key: string, value: string) => storage.set(key, value),
+		});
+		rememberFeedRefreshRequestId('account-a', 'request-a');
+		rememberFeedRefreshRequestId('account-b', 'request-b');
+
+		expect(readLastFeedRefreshRequestId('account-a')).toBe('request-a');
+		expect(readLastFeedRefreshRequestId('account-b')).toBe('request-b');
+		vi.unstubAllGlobals();
+	});
 	it('treats a fresh inactive server status as authoritative over stale local refresh state', () => {
 		const localQueuedAt = Date.parse('2026-06-21T12:00:00.000Z');
 		const statusUpdatedAt = localQueuedAt + 1;

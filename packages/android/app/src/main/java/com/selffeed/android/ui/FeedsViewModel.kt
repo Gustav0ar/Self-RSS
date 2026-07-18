@@ -41,6 +41,8 @@ data class FeedsUiState(
     val syncTotalFeeds: Int = 0,
     val syncCompletedFeeds: Int = 0,
     val syncNewArticles: Int = 0,
+    val syncStatus: FeedSyncAllStatus? = null,
+    val lifecycleActionFeedId: String? = null,
     val lastImportSummary: OpmlImportSummary? = null,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
@@ -102,7 +104,8 @@ class FeedsViewModel @Inject constructor(
                             it.copy(
                                 loading = false,
                                 syncInBackground = false,
-                                errorMessage = "Feed sync stalled. Please try again.",
+                                syncStatus = status.data,
+                                statusMessage = "Refresh progress is stale; the server will reconcile it before another overlapping refresh.",
                             )
                         }
                         return@launch
@@ -110,6 +113,8 @@ class FeedsViewModel @Inject constructor(
                     if (status.data.active) {
                         publishActiveSync(status.data)
                         startSyncMonitor()
+                    } else if (_state.value.syncInBackground || _state.value.syncStatus?.active == true) {
+                        publishCompletedSync(status.data)
                     }
                 }
                 // This is background reconciliation. Existing offline/error UX
@@ -171,7 +176,13 @@ class FeedsViewModel @Inject constructor(
             } else categoryId
             when (val result = repository.createFeed(feedUrl.trim(), destinationCategoryId, title?.trim()?.ifBlank { null })) {
                 is AppResult.Success -> {
-                    _state.update { it.copy(statusMessage = "Feed added") }
+                    _state.update {
+                        it.copy(
+                            statusMessage = if (result.data.lifecycleStatus == "pending") {
+                                "Feed added · validation queued"
+                            } else "Feed added",
+                        )
+                    }
                     loadFeeds()
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
@@ -192,7 +203,13 @@ class FeedsViewModel @Inject constructor(
                 )
             ) {
                 is AppResult.Success -> {
-                    _state.update { it.copy(statusMessage = "Feed updated") }
+                    _state.update {
+                        it.copy(
+                            statusMessage = if (result.data.lifecycleStatus == "replacement_pending") {
+                                "Replacement validation queued · existing articles remain available"
+                            } else "Feed updated",
+                        )
+                    }
                     loadFeeds()
                 }
                 is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
@@ -212,8 +229,48 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
+    fun selectDiscoveryCandidate(feedId: String, candidateId: String) {
+        if (_state.value.lifecycleActionFeedId != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
+            when (val result = repository.selectDiscoveryCandidate(candidateId)) {
+                is AppResult.Success -> _state.update { state ->
+                    state.copy(
+                        lifecycleActionFeedId = null,
+                        feeds = state.feeds.map { if (it.id == feedId) result.data else it },
+                        statusMessage = "Feed selected · validation queued",
+                    )
+                }
+                is AppResult.Error -> _state.update { it.copy(lifecycleActionFeedId = null, errorMessage = result.message) }
+            }
+        }
+    }
+
+    fun cancelFeedReplacement(feedId: String) {
+        if (_state.value.lifecycleActionFeedId != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
+            when (val result = repository.cancelFeedReplacement(feedId)) {
+                is AppResult.Success -> _state.update { state ->
+                    state.copy(
+                        lifecycleActionFeedId = null,
+                        feeds = state.feeds.map { if (it.id == feedId) result.data else it },
+                        statusMessage = "Replacement cancelled · existing feed kept",
+                    )
+                }
+                is AppResult.Error -> _state.update { it.copy(lifecycleActionFeedId = null, errorMessage = result.message) }
+            }
+        }
+    }
+
     fun syncAllFeeds(feedId: String? = null, categoryId: String? = null) {
         if (_state.value.loading) return
+        if (refreshScopesOverlap(feedId, categoryId, _state.value.syncStatus, _state.value.feeds)) {
+            _state.update {
+                it.copy(statusMessage = backgroundSyncMessage(it.syncCompletedFeeds, it.syncTotalFeeds))
+            }
+            return
+        }
         if (_state.value.syncInBackground) {
             _state.update {
                 it.copy(
@@ -295,6 +352,7 @@ class FeedsViewModel @Inject constructor(
                 syncTotalFeeds = status.totalFeeds,
                 syncCompletedFeeds = status.completedFeeds,
                 syncNewArticles = status.newArticles,
+                syncStatus = status,
                 statusMessage = backgroundSyncMessage(status.completedFeeds, status.totalFeeds),
             )
         }
@@ -313,7 +371,7 @@ class FeedsViewModel @Inject constructor(
                     it.copy(
                         loading = false,
                         syncInBackground = false,
-                        errorMessage = "Feed refresh status timed out. Please try again.",
+                        statusMessage = "Refresh continues on the server; progress will be checked on the next app status check.",
                     )
                 }
                 return
@@ -324,19 +382,14 @@ class FeedsViewModel @Inject constructor(
                         _state.update {
                             it.copy(
                                 syncInBackground = false,
-                                errorMessage = "Feed sync stalled. Please try again.",
+                                syncStatus = status.data,
+                                statusMessage = "Refresh progress is stale; the server will reconcile it before another overlapping refresh.",
                             )
                         }
                         return
                     }
                     if (!status.data.active) {
-                        _state.update {
-                            it.copy(
-                                syncInBackground = false,
-                                syncRevision = it.syncRevision + 1,
-                                statusMessage = completedSyncMessage(status.data),
-                            )
-                        }
+                        publishCompletedSync(status.data)
                         refreshFeedHealth()
                         return
                     }
@@ -394,10 +447,25 @@ class FeedsViewModel @Inject constructor(
         return outcomes.joinToString(" · ").ifEmpty { "Feeds are up to date" }
     }
 
+    private fun publishCompletedSync(status: FeedSyncAllStatus) {
+        _state.update {
+            it.copy(
+                loading = false,
+                syncInBackground = false,
+                syncRevision = it.syncRevision + 1,
+                syncTotalFeeds = status.totalFeeds,
+                syncCompletedFeeds = status.completedFeeds,
+                syncNewArticles = status.newArticles,
+                syncStatus = status,
+                statusMessage = completedSyncMessage(status),
+            )
+        }
+    }
+
     private companion object {
         const val SYNC_STATUS_FAST_POLL_MS = 750L
         const val SYNC_STATUS_SLOW_POLL_MS = 10_000L
-        const val SYNC_STATUS_MAX_FAST_POLLS = 400
+        const val SYNC_STATUS_MAX_FAST_POLLS = 8
         const val SYNC_STATUS_MAX_MONITOR_MS = 5 * 60_000L + 30_000L
         const val REFRESH_QUEUE_TIMEOUT_MS = 4_000L
 
@@ -507,4 +575,21 @@ class FeedsViewModel @Inject constructor(
 
         return if (findAndVisit(categories)) ids else setOf(categoryId)
     }
+}
+
+internal fun refreshScopesOverlap(
+    feedId: String?,
+    categoryId: String?,
+    status: FeedSyncAllStatus?,
+    feeds: List<FeedWithCounts>,
+): Boolean {
+    if (status?.active != true) return false
+    val active = status.scope
+    if (active.feedId == null && active.categoryId == null) return true
+    if (feedId == null && categoryId == null) return true
+    if (feedId != null && active.feedId != null) return feedId == active.feedId
+    if (categoryId != null && active.categoryId != null) return categoryId == active.categoryId
+    val comparedFeedId = feedId ?: active.feedId
+    val comparedCategoryId = categoryId ?: active.categoryId
+    return feeds.any { it.id == comparedFeedId && it.categoryId == comparedCategoryId }
 }

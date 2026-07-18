@@ -2,6 +2,7 @@ import type {
 	ApiListResponse,
 	ArticleListItem,
 	CategoryWithCounts,
+	FeedWithCounts,
 	SortOrder,
 } from '@self-feed/shared';
 import { sortArticlesByDisplayOrder } from '@/components/articles/article-ordering';
@@ -23,6 +24,7 @@ export interface FeedViewModel {
 	scopeUnreadCount: number;
 	emptyState: FeedViewEmptyState;
 	selectedFeedHealth: FeedHealthIssue | null;
+	selectedFeed: FeedWithCounts | null;
 }
 
 export function dedupeArticlePages(pages: readonly ApiListResponse<ArticleListItem>[] | undefined) {
@@ -76,6 +78,7 @@ export function buildFeedViewModel({
 		scopeUnreadCount,
 		emptyState: buildEmptyState({ categoryId, feedId, unreadOnly }),
 		selectedFeedHealth: selectedFeed ? feedHealthIssue(selectedFeed) : null,
+		selectedFeed: selectedFeed ?? null,
 	};
 }
 

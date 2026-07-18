@@ -77,7 +77,10 @@ class FeedRemoteDataSource @Inject constructor(
     suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id).data
     suspend fun syncAllFeeds(feedId: String?, categoryId: String?): SyncResponse =
         api.syncAllFeeds(feedId, categoryId).data
-    suspend fun syncAllFeedsStatus(): FeedSyncAllStatus = api.syncAllFeedsStatus().data
+    suspend fun syncAllFeedsStatus(requestId: String?): FeedSyncAllStatus = api.syncAllFeedsStatus(requestId).data
+    suspend fun discoveryCandidates(requestId: String) = api.discoveryCandidates(requestId).data
+    suspend fun selectDiscoveryCandidate(candidateId: String) = api.selectDiscoveryCandidate(candidateId).data
+    suspend fun cancelFeedReplacement(feedId: String) = api.cancelFeedReplacement(feedId).data
     suspend fun importOpml(part: MultipartBody.Part): OpmlImportSummary = api.importOpml(part).data
     suspend fun exportOpml(): Response<ResponseBody> = api.exportOpml()
 }

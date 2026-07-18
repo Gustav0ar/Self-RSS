@@ -120,9 +120,38 @@ data class FeedWithCounts(
     val lastSuccessAt: String? = null,
     val nextEligibleFetchAt: String? = null,
     val replacementRequestedAt: String? = null,
+    val discovery: FeedDiscovery? = null,
     val createdAt: String? = null,
     val updatedAt: String? = null,
     val unreadCount: Int,
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedDiscoveryOption(
+    val id: String,
+    val requestId: String,
+    val url: String,
+    val title: String? = null,
+    val type: String,
+    val expiresAt: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedDiscovery(
+    val required: Boolean,
+    val candidates: List<FeedDiscoveryOption> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedDiscoveryCandidate(
+    val id: String,
+    val requestId: String,
+    val candidateUrl: String,
+    val normalizedCandidateUrl: String,
+    val title: String? = null,
+    val type: String? = null,
+    val status: String,
+    val expiresAt: String,
 )
 
 @JsonClass(generateAdapter = true)
@@ -387,8 +416,14 @@ data class MarkAllReadResponse(
 data class SyncResponse(
     val accepted: Boolean? = null,
     val alreadyQueued: Boolean? = null,
+    val requestId: String? = null,
+    val jobId: String? = null,
+    val jobIds: List<String> = emptyList(),
     val syncedCount: Int? = null,
-    val status: String? = null,
+    // Legacy fixtures used a string while queued refresh endpoints return an
+    // object. Keep this tolerant; requestId plus the status endpoint are the
+    // durable source of truth.
+    val status: Any? = null,
     val totalFeeds: Int? = null,
     val syncedFeeds: Int? = null,
     val failedFeeds: Int? = null,
@@ -425,6 +460,29 @@ data class FeedSyncAllStatus(
     val articleRevision: Long = 0L,
     val jobId: String? = null,
     val scope: FeedSyncScope = FeedSyncScope(),
+    val items: List<FeedSyncItemStatus> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedSyncItemStatus(
+    val feedId: String? = null,
+    val sourceId: String? = null,
+    val jobId: String? = null,
+    val status: String,
+    val feedTitle: String? = null,
+    val errorCode: String? = null,
+    val errorDetails: String? = null,
+    val nextEligibleAt: String? = null,
+    val publisherRequestStarted: Boolean = false,
+    val lastFetchAt: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class DiscoverySelectionResponse(
+    val candidateId: String,
+    val feedId: String,
+    val requestId: String,
+    val jobId: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

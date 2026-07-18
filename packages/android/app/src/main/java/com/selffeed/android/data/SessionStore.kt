@@ -198,6 +198,22 @@ class SessionStore internal constructor(
         }
     }
 
+    fun getFeedRefreshRequestId(): String? = runBlocking {
+        dataStore.data.first()[KEY_FEED_REFRESH_REQUEST_ID]
+    }
+
+    fun setFeedRefreshRequestId(requestId: String?) {
+        runBlocking {
+            dataStore.edit { prefs ->
+                if (requestId.isNullOrBlank()) {
+                    prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
+                } else {
+                    prefs[KEY_FEED_REFRESH_REQUEST_ID] = requestId
+                }
+            }
+        }
+    }
+
     fun setApiBaseUrl(rawBaseUrl: String): String {
         val normalized = normalizeApiServerHost(rawBaseUrl)
         val previous = getApiBaseUrl()
@@ -208,6 +224,7 @@ class SessionStore internal constructor(
                 if (changed) {
                     prefs.remove(KEY_ACCESS_TOKEN)
                     prefs.remove(KEY_REFRESH_COOKIE)
+                    prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
                 }
             }
         }
@@ -402,6 +419,7 @@ class SessionStore internal constructor(
         private val KEY_REFRESH_COOKIE = stringPreferencesKey("refresh_cookie")
         private val KEY_CLIENT_ID = stringPreferencesKey("client_id")
         private val KEY_API_BASE_URL = stringPreferencesKey("api_base_url")
+        private val KEY_FEED_REFRESH_REQUEST_ID = stringPreferencesKey("feed_refresh_request_id")
         private val KEY_LEGACY_SESSION_MIGRATED = stringPreferencesKey("legacy_session_migrated")
     }
 }

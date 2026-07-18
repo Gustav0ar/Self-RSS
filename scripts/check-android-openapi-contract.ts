@@ -48,9 +48,6 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 		// Android remains on the backward-compatible read-state stream until it
 		// adopts the web-only feed progress and health event handling.
 		operationKey('GET', '/events/stream'),
-		operationKey('GET', '/feeds/discovery/{requestId}'),
-		operationKey('POST', '/feeds/discovery/candidates/{candidateId}/select'),
-		operationKey('POST', '/feeds/{feedId}/replacement/cancel'),
 	]),
 	schemaMappings: {
 		User: 'User',

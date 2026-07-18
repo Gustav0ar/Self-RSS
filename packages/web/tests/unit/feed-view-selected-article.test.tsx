@@ -38,6 +38,8 @@ const categories = [
 ];
 
 vi.mock('../../src/hooks/queries', () => ({
+	useSelectFeedDiscoveryCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useCancelFeedReplacement: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: () => currentResult,
 	useSearch: () => searchResult,

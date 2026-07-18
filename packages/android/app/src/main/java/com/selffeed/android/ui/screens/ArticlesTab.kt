@@ -125,7 +125,7 @@ fun ArticlesTab(
         isRefreshing = isRefreshing,
         onRefresh = {
             keepTopAfterRefresh = listState.firstVisibleItemIndex == 0
-            actions.onRefresh()
+            if (state.refreshBlockedGuidance == null && !state.isSyncingFeeds) actions.onRefresh()
         },
         modifier = Modifier.fillMaxSize(),
         state = pullToRefreshState,
@@ -160,6 +160,22 @@ fun ArticlesTab(
                 .testTag("articles-list"),
             verticalArrangement = Arrangement.Top,
         ) {
+            state.refreshBlockedGuidance?.let { guidance ->
+                item(key = "feed-refresh-guidance") {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ) {
+                        Text(
+                            text = guidance,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             if (state.isOffline) {
                 item(key = "articles-offline-status") {
                     OfflineArticlesBanner()

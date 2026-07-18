@@ -4,6 +4,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UserPreferences
@@ -19,6 +20,8 @@ data class FeedTabState(
     val selectedFeedId: String?,
     val loading: Boolean = false,
     val lastImportSummary: OpmlImportSummary? = null,
+    val syncStatus: FeedSyncAllStatus? = null,
+    val lifecycleActionFeedId: String? = null,
 )
 
 data class FeedTabActions(
@@ -34,6 +37,8 @@ data class FeedTabActions(
     val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
     val onExportOpml: () -> Unit = {},
     val onDismissImportSummary: () -> Unit = {},
+    val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
+    val onCancelFeedReplacement: (String) -> Unit = {},
 )
 
 data class ArticleTabState(
@@ -46,6 +51,7 @@ data class ArticleTabState(
     val density: DensityPreference = DensityPreference.COMFORTABLE,
     val isOffline: Boolean = false,
     val feedCount: Int = 0,
+    val refreshBlockedGuidance: String? = null,
 )
 
 data class ArticleTabActions(

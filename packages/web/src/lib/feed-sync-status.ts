@@ -1,6 +1,9 @@
+import { getAccessToken } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
 
 export interface FeedSyncAllStatus {
+	requestId?: string | null;
+	status?: 'pending' | 'running' | 'completed' | 'completed_with_errors' | string;
 	queued: boolean;
 	running: boolean;
 	active: boolean;
@@ -15,10 +18,80 @@ export interface FeedSyncAllStatus {
 	syncedFeeds?: number;
 	failedFeeds?: number;
 	skippedFeeds?: number;
+	pendingFeeds?: number;
+	runningFeeds?: number;
+	deadFeeds?: number;
 	jobId?: string | null;
 	scope?: { feedId?: string; categoryId?: string };
 	phase?: 'queued' | 'running' | 'completed' | 'failed';
 	error?: string | null;
+	items?: Array<{
+		feedId: string | null;
+		sourceId: string | null;
+		jobId: string | null;
+		status: string;
+		feedTitle: string | null;
+		errorCode: string | null;
+		errorDetails: string | null;
+		nextEligibleAt: string | null;
+		publisherRequestStarted: boolean;
+		lastFetchAt: string | null;
+	}>;
+}
+
+const LAST_REFRESH_REQUEST_KEY = 'self-feed:last-refresh-request';
+export const FEED_REFRESH_REQUEST_EVENT = 'self-feed:refresh-request';
+
+export function getFeedRefreshAccountKey() {
+	const token = getAccessToken();
+	if (!token) return null;
+	try {
+		const encoded = (token.split('.')[1] ?? '').replaceAll('-', '+').replaceAll('_', '/');
+		const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+		const payload = JSON.parse(globalThis.atob(padded)) as {
+			sub?: string;
+			email?: string;
+		};
+		return payload.sub ?? payload.email ?? null;
+	} catch {
+		return null;
+	}
+}
+
+export function readLastFeedRefreshRequestId(accountKey?: string | null) {
+	if (!accountKey) return null;
+	try {
+		return globalThis.localStorage?.getItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`) ?? null;
+	} catch {
+		return null;
+	}
+}
+
+export function rememberFeedRefreshRequestId(
+	accountKey: string | null | undefined,
+	requestId?: string | null,
+) {
+	if (!accountKey || !requestId) return;
+	try {
+		globalThis.localStorage?.setItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`, requestId);
+		globalThis.dispatchEvent(
+			new CustomEvent(FEED_REFRESH_REQUEST_EVENT, { detail: { accountKey, requestId } }),
+		);
+	} catch {
+		// Private browsing/storage policies must not break refreshes.
+	}
+}
+
+export function forgetFeedRefreshRequestId(accountKey?: string | null) {
+	if (!accountKey) return;
+	try {
+		globalThis.localStorage?.removeItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`);
+		globalThis.dispatchEvent(
+			new CustomEvent(FEED_REFRESH_REQUEST_EVENT, { detail: { accountKey, requestId: null } }),
+		);
+	} catch {
+		// Storage is an enhancement; the latest server status remains the fallback.
+	}
 }
 
 export const ALL_FEEDS_SYNC_ID = '__all_feeds__';

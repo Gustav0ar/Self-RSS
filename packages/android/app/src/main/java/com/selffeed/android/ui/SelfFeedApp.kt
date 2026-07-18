@@ -139,6 +139,8 @@ data class SelfFeedAppActions(
     val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
     val onExportOpml: () -> Unit = {},
     val onDismissImportSummary: () -> Unit = {},
+    val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
+    val onCancelFeedReplacement: (String) -> Unit = {},
     val onRefreshArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
     val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
@@ -298,6 +300,10 @@ fun SelfFeedApp(
         state.settings.stats?.totalUnread,
         selectedCategoryId,
         selectedFeedId,
+        state.feeds.loading,
+        state.feeds.lastImportSummary,
+        state.feeds.syncStatus,
+        state.feeds.lifecycleActionFeedId,
     ) {
         FeedTabState(
             categories = state.feeds.categories,
@@ -308,6 +314,8 @@ fun SelfFeedApp(
             selectedFeedId = selectedFeedId,
             loading = state.feeds.loading,
             lastImportSummary = state.feeds.lastImportSummary,
+            syncStatus = state.feeds.syncStatus,
+            lifecycleActionFeedId = state.feeds.lifecycleActionFeedId,
         )
     }
     val articleTabState = remember(
@@ -321,7 +329,12 @@ fun SelfFeedApp(
         state.feeds.feeds.size,
         state.articles.loading,
         state.settings.preferences?.density,
+        selectedFeedId,
+        state.feeds.feeds,
     ) {
+        val selectedLifecycle = state.feeds.feeds
+            .firstOrNull { it.id == selectedFeedId }
+            ?.let(::feedLifecyclePresentation)
         ArticleTabState(
             articles = articleQueue,
             selectedArticleId = selectedArticle?.id,
@@ -332,6 +345,7 @@ fun SelfFeedApp(
             density = DensityPreference.fromApiValue(state.settings.preferences?.density),
             isOffline = !state.isOnline,
             feedCount = state.feeds.feeds.size,
+            refreshBlockedGuidance = selectedLifecycle?.takeIf { it.refreshBlocked }?.refreshGuidance,
         )
     }
     val searchTabState = remember(
@@ -386,6 +400,8 @@ fun SelfFeedApp(
             onImportOpml = actions.onImportOpml,
             onExportOpml = actions.onExportOpml,
             onDismissImportSummary = actions.onDismissImportSummary,
+            onSelectDiscoveryCandidate = actions.onSelectDiscoveryCandidate,
+            onCancelFeedReplacement = actions.onCancelFeedReplacement,
         )
     }
     val articleActions = remember(actions, snackbarHostState, scope) {

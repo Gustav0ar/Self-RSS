@@ -7,11 +7,17 @@ import {
 	useSyncAllFeedsStatus,
 } from '@/hooks/queries';
 import { REFRESH_INTERVALS } from '@/lib/constants';
+import { isFeedRefreshBlocked } from '@/lib/feed-lifecycle';
 import {
 	ALL_FEEDS_SYNC_ID,
 	buildAllFeedsRefreshActivity,
+	FEED_REFRESH_REQUEST_EVENT,
+	forgetFeedRefreshRequestId,
+	getFeedRefreshAccountKey,
 	getFeedSyncStatusActiveSince,
 	hasFreshInactiveFeedSyncStatus,
+	readLastFeedRefreshRequestId,
+	rememberFeedRefreshRequestId,
 } from '@/lib/feed-sync-status';
 import { useAppState } from '@/providers/app-state';
 
@@ -39,13 +45,17 @@ export function shouldAutoSyncSelectedFeed(
 
 export function useFeedRefresh() {
 	const qc = useQueryClient();
+	const accountKey = getFeedRefreshAccountKey();
 	const { data: feeds } = useFeeds();
 	const syncAllFeeds = useSyncAllFeeds();
+	const [trackedRequestId, setTrackedRequestId] = useState<string | null>(() =>
+		readLastFeedRefreshRequestId(accountKey),
+	);
 	const {
 		data: allFeedsSyncStatus,
 		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
 		refetch: refetchAllFeedsSyncStatus,
-	} = useSyncAllFeedsStatus();
+	} = useSyncAllFeedsStatus(trackedRequestId);
 	const { data: isRealtimeConnected = false } = useQuery<boolean>({
 		queryKey: ['realtime', 'connected'],
 		queryFn: () => false,
@@ -58,6 +68,27 @@ export function useFeedRefresh() {
 	const [untimedStatusActiveSince, setUntimedStatusActiveSince] = useState(0);
 	const [, setRefreshClock] = useState(0);
 	const wasRefreshingAllFeeds = useRef(false);
+
+	useEffect(() => {
+		setTrackedRequestId(readLastFeedRefreshRequestId(accountKey));
+	}, [accountKey]);
+
+	useEffect(() => {
+		const onRequest = (event: Event) => {
+			const detail = (event as CustomEvent<{ accountKey: string; requestId: string | null }>)
+				.detail;
+			if (detail?.accountKey === accountKey) setTrackedRequestId(detail.requestId);
+		};
+		globalThis.addEventListener(FEED_REFRESH_REQUEST_EVENT, onRequest);
+		return () => globalThis.removeEventListener(FEED_REFRESH_REQUEST_EVENT, onRequest);
+	}, [accountKey]);
+
+	useEffect(() => {
+		if (!trackedRequestId || !allFeedsSyncStatus) return;
+		if (allFeedsSyncStatus.requestId === trackedRequestId) return;
+		forgetFeedRefreshRequestId(accountKey);
+		setTrackedRequestId(null);
+	}, [accountKey, allFeedsSyncStatus, trackedRequestId]);
 	const allFeedsStatus = allFeedsSyncStatus?.scope?.feedId
 		? { ...allFeedsSyncStatus, active: false, queued: false, running: false }
 		: allFeedsSyncStatus;
@@ -95,13 +126,18 @@ export function useFeedRefresh() {
 
 	useEffect(() => {
 		if (!allFeedsSyncStatus?.active) return;
+		const activeSince = getFeedSyncStatusActiveSince(allFeedsSyncStatus);
+		const elapsed = activeSince == null ? 0 : Date.now() - activeSince;
+		if (elapsed >= REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS) return;
 		const timer = globalThis.setTimeout(
 			() => {
 				void refetchAllFeedsSyncStatus();
 			},
 			isRealtimeConnected
 				? REFRESH_INTERVALS.SYNC_STATUS_CONNECTED_FALLBACK_MS
-				: REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS,
+				: elapsed >= REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS
+					? REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS
+					: REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS,
 		);
 		return () => globalThis.clearTimeout(timer);
 	}, [allFeedsSyncStatus, isRealtimeConnected, refetchAllFeedsSyncStatus]);
@@ -166,6 +202,11 @@ export function useFeedRefresh() {
 	const refreshFeed = useCallback(
 		async (feedId?: string, options: RefreshOptions = {}) => {
 			if (!feedId) {
+				if (
+					allFeedsSyncStatus?.active &&
+					refreshScopesOverlap({ categoryId: options.categoryId }, allFeedsSyncStatus.scope, feeds)
+				)
+					return false;
 				if (syncingFeedId === ALL_FEEDS_SYNC_ID && !hasSettledInactiveAllFeedsStatus) {
 					return false;
 				}
@@ -177,7 +218,12 @@ export function useFeedRefresh() {
 				setRefreshClock((tick) => tick + 1);
 
 				try {
-					await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
+					const response = await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
+					const requestId = response.data.requestId ?? response.data.status?.requestId ?? null;
+					if (requestId) {
+						rememberFeedRefreshRequestId(accountKey, requestId);
+						setTrackedRequestId(requestId);
+					}
 					return true;
 				} catch (error) {
 					const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
@@ -194,8 +240,17 @@ export function useFeedRefresh() {
 			if (syncingFeedId === feedId) {
 				return false;
 			}
-
 			const selectedFeed = feeds?.find((feed) => feed.id === feedId);
+			if (
+				allFeedsSyncStatus?.active &&
+				refreshScopesOverlap({ feedId }, allFeedsSyncStatus.scope, feeds)
+			)
+				return false;
+			if (isFeedRefreshBlocked(selectedFeed)) {
+				setFeedSyncError(null);
+				setSyncingFeedId(null);
+				return false;
+			}
 			const shouldAutoSync = options.force || shouldAutoSyncSelectedFeed(selectedFeed);
 			if (!shouldAutoSync) {
 				setFeedSyncError(null);
@@ -208,7 +263,12 @@ export function useFeedRefresh() {
 			setSyncingFeedId(feedId);
 
 			try {
-				await syncAllFeeds.mutateAsync({ feedId });
+				const response = await syncAllFeeds.mutateAsync({ feedId });
+				const requestId = response.data.requestId ?? response.data.status?.requestId ?? null;
+				if (requestId) {
+					rememberFeedRefreshRequestId(accountKey, requestId);
+					setTrackedRequestId(requestId);
+				}
 				return true;
 			} catch (error) {
 				const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
@@ -223,12 +283,15 @@ export function useFeedRefresh() {
 		},
 		[
 			feeds,
+			allFeedsSyncStatus?.active,
+			allFeedsSyncStatus?.scope,
 			hasSettledInactiveAllFeedsStatus,
 			refetchAllFeedsSyncStatus,
 			setFeedSyncError,
 			setSyncingFeedId,
 			syncAllFeeds,
 			syncingFeedId,
+			accountKey,
 		],
 	);
 
@@ -241,6 +304,23 @@ export function useFeedRefresh() {
 			!!feedId &&
 			(syncingFeedId === feedId ||
 				(allFeedsSyncStatus?.active === true && allFeedsSyncStatus.scope?.feedId === feedId)),
+		isRefreshBlockedByActiveRequest: (feedId?: string, categoryId?: string) =>
+			allFeedsSyncStatus?.active === true &&
+			refreshScopesOverlap({ feedId, categoryId }, allFeedsSyncStatus.scope, feeds),
 		refreshFeed,
 	};
+}
+
+function refreshScopesOverlap(
+	requested: { feedId?: string; categoryId?: string },
+	active: { feedId?: string; categoryId?: string } | undefined,
+	feeds: Array<{ id: string; categoryId: string }> | undefined,
+) {
+	if (!active?.feedId && !active?.categoryId) return true;
+	if (!requested.feedId && !requested.categoryId) return true;
+	if (requested.feedId && active.feedId) return requested.feedId === active.feedId;
+	if (requested.categoryId && active.categoryId) return requested.categoryId === active.categoryId;
+	const feedId = requested.feedId ?? active.feedId;
+	const categoryId = requested.categoryId ?? active.categoryId;
+	return feeds?.some((feed) => feed.id === feedId && feed.categoryId === categoryId) ?? true;
 }

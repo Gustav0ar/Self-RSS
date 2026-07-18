@@ -177,6 +177,7 @@ export const openApiSpec = {
 					lastSuccessAt: { type: ['string', 'null'], format: 'date-time' },
 					nextEligibleFetchAt: { type: ['string', 'null'], format: 'date-time' },
 					replacementRequestedAt: { type: ['string', 'null'], format: 'date-time' },
+					discovery: { $ref: '#/components/schemas/FeedDiscoveryPresentation' },
 					createdAt: { type: 'string', format: 'date-time' },
 					updatedAt: { type: 'string', format: 'date-time' },
 				},

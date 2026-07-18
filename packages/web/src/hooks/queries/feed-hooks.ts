@@ -1,7 +1,12 @@
 import type { ApiResponse, FeedWithCounts, OpmlImportSummary } from '@self-feed/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiDownload, apiFetch } from '@/lib/api';
-import { type FeedSyncAllStatus, mergeFeedSyncStatus } from '@/lib/feed-sync-status';
+import {
+	type FeedSyncAllStatus,
+	getFeedRefreshAccountKey,
+	mergeFeedSyncStatus,
+	rememberFeedRefreshRequestId,
+} from '@/lib/feed-sync-status';
 import { invalidateReaderQueries } from './cache-utils';
 
 // --- Feeds ---
@@ -117,7 +122,9 @@ export function useSyncFeed() {
 export interface QueuedFeedSyncResult {
 	accepted: true;
 	alreadyQueued: boolean;
+	requestId?: string;
 	jobId: string;
+	jobIds?: string[];
 	status: FeedSyncAllStatus;
 }
 
@@ -138,20 +145,58 @@ export function useSyncAllFeeds() {
 			qc.setQueryData<FeedSyncAllStatus | undefined>(['feeds', 'sync', 'status'], (current) =>
 				mergeFeedSyncStatus(current, response.data.status),
 			);
+			const requestId = response.data.requestId ?? response.data.status.requestId;
+			if (requestId) qc.setQueryData(['feeds', 'sync', 'status', requestId], response.data.status);
 		},
 	});
 }
 
-export function useSyncAllFeedsStatus() {
+export function useSyncAllFeedsStatus(requestId?: string | null) {
 	return useQuery({
-		queryKey: ['feeds', 'sync', 'status'],
+		queryKey: requestId ? ['feeds', 'sync', 'status', requestId] : ['feeds', 'sync', 'status'],
 		queryFn: ({ signal }) =>
-			apiFetch<ApiResponse<FeedSyncAllStatus>>('/feeds/sync/status', { signal }).then(
-				(response) => response.data,
-			),
+			apiFetch<ApiResponse<FeedSyncAllStatus>>(
+				`/feeds/sync/status${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ''}`,
+				{ signal },
+			).then((response) => response.data),
 		// SSE is the primary progress transport. This query is only the initial
 		// snapshot and reconnect/focus fallback, never a polling loop.
 		staleTime: 10_000,
+	});
+}
+
+export function useSelectFeedDiscoveryCandidate() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (candidateId: string) =>
+			apiFetch<
+				ApiResponse<{
+					candidateId: string;
+					feedId: string;
+					requestId: string;
+					jobId: string | null;
+				}>
+			>(`/feeds/discovery/candidates/${candidateId}/select`, { method: 'POST' }),
+		onSuccess: (response) => {
+			rememberFeedRefreshRequestId(getFeedRefreshAccountKey(), response.data.requestId);
+			qc.invalidateQueries({ queryKey: ['feeds'] });
+			qc.invalidateQueries({ queryKey: ['categories'] });
+		},
+	});
+}
+
+export function useCancelFeedReplacement() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (feedId: string) =>
+			apiFetch<ApiResponse<FeedWithCounts>>(`/feeds/${feedId}/replacement/cancel`, {
+				method: 'POST',
+			}),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ['feeds'] });
+			qc.invalidateQueries({ queryKey: ['categories'] });
+			qc.invalidateQueries({ queryKey: ['feeds', 'sync', 'status'] });
+		},
 	});
 }
 

@@ -387,7 +387,7 @@ class RssRepositoryTest {
             clearExisting = true,
         )
         val pagingSource = localStore.articlePagingSource(queryKey)
-        coEvery { api.syncAllFeedsStatus() } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.syncAllFeedsStatus(any()) } returns com.selffeed.android.network.ApiEnvelope(
             FeedSyncAllStatus(
                 queued = false,
                 running = false,
@@ -408,6 +408,38 @@ class RssRepositoryTest {
             ),
         ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
         assertEquals(listOf("article-visible"), page.data.map { it.id })
+    }
+
+    @Test
+    fun `missing persisted refresh request falls back to latest status once`() = runTest {
+        every { sessionStore.getFeedRefreshRequestId() } returns "old-request"
+        coEvery { api.syncAllFeedsStatus("old-request") } returns com.selffeed.android.network.ApiEnvelope(
+            FeedSyncAllStatus(
+                requestId = null,
+                status = "completed",
+                queued = false,
+                running = false,
+                active = false,
+                stale = false,
+            ),
+        )
+        coEvery { api.syncAllFeedsStatus(null) } returns com.selffeed.android.network.ApiEnvelope(
+            FeedSyncAllStatus(
+                requestId = "latest-request",
+                status = "running",
+                queued = false,
+                running = true,
+                active = true,
+                stale = false,
+            ),
+        )
+
+        val result = repository.syncAllFeedsStatus()
+
+        assertEquals("latest-request", (result as AppResult.Success).data.requestId)
+        coVerify { api.syncAllFeedsStatus("old-request") }
+        coVerify(exactly = 1) { api.syncAllFeedsStatus(null) }
+        io.mockk.verify { sessionStore.setFeedRefreshRequestId("latest-request") }
     }
 
     @Test

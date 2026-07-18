@@ -121,6 +121,7 @@ import com.selffeed.android.ui.AutoMarkReadPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ReaderFontPreference
 import com.selffeed.android.ui.ThemePreference
+import com.selffeed.android.ui.feedLifecyclePresentation
 import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
@@ -248,6 +249,40 @@ fun FeedsTab(
                         checked = state.hideRead,
                         onCheckedChange = actions.onHideReadChanged,
                     )
+                }
+            }
+        }
+
+        state.syncStatus?.let { syncStatus ->
+            item(key = "durable-feed-refresh-status") {
+                FeedSurfaceCard(
+                    modifier = Modifier.semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = durableSyncSummary(syncStatus)
+                    },
+                ) {
+                    Text(
+                        text = when {
+                            syncStatus.queued -> "Refresh queued"
+                            syncStatus.running -> "Refreshing feeds"
+                            syncStatus.failedFeeds > 0 -> "Refresh completed with issues"
+                            else -> "Refresh complete"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = durableSyncSummary(syncStatus),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    earliestNextEligible(syncStatus)?.let { next ->
+                        Text(
+                            text = "Next publisher check: $next",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -456,6 +491,13 @@ fun FeedsTab(
             categories = allCategories,
             onDismiss = { managementDialog = null },
             onCreateCategory = { name -> actions.onCreateCategory(name, null) },
+            actionPending = state.lifecycleActionFeedId == dialog.feed?.id,
+            onSelectCandidate = { candidateId ->
+                dialog.feed?.let { actions.onSelectDiscoveryCandidate(it.id, candidateId) }
+            },
+            onCancelReplacement = {
+                dialog.feed?.let { actions.onCancelFeedReplacement(it.id) }
+            },
             onSave = { url, title, categoryId, pollingIntervalMinutes ->
                 val feed = dialog.feed
                 if (feed == null) {
@@ -569,6 +611,9 @@ private fun FeedEditorDialog(
     categories: List<CategoryWithCounts>,
     onDismiss: () -> Unit,
     onCreateCategory: (String) -> Unit,
+    actionPending: Boolean,
+    onSelectCandidate: (String) -> Unit,
+    onCancelReplacement: () -> Unit,
     onSave: (url: String, title: String?, categoryId: String, pollingIntervalMinutes: Int?) -> Unit,
 ) {
     var url by remember(feed?.id) { mutableStateOf(feed?.feedUrl.orEmpty()) }
@@ -586,6 +631,7 @@ private fun FeedEditorDialog(
     val canSave = url.trim().isNotEmpty() &&
         (feed == null || (categoryId.isNotBlank() && validInterval != null))
     val healthIssue = feed?.let(::feedHealthIssue)
+    val lifecycle = feed?.takeIf { it.lifecycleStatus != null }?.let(::feedLifecyclePresentation)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -597,7 +643,41 @@ private fun FeedEditorDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                healthIssue?.let { issue ->
+                lifecycle?.let { presentation ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().testTag("feed-lifecycle-details"),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(presentation.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(presentation.detail, style = MaterialTheme.typography.bodySmall)
+                            if (presentation.discoveryRequired) {
+                                feed.discovery?.candidates.orEmpty().forEach { candidate ->
+                                    OutlinedButton(
+                                        onClick = { onSelectCandidate(candidate.id) },
+                                        enabled = !actionPending,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Text(candidate.title ?: candidate.type, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(candidate.url, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                                if (feed.discovery?.candidates.isNullOrEmpty()) {
+                                    Text("Discovery choices expired. Save the URL to validate it again.", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            if (presentation.canCancelReplacement) {
+                                TextButton(onClick = onCancelReplacement, enabled = !actionPending) {
+                                    Text("Cancel replacement")
+                                }
+                            }
+                        }
+                    }
+                }
+                if (lifecycle == null) healthIssue?.let { issue ->
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -950,7 +1030,8 @@ private fun FeedRow(
     onDelete: (() -> Unit)? = null,
 ) {
     val healthIssue = feedHealthIssue(feed)
-    val subtitle = feed.description ?: feed.feedUrl
+    val lifecycle = feed.takeIf { it.lifecycleStatus != null }?.let(::feedLifecyclePresentation)
+    val subtitle = lifecycle?.title ?: feed.description ?: feed.feedUrl
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -981,7 +1062,7 @@ private fun FeedRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (healthIssue != null) {
+                if (healthIssue != null || lifecycle != null) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.Warning,
@@ -1041,6 +1122,18 @@ internal fun feedHealthIssue(feed: FeedWithCounts): FeedHealthIssue? {
         warning = "${feed.title} is not updating. $message${failedAt?.let { " Last attempt $it." }.orEmpty()}",
     )
 }
+
+private fun durableSyncSummary(status: com.selffeed.android.network.FeedSyncAllStatus): String = buildList {
+    if (status.totalFeeds > 0) add("${status.completedFeeds}/${status.totalFeeds} checked")
+    if (status.newArticles > 0) add("${status.newArticles} new")
+    if (status.failedFeeds > 0) add("${status.failedFeeds} failed")
+    if (status.skippedFeeds > 0) add("${status.skippedFeeds} deferred")
+}.joinToString(" · ").ifEmpty { if (status.active) "Waiting for progress" else "Feeds are up to date" }
+
+private fun earliestNextEligible(status: com.selffeed.android.network.FeedSyncAllStatus): String? =
+    status.items.mapNotNull { it.nextEligibleAt }
+        .minByOrNull { runCatching { java.time.Instant.parse(it) }.getOrNull() ?: java.time.Instant.MAX }
+        ?.let(::formatPublishedAt)
 
 internal fun feedSyncWarning(feed: FeedWithCounts): String? = feedHealthIssue(feed)?.warning
 

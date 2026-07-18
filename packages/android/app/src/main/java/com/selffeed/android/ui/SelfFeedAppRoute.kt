@@ -243,6 +243,8 @@ fun SelfFeedAppRoute(
                 onImportOpml = feedsViewModel::importOpml,
                 onExportOpml = feedsViewModel::exportOpml,
                 onDismissImportSummary = feedsViewModel::dismissImportSummary,
+                onSelectDiscoveryCandidate = feedsViewModel::selectDiscoveryCandidate,
+                onCancelFeedReplacement = feedsViewModel::cancelFeedReplacement,
                 onRefreshArticles = {
                     // Refresh the API/Room list immediately. Publisher fetches
                     // continue independently and publish revisions as they land.
