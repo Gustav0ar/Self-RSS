@@ -1,5 +1,6 @@
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
 import { cancelResponseBody, readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import type { DurablePublisherOutcome } from './durable-ingestion-ops.types.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
 import {
 	buildFallbackDiscoveryCandidates,
@@ -69,6 +70,10 @@ export interface DurableFeedWorkerOptions {
 		candidates: ReturnType<typeof discoverFeedsFromHtml>;
 		now: Date;
 	}) => Promise<unknown>;
+	telemetry?: {
+		recordPublisherRequest(): void;
+		recordPublisherOutcome(outcome: DurablePublisherOutcome): void;
+	};
 }
 
 export class DurableFeedWorker {
@@ -116,6 +121,17 @@ export class DurableFeedWorker {
 	async processClaim(claim: ClaimedFetch, signal?: AbortSignal) {
 		const now = this.now();
 		let unconditionalAttempt = false;
+		let publisherRequestStarted = false;
+		let publisherOutcomeRecorded = false;
+		const recordPublisherOutcome = (outcome: DurablePublisherOutcome) => {
+			if (!publisherRequestStarted || publisherOutcomeRecorded) return;
+			publisherOutcomeRecorded = true;
+			try {
+				this.options.telemetry?.recordPublisherOutcome(outcome);
+			} catch {
+				// Telemetry must never alter publisher work.
+			}
+		};
 		const requestController = new AbortController();
 		const abortFromCaller = () => requestController.abort(signal?.reason);
 		signal?.addEventListener('abort', abortFromCaller, { once: true });
@@ -167,6 +183,12 @@ export class DurableFeedWorker {
 				headers.set('user-agent', `Self-Feed/1.0; contact=${this.options.contact.trim()}`);
 			}
 			const fetchImpl = this.options.fetch ?? fetchSourceSafely;
+			publisherRequestStarted = true;
+			try {
+				this.options.telemetry?.recordPublisherRequest();
+			} catch {
+				// Telemetry must never alter publisher work.
+			}
 			const response = await fetchImpl(
 				claim.source.resolvedUrl ?? claim.source.requestedUrl,
 				{ method: 'GET', headers, signal: requestController.signal },
@@ -176,11 +198,13 @@ export class DurableFeedWorker {
 				},
 			);
 			if (response.status === 304) {
+				recordPublisherOutcome('not_modified');
 				cancelResponseBody(response);
 				await this.completeUnchanged(claim, response, now, forceUnconditional);
 				return;
 			}
 			if (response.status < 200 || response.status >= 300) {
+				recordPublisherOutcome(response.status === 429 ? 'rate_limited' : 'http_error');
 				cancelResponseBody(response);
 				await this.failClaim(claim, now, {
 					status: response.status,
@@ -195,6 +219,7 @@ export class DurableFeedWorker {
 				Number.isFinite(contentLength) &&
 				contentLength > (this.options.maxBodyBytes ?? 5_242_880)
 			) {
+				recordPublisherOutcome('oversize');
 				cancelResponseBody(response);
 				await this.failClaim(claim, now, {
 					failureKind: 'oversize',
@@ -207,6 +232,7 @@ export class DurableFeedWorker {
 				this.options.maxBodyBytes ?? 5_242_880,
 				requestController,
 			);
+			recordPublisherOutcome('success');
 			clearTimeout(requestTimeout);
 			const snapshotId = crypto.randomUUID();
 			await this.snapshotParser.persistRawResponse({
@@ -237,6 +263,15 @@ export class DurableFeedWorker {
 			const parsed = await parserSemaphore.run(() => this.parseSnapshot(snapshotId, now));
 			await this.completeParsed(claim, parsed, response.status, now, forceUnconditional, response);
 		} catch (error) {
+			if (publisherRequestStarted && !publisherOutcomeRecorded) {
+				recordPublisherOutcome(
+					signal?.aborted
+						? 'aborted'
+						: error instanceof Error && /maximum size/i.test(error.message)
+							? 'oversize'
+							: 'network_error',
+				);
+			}
 			if (error instanceof RawSnapshotPersistedCrash) throw error.original;
 			if (signal?.aborted) {
 				await this.repository.releaseFetchJob(claim.job.id, this.workerId, this.now());

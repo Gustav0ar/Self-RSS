@@ -79,6 +79,8 @@ try {
 				concurrency: env.FEED_SYNC_CONCURRENCY,
 				allowPrivateHosts: env.FEED_ALLOW_PRIVATE_HOSTS,
 				contact: env.ADMIN_EMAIL,
+				historyRetentionDays: env.FEED_INGESTION_HISTORY_RETENTION_DAYS,
+				cleanupBatchSize: env.FEED_INGESTION_CLEANUP_BATCH_SIZE,
 			})
 		: null;
 	const stopQueuedSyncWorker = pipelineWorkers.legacyPublisherWorkers

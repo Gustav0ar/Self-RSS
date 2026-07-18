@@ -10,7 +10,7 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
-import { FeedIngestionDeliveryWorkRepository } from './feed-ingestion-delivery-work.repository.js';
+import { FeedIngestionOperationsRepository } from './feed-ingestion-operations.repository.js';
 import {
 	aggregateRefreshRequest as aggregateRefreshRequestRecord,
 	aggregateRefreshRequests,
@@ -28,7 +28,7 @@ export interface RefreshRequestItemInput {
 	jobId?: string | null;
 }
 
-export class FeedIngestionRepository extends FeedIngestionDeliveryWorkRepository {
+export class FeedIngestionRepository extends FeedIngestionOperationsRepository {
 	async upsertOrigin(data: OriginInsert) {
 		const now = new Date();
 		const [origin] = await this.db

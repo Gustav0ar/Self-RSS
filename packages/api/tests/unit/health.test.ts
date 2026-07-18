@@ -54,6 +54,42 @@ describe('Health routes', () => {
 		expect(body.checks.worker.status).toBe('missing');
 	});
 
+	it('GET /ready exposes v2 backlog truth without treating publisher backoff as unhealthy', async () => {
+		const operationalSnapshot = {
+			fetchJobs: {
+				queued: 9,
+				running: 1,
+				dead: 2,
+				due: 4,
+				oldestDueAgeSeconds: 600,
+				oldestQueuedAgeSeconds: 1_200,
+			},
+			parseBacklog: 3,
+			deliveries: { pending: 5, running: 1, failed: 2, oldestDueAgeSeconds: 300 },
+			refreshRequests: { active: 2, error: 1 },
+			sources: { active: 10, backoff: 6, paused: 2 },
+			origins: { blocked: 4, circuitOpen: 1 },
+		};
+		const health = createHealthRoutes(
+			{ run: async () => undefined, all: async () => null } as never,
+			{ ping: async () => 'PONG', get: async () => 'heartbeat' } as never,
+			{
+				pipelineMode: 'v2',
+				ingestionRepository: {
+					getOperationalSnapshot: vi.fn().mockResolvedValue(operationalSnapshot),
+				} as never,
+			},
+		);
+
+		const res = await health.request('/ready');
+		const body = await res.json();
+		expect(res.status).toBe(200);
+		expect(body.status).toBe('ok');
+		expect(body.feedPipelineMode).toBe('v2');
+		expect(body.checks.ingestion).toEqual({ status: 'informational', ...operationalSnapshot });
+		expect(JSON.stringify(body)).not.toContain('publisher.example.com');
+	});
+
 	it('returns 404 for unknown routes', async () => {
 		const res = await app.request('/nonexistent');
 		expect(res.status).toBe(404);

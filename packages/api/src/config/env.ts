@@ -44,6 +44,8 @@ const rawEnvSchema = z
 		FEED_SYNC_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
 		FEED_MAX_CONTENT_LENGTH: z.coerce.number().int().min(1024).default(5242880),
 		FEED_ALLOW_PRIVATE_HOSTS: booleanCoercible.default(false),
+		FEED_INGESTION_HISTORY_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(14),
+		FEED_INGESTION_CLEANUP_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(250),
 		FEED_FETCH_RELAY_URL: optionalUrl,
 		FEED_FETCH_RELAY_TOKEN: optionalRelayToken,
 		FEED_FETCH_RELAY_HOSTS: z.string().default(''),

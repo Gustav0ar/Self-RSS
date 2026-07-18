@@ -20,10 +20,12 @@ import { createFeedRoutes } from './routes/feeds.js';
 import { createHealthRoutes, createMetricsRoutes } from './routes/index.js';
 import { createPreferencesRoutes } from './routes/preferences.js';
 import { createStatsRoutes } from './routes/stats.js';
+import type { FeedPipelineMode } from './services/durable-ingestion-ops.types.js';
 import type { TokenUtils } from './utils/tokens.js';
 
 interface AppOptions {
 	requireWorkerHeartbeat?: boolean;
+	feedPipelineMode?: FeedPipelineMode;
 }
 
 function getAllowedOrigins() {
@@ -88,6 +90,8 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 		'/',
 		createHealthRoutes(deps?.db, deps?.redis, {
 			requireWorkerHeartbeat: options.requireWorkerHeartbeat,
+			ingestionRepository: deps?.repos.feedIngestion,
+			pipelineMode: options.feedPipelineMode,
 		}),
 	);
 
@@ -146,6 +150,8 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 				db: deps.db,
 				metricsService: deps.services.metrics,
 				redis: deps.redis,
+				ingestionRepository: deps.repos.feedIngestion,
+				pipelineMode: options.feedPipelineMode,
 			}),
 		);
 

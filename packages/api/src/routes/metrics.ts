@@ -2,13 +2,18 @@ import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
-import { feeds } from '../db/schema.js';
+import { articles, feeds } from '../db/schema.js';
+import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
+import type { FeedPipelineMode } from '../services/durable-ingestion-ops.types.js';
+import { readDurableIngestionCounters } from '../services/durable-ingestion-telemetry.js';
 import { getMetricsService, type MetricsService } from '../services/metrics.service.js';
 
 export interface MetricsRouteOptions {
 	db?: Database;
 	metricsService?: MetricsService;
 	redis?: Redis;
+	ingestionRepository?: FeedIngestionRepository;
+	pipelineMode?: FeedPipelineMode;
 }
 
 export function createMetricsRoutes(options: MetricsRouteOptions = {}) {
@@ -46,6 +51,12 @@ async function updateDynamicMetrics(options: MetricsRouteOptions, metricsService
 		// For SQLite, we report connection stats based on active queries
 		// This is a best-effort approach since SQLite handles concurrency differently
 		metricsService.updateDbPoolStats(0, 0, 1);
+		try {
+			const [articleResult] = await db.select({ count: sql<number>`count(*)` }).from(articles);
+			metricsService.setArticleCount(articleResult?.count ?? 0);
+		} catch (err) {
+			console.error('Failed to update article count metric:', err);
+		}
 	}
 
 	// Update feed sync status from database
@@ -73,6 +84,25 @@ async function updateDynamicMetrics(options: MetricsRouteOptions, metricsService
 			);
 		} catch (err) {
 			console.error('Failed to update feed sync metrics:', err);
+		}
+	}
+
+	if (options.ingestionRepository) {
+		try {
+			metricsService.updateDurableIngestion(
+				options.pipelineMode ?? 'legacy',
+				await options.ingestionRepository.getOperationalSnapshot(),
+			);
+		} catch (err) {
+			console.error('Failed to update durable ingestion metrics:', err);
+		}
+	}
+
+	if (redis) {
+		try {
+			metricsService.syncDurableCounters(await readDurableIngestionCounters(redis));
+		} catch (err) {
+			console.error('Failed to update durable ingestion counters:', err);
 		}
 	}
 }

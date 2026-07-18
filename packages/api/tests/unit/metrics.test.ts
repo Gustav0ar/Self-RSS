@@ -98,6 +98,7 @@ describe('Metrics routes', () => {
 		const redis = {
 			ping: vi.fn().mockResolvedValue('PONG'),
 			scan: vi.fn().mockResolvedValue(['0', ['articles:list:user-1']]),
+			hgetall: vi.fn().mockResolvedValue({}),
 		};
 		const redisBackedApp = new Hono();
 		redisBackedApp.route('/api/v1', createMetricsRoutes({ redis: redis as never }));

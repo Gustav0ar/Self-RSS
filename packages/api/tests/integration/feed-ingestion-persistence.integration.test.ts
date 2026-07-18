@@ -91,6 +91,167 @@ async function setupReplacementFacade() {
 }
 
 describe('durable feed ingestion persistence', () => {
+	it('reports queue, staleness, backoff, and circuit state from SQLite truth', async () => {
+		const { sqlite, repository } = await setupDatabase();
+		const now = new Date('2033-05-18T03:33:20Z');
+		const nowSeconds = Math.floor(now.getTime() / 1_000);
+		sqlite.exec(`
+			INSERT INTO feed_origins
+				(id, scheme, host, port, blocked_until, circuit_state, created_at, updated_at)
+			VALUES
+				('metrics-origin', 'https', 'metrics.example.com', 443, ${nowSeconds + 60}, 'open', ${nowSeconds}, ${nowSeconds});
+			INSERT INTO feed_sources
+				(id, normalized_url, requested_url, origin_id, next_fetch_at, backoff_until, state, created_at, updated_at)
+			VALUES
+				('metrics-source-due', 'https://metrics.example.com/due', 'https://metrics.example.com/due', 'metrics-origin', ${nowSeconds - 30}, NULL, 'active', ${nowSeconds - 1_000}, ${nowSeconds}),
+				('metrics-source-delayed', 'https://metrics.example.com/delayed', 'https://metrics.example.com/delayed', 'metrics-origin', ${nowSeconds + 300}, ${nowSeconds + 300}, 'active', ${nowSeconds - 2_000}, ${nowSeconds}),
+				('metrics-source-running', 'https://metrics.example.com/running', 'https://metrics.example.com/running', 'metrics-origin', ${nowSeconds}, NULL, 'active', ${nowSeconds}, ${nowSeconds}),
+				('metrics-source-paused', 'https://metrics.example.com/paused', 'https://metrics.example.com/paused', 'metrics-origin', ${nowSeconds}, NULL, 'paused', ${nowSeconds}, ${nowSeconds});
+			INSERT INTO feeds
+				(id, user_id, category_id, title, feed_url, source_id, next_sync_at, created_at, updated_at)
+			VALUES
+				('metrics-feed', 'user-1', 'category-1', 'Metrics', 'https://metrics.example.com/due', 'metrics-source-due', ${nowSeconds}, ${nowSeconds}, ${nowSeconds});
+			INSERT INTO feed_fetch_jobs
+				(id, source_id, origin_id, status, available_at, created_at, updated_at)
+			VALUES
+				('metrics-job-due', 'metrics-source-due', 'metrics-origin', 'queued', ${nowSeconds - 120}, ${nowSeconds - 300}, ${nowSeconds}),
+				('metrics-job-delayed', 'metrics-source-delayed', 'metrics-origin', 'queued', ${nowSeconds + 120}, ${nowSeconds - 600}, ${nowSeconds}),
+				('metrics-job-running', 'metrics-source-running', 'metrics-origin', 'running', ${nowSeconds}, ${nowSeconds}, ${nowSeconds}),
+				('metrics-job-dead', 'metrics-source-paused', 'metrics-origin', 'dead', ${nowSeconds}, ${nowSeconds}, ${nowSeconds});
+			INSERT INTO feed_fetch_snapshots
+				(id, source_id, fetched_at, final_url, raw_body, raw_body_bytes, parse_state, created_at)
+			VALUES
+				('metrics-snapshot-parse', 'metrics-source-due', ${nowSeconds}, 'https://metrics.example.com/due', '<rss/>', 6, 'failed', ${nowSeconds}),
+				('metrics-snapshot-pending-delivery', 'metrics-source-due', ${nowSeconds}, 'https://metrics.example.com/due', NULL, 0, 'parsed', ${nowSeconds}),
+				('metrics-snapshot-running-delivery', 'metrics-source-due', ${nowSeconds}, 'https://metrics.example.com/due', NULL, 0, 'parsed', ${nowSeconds}),
+				('metrics-snapshot-dead-delivery', 'metrics-source-due', ${nowSeconds}, 'https://metrics.example.com/due', NULL, 0, 'parsed', ${nowSeconds});
+			INSERT INTO feed_snapshot_deliveries
+				(id, snapshot_id, feed_id, status, available_at, created_at, updated_at)
+			VALUES
+				('metrics-delivery-pending', 'metrics-snapshot-pending-delivery', 'metrics-feed', 'pending', ${nowSeconds - 90}, ${nowSeconds}, ${nowSeconds}),
+				('metrics-delivery-running', 'metrics-snapshot-running-delivery', 'metrics-feed', 'running', ${nowSeconds}, ${nowSeconds}, ${nowSeconds}),
+				('metrics-delivery-dead', 'metrics-snapshot-dead-delivery', 'metrics-feed', 'dead', ${nowSeconds}, ${nowSeconds}, ${nowSeconds});
+			INSERT INTO feed_refresh_requests
+				(id, user_id, status, requested_at, created_at, updated_at)
+			VALUES
+				('metrics-request-active', 'user-1', 'running', ${nowSeconds}, ${nowSeconds}, ${nowSeconds}),
+				('metrics-request-error', 'user-1', 'completed_with_errors', ${nowSeconds}, ${nowSeconds}, ${nowSeconds});
+		`);
+
+		expect(await repository.getOperationalSnapshot(now)).toEqual({
+			fetchJobs: {
+				queued: 2,
+				running: 1,
+				dead: 1,
+				due: 1,
+				oldestDueAgeSeconds: 120,
+				oldestQueuedAgeSeconds: 600,
+			},
+			parseBacklog: 1,
+			deliveries: { pending: 1, running: 1, failed: 1, oldestDueAgeSeconds: 90 },
+			refreshRequests: { active: 1, error: 1 },
+			sources: { active: 2, backoff: 1, paused: 1 },
+			origins: { blocked: 1, circuitOpen: 1 },
+		});
+	});
+
+	it('cleans terminal history in bounded batches without deleting active or retained work', async () => {
+		const { sqlite, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const nowSeconds = Math.floor(now.getTime() / 1_000);
+		const old = nowSeconds - 30 * 24 * 60 * 60;
+		const recent = nowSeconds - 24 * 60 * 60;
+		sqlite.exec(`
+			INSERT INTO feed_origins (id, scheme, host, port, circuit_state, created_at, updated_at)
+			VALUES ('cleanup-origin', 'https', 'cleanup.example.com', 443, 'closed', ${old}, ${old});
+			INSERT INTO feed_sources
+				(id, normalized_url, requested_url, origin_id, next_fetch_at, state, created_at, updated_at)
+			VALUES ('cleanup-source', 'https://cleanup.example.com/feed', 'https://cleanup.example.com/feed', 'cleanup-origin', ${nowSeconds}, 'active', ${old}, ${old});
+			INSERT INTO feeds
+				(id, user_id, category_id, title, feed_url, source_id, next_sync_at, created_at, updated_at)
+			VALUES ('cleanup-feed', 'user-1', 'category-1', 'Cleanup', 'https://cleanup.example.com/feed', 'cleanup-source', ${nowSeconds}, ${old}, ${old});
+			INSERT INTO feed_refresh_requests
+				(id, user_id, status, requested_at, completed_at, created_at, updated_at)
+			VALUES
+				('cleanup-request-a', 'user-1', 'completed', ${old}, ${old}, ${old}, ${old}),
+				('cleanup-request-b', 'user-1', 'completed_with_errors', ${old}, ${old}, ${old}, ${old}),
+				('cleanup-request-protected', 'user-1', 'completed', ${old}, ${old}, ${old}, ${old});
+			INSERT INTO feed_fetch_jobs
+				(id, source_id, origin_id, status, available_at, created_at, updated_at, completed_at)
+			VALUES
+				('cleanup-job-a', 'cleanup-source', 'cleanup-origin', 'completed', ${old}, ${old}, ${old}, ${old}),
+				('cleanup-job-b', 'cleanup-source', 'cleanup-origin', 'completed', ${old}, ${old}, ${old}, ${old}),
+				('cleanup-job-protected', 'cleanup-source', 'cleanup-origin', 'completed', ${old}, ${old}, ${old}, ${old});
+			INSERT INTO feed_refresh_request_items
+				(id, request_id, feed_id, source_id, job_id, status, created_at, updated_at)
+			VALUES ('cleanup-item-protected', 'cleanup-request-protected', 'cleanup-feed', 'cleanup-source', 'cleanup-job-protected', 'pending', ${old}, ${old});
+			INSERT INTO feed_fetch_snapshots
+				(id, source_id, job_id, fetched_at, final_url, raw_body, raw_body_bytes, body_expires_at, parse_state, retain_until, cleanup_after, created_at)
+			VALUES
+				('cleanup-snapshot-delete', 'cleanup-source', 'cleanup-job-a', ${old}, 'https://cleanup.example.com/feed', NULL, 0, NULL, 'parsed', ${old}, ${old}, ${old}),
+				('cleanup-snapshot-retained', 'cleanup-source', 'cleanup-job-b', ${old}, 'https://cleanup.example.com/feed', NULL, 0, NULL, 'parsed', ${nowSeconds + 86_400}, ${old}, ${old}),
+				('cleanup-snapshot-active', 'cleanup-source', NULL, ${old}, 'https://cleanup.example.com/feed', NULL, 0, NULL, 'parsed', ${old}, ${old}, ${old}),
+				('cleanup-snapshot-recent', 'cleanup-source', NULL, ${old}, 'https://cleanup.example.com/feed', NULL, 0, NULL, 'parsed', ${old}, ${old}, ${old}),
+				('cleanup-snapshot-expiring', 'cleanup-source', NULL, ${old}, 'https://cleanup.example.com/feed', '<rss/>', 6, ${old}, 'failed', NULL, NULL, ${old});
+			UPDATE feed_fetch_jobs SET snapshot_id = 'cleanup-snapshot-delete' WHERE id = 'cleanup-job-a';
+			UPDATE feed_fetch_jobs SET snapshot_id = 'cleanup-snapshot-retained' WHERE id = 'cleanup-job-b';
+			INSERT INTO feed_snapshot_deliveries
+				(id, snapshot_id, feed_id, status, available_at, created_at, updated_at, completed_at)
+			VALUES
+				('cleanup-delivery-old', 'cleanup-snapshot-delete', 'cleanup-feed', 'completed', ${old}, ${old}, ${old}, ${old}),
+				('cleanup-delivery-active', 'cleanup-snapshot-active', 'cleanup-feed', 'pending', ${old}, ${old}, ${old}, NULL),
+				('cleanup-delivery-recent', 'cleanup-snapshot-recent', 'cleanup-feed', 'completed', ${recent}, ${recent}, ${recent}, ${recent});
+			INSERT INTO feed_discovery_candidates
+				(id, request_id, user_id, input_url, candidate_url, normalized_candidate_url, expires_at, created_at, updated_at)
+			VALUES
+				('cleanup-discovery-a', 'cleanup-discovery-request-a', 'user-1', 'https://cleanup.example.com', 'https://cleanup.example.com/a', 'https://cleanup.example.com/a', ${old}, ${old}, ${old}),
+				('cleanup-discovery-b', 'cleanup-discovery-request-b', 'user-1', 'https://cleanup.example.com', 'https://cleanup.example.com/b', 'https://cleanup.example.com/b', ${old}, ${old}, ${old});
+		`);
+
+		const result = await repository.cleanupOperationalHistory({
+			now,
+			retentionDays: 14,
+			batchSize: 1,
+		});
+		expect(result).toEqual({
+			expiredSnapshotBodies: 1,
+			refreshRequests: 1,
+			fetchJobs: 1,
+			deliveries: 0,
+			snapshots: 1,
+			discoveryCandidates: 1,
+		});
+		for (const count of Object.values(result)) expect(count).toBeLessThanOrEqual(1);
+
+		const remainingIds = (table: string) =>
+			sqlite.query(`SELECT id FROM ${table} ORDER BY id`).all() as Array<{ id: string }>;
+		expect(remainingIds('feed_refresh_requests').map(({ id }) => id)).toContain(
+			'cleanup-request-protected',
+		);
+		expect(remainingIds('feed_fetch_jobs').map(({ id }) => id)).toContain('cleanup-job-protected');
+		expect(remainingIds('feed_fetch_snapshots').map(({ id }) => id)).toEqual(
+			expect.arrayContaining([
+				'cleanup-snapshot-active',
+				'cleanup-snapshot-expiring',
+				'cleanup-snapshot-recent',
+				'cleanup-snapshot-retained',
+			]),
+		);
+		const expiring = sqlite
+			.query(
+				`SELECT raw_body, raw_body_bytes, parse_state, cleanup_after FROM feed_fetch_snapshots WHERE id = 'cleanup-snapshot-expiring'`,
+			)
+			.get() as {
+			raw_body: string | null;
+			raw_body_bytes: number;
+			parse_state: string;
+			cleanup_after: number;
+		};
+		expect(expiring).toMatchObject({ raw_body: null, raw_body_bytes: 0, parse_state: 'expired' });
+		expect(expiring.cleanup_after).toBeGreaterThan(nowSeconds);
+		expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+	});
+
 	it('upserts identities, clamps intervals, deduplicates active work, and recovers leases', async () => {
 		const { sqlite, repository } = await setupDatabase();
 		const originA = await repository.upsertOrigin({
@@ -671,12 +832,20 @@ describe('durable feed ingestion persistence', () => {
 		let activeParsers = 0;
 		let maxParsers = 0;
 		let requests = 0;
+		const publisherOutcomes: string[] = [];
+		let recordedPublisherRequests = 0;
 		const parser = new FeedSnapshotParserService(repository);
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'parallel-worker',
 			networkConcurrency: 4,
 			originStartGapSeconds: 0,
 			now: () => now,
+			telemetry: {
+				recordPublisherRequest: () => {
+					recordedPublisherRequests += 1;
+				},
+				recordPublisherOutcome: (outcome) => publisherOutcomes.push(outcome),
+			},
 			fetch: async () => {
 				requests += 1;
 				activeNetwork += 1;
@@ -704,6 +873,8 @@ describe('durable feed ingestion persistence', () => {
 			processed = await worker.drainOnce();
 		} while (processed > 0);
 		expect(requests).toBe(20);
+		expect(recordedPublisherRequests).toBe(20);
+		expect(publisherOutcomes).toEqual(Array.from({ length: 20 }, () => 'success'));
 		expect(maxNetwork).toBe(4);
 		expect(maxParsers).toBe(1);
 	});
@@ -1556,7 +1727,7 @@ describe('durable feed ingestion persistence', () => {
 		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({ status: 'completed' });
 	});
 
-	it('releases caller-aborted work without consuming attempts or counting publisher failure', async () => {
+	it('releases caller-aborted work without consuming attempts or counting a publisher failure', async () => {
 		const { db, repository } = await setupDatabase();
 		const now = new Date('2026-07-18T00:00:00Z');
 		const origin = await repository.upsertOrigin({
@@ -1581,10 +1752,18 @@ describe('durable feed ingestion persistence', () => {
 			updatedAt: now,
 		});
 		const controller = new AbortController();
+		const publisherOutcomes: string[] = [];
+		let publisherRequests = 0;
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'abort-worker',
 			originStartGapSeconds: 0,
 			now: () => now,
+			telemetry: {
+				recordPublisherRequest: () => {
+					publisherRequests += 1;
+				},
+				recordPublisherOutcome: (outcome) => publisherOutcomes.push(outcome),
+			},
 			fetch: async (_url, init) =>
 				new Promise<Response>((_resolve, reject) => {
 					const requestSignal = init.signal!;
@@ -1596,6 +1775,8 @@ describe('durable feed ingestion persistence', () => {
 		const draining = worker.drainOnce(controller.signal);
 		setTimeout(() => controller.abort(new Error('deploy stop')), 5);
 		expect(await draining).toBe(1);
+		expect(publisherRequests).toBe(1);
+		expect(publisherOutcomes).toEqual(['aborted']);
 		expect(await db.query.feedFetchJobs.findFirst()).toMatchObject({
 			status: 'queued',
 			attempts: 0,

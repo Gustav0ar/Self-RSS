@@ -3,9 +3,16 @@ import { Hono } from 'hono';
 import type Redis from 'ioredis';
 import type { Database } from '../db/client.js';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
+import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
+import type {
+	DurableIngestionOperationalSnapshot,
+	FeedPipelineMode,
+} from '../services/durable-ingestion-ops.types.js';
 
 interface HealthRouteOptions {
 	requireWorkerHeartbeat?: boolean;
+	ingestionRepository?: FeedIngestionRepository;
+	pipelineMode?: FeedPipelineMode;
 }
 
 export function createHealthRoutes(db?: Database, redis?: Redis, options: HealthRouteOptions = {}) {
@@ -17,10 +24,12 @@ export function createHealthRoutes(db?: Database, redis?: Redis, options: Health
 
 	health.get('/ready', async (c) => {
 		const timestamp = new Date().toISOString();
+		const feedPipelineMode = options.pipelineMode ?? 'legacy';
 		if (!db || !redis) {
 			return c.json({
 				status: 'ok',
 				timestamp,
+				feedPipelineMode,
 				checks: { database: 'skipped', redis: 'skipped' },
 			});
 		}
@@ -29,6 +38,9 @@ export function createHealthRoutes(db?: Database, redis?: Redis, options: Health
 			database: 'ok' | 'timeout' | 'error';
 			redis: 'ok' | 'timeout' | 'error';
 			worker: { status: string; timestamp?: string | null; ageMs?: number };
+			ingestion:
+				| ({ status: 'informational' } & DurableIngestionOperationalSnapshot)
+				| { status: 'unavailable' };
 		};
 
 		const timeoutPromise = new Promise<'timeout'>((resolve) =>
@@ -52,6 +64,12 @@ export function createHealthRoutes(db?: Database, redis?: Redis, options: Health
 		const [dbResult, redisResult] = await Promise.all([dbCheck, redisCheck]);
 		const results = { database: dbResult, redis: redisResult };
 		const workerHeartbeat = await readWorkerHeartbeat(redis);
+		const ingestion = options.ingestionRepository
+			? await options.ingestionRepository
+					.getOperationalSnapshot()
+					.then((snapshot) => ({ status: 'informational' as const, ...snapshot }))
+					.catch(() => ({ status: 'unavailable' as const }))
+			: { status: 'unavailable' as const };
 
 		const dbOk = results.database === 'ok';
 		const redisOk = results.redis === 'ok';
@@ -68,12 +86,14 @@ export function createHealthRoutes(db?: Database, redis?: Redis, options: Health
 			database: results.database,
 			redis: results.redis,
 			worker: workerHeartbeat,
+			ingestion,
 		};
 
 		return c.json(
 			{
 				status,
 				timestamp,
+				feedPipelineMode,
 				checks,
 				...(status !== 'ok' && { worker: workerHeartbeat }),
 			},

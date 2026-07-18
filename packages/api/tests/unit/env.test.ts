@@ -31,6 +31,25 @@ describe('getEnv', () => {
 		applyEnv({ FEED_PIPELINE_MODE: 'canary' });
 		expect(() => getEnv()).toThrowError(/FEED_PIPELINE_MODE/);
 	});
+
+	it('bounds durable ingestion history retention and cleanup batches', () => {
+		applyEnv({
+			FEED_INGESTION_HISTORY_RETENTION_DAYS: undefined,
+			FEED_INGESTION_CLEANUP_BATCH_SIZE: undefined,
+		});
+		expect(getEnv().FEED_INGESTION_HISTORY_RETENTION_DAYS).toBe(14);
+		expect(getEnv().FEED_INGESTION_CLEANUP_BATCH_SIZE).toBe(250);
+
+		applyEnv({
+			FEED_INGESTION_HISTORY_RETENTION_DAYS: '30',
+			FEED_INGESTION_CLEANUP_BATCH_SIZE: '500',
+		});
+		expect(getEnv().FEED_INGESTION_HISTORY_RETENTION_DAYS).toBe(30);
+		expect(getEnv().FEED_INGESTION_CLEANUP_BATCH_SIZE).toBe(500);
+
+		applyEnv({ FEED_INGESTION_CLEANUP_BATCH_SIZE: '1001' });
+		expect(() => getEnv()).toThrowError(/FEED_INGESTION_CLEANUP_BATCH_SIZE/);
+	});
 	it('defaults ALLOW_REGISTRATION open outside production and closed in production', () => {
 		applyEnv({ NODE_ENV: 'development' });
 		expect(getEnv().ALLOW_REGISTRATION).toBe(true);

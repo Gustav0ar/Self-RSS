@@ -75,6 +75,7 @@ export const CacheKeys = {
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
 	workerHeartbeat: (name: string) => `worker:heartbeat:${name}`,
+	durableIngestionCounters: () => 'feed:ingestion:metrics:counters',
 } as const;
 
 // Cache TTL in seconds

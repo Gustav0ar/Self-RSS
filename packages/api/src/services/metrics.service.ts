@@ -6,6 +6,13 @@ import {
 	Histogram as HistogramMetric,
 	register,
 } from 'prom-client';
+import type {
+	DurableCleanupResource,
+	DurableIngestionOperationalSnapshot,
+	DurableLoopName,
+	DurablePublisherOutcome,
+	FeedPipelineMode,
+} from './durable-ingestion-ops.types.js';
 
 // Track if default metrics have been collected
 let defaultMetricsCollected = false;
@@ -40,10 +47,27 @@ export class MetricsService {
 	private cacheMissesGauge: Gauge<string>;
 
 	// Article metrics
-	private articleCountByUser: Gauge<string>;
+	private articleCount: Gauge<string>;
 	private articleEnrichmentDuration: Histogram<string>;
 	private articleEnrichmentQueueDepth: Gauge<string>;
 	private articleEnrichmentTotal: Counter<string>;
+
+	// Durable feed ingestion metrics. Every label has a fixed, bounded vocabulary.
+	private durablePipelineMode: Gauge<string>;
+	private durableFetchJobs: Gauge<string>;
+	private durableOldestDueFetchAge: Gauge<string>;
+	private durableOldestQueuedFetchAge: Gauge<string>;
+	private durableParseBacklog: Gauge<string>;
+	private durableDeliveryBacklog: Gauge<string>;
+	private durableOldestDueDeliveryAge: Gauge<string>;
+	private durableRefreshRequests: Gauge<string>;
+	private durableSources: Gauge<string>;
+	private durableOrigins: Gauge<string>;
+	private durablePublisherRequests: Counter<string>;
+	private durablePublisherOutcomes: Counter<string>;
+	private durableLoopErrors: Counter<string>;
+	private durableCleanup: Counter<string>;
+	private mirroredDurableCounters = new Map<string, number>();
 
 	// Registry reference
 	public readonly registry: Registry = register;
@@ -138,11 +162,10 @@ export class MetricsService {
 			labelNames: ['cache_type'],
 		});
 
-		// Article count by user
-		this.articleCountByUser = new GaugeMetric({
+		// Aggregate article count. User IDs must never appear in Prometheus labels.
+		this.articleCount = new GaugeMetric({
 			name: 'articles_total',
-			help: 'Total number of articles per user',
-			labelNames: ['user_id'],
+			help: 'Total number of articles',
 		});
 
 		this.articleEnrichmentDuration = new HistogramMetric({
@@ -159,6 +182,72 @@ export class MetricsService {
 			name: 'article_enrichment_total',
 			help: 'Canonical article enrichment attempts by outcome',
 			labelNames: ['outcome'],
+		});
+
+		this.durablePipelineMode = new GaugeMetric({
+			name: 'feed_ingestion_pipeline_mode',
+			help: 'Selected feed pipeline mode (1 = selected)',
+			labelNames: ['mode'],
+		});
+		this.durableFetchJobs = new GaugeMetric({
+			name: 'feed_ingestion_fetch_jobs',
+			help: 'Durable fetch jobs by bounded status',
+			labelNames: ['status'],
+		});
+		this.durableOldestDueFetchAge = new GaugeMetric({
+			name: 'feed_ingestion_oldest_due_fetch_job_age_seconds',
+			help: 'Age of the oldest due queued fetch job',
+		});
+		this.durableOldestQueuedFetchAge = new GaugeMetric({
+			name: 'feed_ingestion_oldest_queued_fetch_job_age_seconds',
+			help: 'Age of the oldest queued fetch job, including delayed work',
+		});
+		this.durableParseBacklog = new GaugeMetric({
+			name: 'feed_ingestion_parse_backlog',
+			help: 'Snapshots with a retained body awaiting successful parsing',
+		});
+		this.durableDeliveryBacklog = new GaugeMetric({
+			name: 'feed_ingestion_delivery_backlog',
+			help: 'Snapshot deliveries by bounded status',
+			labelNames: ['status'],
+		});
+		this.durableOldestDueDeliveryAge = new GaugeMetric({
+			name: 'feed_ingestion_oldest_due_delivery_age_seconds',
+			help: 'Age of the oldest due pending snapshot delivery',
+		});
+		this.durableRefreshRequests = new GaugeMetric({
+			name: 'feed_ingestion_refresh_requests',
+			help: 'Durable refresh requests by bounded status',
+			labelNames: ['status'],
+		});
+		this.durableSources = new GaugeMetric({
+			name: 'feed_ingestion_sources',
+			help: 'Durable sources by bounded lifecycle state',
+			labelNames: ['state'],
+		});
+		this.durableOrigins = new GaugeMetric({
+			name: 'feed_ingestion_origins',
+			help: 'Publisher origins by bounded protection state',
+			labelNames: ['state'],
+		});
+		this.durablePublisherRequests = new CounterMetric({
+			name: 'feed_ingestion_publisher_requests_total',
+			help: 'Actual publisher HTTP requests started by the durable worker',
+		});
+		this.durablePublisherOutcomes = new CounterMetric({
+			name: 'feed_ingestion_publisher_outcomes_total',
+			help: 'Actual publisher request outcomes by bounded class',
+			labelNames: ['outcome'],
+		});
+		this.durableLoopErrors = new CounterMetric({
+			name: 'feed_ingestion_loop_errors_total',
+			help: 'Durable worker loop failures by bounded loop name',
+			labelNames: ['loop'],
+		});
+		this.durableCleanup = new CounterMetric({
+			name: 'feed_ingestion_cleanup_total',
+			help: 'Durable ingestion rows or payloads cleaned by bounded resource type',
+			labelNames: ['resource'],
 		});
 
 		// Collect default Node.js metrics only once
@@ -225,14 +314,97 @@ export class MetricsService {
 		this.cacheMissesGauge.labels(cacheType).inc();
 	}
 
-	// Update article count for a user
-	setArticleCountByUser(userId: string, count: number) {
-		this.articleCountByUser.labels(userId).set(count);
+	setArticleCount(count: number) {
+		this.articleCount.set(count);
 	}
 
-	// Remove user from article metrics
-	removeUserArticleCount(userId: string) {
-		this.articleCountByUser.remove(userId);
+	updateDurableIngestion(mode: FeedPipelineMode, snapshot: DurableIngestionOperationalSnapshot) {
+		this.durablePipelineMode.labels('legacy').set(mode === 'legacy' ? 1 : 0);
+		this.durablePipelineMode.labels('v2').set(mode === 'v2' ? 1 : 0);
+		this.durableFetchJobs.labels('queued').set(snapshot.fetchJobs.queued);
+		this.durableFetchJobs.labels('running').set(snapshot.fetchJobs.running);
+		this.durableFetchJobs.labels('dead').set(snapshot.fetchJobs.dead);
+		this.durableFetchJobs.labels('due').set(snapshot.fetchJobs.due);
+		this.durableOldestDueFetchAge.set(snapshot.fetchJobs.oldestDueAgeSeconds);
+		this.durableOldestQueuedFetchAge.set(snapshot.fetchJobs.oldestQueuedAgeSeconds);
+		this.durableParseBacklog.set(snapshot.parseBacklog);
+		this.durableDeliveryBacklog.labels('pending').set(snapshot.deliveries.pending);
+		this.durableDeliveryBacklog.labels('running').set(snapshot.deliveries.running);
+		this.durableDeliveryBacklog.labels('failed').set(snapshot.deliveries.failed);
+		this.durableOldestDueDeliveryAge.set(snapshot.deliveries.oldestDueAgeSeconds);
+		this.durableRefreshRequests.labels('active').set(snapshot.refreshRequests.active);
+		this.durableRefreshRequests.labels('error').set(snapshot.refreshRequests.error);
+		this.durableSources.labels('active').set(snapshot.sources.active);
+		this.durableSources.labels('backoff').set(snapshot.sources.backoff);
+		this.durableSources.labels('paused').set(snapshot.sources.paused);
+		this.durableOrigins.labels('blocked').set(snapshot.origins.blocked);
+		this.durableOrigins.labels('circuit_open').set(snapshot.origins.circuitOpen);
+	}
+
+	recordDurablePublisherRequest() {
+		this.durablePublisherRequests.inc();
+	}
+
+	recordDurablePublisherOutcome(outcome: DurablePublisherOutcome) {
+		this.durablePublisherOutcomes.labels(outcome).inc();
+	}
+
+	recordDurableLoopError(loop: DurableLoopName) {
+		this.durableLoopErrors.labels(loop).inc();
+	}
+
+	recordDurableCleanup(resource: DurableCleanupResource, count: number) {
+		if (count > 0) this.durableCleanup.labels(resource).inc(count);
+	}
+
+	syncDurableCounters(counters: Record<string, number>) {
+		this.syncMirroredCounter('publisher_requests', counters.publisher_requests, (delta) =>
+			this.durablePublisherRequests.inc(delta),
+		);
+		for (const outcome of [
+			'success',
+			'not_modified',
+			'rate_limited',
+			'http_error',
+			'network_error',
+			'aborted',
+			'oversize',
+		] as const) {
+			this.syncMirroredCounter(
+				`publisher_outcome:${outcome}`,
+				counters[`publisher_outcome:${outcome}`],
+				(delta) => this.durablePublisherOutcomes.labels(outcome).inc(delta),
+			);
+		}
+		for (const loop of ['schedule', 'fetch', 'delivery', 'cleanup'] as const) {
+			this.syncMirroredCounter(`loop_error:${loop}`, counters[`loop_error:${loop}`], (delta) =>
+				this.durableLoopErrors.labels(loop).inc(delta),
+			);
+		}
+		for (const resource of [
+			'expiredSnapshotBodies',
+			'refreshRequests',
+			'fetchJobs',
+			'deliveries',
+			'snapshots',
+			'discoveryCandidates',
+		] as const) {
+			this.syncMirroredCounter(`cleanup:${resource}`, counters[`cleanup:${resource}`], (delta) =>
+				this.durableCleanup.labels(resource).inc(delta),
+			);
+		}
+	}
+
+	private syncMirroredCounter(
+		key: string,
+		absoluteValue: number | undefined,
+		increment: (delta: number) => void,
+	) {
+		const absolute = Number.isFinite(absoluteValue) ? Math.max(0, absoluteValue ?? 0) : 0;
+		const previous = this.mirroredDurableCounters.get(key) ?? 0;
+		const delta = absolute >= previous ? absolute - previous : absolute;
+		if (delta > 0) increment(delta);
+		this.mirroredDurableCounters.set(key, absolute);
 	}
 
 	recordArticleEnrichment(outcome: 'success' | 'retry' | 'failed', durationSeconds: number) {
@@ -266,6 +438,17 @@ export class MetricsService {
 		this.feedSyncPending.set(0);
 		this.feedSyncFailed.set(0);
 		this.articleEnrichmentQueueDepth.set(0);
+		this.articleCount.set(0);
+		this.durablePipelineMode.reset();
+		this.durableFetchJobs.reset();
+		this.durableOldestDueFetchAge.set(0);
+		this.durableOldestQueuedFetchAge.set(0);
+		this.durableParseBacklog.set(0);
+		this.durableDeliveryBacklog.reset();
+		this.durableOldestDueDeliveryAge.set(0);
+		this.durableRefreshRequests.reset();
+		this.durableSources.reset();
+		this.durableOrigins.reset();
 		// Note: We don't reset counters as they can only be incremented
 		// For counters, a full registry reset is needed between test suites
 	}

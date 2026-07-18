@@ -69,12 +69,65 @@ describe('MetricsService', () => {
 		expect(metrics).toContain('cache_misses_total');
 	});
 
-	it('sets article count by user', async () => {
-		metricsService.setArticleCountByUser('user-123', 150);
-		metricsService.setArticleCountByUser('user-456', 200);
+	it('sets only an aggregate article count without user labels', async () => {
+		metricsService.setArticleCount(350);
 
 		const metrics = await metricsService.getMetrics();
-		expect(metrics).toContain('articles_total');
+		expect(metrics).toContain('articles_total 350');
+		expect(metrics).not.toContain('user-123');
+		expect(metrics).not.toContain('user_id');
+	});
+
+	it('exports durable queue truth with only bounded, non-sensitive labels', async () => {
+		metricsService.updateDurableIngestion('v2', {
+			fetchJobs: {
+				queued: 7,
+				running: 2,
+				dead: 3,
+				due: 5,
+				oldestDueAgeSeconds: 120,
+				oldestQueuedAgeSeconds: 300,
+			},
+			parseBacklog: 4,
+			deliveries: { pending: 6, running: 1, failed: 2, oldestDueAgeSeconds: 90 },
+			refreshRequests: { active: 3, error: 1 },
+			sources: { active: 8, backoff: 2, paused: 1 },
+			origins: { blocked: 2, circuitOpen: 1 },
+		});
+		metricsService.recordDurablePublisherRequest();
+		metricsService.recordDurablePublisherOutcome('rate_limited');
+		metricsService.recordDurableLoopError('fetch');
+		metricsService.recordDurableCleanup('snapshots', 2);
+
+		const metrics = await metricsService.getMetrics();
+		expect(metrics).toContain('feed_ingestion_pipeline_mode{mode="v2"} 1');
+		expect(metrics).toContain('feed_ingestion_fetch_jobs{status="queued"} 7');
+		expect(metrics).toContain('feed_ingestion_fetch_jobs{status="due"} 5');
+		expect(metrics).toContain('feed_ingestion_parse_backlog 4');
+		expect(metrics).toContain('feed_ingestion_delivery_backlog{status="failed"} 2');
+		expect(metrics).toContain('feed_ingestion_sources{state="backoff"} 2');
+		expect(metrics).toContain('feed_ingestion_origins{state="circuit_open"} 1');
+		expect(metrics).toContain('feed_ingestion_publisher_requests_total 1');
+		expect(metrics).toContain('feed_ingestion_publisher_outcomes_total{outcome="rate_limited"} 1');
+		expect(metrics).toContain('feed_ingestion_loop_errors_total{loop="fetch"} 1');
+		expect(metrics).toContain('feed_ingestion_cleanup_total{resource="snapshots"} 2');
+		expect(metrics).not.toContain('publisher.example.com');
+		expect(metrics).not.toContain('https://');
+		expect(metrics).not.toContain('user_id');
+	});
+
+	it('keeps mirrored counters monotonic while counting Redis resets from zero', async () => {
+		const publisherRequests = async () => {
+			const metrics = await metricsService.getMetrics();
+			const line = metrics
+				.split('\n')
+				.find((candidate) => candidate.startsWith('feed_ingestion_publisher_requests_total '));
+			return Number(line?.split(' ')[1]);
+		};
+		metricsService.syncDurableCounters({ publisher_requests: 5 });
+		const beforeReset = await publisherRequests();
+		metricsService.syncDurableCounters({ publisher_requests: 1 });
+		expect(await publisherRequests()).toBe(beforeReset + 1);
 	});
 
 	it('returns prometheus content type', () => {

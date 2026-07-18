@@ -1,6 +1,8 @@
 import type { AppDeps } from '../config/deps.js';
 import { DurableFeedScheduler } from '../services/durable-feed-scheduler.js';
 import { DurableFeedWorker } from '../services/durable-feed-worker.js';
+import type { DurableLoopName } from '../services/durable-ingestion-ops.types.js';
+import { DurableIngestionTelemetry } from '../services/durable-ingestion-telemetry.js';
 import { runNonOverlappingLoop } from '../services/durable-worker-loop.js';
 import { FeedSnapshotDeliveryService } from '../services/feed-snapshot-delivery.service.js';
 import { createLogger } from '../utils/logger.js';
@@ -21,9 +23,12 @@ export function startDurableIngestionRuntime(
 		concurrency: number;
 		allowPrivateHosts: boolean;
 		contact?: string;
+		historyRetentionDays: number;
+		cleanupBatchSize: number;
 	},
 ) {
 	const controller = new AbortController();
+	const telemetry = new DurableIngestionTelemetry(deps.services.metrics, deps.redis);
 	const scheduler = new DurableFeedScheduler(deps.repos.feedIngestion, { batchSize: 100 });
 	const fetchWorker = new DurableFeedWorker(deps.repos.feedIngestion, {
 		networkConcurrency: Math.min(4, options.concurrency),
@@ -32,6 +37,7 @@ export function startDurableIngestionRuntime(
 		allowPrivateHosts: options.allowPrivateHosts,
 		contact: options.contact,
 		handleDiscovery: (input) => deps.services.durableFeed.persistDiscoveryCandidates(input),
+		telemetry,
 	});
 	const deliveryWorker = new FeedSnapshotDeliveryService(
 		deps.repos.feedIngestion,
@@ -64,11 +70,12 @@ export function startDurableIngestionRuntime(
 			},
 		},
 	);
-	const guarded = (name: string, tick: () => Promise<unknown>) => async () => {
+	const guarded = (name: DurableLoopName, tick: () => Promise<unknown>) => async () => {
 		try {
 			await tick();
 		} catch (error) {
 			if (controller.signal.aborted) return;
+			telemetry.recordLoopError(name);
 			logger.error('Durable ingestion cycle failed', {
 				cycle: name,
 				error: error instanceof Error ? error.message : String(error),
@@ -93,8 +100,11 @@ export function startDurableIngestionRuntime(
 		}),
 		runNonOverlappingLoop({
 			tick: guarded('cleanup', async () => {
-				await deps.repos.feedIngestion.cleanupExpiredSnapshots();
-				await deps.services.durableFeed.cleanupDiscoveryCandidates();
+				const result = await deps.repos.feedIngestion.cleanupOperationalHistory({
+					retentionDays: options.historyRetentionDays,
+					batchSize: options.cleanupBatchSize,
+				});
+				telemetry.recordCleanup(result);
 			}),
 			intervalMs: 60 * 60 * 1_000,
 			signal: controller.signal,

@@ -101,6 +101,9 @@ TRUSTED_PROXY_HOPS=1
 RETENTION_DELETION_ENABLED=false
 RETENTION_DELETION_DAYS=90
 RETENTION_DRY_RUN=true
+FEED_PIPELINE_MODE=v2
+FEED_INGESTION_HISTORY_RETENTION_DAYS=14
+FEED_INGESTION_CLEANUP_BATCH_SIZE=250
 FEED_FETCH_RELAY_URL=
 FEED_FETCH_RELAY_TOKEN=
 FEED_FETCH_RELAY_HOSTS=
@@ -248,6 +251,63 @@ row counts, existing protected row keys, and `PRAGMA foreign_key_check`
 before commit. If a migration would remove protected rows or leave
 orphaned rows, it is rolled back and startup fails with the backup path
 in the error.
+
+## Durable feed ingestion rollout
+
+Production Docker Compose defaults `FEED_PIPELINE_MODE` to `v2` for both
+the API and worker. The application schema and `.env.example` deliberately
+default to `legacy`, so source-based and local deployments require an
+explicit activation. API and worker must always receive the same value:
+the worker starts exactly one publisher-fetch pipeline, never both.
+
+An existing `FEED_PIPELINE_MODE=legacy` entry in the VPS `.env` overrides
+the new Compose `v2` default. Change it to `v2` (or remove it only if both
+services use this Compose file) before expecting activation. Confirm the
+resolved values for both services with `docker compose config`.
+
+Before activation, take the normal pre-deploy SQLite backup and confirm the
+worker is healthy. Deploy API and worker together, then verify:
+
+```bash
+curl -fsS https://rss.example.com/ready
+curl -fsS -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
+  https://rss.example.com/api/v1/metrics | rg 'feed_ingestion_'
+docker compose logs --since=10m api worker
+```
+
+`/ready` must report `"feedPipelineMode":"v2"` and an informational
+`checks.ingestion` object. Inspect queued/running/dead fetch jobs, parse and
+delivery backlog, oldest due ages, refresh errors, backoff/paused sources,
+and blocked/circuit-open origins. Backoff and publisher rate limiting are
+protective state and do not make readiness fail. Readiness still fails when
+the required worker heartbeat, database, or Redis check fails.
+
+Prometheus publisher counters describe actual outbound requests and bounded
+outcome classes only; they intentionally contain no user, feed URL, or host
+labels. Alert on sustained growth in due-job or due-delivery age, dead work,
+loop errors, and circuit-open origins rather than on a publisher entering
+normal backoff.
+
+Durable operational history is cleaned hourly in bounded transactions. The
+defaults retain terminal history for 14 days and process at most 250 rows per
+resource per pass:
+
+```dotenv
+FEED_INGESTION_HISTORY_RETENTION_DAYS=14
+FEED_INGESTION_CLEANUP_BATCH_SIZE=250
+```
+
+Cleanup never removes active/recoverable requests, jobs, or deliveries, and
+respects snapshot retention timestamps. Increase retention before increasing
+batch size when more diagnostic history is needed; avoid large cleanup bursts
+against the shared SQLite database.
+
+To roll back, set `FEED_PIPELINE_MODE=legacy` in the deployment `.env` and
+restart API and worker together with `docker compose up -d`. Do not delete or
+truncate the durable ingestion tables: queued work and retained snapshots stay
+in SQLite and are available for a later v2 reactivation. Verify `/ready`
+reports `legacy`, that only legacy publisher workers are running, and that
+normal feed refresh resumes before considering the rollback complete.
 
 ## Visibility recap
 

@@ -59,6 +59,7 @@ try {
 	});
 	const app = createApp(deps, tokenUtils, {
 		requireWorkerHeartbeat: env.REQUIRE_WORKER_HEARTBEAT,
+		feedPipelineMode: env.FEED_PIPELINE_MODE,
 	});
 
 	const server = Bun.serve({
