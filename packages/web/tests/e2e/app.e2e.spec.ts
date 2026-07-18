@@ -181,7 +181,7 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/devtools.xml`);
 	await page.getByLabel('Feed category').selectOption({ label: renamedCategory });
 	await submitQueuedFeed(page);
-	await page.getByRole('button', { name: new RegExp(`^${renamedCategory}$`) }).click();
+	await page.getByRole('button', { name: unreadBadgeName(renamedCategory) }).click();
 	await expect(page.getByRole('button', { name: unreadBadgeName('DevTools Digest') })).toBeVisible({
 		timeout: 30_000,
 	});
