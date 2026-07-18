@@ -2,10 +2,8 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
 	feedDiscoveryCandidates,
-	feedFetchJobs,
 	feedRefreshRequestItems,
 	feedRefreshRequests,
-	feedSources,
 	feeds,
 } from '../db/schema.js';
 import { AppError } from '../middleware/errors.js';
@@ -19,9 +17,13 @@ import {
 	persistDurableDiscoveryCandidates,
 } from './durable-feed-discovery.js';
 import { buildDurableFeedLifecycle } from './durable-feed-lifecycle.js';
+import {
+	enqueueOrAttachDurableJob,
+	queueDurableRefresh,
+	type RefreshScope,
+	type RefreshTransaction,
+} from './durable-refresh-queue.js';
 import { getDurableRefreshStatus } from './durable-refresh-status.js';
-
-type RefreshScope = { feedId?: string; categoryId?: string };
 
 export class DurableFeedFacadeService {
 	constructor(
@@ -104,7 +106,7 @@ export class DurableFeedFacadeService {
 					updatedAt: now,
 				})
 				.run();
-			const job = this.enqueueOrAttachInTransaction(tx, source, 100, now);
+			const job = enqueueOrAttachDurableJob(tx, source, 100, now);
 			tx.insert(feedRefreshRequestItems)
 				.values({
 					id: crypto.randomUUID(),
@@ -153,30 +155,89 @@ export class DurableFeedFacadeService {
 					.where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
 					.run();
 			},
+			'active',
 		);
 		const updated = await this.feedRepository.findById(feedId, userId);
 		return { feed: updated!, requestId: request.requestId, jobId: request.jobIds[0] ?? null };
 	}
 
 	async cancelReplacement(userId: string, feedId: string) {
-		const updated = await this.db
-			.update(feeds)
-			.set({
-				pendingSourceId: null,
-				replacementRequestedAt: null,
-				syncStatus: 'idle',
-				lastSyncError: null,
-				lastSyncErrorCode: null,
-				lastSyncErrorAt: null,
-				updatedAt: new Date(),
-			})
-			.where(
-				and(eq(feeds.id, feedId), eq(feeds.userId, userId), sql`${feeds.sourceId} IS NOT NULL`),
-			)
-			.returning()
-			.get();
-		if (!updated) throw AppError.notFound('Feed not found');
-		return updated;
+		return this.db.transaction((tx) => {
+			const feed = tx
+				.select()
+				.from(feeds)
+				.where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
+				.get();
+			if (!feed?.sourceId) throw AppError.notFound('Feed not found');
+			if (!feed.pendingSourceId) return feed;
+			const now = new Date();
+			const activeItems = tx
+				.select({ id: feedRefreshRequestItems.id, requestId: feedRefreshRequestItems.requestId })
+				.from(feedRefreshRequestItems)
+				.innerJoin(
+					feedRefreshRequests,
+					eq(feedRefreshRequests.id, feedRefreshRequestItems.requestId),
+				)
+				.where(
+					and(
+						eq(feedRefreshRequestItems.feedId, feedId),
+						eq(feedRefreshRequestItems.sourceId, feed.pendingSourceId),
+						inArray(feedRefreshRequestItems.status, ['pending', 'running']),
+						eq(feedRefreshRequests.scopeType, 'feed_replacement'),
+						inArray(feedRefreshRequests.status, ['pending', 'running']),
+					),
+				)
+				.all();
+			if (activeItems.length > 0) {
+				tx.update(feedRefreshRequestItems)
+					.set({
+						jobId: null,
+						status: 'failed',
+						completedAt: now,
+						lastErrorCode: 'replacement_cancelled',
+						lastErrorDetails: 'Replacement cancelled by user',
+						updatedAt: now,
+					})
+					.where(
+						inArray(
+							feedRefreshRequestItems.id,
+							activeItems.map((item) => item.id),
+						),
+					)
+					.run();
+				for (const requestId of new Set(activeItems.map((item) => item.requestId))) {
+					tx.update(feedRefreshRequests)
+						.set({
+							idempotencyKey: null,
+							status: 'completed_with_errors',
+							pendingItems: 0,
+							runningItems: 0,
+							completedItems: 0,
+							failedItems: 1,
+							deadItems: 0,
+							startedAt: now,
+							completedAt: now,
+							updatedAt: now,
+						})
+						.where(eq(feedRefreshRequests.id, requestId))
+						.run();
+				}
+			}
+			return tx
+				.update(feeds)
+				.set({
+					pendingSourceId: null,
+					replacementRequestedAt: null,
+					syncStatus: 'idle',
+					lastSyncError: null,
+					lastSyncErrorCode: null,
+					lastSyncErrorAt: null,
+					updatedAt: now,
+				})
+				.where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
+				.returning()
+				.get()!;
+		});
 	}
 
 	async queueRefresh(userId: string, scope: RefreshScope, idempotencyKey?: string | null) {
@@ -293,160 +354,18 @@ export class DurableFeedFacadeService {
 		scope: RefreshScope,
 		idempotencyKey: string | null,
 		scopeType: string,
-		prepare?: (tx: Parameters<Parameters<Database['transaction']>[0]>[0], now: Date) => void,
+		prepare?: (tx: RefreshTransaction, now: Date) => void,
+		dedupeMode: 'any' | 'active' = 'any',
 	) {
-		if (idempotencyKey) {
-			const existing = await this.db.query.feedRefreshRequests.findFirst({
-				where: and(
-					eq(feedRefreshRequests.userId, userId),
-					eq(feedRefreshRequests.idempotencyKey, idempotencyKey),
-				),
-			});
-			if (existing) {
-				const jobs = await this.db
-					.selectDistinct({ jobId: feedRefreshRequestItems.jobId })
-					.from(feedRefreshRequestItems)
-					.where(eq(feedRefreshRequestItems.requestId, existing.id));
-				return {
-					requestId: existing.id,
-					jobIds: jobs.flatMap((job) => (job.jobId ? [job.jobId] : [])),
-					alreadyQueued: true,
-				};
-			}
-		}
-		const now = new Date();
-		const requestId = crypto.randomUUID();
-		return this.db.transaction((tx) => {
-			const createdRequest = tx
-				.insert(feedRefreshRequests)
-				.values({
-					id: requestId,
-					userId,
-					idempotencyKey,
-					scopeType,
-					scopeFeedId: scope.feedId,
-					scopeCategoryId: scope.categoryId,
-					status: selectedFeeds.length === 0 ? 'completed' : 'pending',
-					totalItems: selectedFeeds.length,
-					pendingItems: selectedFeeds.length,
-					completedAt: selectedFeeds.length === 0 ? now : null,
-					requestedAt: now,
-					createdAt: now,
-					updatedAt: now,
-				})
-				.onConflictDoNothing()
-				.returning()
-				.get();
-			if (!createdRequest) {
-				const existing = idempotencyKey
-					? tx
-							.select()
-							.from(feedRefreshRequests)
-							.where(
-								and(
-									eq(feedRefreshRequests.userId, userId),
-									eq(feedRefreshRequests.idempotencyKey, idempotencyKey),
-								),
-							)
-							.get()
-					: null;
-				if (!existing) throw new Error('Refresh request conflict did not resolve');
-				const existingJobs = tx
-					.selectDistinct({ jobId: feedRefreshRequestItems.jobId })
-					.from(feedRefreshRequestItems)
-					.where(eq(feedRefreshRequestItems.requestId, existing.id))
-					.all();
-				return {
-					requestId: existing.id,
-					jobIds: existingJobs.flatMap((job) => (job.jobId ? [job.jobId] : [])),
-					alreadyQueued: true,
-				};
-			}
-			prepare?.(tx, now);
-			const sourceIds = [
-				...new Set(
-					selectedFeeds
-						.map((feed) => feed.pendingSourceId ?? feed.sourceId)
-						.filter((id): id is string => Boolean(id)),
-				),
-			];
-			const sources = sourceIds.length
-				? tx.select().from(feedSources).where(inArray(feedSources.id, sourceIds)).all()
-				: [];
-			const sourceById = new Map(sources.map((source) => [source.id, source]));
-			const jobs = new Map<string, typeof feedFetchJobs.$inferSelect>();
-			for (const source of sources) {
-				jobs.set(source.id, this.enqueueOrAttachInTransaction(tx, source, 100, now));
-			}
-			if (selectedFeeds.length > 0) {
-				tx.insert(feedRefreshRequestItems)
-					.values(
-						selectedFeeds.map((feed) => {
-							const sourceId = feed.pendingSourceId ?? feed.sourceId;
-							return {
-								id: crypto.randomUUID(),
-								requestId,
-								feedId: feed.id,
-								sourceId,
-								jobId: sourceId ? jobs.get(sourceId)?.id : null,
-								status: sourceId && sourceById.has(sourceId) ? 'pending' : 'failed',
-								lastErrorCode: sourceId ? null : 'source_unavailable',
-								lastErrorDetails: sourceId ? null : 'Feed has no source to refresh',
-								completedAt: sourceId ? null : now,
-								createdAt: now,
-								updatedAt: now,
-							};
-						}),
-					)
-					.run();
-			}
-			return {
-				requestId,
-				jobIds: [...jobs.values()].map((job) => job.id),
-				alreadyQueued: false,
-			};
+		return queueDurableRefresh(this.db, {
+			userId,
+			selectedFeeds,
+			scope,
+			idempotencyKey,
+			scopeType,
+			prepare,
+			dedupeMode,
 		});
-	}
-
-	private enqueueOrAttachInTransaction(
-		tx: Parameters<Parameters<Database['transaction']>[0]>[0],
-		source: typeof feedSources.$inferSelect,
-		priority: number,
-		now: Date,
-	) {
-		const created = tx
-			.insert(feedFetchJobs)
-			.values({
-				id: crypto.randomUUID(),
-				kind: 'manual',
-				priority,
-				sourceId: source.id,
-				originId: source.originId,
-				refreshRequestId: null,
-				availableAt: now,
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoNothing()
-			.returning()
-			.get();
-		if (created) return created;
-		const active = tx
-			.select()
-			.from(feedFetchJobs)
-			.where(
-				and(
-					eq(feedFetchJobs.sourceId, source.id),
-					inArray(feedFetchJobs.status, ['queued', 'running']),
-				),
-			)
-			.get();
-		if (!active) throw new Error('Active source job disappeared during refresh attachment');
-		tx.update(feedFetchJobs)
-			.set({ priority: sql`max(${feedFetchJobs.priority}, ${priority})`, updatedAt: now })
-			.where(eq(feedFetchJobs.id, active.id))
-			.run();
-		return { ...active, priority: Math.max(active.priority, priority) };
 	}
 
 	private async assertTargetAvailable(

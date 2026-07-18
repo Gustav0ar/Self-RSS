@@ -52,6 +52,44 @@ async function setupDatabase() {
 	return { sqlite, db, repository: new FeedIngestionRepository(db) };
 }
 
+async function setupReplacementFacade() {
+	const setup = await setupDatabase();
+	const now = new Date('2026-07-18T00:00:00Z');
+	const origin = await setup.repository.upsertOrigin({
+		id: 'replacement-retry-origin',
+		scheme: 'https',
+		host: 'replacement-old.example.com',
+		port: 443,
+	});
+	const source = await setup.repository.upsertSource({
+		id: 'replacement-retry-source',
+		normalizedUrl: 'https://replacement-old.example.com/feed.xml',
+		requestedUrl: 'https://replacement-old.example.com/feed.xml',
+		originId: origin.id,
+		nextFetchAt: now,
+	});
+	await setup.db.insert(schema.feeds).values({
+		id: 'replacement-retry-feed',
+		userId: 'user-1',
+		categoryId: 'category-1',
+		title: 'Replacement retry feed',
+		feedUrl: source.normalizedUrl,
+		sourceId: source.id,
+		nextSyncAt: now,
+		createdAt: now,
+		updatedAt: now,
+	});
+	return {
+		...setup,
+		facade: new DurableFeedFacadeService(
+			setup.db,
+			new FeedRepository(setup.db),
+			new CategoryRepository(setup.db),
+			setup.repository,
+		),
+	};
+}
+
 describe('durable feed ingestion persistence', () => {
 	it('upserts identities, clamps intervals, deduplicates active work, and recovers leases', async () => {
 		const { sqlite, repository } = await setupDatabase();
@@ -965,6 +1003,97 @@ describe('durable feed ingestion persistence', () => {
 			}),
 		).toMatchObject({ status: 'completed' });
 		expect(publisherRequests).toBe(1);
+	});
+
+	it('retries the same replacement URL after a terminal failure with fresh durable work', async () => {
+		const { db, facade, repository } = await setupReplacementFacade();
+		const targetUrl = 'https://replacement-new.example.com/feed.xml';
+		const first = await facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl);
+		await db
+			.update(schema.feedFetchJobs)
+			.set({ status: 'dead', deadAt: new Date(), updatedAt: new Date() })
+			.where(eq(schema.feedFetchJobs.id, first.jobId!));
+		await repository.failRefreshItemsForJob(first.jobId!, {
+			code: 'parse_permanent',
+			details: 'Terminal replacement failure',
+		});
+
+		const retry = await facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl);
+		expect(retry.requestId).not.toBe(first.requestId);
+		expect(retry.jobId).not.toBe(first.jobId);
+		expect(retry.feed).toMatchObject({
+			pendingSourceId: first.feed.pendingSourceId,
+			syncStatus: 'replacement_pending',
+		});
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, first.requestId!),
+			}),
+		).toMatchObject({ status: 'completed_with_errors', idempotencyKey: null });
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, retry.requestId!),
+			}),
+		).toMatchObject({ status: 'pending' });
+	});
+
+	it('terminalizes cancellation without stopping shared work and permits immediate retry', async () => {
+		const { db, facade } = await setupReplacementFacade();
+		const targetUrl = 'https://replacement-new.example.com/feed.xml';
+		const first = await facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl);
+		const cancelled = await facade.cancelReplacement('user-1', 'replacement-retry-feed');
+		expect(cancelled).toMatchObject({ pendingSourceId: null, syncStatus: 'idle' });
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, first.requestId!),
+			}),
+		).toMatchObject({
+			status: 'completed_with_errors',
+			idempotencyKey: null,
+			pendingItems: 0,
+			failedItems: 1,
+		});
+		expect(
+			await db.query.feedRefreshRequestItems.findFirst({
+				where: (item, { eq }) => eq(item.requestId, first.requestId!),
+			}),
+		).toMatchObject({ status: 'failed', lastErrorCode: 'replacement_cancelled', jobId: null });
+		expect(
+			await db.query.feedFetchJobs.findFirst({
+				where: (job, { eq }) => eq(job.id, first.jobId!),
+			}),
+		).toMatchObject({ status: 'queued' });
+
+		const retry = await facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl);
+		expect(retry.requestId).not.toBe(first.requestId);
+		expect(retry.jobId).toBe(first.jobId);
+		expect(retry.feed).toMatchObject({
+			pendingSourceId: first.feed.pendingSourceId,
+			syncStatus: 'replacement_pending',
+		});
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, retry.requestId!),
+			}),
+		).toMatchObject({ status: 'pending' });
+	});
+
+	it('deduplicates concurrent identical active replacements transactionally', async () => {
+		const { db, facade } = await setupReplacementFacade();
+		const targetUrl = 'https://replacement-new.example.com/feed.xml';
+		const [first, duplicate] = await Promise.all([
+			facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl),
+			facade.requestReplacement('user-1', 'replacement-retry-feed', targetUrl),
+		]);
+		expect(duplicate.requestId).toBe(first.requestId);
+		expect(duplicate.jobId).toBe(first.jobId);
+		expect(await db.select().from(schema.feedRefreshRequests)).toHaveLength(1);
+		expect(await db.select().from(schema.feedRefreshRequestItems)).toHaveLength(1);
+		expect(await db.select().from(schema.feedFetchJobs)).toHaveLength(1);
+		expect(duplicate.feed).toMatchObject({
+			pendingSourceId: first.feed.pendingSourceId,
+			syncStatus: 'replacement_pending',
+		});
 	});
 
 	it('stages replacements atomically, rejects duplicate pending targets, and reconciles parsed recovery without refetch', async () => {
