@@ -74,24 +74,47 @@ export function rememberFeedRefreshRequestId(
 	if (!accountKey || !requestId) return;
 	try {
 		globalThis.localStorage?.setItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`, requestId);
-		globalThis.dispatchEvent(
-			new CustomEvent(FEED_REFRESH_REQUEST_EVENT, { detail: { accountKey, requestId } }),
-		);
 	} catch {
 		// Private browsing/storage policies must not break refreshes.
 	}
+	publishFeedRefreshRequest(accountKey, requestId);
 }
 
 export function forgetFeedRefreshRequestId(accountKey?: string | null) {
 	if (!accountKey) return;
 	try {
 		globalThis.localStorage?.removeItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`);
-		globalThis.dispatchEvent(
-			new CustomEvent(FEED_REFRESH_REQUEST_EVENT, { detail: { accountKey, requestId: null } }),
-		);
 	} catch {
 		// Storage is an enhancement; the latest server status remains the fallback.
 	}
+	publishFeedRefreshRequest(accountKey, null);
+}
+
+function publishFeedRefreshRequest(accountKey: string, requestId: string | null) {
+	try {
+		globalThis.dispatchEvent(
+			new CustomEvent(FEED_REFRESH_REQUEST_EVENT, { detail: { accountKey, requestId } }),
+		);
+	} catch {
+		// Event delivery is an in-session enhancement and must never break a refresh.
+	}
+}
+
+export function getFeedSyncTerminalTimestamp(status: FeedSyncAllStatus | undefined) {
+	if (!status?.requestId || status.active || !status.heartbeatAt) return null;
+	const timestamp = Date.parse(status.heartbeatAt);
+	return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function isFreshTerminalFeedSyncStatus(
+	status: FeedSyncAllStatus | undefined,
+	now = Date.now(),
+	visibleMs = REFRESH_INTERVALS.SYNC_STATUS_TERMINAL_VISIBLE_MS,
+) {
+	const terminalTimestamp = getFeedSyncTerminalTimestamp(status);
+	return (
+		terminalTimestamp != null && now - terminalTimestamp >= 0 && now - terminalTimestamp < visibleMs
+	);
 }
 
 export const ALL_FEEDS_SYNC_ID = '__all_feeds__';

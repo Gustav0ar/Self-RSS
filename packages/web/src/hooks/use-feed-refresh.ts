@@ -85,7 +85,10 @@ export function useFeedRefresh() {
 
 	useEffect(() => {
 		if (!trackedRequestId || !allFeedsSyncStatus) return;
-		if (allFeedsSyncStatus.requestId === trackedRequestId) return;
+		const isTrackedRequest = allFeedsSyncStatus.requestId === trackedRequestId;
+		if (isTrackedRequest && allFeedsSyncStatus.active) return;
+		// Effects run after the terminal snapshot has committed, so the result can
+		// render once before returning to the latest cross-client status stream.
 		forgetFeedRefreshRequestId(accountKey);
 		setTrackedRequestId(null);
 	}, [accountKey, allFeedsSyncStatus, trackedRequestId]);

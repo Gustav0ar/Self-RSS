@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REFRESH_INTERVALS } from '../../src/lib/constants';
 import {
 	buildAllFeedsRefreshActivity,
+	FEED_REFRESH_REQUEST_EVENT,
 	type FeedSyncAllStatus,
+	forgetFeedRefreshRequestId,
 	getFeedSyncStatusPollInterval,
 	hasFreshInactiveFeedSyncStatus,
 	readLastFeedRefreshRequestId,
@@ -20,6 +22,10 @@ const inactiveStatus: FeedSyncAllStatus = {
 };
 
 describe('feed sync status reconciliation', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	it('scopes persisted refresh requests by account', () => {
 		const storage = new Map<string, string>();
 		vi.stubGlobal('localStorage', {
@@ -31,7 +37,39 @@ describe('feed sync status reconciliation', () => {
 
 		expect(readLastFeedRefreshRequestId('account-a')).toBe('request-a');
 		expect(readLastFeedRefreshRequestId('account-b')).toBe('request-b');
-		vi.unstubAllGlobals();
+	});
+
+	it('delivers request events even when browser storage rejects changes', () => {
+		const dispatchEvent = vi.fn((_event: Event) => true);
+		vi.stubGlobal('localStorage', {
+			setItem: () => {
+				throw new Error('Storage disabled');
+			},
+			removeItem: () => {
+				throw new Error('Storage disabled');
+			},
+		});
+		vi.stubGlobal('dispatchEvent', dispatchEvent);
+
+		rememberFeedRefreshRequestId('account-a', 'request-a');
+		forgetFeedRefreshRequestId('account-a');
+
+		expect(dispatchEvent).toHaveBeenCalledTimes(2);
+		expect(
+			dispatchEvent.mock.calls.map(([event]) => ({
+				type: event.type,
+				detail: (event as CustomEvent).detail,
+			})),
+		).toEqual([
+			{
+				type: FEED_REFRESH_REQUEST_EVENT,
+				detail: { accountKey: 'account-a', requestId: 'request-a' },
+			},
+			{
+				type: FEED_REFRESH_REQUEST_EVENT,
+				detail: { accountKey: 'account-a', requestId: null },
+			},
+		]);
 	});
 	it('treats a fresh inactive server status as authoritative over stale local refresh state', () => {
 		const localQueuedAt = Date.parse('2026-06-21T12:00:00.000Z');

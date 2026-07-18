@@ -3,7 +3,12 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFeedRefresh } from '../../src/hooks/use-feed-refresh';
+import { clearTokens, setTokens } from '../../src/lib/api';
 import { REFRESH_INTERVALS } from '../../src/lib/constants';
+import {
+	type FeedSyncAllStatus,
+	readLastFeedRefreshRequestId,
+} from '../../src/lib/feed-sync-status';
 import { AppStateProvider } from '../../src/providers/app-state';
 
 const invalidateReaderQueriesMock = vi.fn();
@@ -16,20 +21,10 @@ let feeds: Array<{
 	unreadCount: number;
 }> = [];
 
-let allFeedsSyncStatus:
-	| {
-			queued: boolean;
-			running: boolean;
-			active: boolean;
-			stale?: boolean;
-			queuedAt?: string | null;
-			startedAt?: string | null;
-			heartbeatAt?: string | null;
-			articleRevision?: number;
-	  }
-	| undefined;
+let allFeedsSyncStatus: FeedSyncAllStatus | undefined;
 let allFeedsSyncStatusUpdatedAt = 0;
 let nowMs = new Date('2026-06-21T12:00:00.000Z').getTime();
+let requestedStatusRequestIds: Array<string | null> = [];
 
 vi.mock('../../src/hooks/queries', () => ({
 	invalidateReaderQueries: (...args: unknown[]) => invalidateReaderQueriesMock(...args),
@@ -38,11 +33,15 @@ vi.mock('../../src/hooks/queries', () => ({
 		isPending: false,
 		mutateAsync: syncAllFeedsMutateAsyncMock,
 	}),
-	useSyncAllFeedsStatus: () => ({
-		data: allFeedsSyncStatus,
-		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
-		refetch: refetchAllFeedsSyncStatusMock,
-	}),
+	useSyncAllFeedsStatus: (requestId?: string | null) => {
+		requestedStatusRequestIds.push(requestId ?? null);
+		return {
+			data:
+				requestId && allFeedsSyncStatus?.requestId !== requestId ? undefined : allFeedsSyncStatus,
+			dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
+			refetch: refetchAllFeedsSyncStatusMock,
+		};
+	},
 }));
 
 function makeQueryClient() {
@@ -71,6 +70,7 @@ describe('useFeedRefresh', () => {
 		vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 		allFeedsSyncStatus = { queued: false, running: false, active: false };
 		allFeedsSyncStatusUpdatedAt = 0;
+		requestedStatusRequestIds = [];
 		feeds = [];
 		syncAllFeedsMutateAsyncMock.mockResolvedValue({ data: { accepted: true } });
 		refetchAllFeedsSyncStatusMock.mockResolvedValue({
@@ -79,7 +79,55 @@ describe('useFeedRefresh', () => {
 	});
 
 	afterEach(() => {
+		clearTokens();
+		vi.unstubAllGlobals();
 		vi.restoreAllMocks();
+	});
+
+	it('releases a completed tracked request and resumes latest-status tracking', async () => {
+		const storage = new Map<string, string>();
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => storage.get(key) ?? null,
+			setItem: (key: string, value: string) => storage.set(key, value),
+			removeItem: (key: string) => storage.delete(key),
+		});
+		const payload = globalThis
+			.btoa(JSON.stringify({ sub: 'account-a' }))
+			.replaceAll('+', '-')
+			.replaceAll('/', '_')
+			.replace(/=+$/, '');
+		setTokens(`header.${payload}.signature`);
+		syncAllFeedsMutateAsyncMock.mockResolvedValue({
+			data: { accepted: true, requestId: 'request-a' },
+		});
+		const queryClient = makeQueryClient();
+		const { result, rerender } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+
+		await act(async () => {
+			await result.current.refreshFeed(undefined, { force: true });
+		});
+		await waitFor(() => {
+			expect(requestedStatusRequestIds.at(-1)).toBe('request-a');
+		});
+		expect(readLastFeedRefreshRequestId('account-a')).toBe('request-a');
+
+		allFeedsSyncStatus = {
+			queued: false,
+			running: false,
+			active: false,
+			requestId: 'request-a',
+			status: 'completed',
+			heartbeatAt: new Date(nowMs).toISOString(),
+		};
+		allFeedsSyncStatusUpdatedAt = nowMs + 1;
+		rerender();
+
+		await waitFor(() => {
+			expect(requestedStatusRequestIds.at(-1)).toBeNull();
+			expect(readLastFeedRefreshRequestId('account-a')).toBeNull();
+		});
 	});
 
 	it('releases all-feeds refresh state when server status settles inactive', async () => {

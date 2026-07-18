@@ -1,5 +1,12 @@
 import { AlertTriangle, Check, RefreshCw } from 'lucide-react';
-import type { AllFeedsRefreshActivity, FeedSyncAllStatus } from '@/lib/feed-sync-status';
+import { useEffect, useState } from 'react';
+import { REFRESH_INTERVALS } from '@/lib/constants';
+import {
+	type AllFeedsRefreshActivity,
+	type FeedSyncAllStatus,
+	getFeedSyncTerminalTimestamp,
+	isFreshTerminalFeedSyncStatus,
+} from '@/lib/feed-sync-status';
 
 interface FeedRefreshStatusBannerProps {
 	feedId?: string;
@@ -14,7 +21,20 @@ export function FeedRefreshStatusBanner({
 	allFeedsSyncStatus,
 	isRefreshingCurrentSelection,
 }: FeedRefreshStatusBannerProps) {
-	const isDurableTerminal = Boolean(allFeedsSyncStatus?.requestId && !allFeedsSyncStatus.active);
+	const [, setTerminalClock] = useState(0);
+	const terminalTimestamp = getFeedSyncTerminalTimestamp(allFeedsSyncStatus);
+	useEffect(() => {
+		if (terminalTimestamp == null) return;
+		const remaining =
+			terminalTimestamp + REFRESH_INTERVALS.SYNC_STATUS_TERMINAL_VISIBLE_MS - Date.now();
+		if (remaining <= 0) return;
+		const timer = globalThis.setTimeout(
+			() => setTerminalClock((clock) => clock + 1),
+			remaining + 25,
+		);
+		return () => globalThis.clearTimeout(timer);
+	}, [terminalTimestamp]);
+	const isDurableTerminal = isFreshTerminalFeedSyncStatus(allFeedsSyncStatus);
 	const showStatus = feedId
 		? isRefreshingCurrentSelection ||
 			(isDurableTerminal && allFeedsSyncStatus?.scope?.feedId === feedId)
