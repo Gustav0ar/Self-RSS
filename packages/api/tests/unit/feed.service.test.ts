@@ -218,22 +218,60 @@ describe('FeedService - update / delete', () => {
 			maxContentLength: 1024,
 			allowPrivateHosts: true,
 		});
-		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('https://new.example/feed.xml');
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('http://127.0.0.1/feed.xml');
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						'<rss version="2.0"><channel><title>Replacement</title><link>https://new.example</link><description>New description</description></channel></rss>',
+						{ status: 200, headers: { 'content-type': 'application/rss+xml' } },
+					),
+			),
+		);
 
 		await service.update('user-1', 'feed-1', { feedUrl: 'https://new.example/feed.xml' });
 
-		expect(feedRepo.findByUrl).toHaveBeenCalledWith('user-1', 'https://new.example/feed.xml');
+		expect(feedRepo.findByUrl).toHaveBeenCalledWith('user-1', 'http://127.0.0.1/feed.xml');
 		expect(feedRepo.update).toHaveBeenCalledWith(
 			'feed-1',
 			'user-1',
 			expect.objectContaining({
-				feedUrl: 'https://new.example/feed.xml',
+				feedUrl: 'http://127.0.0.1/feed.xml',
+				siteUrl: 'https://new.example',
+				description: 'New description',
 				syncStatus: 'idle',
 				lastSyncError: null,
 				lastSyncErrorAt: null,
 				nextSyncAt: expect.any(Date),
 			}),
 		);
+	});
+
+	it('leaves the existing feed unchanged when a replacement URL cannot be parsed', async () => {
+		const feedRepo = {
+			findById: vi.fn(async () => ({
+				id: 'feed-1',
+				feedUrl: 'https://old.example/feed.xml',
+				lastSyncError: 'Existing error',
+			})),
+			findByUrl: vi.fn().mockResolvedValue(null),
+			update: vi.fn(),
+		};
+		const service = new FeedService(feedRepo as never, {} as never, {} as never, {
+			maxContentLength: 1024,
+			allowPrivateHosts: true,
+		});
+		vi.spyOn(service, 'normalizeFeedUrl').mockResolvedValue('http://127.0.0.1/not-a-feed');
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('<html>Not a feed</html>', { status: 200 })),
+		);
+
+		await expect(
+			service.update('user-1', 'feed-1', { feedUrl: 'https://new.example/not-a-feed' }),
+		).rejects.toMatchObject({ code: 'BAD_REQUEST', statusCode: 400 });
+		expect(feedRepo.update).not.toHaveBeenCalled();
 	});
 
 	it('rejects changing a feed to another subscription URL', async () => {

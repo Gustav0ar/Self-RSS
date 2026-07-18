@@ -3,8 +3,10 @@ const HTTP_METHODS = new Set(['get', 'post', 'patch', 'delete', 'put']);
 type Schema = {
 	$ref?: string;
 	allOf?: Schema[];
+	type?: string | string[];
+	items?: Schema;
 	required?: string[];
-	properties?: Record<string, unknown>;
+	properties?: Record<string, Schema>;
 };
 
 type OpenApiDocument = {
@@ -16,6 +18,7 @@ export interface AndroidContractOptions {
 	coveredOutsideRetrofit?: ReadonlySet<string>;
 	intentionallyUnsupported?: ReadonlySet<string>;
 	schemaMappings?: Readonly<Record<string, string>>;
+	responseMappings?: Readonly<Record<string, string>>;
 }
 
 interface KotlinField {
@@ -30,12 +33,32 @@ export function operationKey(method: string, path: string) {
 }
 
 export function extractRetrofitOperations(source: string) {
-	const operations = new Set<string>();
-	const annotation = /@(GET|POST|PATCH|DELETE|PUT)\("([^"]+)"\)/g;
-	for (const match of source.matchAll(annotation)) {
-		operations.add(operationKey(match[1]!, match[2]!));
+	return new Set(extractRetrofitResponses(source).keys());
+}
+
+interface RetrofitResponse {
+	returnType: string;
+	modelName: string | null;
+	isCollection: boolean;
+}
+
+function extractRetrofitResponses(source: string) {
+	const responses = new Map<string, RetrofitResponse>();
+	const operation =
+		/@(GET|POST|PATCH|DELETE|PUT)\("([^"]+)"\)[\s\S]*?suspend\s+fun\s+\w+\s*\([\s\S]*?\)\s*:\s*([^\n]+)/g;
+	for (const match of source.matchAll(operation)) {
+		const returnType = match[3]!.trim();
+		const envelope = /^ApiEnvelope<(.+)>$/.exec(returnType);
+		const listResponse = /^ApiListResponse<(.+)>$/.exec(returnType);
+		const payload = envelope?.[1]?.trim() ?? listResponse?.[1]?.trim() ?? null;
+		const listPayload = payload ? /^List<(.+)>$/.exec(payload) : null;
+		responses.set(operationKey(match[1]!, match[2]!), {
+			returnType,
+			modelName: listPayload?.[1]?.trim() ?? payload,
+			isCollection: listResponse != null || listPayload != null,
+		});
 	}
-	return operations;
+	return responses;
 }
 
 function extractOpenApiOperations(document: OpenApiDocument) {
@@ -90,6 +113,28 @@ function resolveSchemaShape(
 	return { properties, required };
 }
 
+function successResponseSchema(document: OpenApiDocument, operation: string): Schema | null {
+	for (const [path, pathItem] of Object.entries(document.paths ?? {})) {
+		for (const [method, rawOperation] of Object.entries(pathItem)) {
+			if (!HTTP_METHODS.has(method.toLowerCase()) || operationKey(method, path) !== operation) {
+				continue;
+			}
+			const operationObject = rawOperation as {
+				responses?: Record<string, { content?: Record<string, { schema?: Schema }> }>;
+			};
+			const success = Object.entries(operationObject.responses ?? {})
+				.filter(([status]) => /^2\d\d$/.test(status))
+				.sort(([left], [right]) => left.localeCompare(right))[0]?.[1];
+			return success?.content?.['application/json']?.schema ?? null;
+		}
+	}
+	return null;
+}
+
+function schemaRefName(schema: Schema | null) {
+	return schema?.$ref?.split('/').at(-1) ?? null;
+}
+
 export function compareAndroidOpenApiContract(
 	document: OpenApiDocument,
 	retrofitSource: string,
@@ -97,7 +142,8 @@ export function compareAndroidOpenApiContract(
 	options: AndroidContractOptions = {},
 ) {
 	const errors: string[] = [];
-	const retrofitOperations = extractRetrofitOperations(retrofitSource);
+	const retrofitResponses = extractRetrofitResponses(retrofitSource);
+	const retrofitOperations = new Set(retrofitResponses.keys());
 	const openApiOperations = extractOpenApiOperations(document);
 	const coveredOutsideRetrofit = options.coveredOutsideRetrofit ?? new Set<string>();
 	const intentionallyUnsupported = options.intentionallyUnsupported ?? new Set<string>();
@@ -122,6 +168,48 @@ export function compareAndroidOpenApiContract(
 	}
 
 	const schemas = document.components?.schemas ?? {};
+	const schemaNameByKotlinClass = new Map(
+		Object.entries(options.schemaMappings ?? {}).map(([schemaName, className]) => [
+			className,
+			schemaName,
+		]),
+	);
+	for (const [operation, expectedModel] of Object.entries(options.responseMappings ?? {})) {
+		const retrofitResponse = retrofitResponses.get(operation);
+		if (!retrofitResponse) {
+			errors.push(`Mapped Android response references a missing Retrofit operation: ${operation}`);
+			continue;
+		}
+		if (retrofitResponse.modelName !== expectedModel) {
+			errors.push(
+				`Android response for ${operation} is ${retrofitResponse.modelName ?? retrofitResponse.returnType}, expected ${expectedModel}`,
+			);
+		}
+
+		const responseSchema = successResponseSchema(document, operation);
+		const dataSchema = responseSchema?.properties?.data ?? null;
+		const payloadSchema = retrofitResponse.isCollection ? (dataSchema?.items ?? null) : dataSchema;
+		if (!responseSchema || !dataSchema) {
+			errors.push(`OpenAPI success response for ${operation} does not declare a JSON data schema`);
+			continue;
+		}
+		if (retrofitResponse.isCollection && dataSchema.type !== 'array') {
+			errors.push(`OpenAPI success response for ${operation} does not declare data as an array`);
+			continue;
+		}
+		const expectedSchema = schemaNameByKotlinClass.get(expectedModel);
+		if (!expectedSchema) {
+			errors.push(`No OpenAPI schema mapping is declared for Android model ${expectedModel}`);
+			continue;
+		}
+		const actualSchema = schemaRefName(payloadSchema);
+		if (actualSchema !== expectedSchema) {
+			errors.push(
+				`OpenAPI success response for ${operation} declares ${actualSchema ?? 'an inline schema'}, expected ${expectedSchema} for Android ${expectedModel}`,
+			);
+		}
+	}
+
 	for (const [schemaName, className] of Object.entries(options.schemaMappings ?? {})) {
 		const schema = schemas[schemaName];
 		if (!schema) {

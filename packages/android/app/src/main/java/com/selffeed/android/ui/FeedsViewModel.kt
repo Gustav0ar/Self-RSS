@@ -334,11 +334,7 @@ class FeedsViewModel @Inject constructor(
                             it.copy(
                                 syncInBackground = false,
                                 syncRevision = it.syncRevision + 1,
-                                statusMessage = if (status.data.newArticles > 0) {
-                                    "${status.data.newArticles} new articles"
-                                } else {
-                                    "Feeds are up to date"
-                                },
+                                statusMessage = completedSyncMessage(status.data),
                             )
                         }
                         refreshFeedHealth()
@@ -378,6 +374,24 @@ class FeedsViewModel @Inject constructor(
             delay(boundedDelayMs)
             elapsedMs += boundedDelayMs
         }
+    }
+
+    private fun completedSyncMessage(status: FeedSyncAllStatus): String {
+        val outcomes = buildList {
+            if (status.newArticles > 0) {
+                val articleLabel = if (status.newArticles == 1) "article" else "articles"
+                add("${status.newArticles} new $articleLabel")
+            }
+            if (status.failedFeeds > 0) {
+                val feedLabel = if (status.failedFeeds == 1) "feed" else "feeds"
+                add("${status.failedFeeds} $feedLabel failed")
+            }
+            if (status.skippedFeeds > 0) {
+                val feedLabel = if (status.skippedFeeds == 1) "feed" else "feeds"
+                add("${status.skippedFeeds} $feedLabel skipped")
+            }
+        }
+        return outcomes.joinToString(" · ").ifEmpty { "Feeds are up to date" }
     }
 
     private companion object {

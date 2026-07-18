@@ -66,6 +66,12 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 		OpmlImportSummary: 'OpmlImportSummary',
 		OpmlImportWarning: 'OpmlImportWarning',
 	},
+	responseMappings: {
+		[operationKey('GET', '/feeds')]: 'FeedWithCounts',
+		[operationKey('POST', '/feeds')]: 'FeedWithCounts',
+		[operationKey('PATCH', '/feeds/{feedId}')]: 'FeedWithCounts',
+		[operationKey('GET', '/feeds/sync/status')]: 'FeedSyncAllStatus',
+	},
 });
 errors.push(...alternateTransportErrors);
 

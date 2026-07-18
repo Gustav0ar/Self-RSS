@@ -132,7 +132,8 @@ export class OpmlImportService {
 			// the desired categories and feeds and let the repository batch
 			// the writes in a single transaction at the end of the loop.
 			let parentCategoryId: string | null = null;
-			for (const rawName of entry.categoryPath) {
+			const categoryPath = entry.categoryPath.length > 0 ? entry.categoryPath : ['Uncategorized'];
+			for (const rawName of categoryPath) {
 				const name = rawName.trim();
 				if (!name) {
 					continue;
@@ -172,16 +173,6 @@ export class OpmlImportService {
 				// chain against the queue. For correctness, the actual parent
 				// id is patched after the batch insert below.
 				parentCategoryId = `__pending__:${categoriesToCreate.length - 1}`;
-			}
-
-			if (!parentCategoryId) {
-				summary.invalidEntries += 1;
-				summary.warnings.push({
-					code: 'UNCATEGORIZED_ENTRY',
-					message: 'Feed entry is missing a category path',
-					feedUrl: entry.feedUrl,
-				});
-				continue;
 			}
 
 			feedsToCreate.push({

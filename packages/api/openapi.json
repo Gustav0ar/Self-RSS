@@ -1970,7 +1970,7 @@
 									],
 									"properties": {
 										"data": {
-											"$ref": "#/components/schemas/Feed"
+											"$ref": "#/components/schemas/FeedWithCounts"
 										}
 									}
 								}
@@ -2124,7 +2124,7 @@
 									],
 									"properties": {
 										"data": {
-											"$ref": "#/components/schemas/Feed"
+											"$ref": "#/components/schemas/FeedWithCounts"
 										}
 									}
 								}

@@ -386,6 +386,12 @@ data class SyncResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class FeedSyncScope(
+    val feedId: String? = null,
+    val categoryId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
 data class FeedSyncAllStatus(
     val queued: Boolean,
     val running: Boolean,
@@ -396,8 +402,13 @@ data class FeedSyncAllStatus(
     val heartbeatAt: String? = null,
     val totalFeeds: Int = 0,
     val completedFeeds: Int = 0,
+    val syncedFeeds: Int = 0,
+    val failedFeeds: Int = 0,
+    val skippedFeeds: Int = 0,
     val newArticles: Int = 0,
     val articleRevision: Long = 0L,
+    val jobId: String? = null,
+    val scope: FeedSyncScope = FeedSyncScope(),
 )
 
 @JsonClass(generateAdapter = true)

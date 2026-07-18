@@ -192,7 +192,6 @@ export class FeedSyncService {
 			options.signal?.throwIfAborted();
 			const effectiveFeedUrl = proxyResolution?.feedUrl ?? feed.feedUrl;
 			const syncWarning = proxyResolution?.warning ?? null;
-			const parsedTitle = this.normalizeText(parsed.title)?.trim() ?? null;
 			const parsedLink = resolvePublisherUrl(this.normalizeText(parsed.link), effectiveFeedUrl);
 			const parsedDescription = this.normalizeText(parsed.description);
 			const parsedImageUrl = resolvePublisherUrl(
@@ -203,7 +202,6 @@ export class FeedSyncService {
 
 			const feedUpdates: Record<string, unknown> = {};
 			if (effectiveFeedUrl !== feed.feedUrl) feedUpdates.feedUrl = effectiveFeedUrl;
-			if (parsedTitle && parsedTitle !== feed.title) feedUpdates.title = parsedTitle;
 			if (parsedLink) feedUpdates.siteUrl = parsedLink;
 			if (parsedImageUrl) feedUpdates.faviconUrl = parsedImageUrl;
 			if (parsedDescription) feedUpdates.description = parsedDescription;
@@ -264,7 +262,9 @@ export class FeedSyncService {
 					this.normalizeText(itemRecord.creator) ??
 					this.normalizeText(itemRecord['dc:creator']) ??
 					null;
-				const publishedAt = this.parsePublishedAt(itemRecord.pubDate);
+				const publishedAt = this.parsePublishedAt(
+					itemRecord.isoDate ?? itemRecord.pubDate ?? itemRecord.date ?? itemRecord['dc:date'],
+				);
 				const rawHtml =
 					typeof rawFeedContent === 'string'
 						? rawFeedContent

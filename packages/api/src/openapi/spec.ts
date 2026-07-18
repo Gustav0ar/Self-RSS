@@ -531,7 +531,7 @@ export const openApiSpec = {
 						title: { type: 'string', minLength: 1, maxLength: 255 },
 					},
 				}),
-				responses: { '201': json(apiDataRef('#/components/schemas/Feed')) },
+				responses: { '201': json(apiDataRef('#/components/schemas/FeedWithCounts')) },
 			},
 		},
 		'/feeds/import/opml': {
@@ -586,7 +586,7 @@ export const openApiSpec = {
 						pollingIntervalMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
 					},
 				}),
-				responses: { '200': json(apiDataRef('#/components/schemas/Feed')) },
+				responses: { '200': json(apiDataRef('#/components/schemas/FeedWithCounts')) },
 			},
 			delete: {
 				tags: ['Feeds'],

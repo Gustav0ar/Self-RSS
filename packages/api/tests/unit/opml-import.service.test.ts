@@ -143,6 +143,49 @@ describe('OpmlImportService', () => {
 		expect(workParentId).not.toBe(personalParentId);
 	});
 
+	it('imports top-level feeds into one idempotent Uncategorized root category', async () => {
+		const existingUncategorized = {
+			id: 'category-existing',
+			name: 'Uncategorized',
+			slug: 'uncategorized',
+			parentCategoryId: null,
+		};
+		const categoryRepo = {
+			findAllByUser: vi.fn(async () => [existingUncategorized]),
+			createManyInTransaction: vi.fn(),
+		};
+		const feedRepo = {
+			findByUrls: vi.fn(async () => []),
+			createMany: vi.fn(async (rows: Array<Record<string, unknown>>) =>
+				rows.map((row, index) => ({ id: `feed-${index}`, ...row })),
+			),
+		};
+		const service = new OpmlImportService(categoryRepo as never, feedRepo as never, {
+			allowPrivateHosts: true,
+		});
+
+		const summary = await service.import(
+			'user-1',
+			'feeds.opml',
+			`<?xml version="1.0" encoding="UTF-8"?>
+			<opml version="2.0"><body>
+				<outline text="First" xmlUrl="https://example.com/first.xml" />
+				<outline text="Second" xmlUrl="https://example.com/second.xml" />
+			</body></opml>`,
+		);
+
+		expect(summary).toMatchObject({
+			createdCategories: 0,
+			createdFeeds: 2,
+			invalidEntries: 0,
+		});
+		expect(categoryRepo.createManyInTransaction).not.toHaveBeenCalled();
+		expect(feedRepo.createMany).toHaveBeenCalledWith([
+			expect.objectContaining({ categoryId: 'category-existing', title: 'First' }),
+			expect.objectContaining({ categoryId: 'category-existing', title: 'Second' }),
+		]);
+	});
+
 	it('creates missing categories and skips duplicate feeds during import', async () => {
 		const createdCategories: Array<{ id: string; name: string; parentCategoryId: string | null }> =
 			[];

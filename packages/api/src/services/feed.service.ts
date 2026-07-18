@@ -89,6 +89,14 @@ export class FeedService {
 		});
 	}
 
+	async createWithCounts(
+		userId: string,
+		data: { categoryId: string; feedUrl: string; title?: string },
+	) {
+		const feed = await this.create(userId, data);
+		return this.serializeFeedWithCount(feed, 0);
+	}
+
 	async update(
 		userId: string,
 		feedId: string,
@@ -102,6 +110,9 @@ export class FeedService {
 		const feed = await this.feedRepo.findById(feedId, userId);
 		if (!feed) throw AppError.notFound('Feed not found');
 		const updates: Partial<typeof data> & {
+			siteUrl?: string | null;
+			faviconUrl?: string | null;
+			description?: string | null;
 			nextSyncAt?: Date;
 			syncStatus?: string;
 			lastSyncError?: string | null;
@@ -125,7 +136,14 @@ export class FeedService {
 					throw AppError.conflict('You already have this feed');
 				}
 
+				// Validate the replacement as an actual parseable feed before
+				// mutating the subscription. A failed fetch or parse therefore
+				// leaves the existing URL and health state untouched.
+				const metadata = await this.fetchFeedMetadata(normalizedFeedUrl);
 				updates.feedUrl = normalizedFeedUrl;
+				updates.siteUrl = metadata.siteUrl;
+				updates.faviconUrl = metadata.faviconUrl;
+				updates.description = metadata.description;
 				updates.nextSyncAt = new Date();
 				updates.syncStatus = 'idle';
 				updates.lastSyncError = null;
@@ -133,7 +151,26 @@ export class FeedService {
 			}
 		}
 
-		return this.feedRepo.update(feedId, userId, updates);
+		const updatedFeed = await this.feedRepo.update(feedId, userId, updates);
+		if (!updatedFeed) throw AppError.notFound('Feed not found');
+		return updatedFeed;
+	}
+
+	async updateWithCounts(
+		userId: string,
+		feedId: string,
+		data: {
+			categoryId?: string;
+			feedUrl?: string;
+			title?: string;
+			pollingIntervalMinutes?: number;
+		},
+	) {
+		// Read the count before the mutation so a count-query failure cannot
+		// turn a successful database update into an apparent API failure.
+		const unreadCountByFeedId = await this.articleRepo.unreadCountByFeed(userId, [feedId]);
+		const feed = await this.update(userId, feedId, data);
+		return this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feedId) ?? 0);
 	}
 
 	async delete(userId: string, feedId: string) {
@@ -158,14 +195,23 @@ export class FeedService {
 			feeds.map((feed) => feed.id),
 		);
 
-		return feeds.map((f) => ({
-			...f,
-			unreadCount: unreadCountByFeedId.get(f.id) ?? 0,
-			createdAt: f.createdAt.toISOString(),
-			updatedAt: f.updatedAt.toISOString(),
-			lastSyncedAt: f.lastSyncedAt?.toISOString() ?? null,
-			lastSyncErrorAt: f.lastSyncErrorAt?.toISOString() ?? null,
-		}));
+		return feeds.map((feed) =>
+			this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feed.id) ?? 0),
+		);
+	}
+
+	private serializeFeedWithCount(
+		feed: NonNullable<Awaited<ReturnType<FeedRepository['findById']>>>,
+		unreadCount: number,
+	) {
+		return {
+			...feed,
+			unreadCount,
+			createdAt: feed.createdAt.toISOString(),
+			updatedAt: feed.updatedAt.toISOString(),
+			lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
+			lastSyncErrorAt: feed.lastSyncErrorAt?.toISOString() ?? null,
+		};
 	}
 
 	private async fetchFeedMetadata(feedUrl: string): Promise<FeedMetadata> {

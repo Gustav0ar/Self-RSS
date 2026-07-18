@@ -565,6 +565,7 @@ describe('API integration', () => {
 			});
 			expect(createFeed.response.status).toBe(201);
 			expect(createFeed.body.data.title).toBe('Example Feed');
+			expect(createFeed.body.data.unreadCount).toBe(0);
 
 			const parentScopedFeeds = await authedRequest(
 				`/api/v1/feeds?categoryId=${parentCategory.body.data.id}`,
@@ -604,6 +605,7 @@ describe('API integration', () => {
 			expect(updatedFeed.response.status).toBe(200);
 			expect(updatedFeed.body.data.feedUrl).toBe(replacementUrl);
 			expect(updatedFeed.body.data.syncStatus).toBe('idle');
+			expect(updatedFeed.body.data.unreadCount).toBe(0);
 
 			const crossUserFeed = await authedRequest('/api/v1/feeds', token2, {
 				method: 'POST',
@@ -732,6 +734,59 @@ describe('API integration', () => {
 			method: 'DELETE',
 		});
 		expect(badCategory.response.status).toBe(400);
+	});
+
+	it('normalizes RSS 1.0 dc dates when ingesting articles', async () => {
+		const registered = await registerUser('rdf-reader@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'RDF feeds' }),
+		});
+		const feedServer = await startFeedServer(`<?xml version="1.0" encoding="UTF-8"?>
+		<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+			xmlns="http://purl.org/rss/1.0/"
+			xmlns:dc="http://purl.org/dc/elements/1.1/">
+			<channel rdf:about="https://example.com/rdf.xml">
+				<title>RDF Integration Feed</title>
+				<link>https://example.com/</link>
+				<description>RSS 1.0 fixture</description>
+			</channel>
+			<item rdf:about="https://example.com/rdf-story">
+				<title>RDF dated story</title>
+				<link>https://example.com/rdf-story</link>
+				<description>RDF content</description>
+				<dc:date>2025-03-04T05:06:07.000Z</dc:date>
+			</item>
+		</rdf:RDF>`);
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+
+			const sync = await authedRequest(`/api/v1/feeds/${feed.body.data.id}/sync`, token, {
+				method: 'POST',
+			});
+			expect(sync.response.status).toBe(200);
+			expect(sync.body.data.newArticles).toBe(1);
+
+			const articles = await authedRequest(
+				`/api/v1/articles?feedId=${feed.body.data.id}&sort=latest&limit=10`,
+				token,
+			);
+			expect(articles.body.data[0]).toMatchObject({
+				title: 'RDF dated story',
+				publishedAt: '2025-03-04T05:06:07.000Z',
+			});
+		} finally {
+			await feedServer.stop();
+		}
 	});
 
 	it('covers feed sync, articles, search, mark read, mark all read, preferences, and stats', async () => {

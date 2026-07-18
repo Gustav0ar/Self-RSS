@@ -108,7 +108,10 @@ export async function resolveStaleProxyFeed({
 
 function getLatestItemPublishedAt(parsed: ParsedFeed) {
 	const dates = (parsed.items ?? [])
-		.map((item) => parsePublishedAt((item as FeedItemRecord).pubDate))
+		.map((item) => {
+			const record = item as FeedItemRecord;
+			return parsePublishedAt(record.isoDate ?? record.pubDate ?? record.date ?? record['dc:date']);
+		})
 		.filter((date): date is Date => date != null);
 	if (dates.length === 0) {
 		return null;

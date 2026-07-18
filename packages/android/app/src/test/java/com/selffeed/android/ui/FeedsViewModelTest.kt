@@ -333,6 +333,27 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `completed sync reports failures and skipped feeds instead of claiming up to date`() = runTest {
+        coEvery { repository.syncAllFeedsStatus() } returns AppResult.Success(
+            completedSyncStatus().copy(
+                newArticles = 1,
+                syncedFeeds = 2,
+                failedFeeds = 1,
+                skippedFeeds = 2,
+            ),
+        )
+        val viewModel = FeedsViewModel(repository)
+
+        viewModel.syncAllFeeds()
+
+        assertEquals(
+            "1 new article · 1 feed failed · 2 feeds skipped",
+            viewModel.state.value.statusMessage,
+        )
+        assertEquals(false, viewModel.state.value.syncInBackground)
+    }
+
+    @Test
     fun `importOpml exposes a result summary and refreshes subscription data`() = runTest {
         coEvery { repository.importOpml(any(), any()) } returns AppResult.Success(
             OpmlImportSummary(

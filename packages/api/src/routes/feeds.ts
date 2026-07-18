@@ -37,19 +37,7 @@ export function createFeedRoutes(
 		await enforceRateLimit(c, rateLimiter, 'feed-create', RATE_LIMITS.feedCreate);
 		const userId = c.get('userId');
 		const body = await parseBody(c, createFeedSchema);
-		const feed = await feedService.create(userId, body);
-		return c.json(
-			{
-				data: {
-					...feed,
-					createdAt: feed.createdAt.toISOString(),
-					updatedAt: feed.updatedAt.toISOString(),
-					lastSyncedAt: feed.lastSyncedAt?.toISOString() ?? null,
-					lastSyncErrorAt: feed.lastSyncErrorAt?.toISOString() ?? null,
-				},
-			},
-			201,
-		);
+		return c.json({ data: await feedService.createWithCounts(userId, body) }, 201);
 	});
 
 	routes.post('/import/opml', async (c) => {
@@ -166,8 +154,7 @@ export function createFeedRoutes(
 		const userId = c.get('userId');
 		const feedId = parseUuidParam(c, 'feedId');
 		const body = await parseBody(c, updateFeedSchema);
-		const feed = await feedService.update(userId, feedId, body);
-		return c.json({ data: feed });
+		return c.json({ data: await feedService.updateWithCounts(userId, feedId, body) });
 	});
 
 	routes.delete('/:feedId', async (c) => {

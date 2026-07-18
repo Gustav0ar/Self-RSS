@@ -149,7 +149,7 @@ describe('FeedSyncService', () => {
 			'fetchAndParse',
 		);
 		fetchAndParseSpy.mockResolvedValue({
-			title: 'Ah Negao',
+			title: 'Publisher title that must not replace the subscription name',
 			items: [
 				{
 					guid: 'guid-1',
@@ -188,6 +188,12 @@ describe('FeedSyncService', () => {
 			}),
 		]);
 		expect(result).toEqual({ newArticles: 1, total: 1 });
+		expect(feedRepo.update).toHaveBeenNthCalledWith(
+			2,
+			'feed-1',
+			'user-1',
+			expect.not.objectContaining({ title: expect.anything() }),
+		);
 	});
 
 	it('records malformed item failures without failing the whole feed sync', async () => {

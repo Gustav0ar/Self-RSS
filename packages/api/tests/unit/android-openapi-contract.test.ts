@@ -129,4 +129,62 @@ describe('Android/OpenAPI contract compatibility', () => {
 			}),
 		).toEqual([]);
 	});
+
+	it('checks Retrofit payload types against each mapped OpenAPI success response', () => {
+		const feedRetrofit = `
+interface Api {
+  @POST("feeds")
+  suspend fun createFeed(): ApiEnvelope<FeedWithCounts>
+}
+`;
+		const feedModels = `
+data class FeedWithCounts(
+  val id: String,
+  val unreadCount: Int,
+)
+`;
+		const changed = {
+			paths: {
+				'/feeds': {
+					post: {
+						responses: {
+							'201': {
+								content: {
+									'application/json': {
+										schema: {
+											type: 'object',
+											properties: {
+												data: { $ref: '#/components/schemas/Feed' },
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			components: {
+				schemas: {
+					Feed: { type: 'object', required: ['id'], properties: { id: {} } },
+					FeedWithCounts: {
+						type: 'object',
+						required: ['id', 'unreadCount'],
+						properties: { id: {}, unreadCount: {} },
+					},
+				},
+			},
+		};
+
+		expect(
+			compareAndroidOpenApiContract(changed, feedRetrofit, feedModels, {
+				schemaMappings: { FeedWithCounts: 'FeedWithCounts' },
+				responseMappings: {
+					[operationKey('POST', '/feeds')]: 'FeedWithCounts',
+				},
+			}),
+		).toContain(
+			'OpenAPI success response for POST /feeds declares Feed, expected FeedWithCounts for Android FeedWithCounts',
+		);
+	});
 });
