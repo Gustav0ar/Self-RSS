@@ -1913,6 +1913,69 @@ describe('durable feed ingestion persistence', () => {
 		expect(changed?.normalizedPayloadHash).not.toBe(first?.normalizedPayloadHash);
 	});
 
+	it('reuses a retained parsed snapshot when a user resubscribes without refetching', async () => {
+		const { db, repository } = await setupDatabase();
+		const facade = new DurableFeedFacadeService(
+			db,
+			new FeedRepository(db),
+			new CategoryRepository(db),
+			repository,
+		);
+		const articleRepository = new ArticleRepository(db);
+		let publisherRequests = 0;
+		const first = await facade.createPendingFeed('user-1', {
+			categoryId: 'category-1',
+			feedUrl: 'https://reuse.example.com/feed.xml',
+		});
+		const now = new Date();
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'snapshot-reuse-fetch',
+			originStartGapSeconds: 0,
+			now: () => now,
+			fetch: async () => {
+				publisherRequests += 1;
+				return new Response(
+					'<rss version="2.0"><channel><title>Reusable source</title><item><guid>one</guid><title>Reusable article</title></item></channel></rss>',
+					{ headers: { 'content-type': 'application/rss+xml' } },
+				);
+			},
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		const delivery = new FeedSnapshotDeliveryService(repository, articleRepository);
+		expect(await delivery.drainOnce('snapshot-reuse-first', { now, limit: 10 })).toBe(1);
+		expect(publisherRequests).toBe(1);
+		await db.delete(schema.feeds).where(eq(schema.feeds.id, first.feed.id));
+		expect(await db.select().from(schema.articles)).toHaveLength(0);
+
+		const second = await facade.createPendingFeed('user-1', {
+			categoryId: 'category-1',
+			feedUrl: 'https://reuse.example.com/feed.xml',
+		});
+		expect(second.feed).toMatchObject({
+			title: 'Reusable source',
+			sourceId: first.feed.pendingSourceId,
+			pendingSourceId: null,
+			syncStatus: 'idle',
+		});
+		expect(second.jobId).toBe(first.jobId);
+		expect(await db.select().from(schema.feedFetchJobs)).toHaveLength(1);
+		expect(await worker.drainOnce()).toBe(0);
+		expect(publisherRequests).toBe(1);
+
+		expect(await delivery.drainOnce('snapshot-reuse-second', { now, limit: 10 })).toBe(1);
+		expect(
+			await db.query.articles.findFirst({
+				where: (article, { eq }) => eq(article.feedId, second.feed.id),
+			}),
+		).toMatchObject({ title: 'Reusable article' });
+		expect(
+			await db.query.feedRefreshRequests.findFirst({
+				where: (request, { eq }) => eq(request.id, second.requestId),
+			}),
+		).toMatchObject({ status: 'completed', completedItems: 1, pendingItems: 0 });
+		expect(publisherRequests).toBe(1);
+	});
+
 	it('keeps relayed snapshots and relative links based on the publisher URL', async () => {
 		const { db, repository } = await setupDatabase();
 		const now = new Date('2026-07-18T00:00:00Z');

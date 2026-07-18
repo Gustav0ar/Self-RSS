@@ -1,9 +1,12 @@
-import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
 	feedDiscoveryCandidates,
+	feedFetchSnapshots,
 	feedRefreshRequestItems,
 	feedRefreshRequests,
+	feedSnapshotDeliveries,
+	feedSources,
 	feeds,
 } from '../db/schema.js';
 import { AppError } from '../middleware/errors.js';
@@ -73,19 +76,59 @@ export class DurableFeedFacadeService {
 		const now = new Date();
 		const title = data.title?.trim() || new URL(source.normalizedUrl).hostname;
 		return this.db.transaction((tx) => {
+			const currentSource = tx
+				.select()
+				.from(feedSources)
+				.where(eq(feedSources.id, source.id))
+				.get();
+			const reusableSnapshot =
+				currentSource?.state === 'active' && currentSource.lastSuccessAt
+					? tx
+							.select()
+							.from(feedFetchSnapshots)
+							.where(
+								and(
+									eq(feedFetchSnapshots.sourceId, source.id),
+									eq(feedFetchSnapshots.parseState, 'parsed'),
+									isNotNull(feedFetchSnapshots.normalizedPayload),
+									isNotNull(feedFetchSnapshots.jobId),
+									gte(feedFetchSnapshots.retainUntil, now),
+								),
+							)
+							.orderBy(desc(feedFetchSnapshots.fetchedAt))
+							.get()
+					: null;
+			let parsedTitle: string | null = null;
+			if (reusableSnapshot?.normalizedPayload) {
+				try {
+					parsedTitle =
+						(
+							JSON.parse(reusableSnapshot.normalizedPayload) as {
+								source?: { title?: string | null };
+							}
+						).source?.title ?? null;
+				} catch {
+					// A validated snapshot should parse; source metadata remains a safe fallback.
+				}
+			}
+			const canReuse = Boolean(reusableSnapshot?.jobId && currentSource);
 			const feed = tx
 				.insert(feeds)
 				.values({
 					id: crypto.randomUUID(),
 					userId,
 					categoryId: data.categoryId,
-					title,
+					title: data.title?.trim() || parsedTitle || currentSource?.title || title,
 					customTitle: data.title?.trim() || null,
 					feedUrl: source.normalizedUrl,
-					sourceId: null,
-					pendingSourceId: source.id,
-					syncStatus: 'pending',
-					nextSyncAt: now,
+					sourceId: canReuse ? source.id : null,
+					pendingSourceId: canReuse ? null : source.id,
+					siteUrl: canReuse ? currentSource?.siteUrl : null,
+					faviconUrl: canReuse ? currentSource?.imageUrl : null,
+					description: canReuse ? currentSource?.description : null,
+					lastSyncedAt: canReuse ? currentSource?.lastSuccessAt : null,
+					syncStatus: canReuse ? 'idle' : 'pending',
+					nextSyncAt: canReuse ? (currentSource?.nextFetchAt ?? now) : now,
 					createdAt: now,
 					updatedAt: now,
 				})
@@ -106,6 +149,30 @@ export class DurableFeedFacadeService {
 					updatedAt: now,
 				})
 				.run();
+			if (canReuse && reusableSnapshot?.jobId) {
+				tx.insert(feedRefreshRequestItems)
+					.values({
+						id: crypto.randomUUID(),
+						requestId,
+						feedId: feed.id,
+						sourceId: source.id,
+						jobId: reusableSnapshot.jobId,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.run();
+				tx.insert(feedSnapshotDeliveries)
+					.values({
+						id: crypto.randomUUID(),
+						snapshotId: reusableSnapshot.id,
+						feedId: feed.id,
+						availableAt: now,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.run();
+				return { feed, requestId, jobId: reusableSnapshot.jobId };
+			}
 			const job = enqueueOrAttachDurableJob(tx, source, 100, now);
 			tx.insert(feedRefreshRequestItems)
 				.values({

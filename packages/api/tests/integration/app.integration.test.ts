@@ -1590,6 +1590,33 @@ describe('API integration', () => {
 			expect(await delivery.drainOnce('v2-api-delivery', { limit: 10 })).toBe(2);
 			expect(await db.select().from(articles)).toHaveLength(2);
 
+			const deleted = await v2AuthedRequest(
+				`/api/v1/feeds/${firstCreate.body.data.id}`,
+				firstToken,
+				{ method: 'DELETE' },
+			);
+			expect(deleted.response.status).toBe(200);
+			const resubscribed = await v2AuthedRequest('/api/v1/feeds', firstToken, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: firstCategory.body.data.id,
+					feedUrl: publisher.url,
+				}),
+			});
+			expect(resubscribed.response.status).toBe(201);
+			expect(resubscribed.body.data).toMatchObject({
+				title: 'Durable publisher',
+				syncStatus: 'idle',
+				lifecycleStatus: 'active',
+				pendingSourceId: null,
+			});
+			expect(resubscribed.body.data.sourceId).toBeTruthy();
+			expect(publisher.requestCount).toBe(1);
+			expect(await worker.drainOnce()).toBe(0);
+			expect(await delivery.drainOnce('v2-api-reuse-delivery', { limit: 10 })).toBe(1);
+			expect(await db.select().from(articles)).toHaveLength(2);
+			expect(publisher.requestCount).toBe(1);
+
 			const idempotencyHeaders = { 'Idempotency-Key': 'durable-refresh-1' };
 			const queued = await v2AuthedRequest('/api/v1/feeds/sync', firstToken, {
 				method: 'POST',
