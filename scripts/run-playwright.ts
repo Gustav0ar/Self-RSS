@@ -34,6 +34,9 @@ try {
 		PLAYWRIGHT_BASE_URL: `http://127.0.0.1:${webPort}`,
 		PLAYWRIGHT_API_BASE_URL: `http://127.0.0.1:${apiPort}/api/v1`,
 		PLAYWRIGHT_RELAY_BLOCKED_FEED_URL: `http://127.0.0.1:${blockedFeedPort}/feed.xml`,
+		// CI and local E2E exercise the production ingestion path by default.
+		// A dedicated override remains available for explicit rollback diagnostics.
+		FEED_PIPELINE_MODE: process.env.PLAYWRIGHT_FEED_PIPELINE_MODE ?? 'v2',
 		FEED_ALLOW_PRIVATE_HOSTS: 'true',
 		FEED_FETCH_RELAY_URL: `http://127.0.0.1:${relayPort}/videocardz/rss-feed`,
 		FEED_FETCH_RELAY_TOKEN: relayToken,
@@ -53,6 +56,13 @@ try {
 		env,
 	});
 	await waitForHttp(`http://127.0.0.1:${apiPort}/health`);
+	const readiness = await fetch(`http://127.0.0.1:${apiPort}/ready`);
+	const readinessBody = (await readiness.json()) as { feedPipelineMode?: string };
+	if (!readiness.ok || readinessBody.feedPipelineMode !== env.FEED_PIPELINE_MODE) {
+		throw new Error(
+			`E2E API did not start in the requested feed pipeline mode: ${JSON.stringify(readinessBody)}`,
+		);
+	}
 
 	workerProcess = spawnBackground('bun', ['run', '--filter', '@self-feed/api', 'start:worker'], {
 		cwd: rootDir,

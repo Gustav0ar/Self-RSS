@@ -91,6 +91,48 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
+interface DurableRefreshStatus {
+	requestId: string;
+	status: 'pending' | 'running' | 'completed' | 'completed_with_errors';
+	active: boolean;
+	items: Array<{
+		status: string;
+		nextEligibleAt: string | null;
+		publisherRequestStarted: boolean;
+	}>;
+}
+
+async function readDurableRefreshStatus(
+	request: APIRequestContext,
+	authHeaders: Record<string, string>,
+	requestId: string,
+) {
+	const response = await request.get(
+		`${apiBaseUrl}/feeds/sync/status?requestId=${encodeURIComponent(requestId)}`,
+		{ headers: authHeaders },
+	);
+	if (!response.ok()) return null;
+	return ((await response.json()) as { data: DurableRefreshStatus }).data;
+}
+
+async function waitForDurableRefreshCompletion(
+	request: APIRequestContext,
+	authHeaders: Record<string, string>,
+	requestId: string,
+) {
+	let latest: DurableRefreshStatus | null = null;
+	await expect
+		.poll(
+			async () => {
+				latest = await readDurableRefreshStatus(request, authHeaders, requestId);
+				return latest?.status ?? 'unavailable';
+			},
+			{ timeout: 30_000, intervals: [100, 250, 500, 1_000] },
+		)
+		.toMatch(/^completed/);
+	return latest!;
+}
+
 async function visibleArticleTitleOrder(page: Page, titles: string[]) {
 	const rowTexts = await page
 		.locator('[data-article-id]')
@@ -417,15 +459,14 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 		});
 		expect(stalledFeedResponse.ok()).toBeTruthy();
 		const stalledFeed = await stalledFeedResponse.json();
-		const stalledInitialSync = await request.post(
-			`${apiBaseUrl}/feeds/${stalledFeed.data.id}/sync`,
-			{ headers: authHeaders },
+		expect(stalledFeed.data.lifecycleStatus).toBe('pending');
+		expect(stalledFeed.data.ingestionRequestId).toBeTruthy();
+		await waitForDurableRefreshCompletion(
+			request,
+			authHeaders,
+			stalledFeed.data.ingestionRequestId,
 		);
-		expect(stalledInitialSync.ok()).toBeTruthy();
 		expect(stalledFeedServer.getRequestCount()).toBe(1);
-		// Give this feed the earlier cooldown expiry so it is claimed before the
-		// healthy source when the delayed queue resumes the refresh.
-		await page.waitForTimeout(1_200);
 
 		const feedResponse = await request.post(`${apiBaseUrl}/feeds`, {
 			headers: authHeaders,
@@ -437,11 +478,9 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 		});
 		expect(feedResponse.ok()).toBeTruthy();
 		const feed = await feedResponse.json();
-
-		const initialSyncResponse = await request.post(`${apiBaseUrl}/feeds/${feed.data.id}/sync`, {
-			headers: authHeaders,
-		});
-		expect(initialSyncResponse.ok()).toBeTruthy();
+		expect(feed.data.lifecycleStatus).toBe('pending');
+		expect(feed.data.ingestionRequestId).toBeTruthy();
+		await waitForDurableRefreshCompletion(request, authHeaders, feed.data.ingestionRequestId);
 		expect(feedServer.getRequestCount()).toBe(1);
 		stalledFeedServer.setHanging(true);
 
@@ -470,29 +509,45 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 				response.status() === 202,
 		);
 		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-		await refreshResponse;
+		const acceptedRefresh = await refreshResponse;
+		const acceptedRefreshBody = (await acceptedRefresh.json()) as {
+			data: { requestId: string };
+		};
+		expect(acceptedRefreshBody.data.requestId).toBeTruthy();
 
-		// Feed creation prefetches the source and the first sync consumes that body.
-		// An immediate manual refresh must not issue a second publisher request.
-		await expect.poll(() => feedServer.getRequestCount()).toBe(1);
-		await expect.poll(() => stalledFeedServer.getRequestCount()).toBe(1);
-		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
+		let cooldownStatus: DurableRefreshStatus | null = null;
+		await expect
+			.poll(
+				async () => {
+					cooldownStatus = await readDurableRefreshStatus(
+						request,
+						authHeaders,
+						acceptedRefreshBody.data.requestId,
+					);
+					return cooldownStatus?.items.length === 2 &&
+						cooldownStatus.items.every(
+							(item) =>
+								item.status === 'pending' && item.nextEligibleAt && !item.publisherRequestStarted,
+						)
+						? 'cooldown-protected'
+						: 'waiting';
+				},
+				{ timeout: 15_000, intervals: [100, 250, 500, 1_000] },
+			)
+			.toBe('cooldown-protected');
 
-		// Publisher-safe refreshes keep a fifteen-minute cooldown. Repeated user actions
-		// complete without contacting either publisher again or keeping the UI blocked.
-		await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeEnabled();
-		const retryResponse = page.waitForResponse(
-			(response) =>
-				response.url().includes('/api/v1/feeds/sync') &&
-				response.request().method() === 'POST' &&
-				response.status() === 202,
-		);
-		await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-		await retryResponse;
-		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
+		// The durable status is the source of truth: both jobs remain queued until
+		// their publisher-safe next-eligible time, so the refresh does not hammer either source.
+		expect(cooldownStatus!.active).toBe(true);
+		expect(
+			cooldownStatus!.items.every(
+				(item) => item.nextEligibleAt && Date.parse(item.nextEligibleAt) > Date.now(),
+			),
+		).toBe(true);
 		expect(feedServer.getRequestCount()).toBe(1);
 		expect(stalledFeedServer.getRequestCount()).toBe(1);
-		await expect(page.getByText('Loading new articles')).toHaveCount(0);
+		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
+		await expect(page.getByText('Refresh queued')).toBeVisible();
 	} finally {
 		await Promise.all([stalledFeedServer.stop(), feedServer.stop()]);
 	}

@@ -58,6 +58,31 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
+async function submitQueuedFeed(page: Page, expectedLifecycle: 'pending' | 'active' = 'pending') {
+	const createResponse = page.waitForResponse((response) => {
+		const url = new URL(response.url());
+		return (
+			url.pathname === '/api/v1/feeds' &&
+			response.request().method() === 'POST' &&
+			response.status() === 201
+		);
+	});
+	await page.getByRole('button', { name: 'Add feed' }).last().click();
+	const response = await createResponse;
+	const body = (await response.json()) as {
+		data: { lifecycleStatus?: string; ingestionRequestId?: string | null };
+	};
+	expect(body.data.lifecycleStatus).toBe(expectedLifecycle);
+	expect(body.data.ingestionRequestId).toBeTruthy();
+	await expect(
+		page.getByText(
+			expectedLifecycle === 'pending' ? /Validation is queued/ : 'Feed added successfully.',
+		),
+	).toBeVisible();
+	await page.getByRole('button', { name: 'Done' }).click();
+	return body.data;
+}
+
 test.describe.configure({ mode: 'serial' });
 
 test('user can register and sign out', async ({ page }) => {
@@ -133,6 +158,7 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 });
 
 test('reader can manage categories and feeds from the sidebar', async ({ page }) => {
+	test.setTimeout(90_000);
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 	const appOrigin = new URL(page.url()).origin;
 	const categoryName = `Daily ${Date.now()}`;
@@ -154,13 +180,11 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/devtools.xml`);
 	await page.getByLabel('Feed category').selectOption({ label: renamedCategory });
-	await page.getByRole('button', { name: 'Add feed' }).last().click();
-	await expect(page.getByText('Feed added successfully.')).toBeVisible();
-	await page.getByRole('button', { name: 'Done' }).click();
+	await submitQueuedFeed(page);
 	await page.getByRole('button', { name: new RegExp(`^${renamedCategory}$`) }).click();
-	await expect(
-		page.getByRole('button', { name: unreadBadgeName('DevTools Digest') }),
-	).toBeVisible();
+	await expect(page.getByRole('button', { name: unreadBadgeName('DevTools Digest') })).toBeVisible({
+		timeout: 30_000,
+	});
 	await page.getByRole('button', { name: unreadBadgeName('DevTools Digest') }).click();
 	await expect(page.getByRole('button', { name: /Inspector improvements/ })).toBeVisible();
 
@@ -178,11 +202,29 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/devtools.xml`);
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/platform.xml`);
 	await page.getByLabel('Custom name (optional)').fill('My DevTools');
+	const replacementResponse = page.waitForResponse(
+		(response) =>
+			response.url().includes('/api/v1/feeds/') &&
+			response.request().method() === 'PATCH' &&
+			response.status() === 200,
+	);
 	await page.getByRole('button', { name: 'Save changes' }).click();
-	await expect(page.getByRole('button', { name: unreadBadgeName('My DevTools') })).toBeVisible();
-	await page.getByRole('button', { name: 'Edit My DevTools' }).click();
-	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/platform.xml`);
-	await page.getByRole('button', { name: 'Cancel' }).click();
+	const replacementBody = (await (await replacementResponse).json()) as {
+		data: { lifecycleStatus?: string; ingestionRequestId?: string | null };
+	};
+	expect(replacementBody.data.lifecycleStatus).toBe('replacement_pending');
+	expect(replacementBody.data.ingestionRequestId).toBeTruthy();
+	await expect(
+		page.getByText(
+			'Replacement validation is queued; the current source remains active until validation succeeds.',
+		),
+	).toBeVisible();
+	await page.getByRole('button', { name: 'Done' }).click();
+	const replacementFeedButton = page.getByRole('button', { name: unreadBadgeName('My DevTools') });
+	await expect(replacementFeedButton).toBeVisible();
+	await expect(page.getByRole('button', { name: /Platform release notes/ })).toBeVisible({
+		timeout: 30_000,
+	});
 
 	await page.getByRole('button', { name: 'Delete My DevTools' }).click();
 	await page.getByRole('button', { name: 'Delete' }).last().click();
@@ -325,18 +367,16 @@ test('reader can add and read a feed through the authenticated fallback relay', 
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(blockedFeedUrl!);
 	await page.getByLabel('Feed category').selectOption({ label: categoryName });
-	await page.getByRole('button', { name: 'Add feed' }).last().click();
-	await expect(page.getByText('Feed added successfully')).toBeVisible();
-	await page.getByRole('button', { name: 'Done' }).click();
+	await submitQueuedFeed(page);
 
-	await page.getByRole('button', { name: new RegExp(`^${categoryName}$`) }).click();
+	await page.getByRole('button', { name: unreadBadgeName(categoryName) }).click();
 	const feedButton = page.getByRole('button', { name: unreadBadgeName('Relay Hardware News') });
-	await expect(feedButton).toBeVisible();
+	await expect(feedButton).toBeVisible({ timeout: 30_000 });
 	await feedButton.click();
 	await expect(page.getByRole('button', { name: /Relay fallback article/ })).toBeVisible();
 });
 
-test('user can refresh a feed, see unread badges update, and load older articles on scroll', async ({
+test('user sees unread badges, respects publisher cooldown, and loads older articles on scroll', async ({
 	page,
 }) => {
 	const email = `scroll-${Date.now()}@example.com`;
@@ -353,17 +393,15 @@ test('user can refresh a feed, see unread badges update, and load older articles
 	await page.getByRole('button', { name: 'Add Category' }).click();
 	await page.getByLabel('Name').fill(categoryName);
 	await page.getByRole('button', { name: 'Add category' }).last().click();
-	await page.getByRole('button', { name: new RegExp(`^${categoryName}$`) }).click();
+	await page.getByRole('button', { name: unreadBadgeName(categoryName) }).click();
 
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/infinite-scroll.xml`);
 	await page.getByLabel('Feed category').selectOption({ label: categoryName });
-	await page.getByRole('button', { name: 'Add feed' }).last().click();
-	await expect(page.getByText('Feed added successfully.')).toBeVisible();
-	await page.getByRole('button', { name: 'Done' }).click();
+	await submitQueuedFeed(page);
 
 	const feedButton = page.getByRole('button', { name: unreadBadgeName('Infinite Scroll Digest') });
-	await expect(feedButton).toBeVisible();
+	await expect(feedButton).toBeVisible({ timeout: 30_000 });
 	await feedButton.click();
 
 	await expect(
@@ -380,15 +418,7 @@ test('user can refresh a feed, see unread badges update, and load older articles
 	await expect(feedButton).toContainText('34');
 	await expect(page.getByRole('button', { name: /All Feeds/ })).toContainText('34');
 
-	const refreshPromise = page.waitForResponse(
-		(res) => res.url().includes('/api/v1/articles') && res.status() === 200,
-	);
-	await page.getByRole('button', { name: 'Refresh' }).click();
-	await refreshPromise;
-
-	await expect(
-		page.getByRole('button', { name: articleTitleName('Infinite Story 35') }),
-	).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeDisabled();
 
 	await page.getByTestId('article-list-scroll').evaluate((element) => {
 		element.scrollTop = element.scrollHeight;
@@ -415,13 +445,11 @@ test('reader sees the category delete warning for linked feeds and can import OP
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/platform.xml`);
 	await page.getByLabel('Feed category').selectOption({ label: categoryName });
-	await page.getByRole('button', { name: 'Add feed' }).last().click();
-	await expect(page.getByText('Feed added successfully.')).toBeVisible();
-	await page.getByRole('button', { name: 'Done' }).click();
-	await page.getByRole('button', { name: new RegExp(`^${categoryName}$`) }).click();
-	await expect(
-		page.getByRole('button', { name: unreadBadgeName('Platform Weekly') }),
-	).toBeVisible();
+	await submitQueuedFeed(page, 'active');
+	await page.getByRole('button', { name: unreadBadgeName(categoryName) }).click();
+	await expect(page.getByRole('button', { name: unreadBadgeName('Platform Weekly') })).toBeVisible({
+		timeout: 30_000,
+	});
 
 	await page.getByRole('button', { name: `Delete ${categoryName}` }).click();
 	await expect(
