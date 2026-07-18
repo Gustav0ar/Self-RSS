@@ -1913,6 +1913,92 @@ describe('durable feed ingestion persistence', () => {
 		expect(changed?.normalizedPayloadHash).not.toBe(first?.normalizedPayloadHash);
 	});
 
+	it('keeps relayed snapshots and relative links based on the publisher URL', async () => {
+		const { db, repository } = await setupDatabase();
+		const now = new Date('2026-07-18T00:00:00Z');
+		const relayToken = 'relay-token-with-more-than-thirty-two-characters';
+		const publisherServer = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: () => new Response('Publisher blocked this address', { status: 403 }),
+		});
+		servers.push(publisherServer);
+		let relayAuthorization: string | null = null;
+		let relayTarget: string | null = null;
+		const relayServer = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				relayAuthorization = request.headers.get('authorization');
+				relayTarget = request.headers.get('x-self-feed-target');
+				return new Response(
+					'<rss version="2.0"><channel><title>Relayed publisher</title><link>/home</link><item><guid>one</guid><title>One</title><link>/articles/one</link></item></channel></rss>',
+					{
+						headers: {
+							'content-type': 'application/rss+xml',
+							'x-self-feed-relay': 'generic',
+						},
+					},
+				);
+			},
+		});
+		servers.push(relayServer);
+		const publisherPort = publisherServer.port;
+		const relayPort = relayServer.port;
+		if (!publisherPort || !relayPort) throw new Error('Relay test servers did not start');
+		const publisherUrl = `http://127.0.0.1:${publisherPort}/feeds/main.xml`;
+		const relayUrl = `http://127.0.0.1:${relayPort}/feed`;
+		const origin = await repository.upsertOrigin({
+			id: 'relay-origin',
+			scheme: 'http',
+			host: '127.0.0.1',
+			port: publisherPort,
+		});
+		const source = await repository.upsertSource({
+			id: 'relay-source',
+			normalizedUrl: publisherUrl,
+			requestedUrl: publisherUrl,
+			originId: origin.id,
+			nextFetchAt: now,
+		});
+		await repository.enqueueJob({
+			id: 'relay-job',
+			sourceId: source.id,
+			originId: origin.id,
+			availableAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'relay-worker',
+			originStartGapSeconds: 0,
+			allowPrivateHosts: true,
+			now: () => now,
+			relay: { relayUrl, relayToken },
+		});
+		expect(await worker.drainOnce()).toBe(1);
+
+		const snapshot = await db.query.feedFetchSnapshots.findFirst({
+			where: (row, { eq }) => eq(row.sourceId, source.id),
+		});
+		expect(snapshot?.finalUrl).toBe(publisherUrl);
+		expect(snapshot?.finalUrl).not.toBe(relayUrl);
+		const normalized = JSON.parse(snapshot!.normalizedPayload!) as {
+			source: { siteUrl: string | null };
+			items: Array<{ canonicalUrl: string | null }>;
+		};
+		expect(normalized.source.siteUrl).toBe(`http://127.0.0.1:${publisherPort}/home`);
+		expect(normalized.items[0]?.canonicalUrl).toBe(
+			`http://127.0.0.1:${publisherPort}/articles/one`,
+		);
+		expect(
+			await db.query.feedSources.findFirst({ where: (row, { eq }) => eq(row.id, source.id) }),
+		).toMatchObject({ resolvedUrl: publisherUrl });
+		expect(relayAuthorization).toBe(`Bearer ${relayToken}`);
+		expect(relayTarget).toBe(publisherUrl);
+	});
+
 	it('pauses and opens the source circuit on a permanent parse threshold without penalizing origin', async () => {
 		const { db, repository } = await setupDatabase();
 		const now = new Date('2026-07-18T00:00:00Z');

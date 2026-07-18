@@ -22,6 +22,11 @@ const RELAY_REQUEST_HEADERS = [
 	'if-none-match',
 	'pragma',
 ] as const;
+const relayPublisherTargets = new WeakMap<Response, string>();
+
+export function publisherTargetForRelayResponse(response: Response) {
+	return relayPublisherTargets.get(response);
+}
 
 function canUseRelay(config: FeedFetchRelayConfig) {
 	return Boolean(config.relayUrl && config.relayToken);
@@ -69,6 +74,7 @@ export async function fetchFeedWithRelayFallback(
 			cancelResponseBody(relayResponse);
 			throw new Error('configured relay does not support generic feed targets');
 		}
+		relayPublisherTargets.set(relayResponse, input);
 		return relayResponse;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

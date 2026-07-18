@@ -1,12 +1,105 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { selectFeedPipelineWorkers } from '../../src/jobs/durable-ingestion-runtime.js';
-import { classifyNetworkError } from '../../src/services/durable-feed-worker.js';
+import { createDurableFeedFetcher } from '../../src/services/durable-feed-fetcher.js';
 import {
 	runNonOverlappingLoop,
 	withLeaseHeartbeat,
 } from '../../src/services/durable-worker-loop.js';
+import { classifyNetworkError } from '../../src/services/feed-network-error.js';
+import { publisherTargetForRelayResponse } from '../../src/utils/feed-fetch-relay.js';
 
 describe('durable worker core', () => {
+	it('uses the authenticated relay after a direct publisher block', async () => {
+		const relayFetch = vi.fn(
+			async (_input: string | URL | Request, _init?: RequestInit) =>
+				new Response('<rss />', { headers: { 'X-Self-Feed-Relay': 'generic' } }),
+		);
+		const fetcher = createDurableFeedFetcher(
+			{
+				relayUrl: 'https://relay.example/feed',
+				relayToken: 'relay-token-with-more-than-thirty-two-characters',
+			},
+			{
+				directFetch: vi.fn(async () => new Response(null, { status: 403 })) as never,
+				relayFetch: relayFetch as never,
+			},
+		);
+
+		const response = await fetcher(
+			'https://publisher.example/feed.xml',
+			{ headers: { 'If-None-Match': '"feed-v1"' } },
+			{ allowPrivateHosts: false, maxRedirects: 3 },
+		);
+
+		expect(response.status).toBe(200);
+		expect(relayFetch).toHaveBeenCalledOnce();
+		const headers = new Headers(relayFetch.mock.calls[0]?.[1]?.headers);
+		expect(headers.get('x-self-feed-target')).toBe('https://publisher.example/feed.xml');
+		expect(headers.get('if-none-match')).toBe('"feed-v1"');
+	});
+
+	it('rejects a fixed-upstream relay response for a generic durable source', async () => {
+		const fetcher = createDurableFeedFetcher(
+			{
+				relayUrl: 'https://relay.example/videocardz/rss-feed',
+				relayToken: 'relay-token-with-more-than-thirty-two-characters',
+			},
+			{
+				directFetch: vi.fn(async () => new Response(null, { status: 403 })) as never,
+				relayFetch: vi.fn(async () => new Response('<rss />')) as never,
+			},
+		);
+
+		await expect(
+			fetcher(
+				'https://publisher.example/feed.xml',
+				{},
+				{ allowPrivateHosts: false, maxRedirects: 3 },
+			),
+		).rejects.toThrow('configured relay does not support generic feed targets');
+	});
+
+	it('keeps publisher rate limiting on the direct durable path', async () => {
+		const relayFetch = vi.fn();
+		const rateLimited = new Response(null, {
+			status: 429,
+			headers: { 'Retry-After': '900' },
+		});
+		const fetcher = createDurableFeedFetcher(
+			{
+				relayUrl: 'https://relay.example/feed',
+				relayToken: 'relay-token-with-more-than-thirty-two-characters',
+			},
+			{
+				directFetch: vi.fn(async () => rateLimited) as never,
+				relayFetch: relayFetch as never,
+			},
+		);
+
+		const response = await fetcher(
+			'https://publisher.example/feed.xml',
+			{},
+			{ allowPrivateHosts: false, maxRedirects: 3 },
+		);
+
+		expect(response).toBe(rateLimited);
+		expect(response.headers.get('retry-after')).toBe('900');
+		expect(relayFetch).not.toHaveBeenCalled();
+	});
+
+	it('does not trust a publisher-supplied relay marker', async () => {
+		const directResponse = new Response('<rss />', {
+			headers: { 'X-Self-Feed-Relay': 'generic' },
+		});
+		const response = await createDurableFeedFetcher(
+			{},
+			{ directFetch: vi.fn(async () => directResponse) as never },
+		)('https://publisher.example/feed.xml', {}, { allowPrivateHosts: false, maxRedirects: 3 });
+
+		expect(response).toBe(directResponse);
+		expect(publisherTargetForRelayResponse(response)).toBeUndefined();
+	});
+
 	it('selects exactly one publisher pipeline for every supported rollout mode', () => {
 		expect(selectFeedPipelineWorkers('legacy')).toEqual({
 			legacyPublisherWorkers: true,

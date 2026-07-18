@@ -22,6 +22,9 @@ export function startDurableIngestionRuntime(
 		maxContentLength: number;
 		concurrency: number;
 		allowPrivateHosts: boolean;
+		relayUrl?: string;
+		relayToken?: string;
+		allowedRelayHosts?: readonly string[];
 		contact?: string;
 		historyRetentionDays: number;
 		cleanupBatchSize: number;
@@ -35,6 +38,11 @@ export function startDurableIngestionRuntime(
 		requestTimeoutMs: options.timeoutMs,
 		maxBodyBytes: options.maxContentLength,
 		allowPrivateHosts: options.allowPrivateHosts,
+		relay: {
+			relayUrl: options.relayUrl,
+			relayToken: options.relayToken,
+			allowedHosts: options.allowedRelayHosts,
+		},
 		contact: options.contact,
 		handleDiscovery: (input) => deps.services.durableFeed.persistDiscoveryCandidates(input),
 		telemetry,

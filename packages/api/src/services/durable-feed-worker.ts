@@ -1,5 +1,8 @@
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
 import { cancelResponseBody, readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
+import { publisherTargetForRelayResponse } from '../utils/feed-fetch-relay.js';
+import { createDurableFeedFetcher } from './durable-feed-fetcher.js';
 import type { DurablePublisherOutcome } from './durable-ingestion-ops.types.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
 import {
@@ -11,9 +14,10 @@ import {
 	type FetchFailureKind,
 	parseRetryAfter,
 } from './feed-fetch-outcome-policy.js';
+import { classifyNetworkError } from './feed-network-error.js';
 import { computeNextFetchAt } from './feed-next-fetch-policy.js';
 import { FeedSnapshotParserService } from './feed-snapshot-parser.service.js';
-import { fetchSourceSafely } from './feed-source-request.js';
+import type { fetchSourceSafely } from './feed-source-request.js';
 import type { NormalizedFeedPayload } from './normalized-feed.types.js';
 import { NormalizedFeedParseError } from './normalized-feed-parser.js';
 
@@ -60,6 +64,7 @@ export interface DurableFeedWorkerOptions {
 	allowPrivateHosts?: boolean;
 	contact?: string;
 	fetch?: typeof fetchSourceSafely;
+	relay?: FeedFetchRelayConfig;
 	now?: () => Date;
 	afterRawPersisted?: (snapshotId: string) => void | Promise<void>;
 	parseSnapshot?: (snapshotId: string, now: Date) => Promise<NormalizedFeedPayload>;
@@ -80,6 +85,7 @@ export class DurableFeedWorker {
 	private readonly workerId: string;
 	private readonly networkConcurrency: number;
 	private readonly snapshotParser: FeedSnapshotParserService;
+	private readonly fetchSource: typeof fetchSourceSafely;
 
 	constructor(
 		private repository: FeedIngestionRepository,
@@ -88,6 +94,7 @@ export class DurableFeedWorker {
 		this.workerId = options.workerId ?? `durable-feed-${crypto.randomUUID()}`;
 		this.networkConcurrency = Math.max(1, Math.floor(options.networkConcurrency ?? 4));
 		this.snapshotParser = new FeedSnapshotParserService(repository);
+		this.fetchSource = options.fetch ?? createDurableFeedFetcher(options.relay);
 	}
 
 	async drainOnce(signal?: AbortSignal) {
@@ -182,15 +189,15 @@ export class DurableFeedWorker {
 			if (this.options.contact) {
 				headers.set('user-agent', `Self-Feed/1.0; contact=${this.options.contact.trim()}`);
 			}
-			const fetchImpl = this.options.fetch ?? fetchSourceSafely;
 			publisherRequestStarted = true;
 			try {
 				this.options.telemetry?.recordPublisherRequest();
 			} catch {
 				// Telemetry must never alter publisher work.
 			}
-			const response = await fetchImpl(
-				claim.source.resolvedUrl ?? claim.source.requestedUrl,
+			const publisherRequestUrl = claim.source.resolvedUrl ?? claim.source.requestedUrl;
+			const response = await this.fetchSource(
+				publisherRequestUrl,
 				{ method: 'GET', headers, signal: requestController.signal },
 				{
 					allowPrivateHosts: this.options.allowPrivateHosts ?? false,
@@ -234,12 +241,14 @@ export class DurableFeedWorker {
 			);
 			recordPublisherOutcome('success');
 			clearTimeout(requestTimeout);
+			const finalPublisherUrl =
+				(publisherTargetForRelayResponse(response) ?? response.url) || publisherRequestUrl;
 			const snapshotId = crypto.randomUUID();
 			await this.snapshotParser.persistRawResponse({
 				id: snapshotId,
 				sourceId: claim.source.id,
 				jobId: claim.job.id,
-				finalUrl: response.url || claim.source.requestedUrl,
+				finalUrl: finalPublisherUrl,
 				status: response.status,
 				body,
 				headers: response.headers,
@@ -251,17 +260,19 @@ export class DurableFeedWorker {
 				throw new RawSnapshotPersistedCrash(error);
 			}
 			if (this.isHtml(response.headers.get('content-type'), body) && this.options.handleDiscovery) {
-				await this.completeDiscovery(
-					claim,
-					snapshotId,
-					response.url || claim.source.requestedUrl,
-					body,
-					now,
-				);
+				await this.completeDiscovery(claim, snapshotId, finalPublisherUrl, body, now);
 				return;
 			}
 			const parsed = await parserSemaphore.run(() => this.parseSnapshot(snapshotId, now));
-			await this.completeParsed(claim, parsed, response.status, now, forceUnconditional, response);
+			await this.completeParsed(
+				claim,
+				parsed,
+				response.status,
+				now,
+				forceUnconditional,
+				response,
+				finalPublisherUrl,
+			);
 		} catch (error) {
 			if (publisherRequestStarted && !publisherOutcomeRecorded) {
 				recordPublisherOutcome(
@@ -291,6 +302,7 @@ export class DurableFeedWorker {
 		now: Date,
 		unconditional: boolean,
 		response?: Response,
+		finalPublisherUrl?: string,
 	) {
 		const changed = parsed.normalizedPayloadHash !== claim.source.normalizedPayloadHash;
 		const unchangedCount = changed ? 0 : claim.source.consecutiveUnchangedCount + 1;
@@ -310,7 +322,7 @@ export class DurableFeedWorker {
 			{
 				status: 'completed',
 				source: {
-					resolvedUrl: response?.url || claim.source.resolvedUrl,
+					resolvedUrl: (finalPublisherUrl ?? response?.url) || claim.source.resolvedUrl,
 					title: parsed.source.title,
 					siteUrl: parsed.source.siteUrl,
 					description: parsed.source.description,
@@ -629,18 +641,4 @@ export class DurableFeedWorker {
 			/<html\b|<!doctype\s+html/i.test(body.slice(0, 2_048))
 		);
 	}
-}
-
-export function classifyNetworkError(error: unknown): FetchFailureKind {
-	const values: string[] = [];
-	let current: unknown = error;
-	for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
-		const item = current as { code?: unknown; message?: unknown; cause?: unknown };
-		values.push(String(item.code ?? ''), String(item.message ?? ''));
-		current = item.cause;
-	}
-	const description = values.join(' ');
-	if (/ENOTFOUND|EAI_AGAIN|DNS|name.*resolv/i.test(description)) return 'dns';
-	if (/TLS|CERT|SSL|certificate|handshake/i.test(description)) return 'tls';
-	return 'network';
 }
