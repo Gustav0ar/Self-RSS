@@ -583,7 +583,7 @@ describe('FeedSyncService', () => {
 			'feed:sync:lock:feed-1',
 			expect.any(String),
 			'EX',
-			120,
+			900,
 			'NX',
 		);
 		expect(syncRunRepo.create).not.toHaveBeenCalled();
@@ -598,7 +598,7 @@ describe('FeedSyncService', () => {
 		vi.useRealTimers();
 	});
 
-	it('uses a URL-scoped lock and retains it for a two-minute fetch cooldown', async () => {
+	it('uses a URL-scoped lock and retains it for a fifteen-minute fetch cooldown', async () => {
 		const redis = {
 			set: vi.fn(async (..._args: unknown[]) => 'OK'),
 			eval: vi.fn(async () => 1),
@@ -607,25 +607,25 @@ describe('FeedSyncService', () => {
 		const [lockKey, ownerToken] = redis.set.mock.calls[0]!;
 
 		expect(lockKey).toMatch(/^feed:fetch:lock:[a-f0-9]{64}$/);
-		expect(redis.set).toHaveBeenCalledWith(lockKey, ownerToken, 'EX', 120, 'NX');
+		expect(redis.set).toHaveBeenCalledWith(lockKey, ownerToken, 'EX', 900, 'NX');
 		await release?.();
 		expect(redis.eval).toHaveBeenLastCalledWith(
 			expect.stringContaining('EXPIRE'),
 			1,
 			lockKey,
 			ownerToken,
-			'120',
+			'900',
 		);
 	});
 
-	it('skips a manual feed refresh completed less than two minutes ago before acquiring locks', async () => {
+	it('skips a manual feed refresh completed less than fifteen minutes ago before acquiring locks', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const feedRepo = {
 			findById: vi.fn(async () => ({
 				id: 'feed-1',
 				feedUrl: 'https://example.com/feed.xml',
-				lastSyncedAt: new Date('2026-06-21T11:58:01.000Z'),
+				lastSyncedAt: new Date('2026-06-21T11:45:01.000Z'),
 			})),
 		};
 		const redis = { set: vi.fn(async () => 'OK') };
@@ -644,19 +644,19 @@ describe('FeedSyncService', () => {
 		);
 
 		await expect(
-			service.syncFeed('feed-1', 'user-1', { skipIfSyncedWithinMs: 120_000 }),
+			service.syncFeed('feed-1', 'user-1', { skipIfSyncedWithinMs: 15 * 60_000 }),
 		).resolves.toEqual({ newArticles: 0, total: 0, skipped: true });
 		expect(redis.set).not.toHaveBeenCalled();
 	});
 
-	it('allows a manual feed refresh at the two-minute boundary', async () => {
+	it('allows a manual feed refresh at the fifteen-minute boundary', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
 		const feedRepo = {
 			findById: vi.fn(async () => ({
 				id: 'feed-1',
 				feedUrl: 'https://example.com/feed.xml',
-				lastSyncedAt: new Date('2026-06-21T11:58:00.000Z'),
+				lastSyncedAt: new Date('2026-06-21T11:45:00.000Z'),
 			})),
 		};
 		const redis = { set: vi.fn(async () => null) };
@@ -674,7 +674,7 @@ describe('FeedSyncService', () => {
 			},
 		);
 
-		await service.syncFeed('feed-1', 'user-1', { skipIfSyncedWithinMs: 120_000 });
+		await service.syncFeed('feed-1', 'user-1', { skipIfSyncedWithinMs: 15 * 60_000 });
 
 		expect(redis.set).toHaveBeenCalled();
 	});
@@ -1066,35 +1066,32 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
 			deferIfThrottled: true,
 			signal: expect.any(AbortSignal),
-			skipIfSyncedWithinMs: 120_000,
+			skipIfSyncedWithinMs: 15 * 60_000,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-2', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
 			deferIfThrottled: true,
 			signal: expect.any(AbortSignal),
-			skipIfSyncedWithinMs: 120_000,
+			skipIfSyncedWithinMs: 15 * 60_000,
 		});
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-3', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
 			deferIfThrottled: true,
 			signal: expect.any(AbortSignal),
-			skipIfSyncedWithinMs: 120_000,
+			skipIfSyncedWithinMs: 15 * 60_000,
 		});
 		expect(result).toEqual({
 			totalFeeds: 3,
@@ -1105,10 +1102,10 @@ describe('FeedSyncService', () => {
 		});
 	});
 
-	it('runs full refreshes concurrently across different domains', async () => {
+	it('caps full refresh concurrency across twenty different domains', async () => {
 		const feedRepo = {
 			findAllByUser: vi.fn(async () =>
-				Array.from({ length: 6 }, (_, index) => ({
+				Array.from({ length: 20 }, (_, index) => ({
 					id: `feed-${index + 1}`,
 					feedUrl: `https://domain-${index + 1}.example/feed.xml`,
 				})),
@@ -1123,7 +1120,7 @@ describe('FeedSyncService', () => {
 			{
 				timeoutMs: 5_000,
 				maxContentLength: 1_000_000,
-				concurrency: 8,
+				concurrency: 4,
 				allowPrivateHosts: false,
 			},
 		);
@@ -1139,8 +1136,8 @@ describe('FeedSyncService', () => {
 
 		const result = await service.syncAllFeeds('user-1');
 
-		expect(maximumActive).toBe(6);
-		expect(result.syncedFeeds).toBe(6);
+		expect(maximumActive).toBe(4);
+		expect(result.syncedFeeds).toBe(20);
 	});
 
 	it('returns after five minutes and fails feeds that did not complete', async () => {
@@ -1220,13 +1217,12 @@ describe('FeedSyncService', () => {
 		expect(syncFeedSpy).toHaveBeenCalledWith('feed-1', 'user-1', {
 			enrichArticles: true,
 			warmArticleCache: false,
-			forceFetch: true,
 			fetchTimeoutMs: 5_000,
 			fetchMaxRetries: 0,
 			deferScopedCacheCleanup: true,
 			deferIfThrottled: true,
 			signal: expect.any(AbortSignal),
-			skipIfSyncedWithinMs: 120_000,
+			skipIfSyncedWithinMs: 15 * 60_000,
 		});
 		expect(result).toEqual({
 			totalFeeds: 1,
@@ -1526,6 +1522,48 @@ describe('FeedSyncService', () => {
 		);
 	});
 
+	it('sends cached validators without no-cache headers for normal manual fetching', async () => {
+		const redis = {
+			get: vi.fn(async (key: string) => {
+				if (key.startsWith('feed:prefetched:')) return null;
+				if (key.startsWith('feed:etag:')) return '"feed-v2"';
+				if (key.startsWith('feed:lastmod:')) return 'Wed, 15 Jul 2026 12:00:00 GMT';
+				return null;
+			}),
+			set: vi.fn(async () => 'OK'),
+		};
+		const service = new FeedSyncService(
+			{} as never,
+			{} as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			{
+				timeoutMs: 5_000,
+				maxContentLength: 1_000_000,
+				concurrency: 1,
+				allowPrivateHosts: true,
+			},
+		);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: string, init?: RequestInit) => {
+				const headers = new Headers(init?.headers);
+				expect(headers.get('if-none-match')).toBe('"feed-v2"');
+				expect(headers.get('if-modified-since')).toBe('Wed, 15 Jul 2026 12:00:00 GMT');
+				expect(headers.get('cache-control')).toBeNull();
+				expect(headers.get('pragma')).toBeNull();
+				return new Response(null, { status: 304 });
+			}),
+		);
+
+		await (
+			service as unknown as {
+				fetchAndParse: (url: string, ignoreCache: boolean) => Promise<unknown>;
+			}
+		).fetchAndParse('https://example.com/feed.xml', false);
+	});
+
 	it('does not burst-retry a transient feed interruption inside the cooldown window', async () => {
 		const redis = {
 			get: vi.fn(async () => null),
@@ -1660,13 +1698,12 @@ describe('FeedSyncService', () => {
 			expect(call[2]).toEqual({
 				enrichArticles: true,
 				warmArticleCache: false,
-				forceFetch: true,
 				fetchTimeoutMs: 5_000,
 				fetchMaxRetries: 0,
 				deferScopedCacheCleanup: true,
 				deferIfThrottled: true,
 				signal: expect.any(AbortSignal),
-				skipIfSyncedWithinMs: 120_000,
+				skipIfSyncedWithinMs: 15 * 60_000,
 			});
 		}
 

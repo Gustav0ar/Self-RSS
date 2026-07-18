@@ -3,7 +3,7 @@ import type Redis from 'ioredis';
 import { CacheKeys } from '../db/redis.js';
 import { acquireOwnedRedisLock } from './redis-owned-lock.js';
 
-export const FEED_FETCH_COOLDOWN_SECONDS = 2 * 60;
+export const FEED_FETCH_COOLDOWN_SECONDS = 15 * 60;
 
 export interface PrefetchedFeed {
 	text: string;

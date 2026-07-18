@@ -90,7 +90,7 @@ describe('fetchFeedWithRelayFallback', () => {
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 
-	it.each([401, 429])('uses the relay after direct HTTP %s', async (status) => {
+	it('uses the relay after direct HTTP 401', async () => {
 		const relayResponse = new Response('<rss />', { status: 200 });
 		const response = await fetchFeedWithRelayFallback(
 			'https://videocardz.com/rss-feed',
@@ -98,12 +98,37 @@ describe('fetchFeedWithRelayFallback', () => {
 			securityOptions,
 			relayConfig,
 			{
-				directFetch: vi.fn(async () => new Response(null, { status })) as never,
+				directFetch: vi.fn(async () => new Response(null, { status: 401 })) as never,
 				fetchImpl: vi.fn(async () => relayResponse) as never,
 			},
 		);
 
 		expect(response).toBe(relayResponse);
+	});
+
+	it('returns direct HTTP 429 without calling or cancelling through the relay', async () => {
+		const relayFetch = vi.fn();
+		const cancel = vi.fn();
+		const rateLimited = new Response(new ReadableStream({ cancel }), {
+			status: 429,
+			headers: { 'Retry-After': '900' },
+		});
+
+		const response = await fetchFeedWithRelayFallback(
+			'https://videocardz.com/rss-feed',
+			{},
+			securityOptions,
+			relayConfig,
+			{
+				directFetch: vi.fn(async () => rateLimited) as never,
+				fetchImpl: relayFetch as never,
+			},
+		);
+
+		expect(response).toBe(rateLimited);
+		expect(response.headers.get('retry-after')).toBe('900');
+		expect(relayFetch).not.toHaveBeenCalled();
+		expect(cancel).not.toHaveBeenCalled();
 	});
 
 	it('does not relay server failures', async () => {

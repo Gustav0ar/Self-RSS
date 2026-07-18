@@ -10,6 +10,8 @@ import { cancelResponseBody } from './bounded-response.js';
 export interface RemoteFetchSecurityOptions {
 	allowPrivateHosts: boolean;
 	maxRedirects?: number;
+	dnsTimeoutMs?: number;
+	connectTimeoutMs?: number;
 }
 
 type LookupAddressRecord = { address: string; family: number };
@@ -22,6 +24,7 @@ type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
 interface FetchWithValidatedRedirectsDeps {
 	lookupFn?: LookupFn;
 	fetchImpl?: FetchImpl;
+	pinnedFetchImpl?: PinnedFetchImpl;
 }
 
 interface ValidatedRemoteUrl {
@@ -30,6 +33,15 @@ interface ValidatedRemoteUrl {
 }
 
 type PinnedRequestBody = string | Uint8Array | ReadableStream;
+type PinnedFetchImpl = (
+	validated: ValidatedRemoteUrl,
+	address: LookupAddressRecord,
+	init: RequestInit,
+	connectTimeoutMs: number,
+) => Promise<Response>;
+
+const DEFAULT_DNS_TIMEOUT_MS = 3_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 
 function isRedirectStatus(status: number) {
 	return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -112,6 +124,7 @@ async function validateRemoteUrl(
 	options: RemoteFetchSecurityOptions,
 	lookupFn: LookupFn = (hostname, options) =>
 		lookup(hostname, options) as Promise<LookupAddressRecord[]>,
+	signal?: AbortSignal | null,
 ): Promise<ValidatedRemoteUrl> {
 	let url: URL;
 	try {
@@ -137,7 +150,12 @@ async function validateRemoteUrl(
 	const addresses: LookupAddressRecord[] =
 		ipVersion === 4 || ipVersion === 6
 			? [{ address: hostname, family: ipVersion }]
-			: await lookupFn(hostname, { all: true, verbatim: true });
+			: await lookupWithDeadline(
+					hostname,
+					lookupFn,
+					signal,
+					options.dnsTimeoutMs ?? DEFAULT_DNS_TIMEOUT_MS,
+				);
 
 	if (!options.allowPrivateHosts) {
 		if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
@@ -160,13 +178,60 @@ async function validateRemoteUrl(
 	return { url: url.toString(), addresses };
 }
 
+async function lookupWithDeadline(
+	hostname: string,
+	lookupFn: LookupFn,
+	callerSignal: AbortSignal | null | undefined,
+	timeoutMs: number,
+) {
+	callerSignal?.throwIfAborted();
+	const timeoutController = new AbortController();
+	const timeout = setTimeout(
+		() => timeoutController.abort(AppError.badRequest('Remote URL hostname resolution timed out')),
+		Math.max(1, timeoutMs),
+	);
+	const signal = callerSignal
+		? AbortSignal.any([callerSignal, timeoutController.signal])
+		: timeoutController.signal;
+
+	try {
+		return await new Promise<LookupAddressRecord[]>((resolve, reject) => {
+			let settled = false;
+			const finish = (callback: () => void) => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener('abort', onAbort);
+				callback();
+			};
+			const onAbort = () =>
+				finish(() =>
+					reject(
+						signal.reason instanceof Error
+							? signal.reason
+							: new DOMException('The operation was aborted', 'AbortError'),
+					),
+				);
+
+			signal.addEventListener('abort', onAbort, { once: true });
+			lookupFn(hostname, { all: true, verbatim: true }).then(
+				(addresses) => finish(() => resolve(addresses)),
+				(error) => finish(() => reject(error)),
+			);
+			if (signal.aborted) onAbort();
+		});
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 export async function assertSafeRemoteUrl(
 	rawUrl: string,
 	options: RemoteFetchSecurityOptions,
 	lookupFn: LookupFn = (hostname, options) =>
 		lookup(hostname, options) as Promise<LookupAddressRecord[]>,
+	signal?: AbortSignal | null,
 ) {
-	return (await validateRemoteUrl(rawUrl, options, lookupFn)).url;
+	return (await validateRemoteUrl(rawUrl, options, lookupFn, signal)).url;
 }
 
 function headersFromIncoming(headers: Record<string, string | string[] | undefined>) {
@@ -201,13 +266,13 @@ function bodyFromRequestInit(init: RequestInit): PinnedRequestBody | undefined {
 	throw AppError.badRequest('Unsupported remote fetch request body');
 }
 
-async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: RequestInit) {
+async function fetchWithPinnedAddress(
+	validated: ValidatedRemoteUrl,
+	address: LookupAddressRecord,
+	init: RequestInit,
+	connectTimeoutMs: number,
+) {
 	const url = new URL(validated.url);
-	const address = validated.addresses[0];
-	if (!address) {
-		throw AppError.badRequest('Remote URL hostname did not resolve');
-	}
-
 	const requestImpl = url.protocol === 'https:' ? httpsRequest : httpRequest;
 	const headers = Object.fromEntries(new Headers(init.headers).entries());
 	if (!headers.host) {
@@ -217,6 +282,7 @@ async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: Reques
 	const body = bodyFromRequestInit(init);
 
 	return new Promise<Response>((resolve, reject) => {
+		let settled = false;
 		const req = requestImpl(
 			{
 				protocol: url.protocol,
@@ -229,6 +295,8 @@ async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: Reques
 				signal: init.signal ?? undefined,
 			},
 			(res) => {
+				settled = true;
+				clearTimeout(connectTimer);
 				const responseHeaders = headersFromIncoming(res.headers);
 				const responseBody = Readable.toWeb(res) as unknown as ReadableStream;
 				resolve(
@@ -241,7 +309,16 @@ async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: Reques
 			},
 		);
 
-		req.on('error', reject);
+		const connectTimer = setTimeout(
+			() => {
+				if (!settled) req.destroy(new Error('Remote feed connection timed out'));
+			},
+			Math.max(1, connectTimeoutMs),
+		);
+		req.on('error', (error) => {
+			clearTimeout(connectTimer);
+			reject(error);
+		});
 		if (body instanceof ReadableStream) {
 			Readable.fromWeb(body as unknown as NodeReadableStream).pipe(req);
 			return;
@@ -254,6 +331,25 @@ async function fetchWithPinnedLookup(validated: ValidatedRemoteUrl, init: Reques
 	});
 }
 
+async function fetchWithPinnedLookup(
+	validated: ValidatedRemoteUrl,
+	init: RequestInit,
+	connectTimeoutMs: number,
+	pinnedFetchImpl: PinnedFetchImpl = fetchWithPinnedAddress,
+) {
+	let lastError: unknown = AppError.badRequest('Remote URL hostname did not resolve');
+	for (const address of validated.addresses) {
+		init.signal?.throwIfAborted();
+		try {
+			return await pinnedFetchImpl(validated, address, init, connectTimeoutMs);
+		} catch (error) {
+			if (init.signal?.aborted) init.signal.throwIfAborted();
+			lastError = error;
+		}
+	}
+	throw lastError;
+}
+
 export async function fetchWithValidatedRedirects(
 	input: string,
 	init: RequestInit,
@@ -263,7 +359,7 @@ export async function fetchWithValidatedRedirects(
 	const lookupFn = deps.lookupFn ?? lookup;
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const maxRedirects = options.maxRedirects ?? 3;
-	let current = await validateRemoteUrl(input, options, lookupFn);
+	let current = await validateRemoteUrl(input, options, lookupFn, init.signal);
 
 	// The composite signal remains attached after response headers arrive.
 	// That matters for feeds which start a response and then stall its body:
@@ -289,9 +385,14 @@ export async function fetchWithValidatedRedirects(
 				signal: requestSignal,
 			} satisfies RequestInit;
 			response =
-				deps.fetchImpl || options.allowPrivateHosts
+				deps.fetchImpl || (options.allowPrivateHosts && !deps.pinnedFetchImpl)
 					? await fetchImpl(current.url, requestInit)
-					: await fetchWithPinnedLookup(current, requestInit);
+					: await fetchWithPinnedLookup(
+							current,
+							requestInit,
+							options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+							deps.pinnedFetchImpl,
+						);
 		} finally {
 			clearTimeout(perRedirectTimer);
 		}
@@ -312,7 +413,12 @@ export async function fetchWithValidatedRedirects(
 			throw AppError.badRequest('Feed URL returned a redirect without a location');
 		}
 
-		current = await validateRemoteUrl(new URL(location, current.url).toString(), options, lookupFn);
+		current = await validateRemoteUrl(
+			new URL(location, current.url).toString(),
+			options,
+			lookupFn,
+			callerSignal,
+		);
 	}
 
 	throw AppError.badRequest('Feed URL exceeded the maximum number of redirects');

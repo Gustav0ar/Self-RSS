@@ -74,6 +74,33 @@ describe('assertSafeRemoteUrl', () => {
 		const url = await assertSafeRemoteUrl('http://127.0.0.1/feed.xml', { allowPrivateHosts: true });
 		expect(url).toBe('http://127.0.0.1/feed.xml');
 	});
+
+	it('bounds DNS resolution with a configurable timeout', async () => {
+		await expect(
+			assertSafeRemoteUrl(
+				'https://slow-dns.example/feed.xml',
+				{ allowPrivateHosts: false, dnsTimeoutMs: 5 },
+				async () => new Promise(() => undefined),
+			),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			message: 'Remote URL hostname resolution timed out',
+		});
+	});
+
+	it('stops waiting for DNS when the caller aborts', async () => {
+		const controller = new AbortController();
+		const reason = new Error('caller deadline reached');
+		const resolution = assertSafeRemoteUrl(
+			'https://slow-dns.example/feed.xml',
+			{ allowPrivateHosts: false, dnsTimeoutMs: 5_000 },
+			async () => new Promise(() => undefined),
+			controller.signal,
+		);
+
+		controller.abort(reason);
+		await expect(resolution).rejects.toBe(reason);
+	});
 });
 
 describe('fetchWithValidatedRedirects', () => {
@@ -232,5 +259,54 @@ describe('fetchWithValidatedRedirects', () => {
 			code: 'BAD_REQUEST',
 			message: 'Feed URL must not target a local or private network host',
 		} satisfies Partial<AppError>);
+	});
+
+	it('falls back sequentially across validated addresses before headers arrive', async () => {
+		const attemptedAddresses: string[] = [];
+		const response = await fetchWithValidatedRedirects(
+			'https://feeds.example.com/feed.xml',
+			{},
+			{ allowPrivateHosts: false, maxRedirects: 0 },
+			{
+				lookupFn: lookupAll([
+					{ address: '93.184.216.34', family: 4 },
+					{ address: '203.0.113.10', family: 4 },
+				]),
+				pinnedFetchImpl: async (validated, address, init) => {
+					attemptedAddresses.push(address.address);
+					expect(validated.url).toBe('https://feeds.example.com/feed.xml');
+					expect(init.signal?.aborted).toBe(false);
+					if (attemptedAddresses.length === 1) {
+						throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+					}
+					return new Response('<rss />', { status: 200 });
+				},
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(attemptedAddresses).toEqual(['93.184.216.34', '203.0.113.10']);
+	});
+
+	it('never attempts an address when any DNS result fails SSRF validation', async () => {
+		const pinnedFetchImpl = vi.fn();
+		await expect(
+			fetchWithValidatedRedirects(
+				'https://feeds.example.com/feed.xml',
+				{},
+				{ allowPrivateHosts: false, maxRedirects: 0 },
+				{
+					lookupFn: lookupAll([
+						{ address: '93.184.216.34', family: 4 },
+						{ address: '127.0.0.1', family: 4 },
+					]),
+					pinnedFetchImpl,
+				},
+			),
+		).rejects.toMatchObject({
+			code: 'BAD_REQUEST',
+			message: 'Feed URL must not target a local or private network host',
+		});
+		expect(pinnedFetchImpl).not.toHaveBeenCalled();
 	});
 });

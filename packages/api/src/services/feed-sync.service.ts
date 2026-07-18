@@ -147,7 +147,7 @@ export class FeedSyncService {
 
 		const releaseFeedLocks = await acquireFeedSyncGuards(this.redis, feedId, feed.feedUrl);
 		if (!releaseFeedLocks) {
-			logger.info('Skipping feed sync because it is active or in its two-minute cooldown', {
+			logger.info('Skipping feed sync because it is active or in its fifteen-minute cooldown', {
 				feedId,
 				userId,
 			});
@@ -166,7 +166,8 @@ export class FeedSyncService {
 		try {
 			const articleCount = (await this.articleRepo.countByFeeds?.([feedId])) ?? 0;
 			const isProxyFeed = isKnownProxyFeedUrl(feed.feedUrl);
-			const ignoreCache = options.forceFetch === true || articleCount === 0 || isProxyFeed;
+			const isNeverSynced = feed.lastSyncedAt == null && articleCount === 0;
+			const ignoreCache = options.forceFetch === true || isNeverSynced || isProxyFeed;
 			const fetchOptions =
 				options.fetchTimeoutMs != null || options.fetchMaxRetries != null || options.signal != null
 					? {
@@ -560,6 +561,7 @@ export class FeedSyncService {
 			: new Set<string>();
 		const bulkResult = await syncManualFeedBatch({
 			feeds,
+			concurrency: this.config.concurrency,
 			categoryFeedIds,
 			scope,
 			syncFeed: (feed, controls) =>
@@ -567,9 +569,6 @@ export class FeedSyncService {
 					enrichArticles: true,
 					// Warm the full user cache once after the batch.
 					warmArticleCache: false,
-					// A manual refresh must bypass publisher validators. Several
-					// real feeds reuse stale ETags and otherwise hide new articles.
-					forceFetch: true,
 					// Leave slow publishers for the robust background scheduler.
 					fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
 					// Publisher requests are never retried inline. Throttled work is
@@ -638,7 +637,6 @@ export class FeedSyncService {
 			this.syncFeed(request.feedId, request.userId, {
 				enrichArticles: true,
 				warmArticleCache: true,
-				forceFetch: true,
 				fetchTimeoutMs: Math.min(this.config.timeoutMs, MANUAL_FEED_SYNC_TIMEOUT_MS),
 				fetchMaxRetries: 0,
 				deferIfThrottled: true,

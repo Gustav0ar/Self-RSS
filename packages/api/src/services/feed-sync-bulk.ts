@@ -18,6 +18,7 @@ export interface BulkSyncResult {
 interface BulkSyncOptions<TFeed extends BulkSyncFeed> {
 	feeds: TFeed[];
 	groupBy: (feed: TFeed) => string;
+	maxConcurrency: number;
 	deadlineMs: number;
 	syncFeed: (feed: TFeed, signal: AbortSignal) => Promise<BulkSyncFeedResult | null>;
 	onFeedError?: (feed: TFeed, error: unknown) => void;
@@ -44,6 +45,7 @@ export function feedHostname(feedUrl: string, fallback: string) {
 export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 	feeds,
 	groupBy,
+	maxConcurrency,
 	deadlineMs,
 	syncFeed,
 	onFeedError,
@@ -116,7 +118,19 @@ export async function syncFeedsForBulk<TFeed extends BulkSyncFeed>({
 		controller.abort(deadlineError);
 		resolveDeadline();
 	}, deadlineMs);
-	const workers = Promise.all([...groups.values()].map((group) => runGroup(group)));
+	const groupQueues = [...groups.values()];
+	let nextGroupIndex = 0;
+	const runWorker = async () => {
+		while (!deadlineReached) {
+			const groupIndex = nextGroupIndex;
+			nextGroupIndex += 1;
+			const group = groupQueues[groupIndex];
+			if (!group) return;
+			await runGroup(group);
+		}
+	};
+	const workerCount = Math.min(Math.max(1, maxConcurrency), groupQueues.length);
+	const workers = Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 	const outcome = await Promise.race([
 		workers.then(() => 'completed' as const),
 		deadlinePromise.then(() => 'deadline' as const),

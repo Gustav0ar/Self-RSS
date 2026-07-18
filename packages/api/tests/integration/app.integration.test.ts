@@ -178,7 +178,9 @@ function createSseReader(response: Response) {
 }
 
 async function startFeedServer(xml: string) {
+	let requestCount = 0;
 	const server = createServer((_req, res) => {
+		requestCount += 1;
 		res.writeHead(200, { 'Content-Type': 'application/rss+xml; charset=utf-8' });
 		res.end(xml);
 	});
@@ -189,6 +191,9 @@ async function startFeedServer(xml: string) {
 	}
 	return {
 		url: `http://127.0.0.1:${address.port}/feed.xml`,
+		get requestCount() {
+			return requestCount;
+		},
 		async stop() {
 			await new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
@@ -784,6 +789,45 @@ describe('API integration', () => {
 				title: 'RDF dated story',
 				publishedAt: '2025-03-04T05:06:07.000Z',
 			});
+		} finally {
+			await feedServer.stop();
+		}
+	});
+
+	it('reuses prefetched content and suppresses repeated manual refresh publisher requests', async () => {
+		const registered = await registerUser('manual-cooldown@example.com');
+		const userId = registered.body.data.user.id;
+		const token = registered.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Manual cooldown' }),
+		});
+		const feedServer = await startFeedServer(`<?xml version="1.0" encoding="UTF-8"?>
+		<rss version="2.0"><channel>
+			<title>Manual cooldown feed</title>
+			<link>https://example.com/</link>
+			<description>Cooldown fixture</description>
+			<item><title>One story</title><link>https://example.com/one</link><guid>one</guid></item>
+		</channel></rss>`);
+
+		try {
+			const feed = await authedRequest('/api/v1/feeds', token, {
+				method: 'POST',
+				body: JSON.stringify({
+					categoryId: category.body.data.id,
+					feedUrl: feedServer.url,
+				}),
+			});
+			expect(feed.response.status).toBe(201);
+			expect(feedServer.requestCount).toBe(1);
+
+			const firstRefresh = await deps.services.feedSync.syncAllFeeds(userId);
+			expect(firstRefresh).toMatchObject({ syncedFeeds: 1, skippedFeeds: 0 });
+			expect(feedServer.requestCount).toBe(1);
+
+			const repeatedRefresh = await deps.services.feedSync.syncAllFeeds(userId);
+			expect(repeatedRefresh).toMatchObject({ syncedFeeds: 0, skippedFeeds: 1 });
+			expect(feedServer.requestCount).toBe(1);
 		} finally {
 			await feedServer.stop();
 		}

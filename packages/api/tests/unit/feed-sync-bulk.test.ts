@@ -28,6 +28,7 @@ describe('syncFeedsForBulk', () => {
 				feed('other', 'https://other.example.net/feed.xml'),
 			],
 			groupBy: groupByHostname,
+			maxConcurrency: 2,
 			deadlineMs: 5_000,
 			syncFeed: (item) =>
 				new Promise((resolve) => {
@@ -60,6 +61,7 @@ describe('syncFeedsForBulk', () => {
 				feed('good', 'https://example.com/good.xml'),
 			],
 			groupBy: groupByHostname,
+			maxConcurrency: 1,
 			deadlineMs: 5_000,
 			syncFeed: async (item) => {
 				started.push(item.id);
@@ -90,6 +92,7 @@ describe('syncFeedsForBulk', () => {
 				feed('missing', 'https://two.example/feed'),
 			],
 			groupBy: groupByHostname,
+			maxConcurrency: 2,
 			deadlineMs: 5_000,
 			syncFeed: async (item) =>
 				item.id === 'guarded' ? { newArticles: 0, total: 0, skipped: true } : null,
@@ -113,6 +116,7 @@ describe('syncFeedsForBulk', () => {
 				feed('waiting', 'https://example.com/waiting'),
 			],
 			groupBy: groupByHostname,
+			maxConcurrency: 1,
 			deadlineMs: 300,
 			syncFeed: (_item, signal) => {
 				observedSignals.push(signal);
@@ -139,5 +143,30 @@ describe('syncFeedsForBulk', () => {
 	it('uses a unique fallback group for malformed feed URLs', () => {
 		expect(feedHostname('not a url', 'feed-1')).toBe('feed-1');
 		expect(feedHostname('https://EXAMPLE.com:8443/feed', 'feed-2')).toBe('example.com');
+	});
+
+	it('caps active work across twenty unique publisher origins', async () => {
+		const feeds = Array.from({ length: 20 }, (_, index) =>
+			feed(`feed-${index}`, `https://publisher-${index}.example/feed.xml`),
+		);
+		let active = 0;
+		let maximumActive = 0;
+
+		const result = await syncFeedsForBulk({
+			feeds,
+			groupBy: groupByHostname,
+			maxConcurrency: 4,
+			deadlineMs: 5_000,
+			syncFeed: async () => {
+				active += 1;
+				maximumActive = Math.max(maximumActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				active -= 1;
+				return { newArticles: 0, total: 0 };
+			},
+		});
+
+		expect(maximumActive).toBe(4);
+		expect(result.syncedFeeds).toBe(20);
 	});
 });

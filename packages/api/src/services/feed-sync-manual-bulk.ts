@@ -2,7 +2,7 @@ import { type BulkSyncFeedResult, feedHostname, syncFeedsForBulk } from './feed-
 import type { ManualSyncScope } from './feed-sync-status.js';
 
 const MANUAL_FEED_SYNC_DEADLINE_MS = 5 * 60_000;
-const MANUAL_FEED_SYNC_MIN_INTERVAL_MS = 2 * 60_000;
+const MANUAL_FEED_SYNC_MIN_INTERVAL_MS = 15 * 60_000;
 
 interface ManualSyncFeed {
 	id: string;
@@ -20,6 +20,7 @@ export interface ManualSyncProgress {
 
 interface ManualFeedBatchOptions<TFeed extends ManualSyncFeed> {
 	feeds: TFeed[];
+	concurrency: number;
 	categoryFeedIds: Set<string>;
 	scope: ManualSyncScope;
 	syncFeed: (
@@ -32,6 +33,7 @@ interface ManualFeedBatchOptions<TFeed extends ManualSyncFeed> {
 
 export async function syncManualFeedBatch<TFeed extends ManualSyncFeed>({
 	feeds,
+	concurrency,
 	categoryFeedIds,
 	scope,
 	syncFeed,
@@ -58,6 +60,7 @@ export async function syncManualFeedBatch<TFeed extends ManualSyncFeed>({
 	const result = await syncFeedsForBulk({
 		feeds: syncableFeeds,
 		groupBy: (feed) => feedHostname(feed.feedUrl, feed.id),
+		maxConcurrency: concurrency,
 		deadlineMs: MANUAL_FEED_SYNC_DEADLINE_MS,
 		syncFeed: (feed, signal) =>
 			syncFeed(feed, { signal, skipIfSyncedWithinMs: MANUAL_FEED_SYNC_MIN_INTERVAL_MS }),

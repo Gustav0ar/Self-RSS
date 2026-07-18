@@ -632,7 +632,7 @@ describe('API integration - additional flows', () => {
 			});
 			db.run(sql`
 				UPDATE feeds
-				SET last_synced_at = unixepoch() - 121
+				SET last_synced_at = unixepoch() - 901
 				WHERE id IN (${stalledFeed.body.data.id}, ${healthyFeed.body.data.id})
 			`);
 

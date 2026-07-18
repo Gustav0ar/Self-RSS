@@ -13,7 +13,7 @@ interface FeedFetchRelayDeps {
 	fetchImpl?: typeof fetch;
 }
 
-const RELAY_HTTP_STATUSES = new Set([401, 403, 429]);
+const RELAY_HTTP_STATUSES = new Set([401, 403]);
 const LEGACY_VIDEOCARDZ_FEED_URL = 'https://videocardz.com/rss-feed';
 const RELAY_REQUEST_HEADERS = [
 	'accept',
