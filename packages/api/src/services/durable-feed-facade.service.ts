@@ -75,118 +75,121 @@ export class DurableFeedFacadeService {
 		if (duplicate) throw AppError.conflict('You already have this feed');
 		const now = new Date();
 		const title = data.title?.trim() || new URL(source.normalizedUrl).hostname;
-		return this.db.transaction((tx) => {
-			const currentSource = tx
-				.select()
-				.from(feedSources)
-				.where(eq(feedSources.id, source.id))
-				.get();
-			const reusableSnapshot =
-				currentSource?.state === 'active' && currentSource.lastSuccessAt
-					? tx
-							.select()
-							.from(feedFetchSnapshots)
-							.where(
-								and(
-									eq(feedFetchSnapshots.sourceId, source.id),
-									eq(feedFetchSnapshots.parseState, 'parsed'),
-									isNotNull(feedFetchSnapshots.normalizedPayload),
-									isNotNull(feedFetchSnapshots.jobId),
-									gte(feedFetchSnapshots.retainUntil, now),
-								),
-							)
-							.orderBy(desc(feedFetchSnapshots.fetchedAt))
-							.get()
-					: null;
-			let parsedTitle: string | null = null;
-			if (reusableSnapshot?.normalizedPayload) {
-				try {
-					parsedTitle =
-						(
-							JSON.parse(reusableSnapshot.normalizedPayload) as {
-								source?: { title?: string | null };
-							}
-						).source?.title ?? null;
-				} catch {
-					// A validated snapshot should parse; source metadata remains a safe fallback.
+		return this.db.transaction(
+			(tx) => {
+				const currentSource = tx
+					.select()
+					.from(feedSources)
+					.where(eq(feedSources.id, source.id))
+					.get();
+				const reusableSnapshot =
+					currentSource?.state === 'active' && currentSource.lastSuccessAt
+						? tx
+								.select()
+								.from(feedFetchSnapshots)
+								.where(
+									and(
+										eq(feedFetchSnapshots.sourceId, source.id),
+										eq(feedFetchSnapshots.parseState, 'parsed'),
+										isNotNull(feedFetchSnapshots.normalizedPayload),
+										isNotNull(feedFetchSnapshots.jobId),
+										gte(feedFetchSnapshots.retainUntil, now),
+									),
+								)
+								.orderBy(desc(feedFetchSnapshots.fetchedAt))
+								.get()
+						: null;
+				let parsedTitle: string | null = null;
+				if (reusableSnapshot?.normalizedPayload) {
+					try {
+						parsedTitle =
+							(
+								JSON.parse(reusableSnapshot.normalizedPayload) as {
+									source?: { title?: string | null };
+								}
+							).source?.title ?? null;
+					} catch {
+						// A validated snapshot should parse; source metadata remains a safe fallback.
+					}
 				}
-			}
-			const canReuse = Boolean(reusableSnapshot?.jobId && currentSource);
-			const feed = tx
-				.insert(feeds)
-				.values({
-					id: crypto.randomUUID(),
-					userId,
-					categoryId: data.categoryId,
-					title: data.title?.trim() || parsedTitle || currentSource?.title || title,
-					customTitle: data.title?.trim() || null,
-					feedUrl: source.normalizedUrl,
-					sourceId: canReuse ? source.id : null,
-					pendingSourceId: canReuse ? null : source.id,
-					siteUrl: canReuse ? currentSource?.siteUrl : null,
-					faviconUrl: canReuse ? currentSource?.imageUrl : null,
-					description: canReuse ? currentSource?.description : null,
-					lastSyncedAt: canReuse ? currentSource?.lastSuccessAt : null,
-					syncStatus: canReuse ? 'idle' : 'pending',
-					nextSyncAt: canReuse ? (currentSource?.nextFetchAt ?? now) : now,
-					createdAt: now,
-					updatedAt: now,
-				})
-				.returning()
-				.get();
-			const requestId = crypto.randomUUID();
-			tx.insert(feedRefreshRequests)
-				.values({
-					id: requestId,
-					userId,
-					idempotencyKey: `feed-create:${feed.id}`,
-					scopeType: 'feed_create',
-					scopeFeedId: feed.id,
-					totalItems: 1,
-					pendingItems: 1,
-					requestedAt: now,
-					createdAt: now,
-					updatedAt: now,
-				})
-				.run();
-			if (canReuse && reusableSnapshot?.jobId) {
+				const canReuse = Boolean(reusableSnapshot?.jobId && currentSource);
+				const feed = tx
+					.insert(feeds)
+					.values({
+						id: crypto.randomUUID(),
+						userId,
+						categoryId: data.categoryId,
+						title: data.title?.trim() || parsedTitle || currentSource?.title || title,
+						customTitle: data.title?.trim() || null,
+						feedUrl: source.normalizedUrl,
+						sourceId: canReuse ? source.id : null,
+						pendingSourceId: canReuse ? null : source.id,
+						siteUrl: canReuse ? currentSource?.siteUrl : null,
+						faviconUrl: canReuse ? currentSource?.imageUrl : null,
+						description: canReuse ? currentSource?.description : null,
+						lastSyncedAt: canReuse ? currentSource?.lastSuccessAt : null,
+						syncStatus: canReuse ? 'idle' : 'pending',
+						nextSyncAt: canReuse ? (currentSource?.nextFetchAt ?? now) : now,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.returning()
+					.get();
+				const requestId = crypto.randomUUID();
+				tx.insert(feedRefreshRequests)
+					.values({
+						id: requestId,
+						userId,
+						idempotencyKey: `feed-create:${feed.id}`,
+						scopeType: 'feed_create',
+						scopeFeedId: feed.id,
+						totalItems: 1,
+						pendingItems: 1,
+						requestedAt: now,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.run();
+				if (canReuse && reusableSnapshot?.jobId) {
+					tx.insert(feedRefreshRequestItems)
+						.values({
+							id: crypto.randomUUID(),
+							requestId,
+							feedId: feed.id,
+							sourceId: source.id,
+							jobId: reusableSnapshot.jobId,
+							createdAt: now,
+							updatedAt: now,
+						})
+						.run();
+					tx.insert(feedSnapshotDeliveries)
+						.values({
+							id: crypto.randomUUID(),
+							snapshotId: reusableSnapshot.id,
+							feedId: feed.id,
+							availableAt: now,
+							createdAt: now,
+							updatedAt: now,
+						})
+						.run();
+					return { feed, requestId, jobId: reusableSnapshot.jobId };
+				}
+				const job = enqueueOrAttachDurableJob(tx, source, 100, now);
 				tx.insert(feedRefreshRequestItems)
 					.values({
 						id: crypto.randomUUID(),
 						requestId,
 						feedId: feed.id,
 						sourceId: source.id,
-						jobId: reusableSnapshot.jobId,
+						jobId: job.id,
 						createdAt: now,
 						updatedAt: now,
 					})
 					.run();
-				tx.insert(feedSnapshotDeliveries)
-					.values({
-						id: crypto.randomUUID(),
-						snapshotId: reusableSnapshot.id,
-						feedId: feed.id,
-						availableAt: now,
-						createdAt: now,
-						updatedAt: now,
-					})
-					.run();
-				return { feed, requestId, jobId: reusableSnapshot.jobId };
-			}
-			const job = enqueueOrAttachDurableJob(tx, source, 100, now);
-			tx.insert(feedRefreshRequestItems)
-				.values({
-					id: crypto.randomUUID(),
-					requestId,
-					feedId: feed.id,
-					sourceId: source.id,
-					jobId: job.id,
-					createdAt: now,
-					updatedAt: now,
-				})
-				.run();
-			return { feed, requestId, jobId: job.id };
-		});
+				return { feed, requestId, jobId: job.id };
+			},
+			{ behavior: 'immediate' },
+		);
 	}
 
 	async requestReplacement(userId: string, feedId: string, inputUrl: string) {
