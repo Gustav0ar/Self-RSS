@@ -104,6 +104,25 @@ describe('assertSafeRemoteUrl', () => {
 });
 
 describe('fetchWithValidatedRedirects', () => {
+	it('settles when an injected request ignores its abort signal', async () => {
+		const controller = new AbortController();
+		const reason = new Error('request deadline reached');
+		const pending = fetchWithValidatedRedirects(
+			'https://example.com/feed.xml',
+			{ signal: controller.signal },
+			{ allowPrivateHosts: false, maxRedirects: 0 },
+			{
+				lookupFn: lookupAll([{ address: '93.184.216.34', family: 4 }]),
+				fetchImpl: async () => new Promise<Response>(() => undefined),
+			},
+		);
+
+		await Promise.resolve();
+		controller.abort(reason);
+
+		await expect(pending).rejects.toBe(reason);
+	});
+
 	it('keeps the caller abort signal attached after response headers arrive', async () => {
 		const callerController = new AbortController();
 		let requestSignal!: AbortSignal;

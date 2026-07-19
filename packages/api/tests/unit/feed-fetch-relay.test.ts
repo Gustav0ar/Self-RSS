@@ -10,6 +10,24 @@ const relayConfig = {
 const securityOptions = { allowPrivateHosts: false, maxRedirects: 3 };
 
 describe('fetchFeedWithRelayFallback', () => {
+	it('settles when an injected direct fetch ignores the caller abort', async () => {
+		const controller = new AbortController();
+		const reason = new Error('publisher deadline reached');
+		const pending = fetchFeedWithRelayFallback(
+			'https://publisher.example/feed.xml',
+			{ signal: controller.signal },
+			securityOptions,
+			relayConfig,
+			{
+				directFetch: vi.fn(async () => new Promise<Response>(() => undefined)) as never,
+			},
+		);
+
+		controller.abort(reason);
+
+		await expect(pending).rejects.toBe(reason);
+	});
+
 	it('uses the direct response and skips the relay after direct access recovers', async () => {
 		const directResponse = new Response('<rss />', { status: 200 });
 		const relayFetch = vi.fn();

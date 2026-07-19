@@ -1,4 +1,4 @@
-import { cancelResponseBody } from './bounded-response.js';
+import { cancelResponseBody, raceWithAbort } from './bounded-response.js';
 import { fetchWithValidatedRedirects, type RemoteFetchSecurityOptions } from './safe-fetch.js';
 
 export interface FeedFetchRelayConfig {
@@ -53,19 +53,25 @@ export async function fetchFeedWithRelayFallback(
 	deps: FeedFetchRelayDeps = {},
 ) {
 	const directFetch = deps.directFetch ?? fetchWithValidatedRedirects;
-	const directResponse = await directFetch(input, init, securityOptions);
+	const directResponse = await raceWithAbort(
+		directFetch(input, init, securityOptions),
+		init.signal ?? undefined,
+	);
 	if (!RELAY_HTTP_STATUSES.has(directResponse.status) || !canUseRelay(config)) {
 		return directResponse;
 	}
 
 	cancelResponseBody(directResponse);
 	try {
-		const relayResponse = await (deps.fetchImpl ?? fetch)(config.relayUrl!, {
-			method: 'GET',
-			headers: relayHeaders(init, config.relayToken!, input),
-			redirect: 'error',
-			signal: init.signal,
-		});
+		const relayResponse = await raceWithAbort(
+			(deps.fetchImpl ?? fetch)(config.relayUrl!, {
+				method: 'GET',
+				headers: relayHeaders(init, config.relayToken!, input),
+				redirect: 'error',
+				signal: init.signal,
+			}),
+			init.signal ?? undefined,
+		);
 		if (
 			relayResponse.ok &&
 			new URL(input).toString() !== LEGACY_VIDEOCARDZ_FEED_URL &&

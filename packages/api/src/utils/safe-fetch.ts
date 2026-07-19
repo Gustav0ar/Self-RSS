@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { AppError } from '../middleware/errors.js';
-import { cancelResponseBody } from './bounded-response.js';
+import { cancelResponseBody, raceWithAbort } from './bounded-response.js';
 
 export interface RemoteFetchSecurityOptions {
 	allowPrivateHosts: boolean;
@@ -384,15 +384,16 @@ export async function fetchWithValidatedRedirects(
 				redirect: 'manual',
 				signal: requestSignal,
 			} satisfies RequestInit;
-			response =
+			const responsePromise =
 				deps.fetchImpl || (options.allowPrivateHosts && !deps.pinnedFetchImpl)
-					? await fetchImpl(current.url, requestInit)
-					: await fetchWithPinnedLookup(
+					? fetchImpl(current.url, requestInit)
+					: fetchWithPinnedLookup(
 							current,
 							requestInit,
 							options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
 							deps.pinnedFetchImpl,
 						);
+			response = await raceWithAbort(responsePromise, requestSignal);
 		} finally {
 			clearTimeout(perRedirectTimer);
 		}

@@ -11,10 +11,10 @@ export function cancelResponseBody(response: Response) {
 	void response.body?.cancel().catch(() => undefined);
 }
 
-function raceWithAbort<T>(
+export function raceWithAbort<T>(
 	operation: Promise<T>,
 	signal: AbortSignal | undefined,
-	onAbort: () => void,
+	onAbort: () => void = () => undefined,
 ) {
 	if (!signal) return operation;
 	if (signal.aborted) {
