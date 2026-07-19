@@ -8,7 +8,9 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
-import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
+
+const STALLED_RUNNING_JOB_MS = 2 * 60_000;
+const STALLED_ACTIONABLE_QUEUE_MS = 5 * 60_000;
 
 function latestDate(...values: Array<Date | null | undefined>) {
 	return values.reduce<Date | null>((latest, value) => {
@@ -19,9 +21,9 @@ function latestDate(...values: Array<Date | null | undefined>) {
 
 export async function getDurableRefreshStatus(
 	db: Database,
-	ingestionRepository: FeedIngestionRepository,
 	userId: string,
 	requestId?: string | null,
+	now = new Date(),
 ) {
 	const request = requestId
 		? await db.query.feedRefreshRequests.findFirst({
@@ -32,10 +34,6 @@ export async function getDurableRefreshStatus(
 				orderBy: [desc(feedRefreshRequests.createdAt)],
 			});
 	if (!request) return emptyDurableRefreshStatus();
-	await ingestionRepository.aggregateRefreshRequest(request.id);
-	const refreshed = (await db.query.feedRefreshRequests.findFirst({
-		where: eq(feedRefreshRequests.id, request.id),
-	}))!;
 	const rows = await db
 		.select({
 			item: feedRefreshRequestItems,
@@ -48,7 +46,7 @@ export async function getDurableRefreshStatus(
 		.leftJoin(feedSources, eq(feedSources.id, feedRefreshRequestItems.sourceId))
 		.leftJoin(feedFetchJobs, eq(feedFetchJobs.id, feedRefreshRequestItems.jobId))
 		.where(eq(feedRefreshRequestItems.requestId, request.id));
-	const items = await Promise.all(
+	const itemDetails = await Promise.all(
 		rows.map(async (row) => {
 			const origin = row.source
 				? await db.query.feedOrigins.findFirst({ where: eq(feedOrigins.id, row.source.originId) })
@@ -61,47 +59,72 @@ export async function getDurableRefreshStatus(
 				origin?.retryAfterUntil,
 				origin?.blockedUntil,
 			);
+			const runningTooLong =
+				row.job?.status === 'running' &&
+				row.job.startedAt != null &&
+				now.getTime() - row.job.startedAt.getTime() >= STALLED_RUNNING_JOB_MS;
+			const actionableQueued =
+				row.job?.status === 'queued' &&
+				row.job.availableAt <= now &&
+				row.source != null &&
+				row.source.nextFetchAt <= now &&
+				(row.source.backoffUntil == null || row.source.backoffUntil <= now) &&
+				(origin?.nextAllowedRequestAt == null || origin.nextAllowedRequestAt <= now) &&
+				(origin?.retryAfterUntil == null || origin.retryAfterUntil <= now) &&
+				(origin?.blockedUntil == null || origin.blockedUntil <= now);
 			return {
-				feedId: row.item.feedId,
-				sourceId: row.item.sourceId,
-				jobId: row.item.jobId,
-				status: row.item.status,
-				feedTitle: row.feed?.title ?? null,
-				errorCode: row.item.lastErrorCode ?? row.job?.lastErrorCode ?? row.source?.lastErrorCode,
-				errorDetails:
-					row.item.lastErrorDetails ?? row.job?.lastErrorDetails ?? row.source?.lastErrorDetails,
-				nextEligibleAt: nextEligibleAt?.toISOString() ?? null,
-				publisherRequestStarted: Boolean(row.job?.startedAt),
-				lastFetchAt: row.source?.lastFetchAt?.toISOString() ?? null,
+				item: {
+					feedId: row.item.feedId,
+					sourceId: row.item.sourceId,
+					jobId: row.item.jobId,
+					status: row.item.status,
+					feedTitle: row.feed?.title ?? null,
+					errorCode: row.item.lastErrorCode ?? row.job?.lastErrorCode ?? row.source?.lastErrorCode,
+					errorDetails:
+						row.item.lastErrorDetails ?? row.job?.lastErrorDetails ?? row.source?.lastErrorDetails,
+					nextEligibleAt: nextEligibleAt?.toISOString() ?? null,
+					publisherRequestStarted: Boolean(row.job?.startedAt),
+					lastFetchAt: row.source?.lastFetchAt?.toISOString() ?? null,
+				},
+				runningTooLong,
+				actionableQueued,
 			};
 		}),
 	);
-	const running = refreshed.status === 'running';
-	const queued = refreshed.status === 'pending';
+	const items = itemDetails.map((detail) => detail.item);
+	const running = request.status === 'running';
+	const queued = request.status === 'pending';
+	const active = queued || running;
+	const noProgressForMs = Math.max(0, now.getTime() - request.updatedAt.getTime());
+	const stale =
+		active &&
+		(itemDetails.some((detail) => detail.runningTooLong) ||
+			(noProgressForMs >= STALLED_ACTIONABLE_QUEUE_MS &&
+				itemDetails.some((detail) => detail.actionableQueued)));
 	return {
-		requestId: refreshed.id,
-		status: refreshed.status,
+		requestId: request.id,
+		status: request.status,
 		queued,
 		running,
-		active: queued || running,
-		stale: false,
-		queuedAt: refreshed.requestedAt.toISOString(),
-		startedAt: refreshed.startedAt?.toISOString() ?? null,
-		heartbeatAt: refreshed.updatedAt.toISOString(),
-		totalFeeds: refreshed.totalItems,
-		completedFeeds: refreshed.completedItems + refreshed.failedItems + refreshed.deadItems,
-		syncedFeeds: refreshed.completedItems,
-		failedFeeds: refreshed.failedItems + refreshed.deadItems,
+		active,
+		stale,
+		queuedAt: request.requestedAt.toISOString(),
+		startedAt: request.startedAt?.toISOString() ?? null,
+		heartbeatAt: request.updatedAt.toISOString(),
+		totalFeeds: request.totalItems,
+		completedFeeds: request.completedItems + request.failedItems + request.deadItems,
+		syncedFeeds: request.completedItems,
+		failedFeeds: request.failedItems + request.deadItems,
 		skippedFeeds: 0,
-		pendingFeeds: refreshed.pendingItems,
-		runningFeeds: refreshed.runningItems,
-		deadFeeds: refreshed.deadItems,
+		pendingFeeds: request.pendingItems,
+		runningFeeds: request.runningItems,
+		deadFeeds: request.deadItems,
 		newArticles: 0,
 		articleRevision: 0,
 		jobId: items.find((item) => item.jobId)?.jobId ?? null,
 		scope: {
-			feedId: refreshed.scopeFeedId ?? undefined,
-			categoryId: refreshed.scopeCategoryId ?? undefined,
+			feedId: request.scopeFeedId ?? undefined,
+			categoryId: request.scopeCategoryId ?? undefined,
 		},
 		items,
 	};

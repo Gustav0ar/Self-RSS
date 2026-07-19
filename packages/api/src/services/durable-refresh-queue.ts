@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
 	feedFetchJobs,
@@ -99,71 +99,52 @@ export async function queueDurableRefresh(db: Database, input: QueueRefreshInput
 
 	const now = new Date();
 	const requestId = crypto.randomUUID();
-	return db.transaction((tx) => {
-		if (input.idempotencyKey && dedupeMode === 'active') {
-			const existing = tx
-				.select()
-				.from(feedRefreshRequests)
-				.where(
-					and(
-						eq(feedRefreshRequests.userId, input.userId),
-						eq(feedRefreshRequests.idempotencyKey, input.idempotencyKey),
-					),
-				)
-				.get();
-			if (existing && ['pending', 'running'].includes(existing.status)) {
-				return existingResult(tx, existing.id);
+	return db.transaction(
+		(tx) => {
+			if (!input.idempotencyKey) {
+				const existingActiveScope = tx
+					.select({ id: feedRefreshRequests.id })
+					.from(feedRefreshRequests)
+					.where(
+						and(
+							eq(feedRefreshRequests.userId, input.userId),
+							eq(feedRefreshRequests.scopeType, input.scopeType),
+							input.scope.feedId
+								? eq(feedRefreshRequests.scopeFeedId, input.scope.feedId)
+								: isNull(feedRefreshRequests.scopeFeedId),
+							input.scope.categoryId
+								? eq(feedRefreshRequests.scopeCategoryId, input.scope.categoryId)
+								: isNull(feedRefreshRequests.scopeCategoryId),
+							inArray(feedRefreshRequests.status, ['pending', 'running']),
+						),
+					)
+					.get();
+				if (existingActiveScope) return existingResult(tx, existingActiveScope.id);
 			}
-			if (existing) {
-				tx.update(feedRefreshRequests)
-					.set({ idempotencyKey: null, updatedAt: now })
-					.where(eq(feedRefreshRequests.id, existing.id))
-					.run();
-			}
-		}
 
-		let createdRequest = tx
-			.insert(feedRefreshRequests)
-			.values({
-				id: requestId,
-				userId: input.userId,
-				idempotencyKey: input.idempotencyKey,
-				scopeType: input.scopeType,
-				scopeFeedId: input.scope.feedId,
-				scopeCategoryId: input.scope.categoryId,
-				status: input.selectedFeeds.length === 0 ? 'completed' : 'pending',
-				totalItems: input.selectedFeeds.length,
-				pendingItems: input.selectedFeeds.length,
-				completedAt: input.selectedFeeds.length === 0 ? now : null,
-				requestedAt: now,
-				createdAt: now,
-				updatedAt: now,
-			})
-			.onConflictDoNothing()
-			.returning()
-			.get();
-		if (!createdRequest) {
-			const existing = input.idempotencyKey
-				? tx
-						.select()
-						.from(feedRefreshRequests)
-						.where(
-							and(
-								eq(feedRefreshRequests.userId, input.userId),
-								eq(feedRefreshRequests.idempotencyKey, input.idempotencyKey),
-							),
-						)
-						.get()
-				: null;
-			if (!existing) throw new Error('Refresh request conflict did not resolve');
-			if (dedupeMode === 'any' || ['pending', 'running'].includes(existing.status)) {
-				return existingResult(tx, existing.id);
+			if (input.idempotencyKey && dedupeMode === 'active') {
+				const existing = tx
+					.select()
+					.from(feedRefreshRequests)
+					.where(
+						and(
+							eq(feedRefreshRequests.userId, input.userId),
+							eq(feedRefreshRequests.idempotencyKey, input.idempotencyKey),
+						),
+					)
+					.get();
+				if (existing && ['pending', 'running'].includes(existing.status)) {
+					return existingResult(tx, existing.id);
+				}
+				if (existing) {
+					tx.update(feedRefreshRequests)
+						.set({ idempotencyKey: null, updatedAt: now })
+						.where(eq(feedRefreshRequests.id, existing.id))
+						.run();
+				}
 			}
-			tx.update(feedRefreshRequests)
-				.set({ idempotencyKey: null, updatedAt: now })
-				.where(eq(feedRefreshRequests.id, existing.id))
-				.run();
-			createdRequest = tx
+
+			let createdRequest = tx
 				.insert(feedRefreshRequests)
 				.values({
 					id: requestId,
@@ -180,52 +161,95 @@ export async function queueDurableRefresh(db: Database, input: QueueRefreshInput
 					createdAt: now,
 					updatedAt: now,
 				})
+				.onConflictDoNothing()
 				.returning()
 				.get();
-		}
+			if (!createdRequest) {
+				const existing = input.idempotencyKey
+					? tx
+							.select()
+							.from(feedRefreshRequests)
+							.where(
+								and(
+									eq(feedRefreshRequests.userId, input.userId),
+									eq(feedRefreshRequests.idempotencyKey, input.idempotencyKey),
+								),
+							)
+							.get()
+					: null;
+				if (!existing) throw new Error('Refresh request conflict did not resolve');
+				if (dedupeMode === 'any' || ['pending', 'running'].includes(existing.status)) {
+					return existingResult(tx, existing.id);
+				}
+				tx.update(feedRefreshRequests)
+					.set({ idempotencyKey: null, updatedAt: now })
+					.where(eq(feedRefreshRequests.id, existing.id))
+					.run();
+				createdRequest = tx
+					.insert(feedRefreshRequests)
+					.values({
+						id: requestId,
+						userId: input.userId,
+						idempotencyKey: input.idempotencyKey,
+						scopeType: input.scopeType,
+						scopeFeedId: input.scope.feedId,
+						scopeCategoryId: input.scope.categoryId,
+						status: input.selectedFeeds.length === 0 ? 'completed' : 'pending',
+						totalItems: input.selectedFeeds.length,
+						pendingItems: input.selectedFeeds.length,
+						completedAt: input.selectedFeeds.length === 0 ? now : null,
+						requestedAt: now,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.returning()
+					.get();
+			}
 
-		input.prepare?.(tx, now);
-		const sourceIds = [
-			...new Set(
-				input.selectedFeeds
-					.map((feed) => feed.pendingSourceId ?? feed.sourceId)
-					.filter((id): id is string => Boolean(id)),
-			),
-		];
-		const sources = sourceIds.length
-			? tx.select().from(feedSources).where(inArray(feedSources.id, sourceIds)).all()
-			: [];
-		const sourceById = new Map(sources.map((source) => [source.id, source]));
-		const jobs = new Map<string, typeof feedFetchJobs.$inferSelect>();
-		for (const source of sources) {
-			jobs.set(source.id, enqueueOrAttachDurableJob(tx, source, 100, now));
-		}
-		if (input.selectedFeeds.length > 0) {
-			tx.insert(feedRefreshRequestItems)
-				.values(
-					input.selectedFeeds.map((feed) => {
-						const sourceId = feed.pendingSourceId ?? feed.sourceId;
-						return {
-							id: crypto.randomUUID(),
-							requestId,
-							feedId: feed.id,
-							sourceId,
-							jobId: sourceId ? jobs.get(sourceId)?.id : null,
-							status: sourceId && sourceById.has(sourceId) ? 'pending' : 'failed',
-							lastErrorCode: sourceId ? null : 'source_unavailable',
-							lastErrorDetails: sourceId ? null : 'Feed has no source to refresh',
-							completedAt: sourceId ? null : now,
-							createdAt: now,
-							updatedAt: now,
-						};
-					}),
-				)
-				.run();
-		}
-		return {
-			requestId: createdRequest.id,
-			jobIds: [...jobs.values()].map((job) => job.id),
-			alreadyQueued: false,
-		};
-	});
+			input.prepare?.(tx, now);
+			const sourceIds = [
+				...new Set(
+					input.selectedFeeds
+						.map((feed) => feed.pendingSourceId ?? feed.sourceId)
+						.filter((id): id is string => Boolean(id)),
+				),
+			];
+			const sources = sourceIds.length
+				? tx.select().from(feedSources).where(inArray(feedSources.id, sourceIds)).all()
+				: [];
+			const sourceById = new Map(sources.map((source) => [source.id, source]));
+			const jobs = new Map<string, typeof feedFetchJobs.$inferSelect>();
+			for (const source of sources) {
+				jobs.set(source.id, enqueueOrAttachDurableJob(tx, source, 100, now));
+			}
+			if (input.selectedFeeds.length > 0) {
+				tx.insert(feedRefreshRequestItems)
+					.values(
+						input.selectedFeeds.map((feed) => {
+							const sourceId = feed.pendingSourceId ?? feed.sourceId;
+							return {
+								id: crypto.randomUUID(),
+								requestId,
+								feedId: feed.id,
+								sourceId,
+								jobId: sourceId ? jobs.get(sourceId)?.id : null,
+								status: sourceId && sourceById.has(sourceId) ? 'pending' : 'failed',
+								lastErrorCode: sourceId ? null : 'source_unavailable',
+								lastErrorDetails: sourceId ? null : 'Feed has no source to refresh',
+								completedAt: sourceId ? null : now,
+								createdAt: now,
+								updatedAt: now,
+							};
+						}),
+					)
+					.run();
+			}
+			return {
+				requestId: createdRequest.id,
+				jobIds: [...jobs.values()].map((job) => job.id),
+				alreadyQueued: false,
+			};
+		},
+		{ behavior: 'immediate' },
+	);
 }

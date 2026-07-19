@@ -1176,6 +1176,48 @@ describe('durable feed ingestion persistence', () => {
 		expect(publisherRequests).toBe(1);
 	});
 
+	it('deduplicates active manual refresh scopes without relying on client headers', async () => {
+		const { db, facade } = await setupReplacementFacade();
+
+		const [first, duplicate] = await Promise.all([
+			facade.queueRefresh('user-1', {}),
+			facade.queueRefresh('user-1', {}),
+		]);
+
+		expect(duplicate.requestId).toBe(first.requestId);
+		expect(duplicate.jobIds).toEqual(first.jobIds);
+		expect(duplicate.alreadyQueued).toBe(true);
+		expect(await db.select().from(schema.feedRefreshRequests)).toHaveLength(1);
+		expect(await db.select().from(schema.feedRefreshRequestItems)).toHaveLength(1);
+	});
+
+	it('reports an overlong running publisher job as stale without refreshing progress time', async () => {
+		const { db, facade } = await setupReplacementFacade();
+		const queued = await facade.queueRefresh('user-1', {});
+		const before = await db.query.feedRefreshRequests.findFirst({
+			where: (request, { eq }) => eq(request.id, queued.requestId),
+		});
+		const now = new Date();
+		await db
+			.update(schema.feedFetchJobs)
+			.set({
+				status: 'running',
+				startedAt: new Date(now.getTime() - 3 * 60_000),
+				leaseOwner: 'stalled-worker',
+				leaseExpiresAt: new Date(now.getTime() + 60_000),
+				attempts: 1,
+			})
+			.where(eq(schema.feedFetchJobs.id, queued.jobIds[0]!));
+
+		const status = await facade.getRefreshStatus('user-1', queued.requestId);
+		const after = await db.query.feedRefreshRequests.findFirst({
+			where: (request, { eq }) => eq(request.id, queued.requestId),
+		});
+
+		expect(status).toMatchObject({ active: true, stale: true });
+		expect(after?.updatedAt).toEqual(before?.updatedAt);
+	});
+
 	it('retries the same replacement URL after a terminal failure with fresh durable work', async () => {
 		const { db, facade, repository } = await setupReplacementFacade();
 		const targetUrl = 'https://replacement-new.example.com/feed.xml';
@@ -1548,7 +1590,9 @@ describe('durable feed ingestion persistence', () => {
 			new CategoryRepository(db),
 			repository,
 		);
-		const now = new Date('2026-07-18T00:00:00Z');
+		// Discovery candidates expire relative to wall-clock time, so a fixed past
+		// date makes this test start failing as soon as that date ages out.
+		const now = new Date();
 		const pending = await facade.createPendingFeed('user-1', {
 			categoryId: 'category-1',
 			feedUrl: 'https://site.example.com/',
@@ -1815,20 +1859,40 @@ describe('durable feed ingestion persistence', () => {
 			createdAt: now,
 			updatedAt: now,
 		});
+		await db.insert(schema.feeds).values({
+			id: 'timeout-feed',
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: 'Timeout feed',
+			feedUrl: source.normalizedUrl,
+			sourceId: source.id,
+			nextSyncAt: now,
+			createdAt: now,
+			updatedAt: now,
+		});
+		const refresh = await repository.createRefreshRequest(
+			{
+				id: 'timeout-refresh',
+				userId: 'user-1',
+				idempotencyKey: null,
+				scopeType: 'manual',
+				requestedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			},
+			[{ feedId: 'timeout-feed', sourceId: source.id, jobId: 'timeout-job' }],
+		);
 		let requests = 0;
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'timeout-worker',
 			originStartGapSeconds: 0,
 			requestTimeoutMs: 10,
 			now: () => now,
-			fetch: async (_url, init) => {
+			fetch: async () => {
 				requests += 1;
-				return new Promise<Response>((_resolve, reject) => {
-					const requestSignal = init.signal!;
-					requestSignal.addEventListener('abort', () => reject(requestSignal.reason), {
-						once: true,
-					});
-				});
+				// Reproduce a network implementation that ignores AbortSignal. The
+				// worker deadline must still settle and release the rest of the queue.
+				return new Promise<Response>(() => undefined);
 			},
 		});
 		expect(await worker.drainOnce()).toBe(1);
@@ -1845,6 +1909,11 @@ describe('durable feed ingestion persistence', () => {
 		).toMatchObject({
 			consecutiveFailureCount: 1,
 			blockedUntil: new Date(now.getTime() + 15 * 60_000),
+		});
+		expect(await repository.aggregateRefreshRequest(refresh.id, now)).toMatchObject({
+			status: 'completed_with_errors',
+			pendingItems: 0,
+			failedItems: 1,
 		});
 	});
 

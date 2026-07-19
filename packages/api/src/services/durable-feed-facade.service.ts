@@ -335,7 +335,7 @@ export class DurableFeedFacadeService {
 	}
 
 	async getRefreshStatus(userId: string, requestId?: string | null) {
-		return getDurableRefreshStatus(this.db, this.ingestionRepository, userId, requestId);
+		return getDurableRefreshStatus(this.db, userId, requestId);
 	}
 
 	async listDiscoveryCandidates(userId: string, requestId: string) {

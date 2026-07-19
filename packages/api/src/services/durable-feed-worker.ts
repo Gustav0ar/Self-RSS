@@ -1,5 +1,9 @@
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
-import { cancelResponseBody, readResponseTextWithinLimit } from '../utils/bounded-response.js';
+import {
+	cancelResponseBody,
+	raceWithAbort,
+	readResponseTextWithinLimit,
+} from '../utils/bounded-response.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { publisherTargetForRelayResponse } from '../utils/feed-fetch-relay.js';
 import { createDurableFeedFetcher } from './durable-feed-fetcher.js';
@@ -196,13 +200,16 @@ export class DurableFeedWorker {
 				// Telemetry must never alter publisher work.
 			}
 			const publisherRequestUrl = claim.source.resolvedUrl ?? claim.source.requestedUrl;
-			const response = await this.fetchSource(
-				publisherRequestUrl,
-				{ method: 'GET', headers, signal: requestController.signal },
-				{
-					allowPrivateHosts: this.options.allowPrivateHosts ?? false,
-					maxRedirects: this.options.maxRedirects ?? 5,
-				},
+			const response = await raceWithAbort(
+				this.fetchSource(
+					publisherRequestUrl,
+					{ method: 'GET', headers, signal: requestController.signal },
+					{
+						allowPrivateHosts: this.options.allowPrivateHosts ?? false,
+						maxRedirects: this.options.maxRedirects ?? 5,
+					},
+				),
+				requestController.signal,
 			);
 			if (response.status === 304) {
 				recordPublisherOutcome('not_modified');
@@ -613,15 +620,13 @@ export class DurableFeedWorker {
 			},
 			now,
 		);
-		if (status === 'completed' && terminalParseFailure) {
-			await this.repository.failRefreshItemsForJob(
-				claim.job.id,
-				{ code: errorCode, details: input.details },
-				now,
-			);
-		} else {
-			await this.repository.aggregateRefreshRequestsForJob(claim.job.id, now);
-		}
+		// Finish this manual attempt now; publisher-aware source retries remain queued
+		// independently and must not leave clients spinning until all retries expire.
+		await this.repository.failRefreshItemsForJob(
+			claim.job.id,
+			{ code: errorCode, details: input.details },
+			now,
+		);
 	}
 
 	private now() {

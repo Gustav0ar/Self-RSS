@@ -5,6 +5,12 @@ import { feedRefreshRequestItems, feedRefreshRequests } from '../db/schema.js';
 export async function aggregateRefreshRequest(db: Database, requestId: string, now = new Date()) {
 	return db.transaction(
 		(tx) => {
+			const current = tx
+				.select()
+				.from(feedRefreshRequests)
+				.where(eq(feedRefreshRequests.id, requestId))
+				.get();
+			if (!current) return undefined;
 			const grouped = tx
 				.select({ status: feedRefreshRequestItems.status, count: sql<number>`count(*)` })
 				.from(feedRefreshRequestItems)
@@ -29,6 +35,16 @@ export async function aggregateRefreshRequest(db: Database, requestId: string, n
 						: runningItems > 0
 							? 'running'
 							: 'pending';
+			const progressChanged =
+				current.status !== status ||
+				current.totalItems !== totalItems ||
+				current.pendingItems !== pendingItems ||
+				current.runningItems !== runningItems ||
+				current.completedItems !== completedItems ||
+				current.failedItems !== failedItems ||
+				current.deadItems !== deadItems;
+			const hasStarted = runningItems > 0 || terminalItems > 0;
+			const isTerminal = terminalItems === totalItems;
 
 			return tx
 				.update(feedRefreshRequests)
@@ -40,9 +56,11 @@ export async function aggregateRefreshRequest(db: Database, requestId: string, n
 					completedItems,
 					failedItems,
 					deadItems,
-					startedAt: runningItems > 0 || terminalItems > 0 ? now : undefined,
-					completedAt: terminalItems === totalItems ? now : null,
-					updatedAt: now,
+					startedAt: current.startedAt ?? (hasStarted ? now : null),
+					completedAt: isTerminal ? (current.completedAt ?? now) : null,
+					// Status reads reconcile counts but must not manufacture progress.
+					// Clients and operations use updatedAt to detect a genuinely stalled request.
+					updatedAt: progressChanged ? now : current.updatedAt,
 				})
 				.where(eq(feedRefreshRequests.id, requestId))
 				.returning()
