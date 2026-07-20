@@ -95,8 +95,10 @@ interface DurableRefreshStatus {
 	requestId: string;
 	status: 'pending' | 'running' | 'completed' | 'completed_with_errors';
 	active: boolean;
+	skippedFeeds: number;
 	items: Array<{
 		status: string;
+		errorCode: string | null;
 		nextEligibleAt: string | null;
 		publisherRequestStarted: boolean;
 	}>;
