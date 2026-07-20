@@ -20,8 +20,30 @@ export class FeedIngestionOperationsRepository extends FeedIngestionDeliveryWork
 				(SELECT count(*) FROM feed_fetch_jobs WHERE status = 'queued') AS queuedFetchJobs,
 				(SELECT count(*) FROM feed_fetch_jobs WHERE status = 'running') AS runningFetchJobs,
 				(SELECT count(*) FROM feed_fetch_jobs WHERE status = 'dead') AS deadFetchJobs,
-				(SELECT count(*) FROM feed_fetch_jobs WHERE status = 'queued' AND available_at <= ${nowSeconds}) AS dueFetchJobs,
-				coalesce((SELECT max(0, ${nowSeconds} - min(available_at)) FROM feed_fetch_jobs WHERE status = 'queued' AND available_at <= ${nowSeconds}), 0) AS oldestDueFetchAge,
+				(SELECT count(*) FROM feed_fetch_jobs jobs
+					JOIN feed_sources sources ON sources.id = jobs.source_id
+					JOIN feed_origins origins ON origins.id = jobs.origin_id
+					WHERE jobs.status = 'queued' AND jobs.available_at <= ${nowSeconds}
+					AND jobs.attempts < jobs.max_attempts
+					AND sources.state IN ('active', 'paused')
+					AND (sources.backoff_until IS NULL OR sources.backoff_until <= ${nowSeconds})
+					AND ((jobs.kind = 'manual' AND (sources.last_fetch_at IS NULL OR sources.last_fetch_at + sources.min_interval_seconds <= ${nowSeconds}))
+						OR (jobs.kind <> 'manual' AND sources.next_fetch_at <= ${nowSeconds}))
+					AND (origins.next_allowed_request_at IS NULL OR origins.next_allowed_request_at <= ${nowSeconds})
+					AND (origins.retry_after_until IS NULL OR origins.retry_after_until <= ${nowSeconds})
+					AND (origins.blocked_until IS NULL OR origins.blocked_until <= ${nowSeconds})) AS dueFetchJobs,
+				coalesce((SELECT max(0, ${nowSeconds} - min(jobs.available_at)) FROM feed_fetch_jobs jobs
+					JOIN feed_sources sources ON sources.id = jobs.source_id
+					JOIN feed_origins origins ON origins.id = jobs.origin_id
+					WHERE jobs.status = 'queued' AND jobs.available_at <= ${nowSeconds}
+					AND jobs.attempts < jobs.max_attempts
+					AND sources.state IN ('active', 'paused')
+					AND (sources.backoff_until IS NULL OR sources.backoff_until <= ${nowSeconds})
+					AND ((jobs.kind = 'manual' AND (sources.last_fetch_at IS NULL OR sources.last_fetch_at + sources.min_interval_seconds <= ${nowSeconds}))
+						OR (jobs.kind <> 'manual' AND sources.next_fetch_at <= ${nowSeconds}))
+					AND (origins.next_allowed_request_at IS NULL OR origins.next_allowed_request_at <= ${nowSeconds})
+					AND (origins.retry_after_until IS NULL OR origins.retry_after_until <= ${nowSeconds})
+					AND (origins.blocked_until IS NULL OR origins.blocked_until <= ${nowSeconds})), 0) AS oldestDueFetchAge,
 				coalesce((SELECT max(0, ${nowSeconds} - min(created_at)) FROM feed_fetch_jobs WHERE status = 'queued'), 0) AS oldestQueuedFetchAge,
 				(SELECT count(*) FROM feed_fetch_snapshots WHERE parse_state IN ('pending', 'failed') AND raw_body IS NOT NULL) AS parseBacklog,
 				(SELECT count(*) FROM feed_snapshot_deliveries WHERE status = 'pending') AS pendingDeliveries,

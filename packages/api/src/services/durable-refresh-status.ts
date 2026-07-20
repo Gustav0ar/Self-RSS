@@ -51,9 +51,15 @@ export async function getDurableRefreshStatus(
 			const origin = row.source
 				? await db.query.feedOrigins.findFirst({ where: eq(feedOrigins.id, row.source.originId) })
 				: null;
+			const isManual = request.scopeType === 'manual' || row.job?.kind === 'manual';
+			const sourceEligibleAt = isManual
+				? row.source?.lastFetchAt
+					? new Date(row.source.lastFetchAt.getTime() + row.source.minIntervalSeconds * 1_000)
+					: null
+				: row.source?.nextFetchAt;
 			const nextEligibleAt = latestDate(
 				row.job?.availableAt,
-				row.source?.nextFetchAt,
+				sourceEligibleAt,
 				row.source?.backoffUntil,
 				origin?.nextAllowedRequestAt,
 				origin?.retryAfterUntil,
@@ -67,7 +73,7 @@ export async function getDurableRefreshStatus(
 				row.job?.status === 'queued' &&
 				row.job.availableAt <= now &&
 				row.source != null &&
-				row.source.nextFetchAt <= now &&
+				(sourceEligibleAt == null || sourceEligibleAt <= now) &&
 				(row.source.backoffUntil == null || row.source.backoffUntil <= now) &&
 				(origin?.nextAllowedRequestAt == null || origin.nextAllowedRequestAt <= now) &&
 				(origin?.retryAfterUntil == null || origin.retryAfterUntil <= now) &&
@@ -92,6 +98,11 @@ export async function getDurableRefreshStatus(
 		}),
 	);
 	const items = itemDetails.map((detail) => detail.item);
+	const skippedFeeds = items.filter(
+		(item) =>
+			item.errorCode === 'manual_refresh_deferred' ||
+			item.errorCode === 'manual_refresh_deadline_exceeded',
+	).length;
 	const running = request.status === 'running';
 	const queued = request.status === 'pending';
 	const active = queued || running;
@@ -113,9 +124,9 @@ export async function getDurableRefreshStatus(
 		heartbeatAt: request.updatedAt.toISOString(),
 		totalFeeds: request.totalItems,
 		completedFeeds: request.completedItems + request.failedItems + request.deadItems,
-		syncedFeeds: request.completedItems,
+		syncedFeeds: Math.max(0, request.completedItems - skippedFeeds),
 		failedFeeds: request.failedItems + request.deadItems,
-		skippedFeeds: 0,
+		skippedFeeds,
 		pendingFeeds: request.pendingItems,
 		runningFeeds: request.runningItems,
 		deadFeeds: request.deadItems,

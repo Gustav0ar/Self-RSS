@@ -9,6 +9,7 @@ import {
 	isNull,
 	lt,
 	lte,
+	ne,
 	notInArray,
 	or,
 	sql,
@@ -141,9 +142,20 @@ export class FeedIngestionSourceWorkRepository {
 					lt(feedFetchJobs.attempts, feedFetchJobs.maxAttempts),
 				),
 			);
+			const manualSourceDue = and(
+				eq(feedFetchJobs.kind, 'manual'),
+				or(
+					isNull(feedSources.lastFetchAt),
+					sql`${feedSources.lastFetchAt} + ${feedSources.minIntervalSeconds} <= ${Math.floor(now.getTime() / 1_000)}`,
+				),
+			);
+			const scheduledSourceDue = and(
+				ne(feedFetchJobs.kind, 'manual'),
+				lte(feedSources.nextFetchAt, now),
+			);
 			const sourceDue = and(
 				inArray(feedSources.state, ['active', 'paused']),
-				lte(feedSources.nextFetchAt, now),
+				or(manualSourceDue, scheduledSourceDue),
 				or(isNull(feedSources.backoffUntil), lte(feedSources.backoffUntil, now)),
 			);
 			const originDue = and(

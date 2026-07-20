@@ -1,19 +1,12 @@
 import { createServer } from 'node:http';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
-import {
-	articles,
-	auditLogs,
-	authSessions,
-	feedFetchJobs,
-	feedOrigins,
-	users,
-} from '../../src/db/schema.js';
+import { articles, auditLogs, authSessions, feedFetchJobs, users } from '../../src/db/schema.js';
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
@@ -1629,7 +1622,12 @@ describe('API integration', () => {
 			expect(queued.response.status).toBe(202);
 			expect(duplicate.body.data.requestId).toBe(queued.body.data.requestId);
 			expect(duplicate.body.data.alreadyQueued).toBe(true);
-			expect(queued.body.data.status).toMatchObject({ queued: true, active: true });
+			expect(queued.body.data.status).toMatchObject({
+				queued: false,
+				active: false,
+				syncedFeeds: 0,
+				skippedFeeds: 1,
+			});
 			await redis.flushall();
 			const persistedStatus = await v2AuthedRequest(
 				`/api/v1/feeds/sync/status?requestId=${queued.body.data.requestId}`,
@@ -1637,24 +1635,18 @@ describe('API integration', () => {
 			);
 			expect(persistedStatus.body.data).toMatchObject({
 				requestId: queued.body.data.requestId,
-				queued: true,
-				active: true,
+				queued: false,
+				active: false,
+				skippedFeeds: 1,
 			});
-
-			const source = await db.query.feedSources.findFirst();
-			const blockedUntil = new Date(Date.now() + 2 * 60 * 60_000);
-			await db
-				.update(feedOrigins)
-				.set({ blockedUntil, blockReason: 'http_429' })
-				.where(eq(feedOrigins.id, source!.originId));
 			expect(await worker.drainOnce()).toBe(0);
 			expect(publisher.requestCount).toBe(1);
-			const status = await v2AuthedRequest(
-				`/api/v1/feeds/sync/status?requestId=${queued.body.data.requestId}`,
-				firstToken,
-			);
-			expect(status.body.data.items[0].nextEligibleAt).toBe(
-				new Date(Math.floor(blockedUntil.getTime() / 1_000) * 1_000).toISOString(),
+			expect(persistedStatus.body.data.items[0]).toMatchObject(
+				expect.objectContaining({
+					status: 'completed',
+					errorCode: 'manual_refresh_deferred',
+					publisherRequestStarted: false,
+				}),
 			);
 		} finally {
 			await publisher.stop();

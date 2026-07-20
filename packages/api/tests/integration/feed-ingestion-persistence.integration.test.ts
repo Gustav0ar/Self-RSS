@@ -143,8 +143,8 @@ describe('durable feed ingestion persistence', () => {
 				queued: 2,
 				running: 1,
 				dead: 1,
-				due: 1,
-				oldestDueAgeSeconds: 120,
+				due: 0,
+				oldestDueAgeSeconds: 0,
 				oldestQueuedAgeSeconds: 600,
 			},
 			parseBacklog: 1,
@@ -1189,6 +1189,88 @@ describe('durable feed ingestion persistence', () => {
 		expect(duplicate.alreadyQueued).toBe(true);
 		expect(await db.select().from(schema.feedRefreshRequests)).toHaveLength(1);
 		expect(await db.select().from(schema.feedRefreshRequestItems)).toHaveLength(1);
+	});
+
+	it('lets manual refresh bypass adaptive cadence after the publisher safety interval', async () => {
+		const { db, facade, repository } = await setupReplacementFacade();
+		const now = new Date();
+		await db
+			.update(schema.feedSources)
+			.set({
+				lastFetchAt: new Date(now.getTime() - 60 * 60_000),
+				nextFetchAt: new Date(now.getTime() + 24 * 60 * 60_000),
+			})
+			.where(eq(schema.feedSources.id, 'replacement-retry-source'));
+
+		const queued = await facade.queueRefresh('user-1', {});
+		const claim = await repository.claimEligibleFetchJob(
+			'manual-worker',
+			60,
+			new Date(now.getTime() + 1_000),
+			0,
+		);
+
+		expect(queued.status).toMatchObject({ active: true, pendingFeeds: 1 });
+		expect(claim?.job).toMatchObject({ id: queued.jobIds[0], kind: 'manual', status: 'running' });
+	});
+
+	it('defers manual refresh inside the publisher safety interval without queuing a fetch', async () => {
+		const { db, facade } = await setupReplacementFacade();
+		const now = new Date();
+		await db
+			.update(schema.feedSources)
+			.set({
+				lastFetchAt: new Date(now.getTime() - 5 * 60_000),
+				nextFetchAt: new Date(now.getTime() + 24 * 60 * 60_000),
+			})
+			.where(eq(schema.feedSources.id, 'replacement-retry-source'));
+
+		const queued = await facade.queueRefresh('user-1', {});
+
+		expect(queued.jobIds).toEqual([]);
+		expect(queued.status).toMatchObject({
+			active: false,
+			status: 'completed',
+			syncedFeeds: 0,
+			skippedFeeds: 1,
+		});
+		expect(await db.select().from(schema.feedFetchJobs)).toHaveLength(0);
+		expect(await db.select().from(schema.feedRefreshRequestItems)).toEqual([
+			expect.objectContaining({
+				status: 'completed',
+				jobId: null,
+				lastErrorCode: 'manual_refresh_deferred',
+			}),
+		]);
+	});
+
+	it('ends manual refresh tracking after five minutes while preserving queued publisher work', async () => {
+		const { db, facade, repository } = await setupReplacementFacade();
+		const queued = await facade.queueRefresh('user-1', {});
+		const now = new Date();
+		await db
+			.update(schema.feedRefreshRequests)
+			.set({ requestedAt: new Date(now.getTime() - 6 * 60_000) })
+			.where(eq(schema.feedRefreshRequests.id, queued.requestId));
+
+		await new DurableFeedScheduler(repository, { jitter: () => 0 }).tick(now);
+
+		expect(await facade.getRefreshStatus('user-1', queued.requestId)).toMatchObject({
+			active: false,
+			status: 'completed',
+			syncedFeeds: 0,
+			skippedFeeds: 1,
+		});
+		expect(await db.select().from(schema.feedFetchJobs)).toEqual([
+			expect.objectContaining({ status: 'queued', kind: 'manual' }),
+		]);
+		expect(await db.select().from(schema.feedRefreshRequestItems)).toEqual([
+			expect.objectContaining({
+				status: 'completed',
+				jobId: null,
+				lastErrorCode: 'manual_refresh_deadline_exceeded',
+			}),
+		]);
 	});
 
 	it('reports an overlong running publisher job as stale without refreshing progress time', async () => {

@@ -476,6 +476,48 @@ export class FeedIngestionRepository extends FeedIngestionOperationsRepository {
 		return aggregateRefreshRequestRecord(this.db, requestId, now);
 	}
 
+	async expireStaleManualRefreshRequests(now: Date, maxAgeMs: number) {
+		const cutoff = new Date(now.getTime() - Math.max(1, maxAgeMs));
+		const requestIds = await this.db.transaction(
+			(tx) => {
+				const ids = tx
+					.select({ id: feedRefreshRequests.id })
+					.from(feedRefreshRequests)
+					.where(
+						and(
+							eq(feedRefreshRequests.scopeType, 'manual'),
+							inArray(feedRefreshRequests.status, ['pending', 'running']),
+							lte(feedRefreshRequests.requestedAt, cutoff),
+						),
+					)
+					.all()
+					.map((request) => request.id);
+				if (ids.length === 0) return ids;
+				tx.update(feedRefreshRequestItems)
+					.set({
+						status: 'completed',
+						jobId: null,
+						completedAt: now,
+						lastErrorCode: 'manual_refresh_deadline_exceeded',
+						lastErrorDetails:
+							'Publisher checks continue in the background after the five-minute refresh window',
+						updatedAt: now,
+					})
+					.where(
+						and(
+							inArray(feedRefreshRequestItems.requestId, ids),
+							inArray(feedRefreshRequestItems.status, ['pending', 'running']),
+						),
+					)
+					.run();
+				return ids;
+			},
+			{ behavior: 'immediate' },
+		);
+		await aggregateRefreshRequests(this.db, requestIds, now);
+		return requestIds;
+	}
+
 	async updateRefreshItemStatus(
 		itemId: string,
 		status: 'pending' | 'running' | 'completed' | 'failed' | 'dead',
