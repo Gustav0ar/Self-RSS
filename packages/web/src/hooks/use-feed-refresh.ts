@@ -206,8 +206,8 @@ export function useFeedRefresh() {
 		async (feedId?: string, options: RefreshOptions = {}) => {
 			if (!feedId) {
 				if (
-					allFeedsSyncStatus?.active &&
-					refreshScopesOverlap({ categoryId: options.categoryId }, allFeedsSyncStatus.scope, feeds)
+					allFeedsRefreshActivity.isBlocking &&
+					refreshScopesOverlap({ categoryId: options.categoryId }, allFeedsSyncStatus?.scope, feeds)
 				)
 					return false;
 				if (syncingFeedId === ALL_FEEDS_SYNC_ID && !hasSettledInactiveAllFeedsStatus) {
@@ -245,8 +245,8 @@ export function useFeedRefresh() {
 			}
 			const selectedFeed = feeds?.find((feed) => feed.id === feedId);
 			if (
-				allFeedsSyncStatus?.active &&
-				refreshScopesOverlap({ feedId }, allFeedsSyncStatus.scope, feeds)
+				allFeedsRefreshActivity.isBlocking &&
+				refreshScopesOverlap({ feedId }, allFeedsSyncStatus?.scope, feeds)
 			)
 				return false;
 			if (isFeedRefreshBlocked(selectedFeed)) {
@@ -286,7 +286,7 @@ export function useFeedRefresh() {
 		},
 		[
 			feeds,
-			allFeedsSyncStatus?.active,
+			allFeedsRefreshActivity.isBlocking,
 			allFeedsSyncStatus?.scope,
 			hasSettledInactiveAllFeedsStatus,
 			refetchAllFeedsSyncStatus,
@@ -308,8 +308,8 @@ export function useFeedRefresh() {
 			(syncingFeedId === feedId ||
 				(allFeedsSyncStatus?.active === true && allFeedsSyncStatus.scope?.feedId === feedId)),
 		isRefreshBlockedByActiveRequest: (feedId?: string, categoryId?: string) =>
-			allFeedsSyncStatus?.active === true &&
-			refreshScopesOverlap({ feedId, categoryId }, allFeedsSyncStatus.scope, feeds),
+			allFeedsRefreshActivity.isBlocking &&
+			refreshScopesOverlap({ feedId, categoryId }, allFeedsSyncStatus?.scope, feeds),
 		refreshFeed,
 	};
 }

@@ -112,7 +112,7 @@ vi.mock('../../src/hooks/use-feed-refresh', () => ({
 		feedSyncError: null,
 		isRefreshingAllFeeds,
 		isRefreshingFeed: () => false,
-		isRefreshBlockedByActiveRequest: () => isRefreshingAllFeeds || allFeedsRefreshIsTakingLonger,
+		isRefreshBlockedByActiveRequest: () => isRefreshingAllFeeds,
 		refreshFeed,
 	}),
 }));
@@ -266,7 +266,7 @@ describe('FeedView refresh', () => {
 		expect(screen.getByText('Article list')).toBeTruthy();
 	});
 
-	it('shows long all-feeds syncs as background work while blocking duplicates', () => {
+	it('shows long all-feeds syncs as background work without trapping refresh controls', () => {
 		allFeedsRefreshIsTakingLonger = true;
 		allFeedsRefreshShouldShowStatus = true;
 
@@ -277,10 +277,10 @@ describe('FeedView refresh', () => {
 		expect(container.querySelector('.motion-safe\\:animate-spin')).toBeTruthy();
 
 		const refreshButton = screen.getByRole('button', { name: 'Refresh' });
-		expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
 
 		fireEvent.click(refreshButton);
-		expect(refreshFeed).not.toHaveBeenCalled();
+		expect(refreshFeed).toHaveBeenCalled();
 	});
 
 	it('opens article URLs with the active feed context in a new tab', () => {

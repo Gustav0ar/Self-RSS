@@ -195,4 +195,28 @@ describe('feed sync status reconciliation', () => {
 		).toBe(REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS);
 		expect(REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS).toBeGreaterThanOrEqual(30_000);
 	});
+
+	it('hides server activity that exceeds the bounded monitoring window', () => {
+		const startedAt = Date.parse('2026-06-21T12:00:00.000Z');
+		expect(
+			buildAllFeedsRefreshActivity({
+				status: {
+					...inactiveStatus,
+					running: true,
+					active: true,
+					startedAt: new Date(startedAt).toISOString(),
+				},
+				statusUpdatedAt: startedAt,
+				localQueuedAt: 0,
+				isMutationPending: false,
+				isLocalRefreshSelected: false,
+				now: startedAt + REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS,
+			}),
+		).toMatchObject({
+			phase: 'idle',
+			isActive: false,
+			isBlocking: false,
+			shouldShowStatus: false,
+		});
+	});
 });

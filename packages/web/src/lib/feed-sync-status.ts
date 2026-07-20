@@ -223,6 +223,17 @@ export function buildAllFeedsRefreshActivity({
 		(localQueuedAt > 0 ? localQueuedAt : null) ??
 		(statusUpdatedAt > 0 ? statusUpdatedAt : now);
 	const elapsedMs = Math.max(0, now - activeSinceMs);
+	if (!isMutationPending && elapsedMs >= REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS) {
+		return {
+			phase: 'idle',
+			isActive: false,
+			isBlocking: false,
+			isTakingLonger: false,
+			shouldShowStatus: false,
+			activeSinceMs: null,
+			elapsedMs: null,
+		};
+	}
 	const isTakingLonger = status?.stale === true || elapsedMs >= foregroundTimeoutMs;
 	// A refresh can be started by another tab/client or restored after a page
 	// reload. Server activity is still foreground UX state even when this hook
