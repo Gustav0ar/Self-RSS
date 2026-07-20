@@ -524,10 +524,14 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 						authHeaders,
 						acceptedRefreshBody.data.requestId,
 					);
-					return cooldownStatus?.items.length === 2 &&
+					return cooldownStatus?.active === false &&
+						cooldownStatus.items.length === 2 &&
 						cooldownStatus.items.every(
 							(item) =>
-								item.status === 'pending' && item.nextEligibleAt && !item.publisherRequestStarted,
+								item.status === 'completed' &&
+								item.errorCode === 'manual_refresh_deferred' &&
+								item.nextEligibleAt &&
+								!item.publisherRequestStarted,
 						)
 						? 'cooldown-protected'
 						: 'waiting';
@@ -536,9 +540,10 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 			)
 			.toBe('cooldown-protected');
 
-		// The durable status is the source of truth: both jobs remain queued until
-		// their publisher-safe next-eligible time, so the refresh does not hammer either source.
-		expect(cooldownStatus!.active).toBe(true);
+		// Publisher-safe deferrals are terminal for this user request, while the
+		// normal scheduler retains responsibility for the future publisher checks.
+		expect(cooldownStatus!.active).toBe(false);
+		expect(cooldownStatus!.skippedFeeds).toBe(2);
 		expect(
 			cooldownStatus!.items.every(
 				(item) => item.nextEligibleAt && Date.parse(item.nextEligibleAt) > Date.now(),
@@ -547,7 +552,8 @@ test('all-feeds refresh respects publisher cooldown through the real worker queu
 		expect(feedServer.getRequestCount()).toBe(1);
 		expect(stalledFeedServer.getRequestCount()).toBe(1);
 		await expect(page.getByRole('button', { name: /New Worker Story/ })).toHaveCount(0);
-		await expect(page.getByText('Refresh queued')).toBeVisible();
+		await expect(page.getByText('Refresh complete')).toBeVisible();
+		await expect(page.getByText('2/2 checked · 2 deferred')).toBeVisible();
 	} finally {
 		await Promise.all([stalledFeedServer.stop(), feedServer.stop()]);
 	}
