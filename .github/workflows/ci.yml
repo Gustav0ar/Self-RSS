@@ -47,7 +47,8 @@ jobs:
       - name: Verify generated OpenAPI is committed
         run: git diff --exit-code -- packages/api/openapi.json
       - run: bun run test
-      - run: bun run --filter '@self-feed/web' playwright:install
+      - name: Install pinned web Playwright browsers
+        run: bun run --filter '@self-feed/web' playwright:install
       - run: bun run test:integration
       - run: bun run test:e2e
 

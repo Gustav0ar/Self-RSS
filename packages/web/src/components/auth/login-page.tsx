@@ -175,7 +175,7 @@ function LoginPageContent() {
 							<button
 								type="submit"
 								disabled={loading}
-								className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-primary px-4 text-sm font-medium text-primary-foreground shadow-lg shadow-primary/20 hover:bg-primary/90 disabled:opacity-50"
+								className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-primary px-4 text-sm font-medium text-primary-foreground shadow-lg shadow-primary/20 hover:bg-primary/90 disabled:cursor-not-allowed"
 							>
 								{loading ? 'Please wait...' : mode === 'login' ? 'Sign In' : 'Create Account'}
 							</button>

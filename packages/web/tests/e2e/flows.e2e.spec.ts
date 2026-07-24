@@ -266,7 +266,8 @@ test('all-feeds refresh uses its queue snapshot without status polling', async (
 	await refreshButton.click();
 
 	await expect(page.getByText('Refresh queued')).toBeVisible();
-	await page.waitForTimeout(2_000);
+	await expect(refreshButton).toBeDisabled();
+	await expect(refreshButton.locator('svg')).toHaveClass(/animate-spin/);
 	expect(statusRequests).toBe(initialStatusRequests);
 });
 
@@ -399,7 +400,8 @@ test('selecting a failed feed does not retry it, while explicit refresh uses the
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 	await page.getByRole('button', { name: 'Expand Failed sources' }).click();
 	await page.getByRole('button', { name: 'Failed Feed', exact: true }).click();
-	await page.waitForTimeout(1_000);
+	await expect(page.getByRole('heading', { name: 'Failed Feed' })).toBeVisible();
+	await expect(page.getByText('0 loaded', { exact: true })).toBeVisible();
 	expect(syncRequests).toHaveLength(0);
 
 	await page.getByRole('button', { name: 'Refresh', exact: true }).click();
