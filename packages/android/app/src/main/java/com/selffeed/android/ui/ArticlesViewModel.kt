@@ -481,6 +481,13 @@ class ArticlesViewModel @Inject constructor(
                 readDelta = readDelta,
             ),
         )
+        // The unread-only Paging query is server-backed. Once a mutation is
+        // confirmed, start a fresh generation so a newly-read row disappears
+        // (or a newly-unread row can return) without waiting for a manual
+        // refresh or the next app launch.
+        if (_state.value.hideRead && previousReadState != isRead) {
+            refreshArticlePager()
+        }
     }
 
     private fun applyReadStateEvent(event: ArticleFeatureEvent) {

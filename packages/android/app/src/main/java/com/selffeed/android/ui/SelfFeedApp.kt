@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -878,6 +879,15 @@ internal fun AuthScreen(
         stringResource(R.string.auth_server_placeholder)
     }
     val resolvedErrorMessage = errorMessage?.resolve().orEmpty()
+    val submit = {
+        val submittedServer = serverUrl.trim().ifEmpty { configuredServer }
+        if (mode == AuthMode.LOGIN) {
+            onLogin(email, password, submittedServer)
+        } else {
+            onRegister(email, password, submittedServer)
+        }
+        password = ""
+    }
 
     Box(
         modifier = Modifier
@@ -992,17 +1002,10 @@ internal fun AuthScreen(
                     visualTransformation = PasswordVisualTransformation(),
                     shape = RoundedCornerShape(20.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
                 Button(
-                    onClick = {
-                        val submittedServer = serverUrl.trim().ifEmpty { configuredServer }
-                        if (mode == AuthMode.LOGIN) {
-                            onLogin(email, password, submittedServer)
-                        } else {
-                            onRegister(email, password, submittedServer)
-                        }
-                        password = ""
-                    },
+                    onClick = submit,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(22.dp),
                 ) {

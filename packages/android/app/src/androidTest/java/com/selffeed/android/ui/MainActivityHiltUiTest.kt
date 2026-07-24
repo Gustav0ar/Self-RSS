@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
@@ -97,7 +98,7 @@ class MainActivityHiltUiTest {
     }
 
     @Test
-    fun readerAutoMarksReadAndRetainsRowInUnreadOnlyList() {
+    fun readerAutoMarksReadAndRemovesRowFromUnreadOnlyList() {
         repository.reset(authenticated = true, hideRead = true)
         launchActivity()
 
@@ -109,7 +110,10 @@ class MainActivityHiltUiTest {
 
         composeRule.onNodeWithContentDescription("Back to list").performClick()
         waitForContentDescription("Open feeds")
-        composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Injected Article").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onAllNodesWithText("Injected Article").assertCountEquals(0)
     }
 
     @Test
@@ -200,7 +204,7 @@ class MainActivityHiltUiTest {
         composeRule.onNodeWithText("Server").performTextInput("10.0.22.22:3000")
         composeRule.onNodeWithText("Email").performTextInput("reader@example.com")
         composeRule.onNodeWithText("Password").performTextInput("password123")
-        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.onNodeWithText("Password").performImeAction()
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
             repository.getApiBaseUrl() == "10.0.22.22:3000"

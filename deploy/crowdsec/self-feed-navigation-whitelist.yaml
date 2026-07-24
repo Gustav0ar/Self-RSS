@@ -1,9 +1,12 @@
-name: selffeed/article-navigation-whitelist
-description: "Do not classify successful SelfFeed article navigation as an aggressive crawler"
+name: selffeed/client-navigation-whitelist
+description: "Keep legitimate SelfFeed API and article navigation out of generic HTTP probing heuristics"
 filter: "evt.Meta.service == 'http' && evt.Meta.log_type in ['http_access-log', 'http_error-log']"
 whitelist:
-  reason: "Authenticated SelfFeed readers legitimately open many distinct article UUIDs"
+  reason: "SelfFeed clients legitimately burst across API routes, including transient non-2xx responses during deploys"
   expression:
+    - >-
+      evt.Meta.target_fqdn == 'rss.gustavo.ca' &&
+      evt.Meta.http_path matches '^/api/v1(?:/|$)'
     - >-
       evt.Meta.target_fqdn == 'rss.gustavo.ca' &&
       evt.Meta.http_verb == 'GET' &&

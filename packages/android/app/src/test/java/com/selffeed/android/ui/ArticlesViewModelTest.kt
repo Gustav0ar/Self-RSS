@@ -501,6 +501,22 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `markRead refreshes unread-only paging after server confirmation`() = runTest {
+        val viewModel = createViewModel()
+        val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
+        runCurrent()
+        viewModel.setFilter(sort = null, hideRead = true)
+        runCurrent()
+        primeArticleQueue(viewModel)
+
+        viewModel.markRead("a1", true)
+        runCurrent()
+
+        verify(exactly = 3) { repository.articlePagingData(any(), any()) }
+        collection.cancel()
+    }
+
+    @Test
     fun `manual unread is preserved when opening the article again`() = runTest {
         val viewModel = createViewModel()
         viewModel.setAutoMarkReadMode(AutoMarkReadPreference.DISABLED.apiValue)

@@ -68,6 +68,18 @@ describe('Security headers', () => {
 		}
 	});
 
+	it('keeps legitimate first-party API traffic out of generic CrowdSec probing heuristics', () => {
+		const whitelist = readFileSync(
+			resolve(testDir, '../../../..', 'deploy/crowdsec/self-feed-navigation-whitelist.yaml'),
+			'utf8',
+		);
+
+		expect(whitelist).toContain("evt.Meta.target_fqdn == 'rss.gustavo.ca'");
+		expect(whitelist).toMatch(
+			/evt\.Meta\.target_fqdn == 'rss\.gustavo\.ca' &&\n\s+evt\.Meta\.http_path matches '\^\/api\/v1\(\?:\/\|\$\)'/,
+		);
+	});
+
 	it('includes X-Request-Id header', async () => {
 		const res = await buildApp().request('/health');
 		const requestId = res.headers.get('X-Request-Id');

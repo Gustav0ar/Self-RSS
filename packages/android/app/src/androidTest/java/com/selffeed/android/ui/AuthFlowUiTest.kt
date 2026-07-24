@@ -132,10 +132,10 @@ class AuthFlowUiTest {
         // Enter credentials and submit
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
-        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.onNodeWithText("Password").performImeAction()
 
         // Verify password was captured before clearing
-        assert(capturedPasswords.isNotEmpty()) { "Login callback should have been invoked" }
+        composeRule.waitUntil(timeoutMillis = 5_000) { capturedPasswords.isNotEmpty() }
         assert(capturedPasswords.last() == "mypassword123") { "Submitted password should match input" }
     }
 
