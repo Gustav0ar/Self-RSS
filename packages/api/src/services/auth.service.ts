@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type Redis from 'ioredis';
 import { getEnv } from '../config/index.js';
-import { CacheKeys } from '../db/redis.js';
+import { CacheKeys, CacheTTL } from '../db/redis.js';
 import { AppError } from '../middleware/errors.js';
 import type {
 	AuthSessionMetadataInput,
@@ -9,8 +9,31 @@ import type {
 } from '../repositories/auth-session.repository.js';
 import type { AppSettingsRepository } from '../repositories/settings.repository.js';
 import type { UserRepository } from '../repositories/user.repository.js';
+import { createLogger } from '../utils/logger.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import type { TokenPayload, TokenUtils } from '../utils/tokens.js';
+
+const logger = createLogger();
+
+const CACHE_NEW_AUTH_SESSION_SCRIPT = `
+redis.call("DEL", KEYS[1])
+redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
+return 1
+`;
+
+const REVOKE_AUTH_SESSION_SCRIPT = `
+redis.call("SET", KEYS[1], "1", "EX", ARGV[1])
+redis.call("DEL", KEYS[2])
+return 1
+`;
+
+const CACHE_ACTIVE_AUTH_SESSION_SCRIPT = `
+if redis.call("GET", KEYS[1]) then
+	return 0
+end
+redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
+return 1
+`;
 
 function getRevocationTtlSeconds(payload: TokenPayload) {
 	if (!payload.exp) {
@@ -124,6 +147,7 @@ export class AuthService {
 
 		const user = await this.userRepo.findById(session.userId);
 		if (!user?.isActive) {
+			await this.prepareSessionRevocation(session.id);
 			await this.sessionRepo.revoke(session.id);
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
@@ -143,6 +167,7 @@ export class AuthService {
 		if (parsed) {
 			const session = await this.sessionRepo.findActiveById(parsed.sessionId);
 			if (session && constantTimeEqual(session.refreshTokenHash, hashRefreshToken(refreshToken))) {
+				await this.prepareSessionRevocation(session.id);
 				await this.sessionRepo.revoke(session.id);
 			}
 			return;
@@ -172,10 +197,14 @@ export class AuthService {
 	}
 
 	async revokeSession(userId: string, sessionId: string) {
-		const revoked = await this.sessionRepo.revokeForUser(userId, sessionId);
-		if (!revoked) {
+		const session = await this.sessionRepo.findActiveById(sessionId);
+		if (session?.userId !== userId) {
 			throw AppError.notFound('Session not found');
 		}
+		await this.prepareSessionRevocation(sessionId);
+		// The tombstone remains fail-closed if this database write throws. That
+		// prevents a requested revocation from resurfacing through stale cache.
+		await this.sessionRepo.revokeForUser(userId, sessionId);
 		return { success: true };
 	}
 
@@ -186,8 +215,49 @@ export class AuthService {
 			// durable sessions.
 			return true;
 		}
+
+		try {
+			const revoked = await this.redis.get(CacheKeys.authSessionRevoked(sessionId));
+			if (revoked !== null) {
+				return false;
+			}
+			const activeOwner = await this.redis.get(CacheKeys.authSessionActive(sessionId));
+			if (activeOwner !== null) {
+				return activeOwner === userId;
+			}
+		} catch (error) {
+			this.logSessionCacheFailure('read', sessionId, error);
+		}
+
 		const session = await this.sessionRepo.findActiveById(sessionId);
-		return session?.userId === userId;
+		if (session?.userId !== userId) {
+			return false;
+		}
+
+		try {
+			const cached = await this.redis.eval(
+				CACHE_ACTIVE_AUTH_SESSION_SCRIPT,
+				2,
+				CacheKeys.authSessionRevoked(sessionId),
+				CacheKeys.authSessionActive(sessionId),
+				userId,
+				String(CacheTTL.authSessionActive),
+			);
+			const cacheResult =
+				typeof cached === 'number' || typeof cached === 'string' ? Number(cached) : Number.NaN;
+			if (cacheResult !== 0 && cacheResult !== 1) {
+				throw new Error('Invalid Redis auth session cache response');
+			}
+			if (cacheResult === 0) {
+				return false;
+			}
+		} catch (error) {
+			this.logSessionCacheFailure('populate', sessionId, error);
+			const currentSession = await this.sessionRepo.findActiveById(sessionId);
+			return currentSession?.userId === userId;
+		}
+
+		return true;
 	}
 
 	async adminCreateUser(email: string, password: string, role: string) {
@@ -216,6 +286,7 @@ export class AuthService {
 			userAgent: metadata.userAgent ?? null,
 			ipAddress: metadata.ipAddress ?? null,
 		});
+		await this.cacheNewSession(userId, sessionId);
 		const accessToken = await this.tokenUtils.signAccessToken(userId, role, sessionId);
 		return {
 			accessToken,
@@ -287,6 +358,47 @@ export class AuthService {
 		} catch {
 			return;
 		}
+	}
+
+	private async cacheNewSession(userId: string, sessionId: string) {
+		try {
+			await this.redis.eval(
+				CACHE_NEW_AUTH_SESSION_SCRIPT,
+				2,
+				CacheKeys.authSessionRevoked(sessionId),
+				CacheKeys.authSessionActive(sessionId),
+				userId,
+				String(CacheTTL.authSessionActive),
+			);
+		} catch (error) {
+			this.logSessionCacheFailure('create', sessionId, error);
+		}
+	}
+
+	private async prepareSessionRevocation(sessionId: string) {
+		try {
+			const result = await this.redis.eval(
+				REVOKE_AUTH_SESSION_SCRIPT,
+				2,
+				CacheKeys.authSessionRevoked(sessionId),
+				CacheKeys.authSessionActive(sessionId),
+				String(Math.max(CacheTTL.authSessionActive + 1, this.tokenUtils.accessExpiresIn)),
+			);
+			if (Number(result) !== 1) {
+				throw new Error('Invalid Redis auth session revocation response');
+			}
+		} catch (error) {
+			this.logSessionCacheFailure('revoke', sessionId, error);
+			throw AppError.internal('Unable to revoke session. Please try again.');
+		}
+	}
+
+	private logSessionCacheFailure(operation: string, sessionId: string, error: unknown) {
+		logger.warn('Auth session cache unavailable', {
+			operation,
+			sessionId,
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 
 	private async revokeLegacyRefreshToken(payload: TokenPayload) {

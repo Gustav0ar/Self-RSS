@@ -5,7 +5,7 @@ import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
-import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
+import { CacheKeys, CacheTTL, closeRedis, getRedis } from '../../src/db/redis.js';
 import { articles, auditLogs, authSessions, feedFetchJobs, users } from '../../src/db/schema.js';
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
@@ -321,6 +321,13 @@ describe('API integration', () => {
 
 		const [storedSession] = await db.select().from(authSessions);
 		expect(storedSession).toBeTruthy();
+		expect(await redis.get(CacheKeys.authSessionActive(storedSession!.id))).toBe(
+			registered.body.data.user.id,
+		);
+		const activeSessionTtl = await redis.ttl(CacheKeys.authSessionActive(storedSession!.id));
+		expect(activeSessionTtl).toBeGreaterThan(0);
+		expect(activeSessionTtl).toBeLessThanOrEqual(CacheTTL.authSessionActive);
+		expect(await redis.get(CacheKeys.authSessionRevoked(storedSession!.id))).toBeNull();
 		const unchangedHash = storedSession!.refreshTokenHash;
 		const staleRotate = await deps.repos.authSession.rotate(
 			storedSession!.id,
@@ -361,6 +368,11 @@ describe('API integration', () => {
 			{ method: 'DELETE' },
 		);
 		expect(revokedAndroid.response.status).toBe(200);
+		expect(await redis.get(CacheKeys.authSessionActive(androidSession.id))).toBeNull();
+		expect(await redis.get(CacheKeys.authSessionRevoked(androidSession.id))).toBe('1');
+		const revokedAndroidTtl = await redis.ttl(CacheKeys.authSessionRevoked(androidSession.id));
+		expect(revokedAndroidTtl).toBeGreaterThan(0);
+		expect(revokedAndroidTtl).toBeLessThanOrEqual(tokenUtils.accessExpiresIn);
 
 		const revokedAndroidMe = await authedRequest(
 			'/api/v1/auth/me',
@@ -396,6 +408,11 @@ describe('API integration', () => {
 			},
 		});
 		expect(logout.response.status).toBe(200);
+		expect(await redis.get(CacheKeys.authSessionActive(storedSession!.id))).toBeNull();
+		expect(await redis.get(CacheKeys.authSessionRevoked(storedSession!.id))).toBe('1');
+		const loggedOutTtl = await redis.ttl(CacheKeys.authSessionRevoked(storedSession!.id));
+		expect(loggedOutTtl).toBeGreaterThan(0);
+		expect(loggedOutTtl).toBeLessThanOrEqual(tokenUtils.accessExpiresIn);
 
 		const revokedRefresh = await jsonRequest('/api/v1/auth/refresh', {
 			method: 'POST',

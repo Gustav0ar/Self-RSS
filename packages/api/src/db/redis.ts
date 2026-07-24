@@ -42,6 +42,8 @@ export const CacheKeys = {
 		`unread:${userId}:cat:${categoryId}`,
 	unreadCountByFeed: (userId: string, feedId: string) => `unread:${userId}:feed:${feedId}`,
 	refreshToken: (tokenId: string) => `refresh:${tokenId}`,
+	authSessionActive: (sessionId: string) => `auth:session:active:${sessionId}`,
+	authSessionRevoked: (sessionId: string) => `auth:session:revoked:${sessionId}`,
 	rateLimit: (key: string) => `rl:${key}`,
 	feedEtag: (feedUrl: string) => `feed:etag:${feedUrl}`,
 	feedLastModified: (feedUrl: string) => `feed:lastmod:${feedUrl}`,
@@ -80,6 +82,7 @@ export const CacheKeys = {
 
 // Cache TTL in seconds
 export const CacheTTL = {
+	authSessionActive: 60,
 	articleList: 120, // 2 minutes - balanced between freshness and performance
 	// Single-article details change rarely once published; a 5-minute
 	// cache makes reopening an old article a Redis hit instead of a

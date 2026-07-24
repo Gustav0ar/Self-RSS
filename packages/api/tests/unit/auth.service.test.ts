@@ -32,12 +32,15 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 	applyEnv({});
 	const userRepo = {
 		findById: vi.fn(),
+		registerUser: vi.fn(),
 		...(overrides.userRepo as Record<string, unknown> | undefined),
 	};
 	const sessionRepo = {
+		create: vi.fn(),
 		findActiveById: vi.fn(),
 		rotate: vi.fn(),
 		revoke: vi.fn(),
+		revokeForUser: vi.fn(),
 		...(overrides.sessionRepo as Record<string, unknown> | undefined),
 	};
 	const settingsRepo = {
@@ -51,6 +54,8 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 		...(overrides.tokenUtils as Record<string, unknown> | undefined),
 	};
 	const redis = {
+		get: vi.fn().mockResolvedValue(null),
+		eval: vi.fn().mockResolvedValue(1),
 		set: vi.fn(),
 		...(overrides.redis as Record<string, unknown> | undefined),
 	};
@@ -263,5 +268,195 @@ describe('AuthService - refresh', () => {
 			expect.objectContaining({ deviceName: 'Unknown device' }),
 		);
 		expect(tokenUtils.signAccessToken).not.toHaveBeenCalled();
+	});
+});
+
+describe('AuthService - access session cache', () => {
+	const sessionId = '11111111-1111-4111-8111-111111111111';
+	const userId = 'user-1';
+	const activeSession = {
+		id: sessionId,
+		userId,
+		revokedAt: null,
+	};
+
+	it('uses a matching active owner cache hit without querying SQLite', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		redis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(userId);
+
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+
+		expect(redis.get).toHaveBeenNthCalledWith(1, `auth:session:revoked:${sessionId}`);
+		expect(redis.get).toHaveBeenNthCalledWith(2, `auth:session:active:${sessionId}`);
+		expect(sessionRepo.findActiveById).not.toHaveBeenCalled();
+	});
+
+	it('rejects an active cache entry owned by another user without querying SQLite', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		redis.get.mockResolvedValueOnce(null).mockResolvedValueOnce('different-user');
+
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(false);
+
+		expect(sessionRepo.findActiveById).not.toHaveBeenCalled();
+	});
+
+	it('falls back to SQLite when Redis reads and cache population fail', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		redis.get.mockRejectedValueOnce(new Error('Redis unavailable'));
+		redis.eval.mockRejectedValueOnce(new Error('Redis unavailable'));
+		sessionRepo.findActiveById.mockResolvedValue(activeSession);
+
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+
+		expect(sessionRepo.findActiveById).toHaveBeenCalledWith(sessionId);
+		expect(sessionRepo.findActiveById).toHaveBeenCalledTimes(2);
+	});
+
+	it('lets a revoked tombstone dominate a stale active cache entry', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		redis.get.mockResolvedValueOnce('1').mockResolvedValueOnce(userId);
+
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(false);
+
+		expect(redis.get).toHaveBeenCalledTimes(1);
+		expect(sessionRepo.findActiveById).not.toHaveBeenCalled();
+	});
+
+	it('rejects a tombstone created while a SQLite cache miss is being validated', async () => {
+		let resolveLookup: ((session: typeof activeSession) => void) | undefined;
+		const lookup = new Promise<typeof activeSession>((resolve) => {
+			resolveLookup = resolve;
+		});
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		redis.get.mockResolvedValue(null);
+		redis.eval.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+		sessionRepo.findActiveById.mockReturnValueOnce(lookup).mockResolvedValueOnce(activeSession);
+		sessionRepo.revokeForUser.mockResolvedValue(activeSession);
+
+		const validation = service.isAccessSessionActive(userId, sessionId);
+		await vi.waitFor(() => expect(sessionRepo.findActiveById).toHaveBeenCalledWith(sessionId));
+
+		await expect(service.revokeSession(userId, sessionId)).resolves.toEqual({ success: true });
+		resolveLookup?.(activeSession);
+
+		await expect(validation).resolves.toBe(false);
+		expect(redis.eval).toHaveBeenNthCalledWith(
+			1,
+			expect.stringContaining('redis.call("SET", KEYS[1], "1", "EX", ARGV[1])'),
+			2,
+			`auth:session:revoked:${sessionId}`,
+			`auth:session:active:${sessionId}`,
+			'900',
+		);
+		expect(redis.eval).toHaveBeenNthCalledWith(
+			2,
+			expect.stringContaining('if redis.call("GET", KEYS[1]) then'),
+			2,
+			`auth:session:revoked:${sessionId}`,
+			`auth:session:active:${sessionId}`,
+			userId,
+			'60',
+		);
+
+		redis.get.mockReset().mockResolvedValueOnce('1');
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(false);
+		expect(sessionRepo.findActiveById).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not revoke or report success when cache invalidation fails and Redis recovers', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		sessionRepo.findActiveById.mockResolvedValue(activeSession);
+		redis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(userId);
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+		redis.eval.mockRejectedValueOnce(new Error('Redis write failed'));
+
+		await expect(service.revokeSession(userId, sessionId)).rejects.toMatchObject({
+			statusCode: 500,
+			message: 'Unable to revoke session. Please try again.',
+		});
+		expect(sessionRepo.revokeForUser).not.toHaveBeenCalled();
+
+		redis.get.mockReset().mockResolvedValueOnce(null).mockResolvedValueOnce(userId);
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+		expect(sessionRepo.findActiveById).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not report logout success or revoke SQLite when cache invalidation fails', async () => {
+		const refreshToken = `${sessionId}.current-secret`;
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		sessionRepo.findActiveById.mockResolvedValue({
+			...activeSession,
+			refreshTokenHash: hashRefreshToken(refreshToken),
+		});
+		redis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(userId);
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+		redis.eval.mockRejectedValueOnce(new Error('Redis write failed'));
+
+		await expect(service.logout(refreshToken)).rejects.toMatchObject({
+			statusCode: 500,
+			message: 'Unable to revoke session. Please try again.',
+		});
+		expect(sessionRepo.revoke).not.toHaveBeenCalled();
+
+		redis.get.mockReset().mockResolvedValueOnce(null).mockResolvedValueOnce(userId);
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(true);
+	});
+
+	it('keeps the tombstone fail-closed when the database revoke throws', async () => {
+		const databaseError = new Error('SQLite write failed');
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		sessionRepo.findActiveById.mockResolvedValue(activeSession);
+		sessionRepo.revokeForUser.mockRejectedValue(databaseError);
+
+		await expect(service.revokeSession(userId, sessionId)).rejects.toBe(databaseError);
+
+		redis.get.mockReset().mockResolvedValueOnce('1');
+		await expect(service.isAccessSessionActive(userId, sessionId)).resolves.toBe(false);
+		expect(redis.get).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not tombstone a session owned by another user', async () => {
+		const { service, redis, sessionRepo } = createServiceWithMocks();
+		sessionRepo.findActiveById.mockResolvedValue({
+			...activeSession,
+			userId: 'different-user',
+		});
+
+		await expect(service.revokeSession(userId, sessionId)).rejects.toMatchObject({
+			statusCode: 404,
+			message: 'Session not found',
+		});
+
+		expect(redis.eval).not.toHaveBeenCalled();
+		expect(sessionRepo.revokeForUser).not.toHaveBeenCalled();
+	});
+
+	it('clears a stale tombstone before caching a newly created session', async () => {
+		const user = {
+			id: userId,
+			email: 'new@example.com',
+			role: 'user',
+			isActive: true,
+			createdAt: new Date('2026-01-01T00:00:00.000Z'),
+			updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+		};
+		const { service, userRepo, sessionRepo, settingsRepo, redis } = createServiceWithMocks();
+		applyEnv({ ALLOW_REGISTRATION: 'true' });
+		settingsRepo.get.mockResolvedValue({ registrationLocked: false });
+		userRepo.registerUser.mockResolvedValue({ user });
+
+		const result = await service.register(user.email, 'password123');
+		expect(result.user).toMatchObject({ id: userId, email: user.email });
+
+		const createdSession = sessionRepo.create.mock.calls[0]?.[0];
+		expect(createdSession?.id).toEqual(expect.any(String));
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('redis.call("DEL", KEYS[1])'),
+			2,
+			`auth:session:revoked:${createdSession?.id}`,
+			`auth:session:active:${createdSession?.id}`,
+			userId,
+			'60',
+		);
 	});
 });
