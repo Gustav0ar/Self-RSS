@@ -1,12 +1,18 @@
 package com.selffeed.android.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import com.selffeed.android.R
 import com.selffeed.android.ui.components.shareOpmlContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
@@ -47,6 +53,37 @@ fun SelfFeedAppRoute(
     }
 
     SelfFeedTheme(darkTheme = darkTheme) {
+        chromeState.serverChangeConfirmation?.let { confirmation ->
+            val requestedServer = confirmation.serverOrigin.orEmpty()
+            AlertDialog(
+                onDismissRequest = appViewModel::cancelExternalServerChange,
+                title = { Text(stringResource(R.string.external_link_switch_server_title)) },
+                text = {
+                    Text(
+                        stringResource(
+                            R.string.external_link_switch_server_detail,
+                            requestedServer,
+                            authState.apiBaseUrl,
+                        ),
+                    )
+                },
+                dismissButton = {
+                    TextButton(onClick = appViewModel::cancelExternalServerChange) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            appViewModel.confirmExternalServerChange()
+                            authViewModel.switchServerForExternalAction(requestedServer)
+                        },
+                    ) {
+                        Text(stringResource(R.string.external_link_switch_server_action))
+                    }
+                },
+            )
+        }
         val latestFeedsState = rememberUpdatedState(feedsState)
         val workflowCoordinator = remember { AppWorkflowCoordinator() }
         val workflowSink = object : AppWorkflowSink {
@@ -58,7 +95,9 @@ fun SelfFeedAppRoute(
                 settingsViewModel.loadPreferences()
                 settingsViewModel.loadStats()
                 settingsViewModel.loadAuthSessions()
-                settingsViewModel.loadAdminSettings()
+                if (authState.user?.role == "admin") {
+                    settingsViewModel.loadAdminSettings()
+                }
                 articlesViewModel.refreshArticles()
                 articlesViewModel.startReadStateSync()
             }
@@ -118,8 +157,10 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(Unit) {
-            authViewModel.bootstrap()
+        LaunchedEffect(chromeState.sessionReady) {
+            if (chromeState.sessionReady) {
+                authViewModel.bootstrap()
+            }
         }
 
         LaunchedEffect(Unit) {
@@ -130,6 +171,21 @@ fun SelfFeedAppRoute(
 
         LaunchedEffect(authState.isAuthenticated) {
             workflowCoordinator.onAuthenticationChanged(authState.isAuthenticated, workflowSink)
+        }
+
+        LaunchedEffect(authState.isAuthenticated, chromeState.pendingExternalAction?.key) {
+            if (!authState.isAuthenticated) return@LaunchedEffect
+            when (val action = appViewModel.consumeExternalAction()) {
+                is ExternalAction.OpenArticle -> {
+                    articlesViewModel.openArticle(action.articleId)
+                    appViewModel.openReaderFrom(HomeTab.ARTICLES)
+                }
+                is ExternalAction.AddFeed -> {
+                    feedsViewModel.offerExternalFeed(action.feedUrl)
+                    appViewModel.setTab(HomeTab.FEEDS)
+                }
+                null -> Unit
+            }
         }
 
         LaunchedEffect(authState.isAuthenticated) {
@@ -245,6 +301,8 @@ fun SelfFeedAppRoute(
                 onDismissImportSummary = feedsViewModel::dismissImportSummary,
                 onSelectDiscoveryCandidate = feedsViewModel::selectDiscoveryCandidate,
                 onCancelFeedReplacement = feedsViewModel::cancelFeedReplacement,
+                onConsumeExternalFeed = feedsViewModel::consumeExternalFeed,
+                onLoadFeedSyncHistory = feedsViewModel::loadFeedSyncHistory,
                 onRefreshArticles = {
                     // Refresh the API/Room list immediately. Publisher fetches
                     // continue independently and publish revisions as they land.
@@ -298,6 +356,14 @@ fun SelfFeedAppRoute(
                     articlesViewModel.setAutoMarkReadMode(it.apiValue)
                 },
                 onRevokeAuthSession = settingsViewModel::revokeAuthSession,
+                onRegistrationLockChanged = settingsViewModel::toggleRegistrationLock,
+                onRetryFeedSync = { feedId ->
+                    feedsViewModel.syncAllFeeds(feedId = feedId, categoryId = null)
+                    settingsViewModel.loadStats()
+                },
+                onCreateAdminUser = settingsViewModel::createAdminUser,
+                onUpdateAdminUser = settingsViewModel::updateAdminUser,
+                onResetAdminPassword = settingsViewModel::resetAdminPassword,
                 onRetryPreferences = settingsViewModel::loadPreferences,
                 onClearMessages = {
                     authViewModel.clearMessages()

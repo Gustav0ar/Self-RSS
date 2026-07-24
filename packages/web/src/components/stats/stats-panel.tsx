@@ -1,10 +1,19 @@
-import { Activity, AlertTriangle, BarChart3, BookOpen, FolderOpen, Rss } from 'lucide-react';
+import {
+	Activity,
+	AlertTriangle,
+	BarChart3,
+	BookOpen,
+	FolderOpen,
+	RefreshCw,
+	Rss,
+} from 'lucide-react';
 import { QueryFailure } from '@/components/query-failure';
-import { useStats } from '@/hooks/queries';
+import { useStats, useSyncFeed } from '@/hooks/queries';
 import { cn } from '@/lib/utils';
 
 export function StatsPanel() {
 	const { data: stats, error, isError, isFetching, isLoading, refetch } = useStats();
+	const syncFeed = useSyncFeed();
 
 	if (isLoading && !stats) {
 		return <div className="p-4 text-sm text-muted-foreground">Loading stats...</div>;
@@ -53,13 +62,7 @@ export function StatsPanel() {
 			color: 'text-purple-500',
 		},
 	];
-	const syncFailures = stats.recentSyncRuns.filter(
-		(run) =>
-			run &&
-			typeof run === 'object' &&
-			'status' in run &&
-			(run as { status?: unknown }).status === 'failed',
-	).length;
+	const syncFailures = stats.recentSyncRuns.filter((run) => run.status === 'failed').length;
 	const totalRecentActivity = stats.dailyMetrics.reduce(
 		(total, metric) =>
 			total + metric.articlesReadCount + metric.feedsSyncedCount + metric.searchCount,
@@ -117,6 +120,80 @@ export function StatsPanel() {
 				))}
 			</div>
 
+			<section className="mt-6 rounded-[1.5rem] border border-border bg-background/45 p-4 sm:p-5">
+				<div className="flex flex-wrap items-end justify-between gap-3">
+					<div>
+						<p className="text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+							Feed ledger
+						</p>
+						<h3 className="mt-1 text-sm font-semibold">Recent sync activity</h3>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						{stats.recentSyncRuns.length === 0
+							? 'No sync attempts recorded yet'
+							: `${stats.recentSyncRuns.length} latest attempts`}
+					</p>
+				</div>
+				{stats.recentSyncRuns.length > 0 ? (
+					<div className="mt-4 space-y-2">
+						{stats.recentSyncRuns.map((run) => {
+							const failed = run.status === 'failed';
+							const running = run.status === 'running';
+							return (
+								<article
+									key={run.id}
+									className="grid gap-3 rounded-2xl border border-border/70 bg-card/65 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+								>
+									<div className="min-w-0">
+										<div className="flex flex-wrap items-center gap-2">
+											<span
+												className={cn(
+													'h-2 w-2 rounded-full',
+													failed
+														? 'bg-red-500'
+														: running
+															? 'animate-pulse bg-amber-500'
+															: 'bg-emerald-500',
+												)}
+												aria-hidden="true"
+											/>
+											<p className="truncate text-sm font-medium">
+												{run.feedTitle ?? 'Deleted feed'}
+											</p>
+											<span className="text-xs capitalize text-muted-foreground">{run.status}</span>
+										</div>
+										<p className="mt-1 text-xs text-muted-foreground">
+											{formatSyncTime(run.startedAt)}
+											{run.httpStatus ? ` · HTTP ${run.httpStatus}` : ''}
+											{run.status === 'success' ? ` · ${run.itemCount} items` : ''}
+										</p>
+										{run.errorMessage ? (
+											<p className="mt-2 line-clamp-2 text-xs leading-5 text-red-500">
+												{run.errorMessage}
+											</p>
+										) : null}
+									</div>
+									{failed ? (
+										<button
+											type="button"
+											onClick={() => syncFeed.mutate(run.feedId)}
+											disabled={syncFeed.isPending}
+											className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-border px-3 text-xs font-medium hover:bg-accent disabled:opacity-60"
+										>
+											<RefreshCw
+												className={cn('h-3.5 w-3.5', syncFeed.isPending && 'animate-spin')}
+												aria-hidden="true"
+											/>
+											Retry now
+										</button>
+									) : null}
+								</article>
+							);
+						})}
+					</div>
+				) : null}
+			</section>
+
 			{stats.dailyMetrics.length > 0 && (
 				<div className="mt-6">
 					<div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -157,6 +234,17 @@ export function StatsPanel() {
 	);
 }
 
+function formatSyncTime(value: string) {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return 'Unknown time';
+	return new Intl.DateTimeFormat(undefined, {
+		month: 'short',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit',
+	}).format(date);
+}
+
 type DailyMetric = NonNullable<ReturnType<typeof useStats>['data']>['dailyMetrics'][number];
 
 function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
@@ -178,7 +266,10 @@ function ActivityChart({ metrics }: { metrics: DailyMetric[] }) {
 				const total = metric.articlesReadCount + metric.feedsSyncedCount + metric.searchCount;
 				const height = Math.max(6, Math.round((total / maxTotal) * 100));
 				return (
-					<div key={metric.date} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+					<div
+						key={metric.date}
+						className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1"
+					>
 						<div
 							className="w-full rounded-t bg-primary/80"
 							style={{ height: `${height}%` }}

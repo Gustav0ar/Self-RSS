@@ -1,5 +1,7 @@
+import { adminPaths, adminSchemas } from './admin.spec';
 import { authPaths, authSchemas } from './auth.spec';
 import { durableFeedPaths, durableFeedSchemas } from './durable-feeds.spec';
+import { feedHistoryPaths } from './feed-history.spec';
 import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
 import { preferencesAndStatsSchemas } from './preferences-stats.spec';
 import { realtimePaths, realtimeSchemas } from './realtime.spec';
@@ -71,6 +73,7 @@ export const openApiSpec = {
 				},
 			},
 			...authSchemas,
+			...adminSchemas,
 			...durableFeedSchemas,
 			AppSettings: {
 				type: 'object',
@@ -239,6 +242,7 @@ export const openApiSpec = {
 					'id',
 					'feedId',
 					'feedTitle',
+					'canonicalUrl',
 					'title',
 					'isRead',
 					'contentStatus',
@@ -249,6 +253,7 @@ export const openApiSpec = {
 					feedId: { type: 'string', format: 'uuid' },
 					feedTitle: { type: 'string' },
 					feedFaviconUrl: { type: ['string', 'null'] },
+					canonicalUrl: { type: ['string', 'null'] },
 					title: { type: 'string' },
 					author: { type: ['string', 'null'] },
 					excerpt: { type: ['string', 'null'] },
@@ -432,7 +437,9 @@ export const openApiSpec = {
 	},
 	paths: {
 		...authPaths,
+		...adminPaths,
 		...durableFeedPaths,
+		...feedHistoryPaths,
 		'/categories': {
 			get: {
 				tags: ['Categories'],
@@ -782,35 +789,6 @@ export const openApiSpec = {
 				tags: ['Stats'],
 				security: bearerSecurity,
 				responses: { '200': json(apiDataRef('#/components/schemas/Stats')) },
-			},
-		},
-		'/admin/settings': {
-			get: {
-				tags: ['Admin'],
-				security: bearerSecurity,
-				responses: { '200': json(apiDataRef('#/components/schemas/AppSettings')) },
-			},
-			patch: {
-				tags: ['Admin'],
-				security: bearerSecurity,
-				requestBody: json({ $ref: '#/components/schemas/AppSettings' }),
-				responses: { '200': json(apiDataRef('#/components/schemas/AppSettings')) },
-			},
-		},
-		'/admin/users': {
-			post: {
-				tags: ['Admin'],
-				security: bearerSecurity,
-				requestBody: json({
-					type: 'object',
-					required: ['email', 'password'],
-					properties: {
-						email: { type: 'string', format: 'email' },
-						password: { type: 'string', minLength: 8 },
-						role: { type: 'string', enum: ['admin', 'user'] },
-					},
-				}),
-				responses: { '201': json(apiDataRef('#/components/schemas/User')) },
 			},
 		},
 	},

@@ -129,4 +129,41 @@ class AppViewModelTest {
         val viewModel = AppViewModel(repository, sessionStore)
         assertEquals(false, viewModel.isOnline.value)
     }
+
+    @Test
+    fun `wrong-server article waits for explicit switch confirmation`() = runTest {
+        every { sessionStore.getApiBaseUrl() } returns "https://current.example/api/v1/"
+        val viewModel = AppViewModel(repository, sessionStore)
+        val action = ExternalAction.OpenArticle(
+            articleId = "00000000-0000-0000-0000-000000000001",
+            serverOrigin = "https://other.example",
+        )
+
+        viewModel.offerExternalAction(action)
+
+        assertNull(viewModel.consumeExternalAction())
+        assertEquals(action, viewModel.chrome.value.pendingExternalAction)
+        assertEquals(action, viewModel.chrome.value.serverChangeConfirmation)
+        viewModel.confirmExternalServerChange()
+        assertEquals(action, viewModel.chrome.value.pendingExternalAction)
+        assertNull(viewModel.chrome.value.serverChangeConfirmation)
+    }
+
+    @Test
+    fun `cancelling a server switch discards the untrusted action`() = runTest {
+        every { sessionStore.getApiBaseUrl() } returns "https://current.example/api/v1/"
+        val viewModel = AppViewModel(repository, sessionStore)
+        viewModel.offerExternalAction(
+            ExternalAction.OpenArticle(
+                articleId = "00000000-0000-0000-0000-000000000001",
+                serverOrigin = "https://other.example",
+            ),
+        )
+        viewModel.consumeExternalAction()
+
+        viewModel.cancelExternalServerChange()
+
+        assertNull(viewModel.chrome.value.pendingExternalAction)
+        assertNull(viewModel.chrome.value.serverChangeConfirmation)
+    }
 }

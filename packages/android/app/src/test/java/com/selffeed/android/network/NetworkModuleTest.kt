@@ -5,9 +5,10 @@ package com.selffeed.android.network
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.SessionStore
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.verify
 import okhttp3.Cookie
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -172,7 +173,7 @@ class NetworkModuleTest {
             listOf(refreshCookie),
         )
 
-        verify {
+        coVerify {
             store.setRefreshCookie(match { raw ->
                 raw.contains("rss_refresh_token=refresh-value") &&
                     raw.contains("path=/api/v1/auth")
@@ -265,7 +266,7 @@ class NetworkModuleTest {
         val cookies = jar.loadForRequest(url("https://example.com/api/v1/auth/refresh"))
         assertTrue(cookies.isEmpty())
         // The store should have been updated to null.
-        io.mockk.verify { store.setRefreshCookie(null) }
+        coVerify { store.setRefreshCookie(null) }
     }
 
     @Test
@@ -286,13 +287,13 @@ class NetworkModuleTest {
             .path("/")
             .build()
         jar.saveFromResponse(parsedUrl, listOf(sessionCookie, refreshCookie))
-        io.mockk.verify { store.setRefreshCookie(match { it!!.contains("refresh-value") }) }
+        coVerify { store.setRefreshCookie(match { it!!.contains("refresh-value") }) }
     }
 
     @Test
     fun `saveFromResponse does not throw when secure storage fails`() {
         val store = mockk<SessionStore>()
-        every { store.setRefreshCookie(any()) } throws IllegalStateException("missing keystore key")
+        coEvery { store.setRefreshCookie(any()) } throws IllegalStateException("missing keystore key")
         val jar = PersistedRefreshCookieJar(store)
         val refreshCookie = Cookie.Builder()
             .name("rss_refresh_token")
@@ -328,7 +329,7 @@ class NetworkModuleTest {
             .build()
         jar.saveFromResponse(parsedUrl, listOf(sessionCookie))
         // No interaction with setRefreshCookie.
-        io.mockk.verify(exactly = 0) { store.setRefreshCookie(any()) }
+        coVerify(exactly = 0) { store.setRefreshCookie(any()) }
     }
 }
 

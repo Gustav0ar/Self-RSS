@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	startArticleEnrichmentWorker,
+	startAuthSessionCleanup,
 	startCacheWarmer,
 	startQueuedSyncWorker,
 	startRetentionCleanup,
@@ -103,6 +104,47 @@ describe('scheduler error handling', () => {
 
 			const errorLog = errorLogs.find((l) => l.msg === 'Sync scheduler error');
 			expect(errorLog!.extra.error).toBe('String error');
+		});
+	});
+
+	describe('startAuthSessionCleanup', () => {
+		it('runs immediately and keeps every cleanup batch bounded', async () => {
+			vi.useFakeTimers();
+			const sessionRepo = { cleanupExpired: vi.fn().mockResolvedValue(3) };
+			const stop = startAuthSessionCleanup(sessionRepo as never, 25, 100);
+
+			await vi.runAllTicks();
+			expect(sessionRepo.cleanupExpired).toHaveBeenCalledTimes(1);
+			expect(sessionRepo.cleanupExpired).toHaveBeenLastCalledWith(25);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(sessionRepo.cleanupExpired).toHaveBeenCalledTimes(2);
+			expect(sessionRepo.cleanupExpired).toHaveBeenLastCalledWith(25);
+			stop();
+			vi.useRealTimers();
+		});
+
+		it('does not overlap a slow cleanup batch', async () => {
+			vi.useFakeTimers();
+			let finish: ((value: number) => void) | undefined;
+			const sessionRepo = {
+				cleanupExpired: vi.fn(
+					() =>
+						new Promise<number>((resolve) => {
+							finish = resolve;
+						}),
+				),
+			};
+			const stop = startAuthSessionCleanup(sessionRepo as never, 10, 100);
+
+			await vi.runAllTicks();
+			await vi.advanceTimersByTimeAsync(300);
+			expect(sessionRepo.cleanupExpired).toHaveBeenCalledTimes(1);
+			finish?.(0);
+			await vi.runAllTicks();
+			await vi.advanceTimersByTimeAsync(100);
+			expect(sessionRepo.cleanupExpired).toHaveBeenCalledTimes(2);
+			stop();
+			vi.useRealTimers();
 		});
 	});
 

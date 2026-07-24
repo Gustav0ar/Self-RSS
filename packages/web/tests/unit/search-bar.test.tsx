@@ -16,14 +16,81 @@ describe('SearchBar', () => {
 			data: { pages: [{ data: [], cursor: null, hasMore: false }] },
 			fetchNextPage: vi.fn(),
 			hasNextPage: false,
+			error: null,
+			isError: false,
+			isFetching: false,
 			isFetchingNextPage: false,
 			isLoading: false,
+			refetch: vi.fn(),
 		});
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.clearAllMocks();
+	});
+
+	it('shows a retryable error instead of reporting no results', () => {
+		const refetch = vi.fn();
+		useSearchMock.mockReturnValue({
+			data: undefined,
+			error: new TypeError('offline'),
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+			isError: true,
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			refetch,
+		});
+
+		render(<SearchBar onSelectArticle={() => {}} />);
+		const input = screen.getByPlaceholderText('Search articles...');
+		fireEvent.change(input, { target: { value: 'Alpha' } });
+		act(() => vi.advanceTimersByTime(300));
+
+		expect(screen.getByRole('alert').textContent).toContain('Search failed');
+		expect(screen.queryByText('No results found')).toBeNull();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps stale results visible when a refresh fails', () => {
+		useSearchMock.mockReturnValue({
+			data: {
+				pages: [
+					{
+						data: [
+							{
+								id: 'stale-1',
+								title: 'Cached story',
+								feedTitle: 'Cached feed',
+								excerpt: null,
+								heroImageUrl: null,
+							},
+						],
+						cursor: null,
+						hasMore: false,
+					},
+				],
+			},
+			error: new Error('refresh failed'),
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+			isError: true,
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			refetch: vi.fn(),
+		});
+
+		render(<SearchBar onSelectArticle={() => {}} />);
+		const input = screen.getByPlaceholderText('Search articles...');
+		fireEvent.change(input, { target: { value: 'Cached' } });
+		act(() => vi.advanceTimersByTime(300));
+
+		expect(screen.getByRole('alert').textContent).toContain('Search could not be refreshed');
+		expect(screen.getByRole('option', { name: /Cached story/ })).toBeTruthy();
 	});
 
 	it('debounces the search query before passing it to useSearch', () => {

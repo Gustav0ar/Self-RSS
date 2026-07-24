@@ -2,6 +2,7 @@ import type { SortOrder } from '@self-feed/shared';
 import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
+import { ExternalShortcutStatus } from '@/components/articles/external-shortcut-status';
 import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
 import { FeedQueryState } from '@/components/articles/feed-query-state';
 import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
@@ -46,7 +47,6 @@ interface FeedViewProps {
 	searchScope?: 'all' | 'category';
 	onSelectArticle: (id: string | null) => void;
 }
-
 const EMPTY_CATEGORY_TREE = [] as const;
 export function FeedView({
 	feedId,
@@ -60,6 +60,7 @@ export function FeedView({
 	const [unreadOnlyOverride, setUnreadOnly] = useState<boolean | null>(null);
 	const [sortOverride, setSort] = useState<SortOrder | null>(null);
 	const [markAllDialogOpen, setMarkAllDialogOpen] = useState(false);
+	const [externalShortcutStatus, setExternalShortcutStatus] = useState<string | null>(null);
 	const preferencesQuery = usePreferences();
 	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
@@ -159,9 +160,6 @@ export function FeedView({
 		(count, article) => count + (article.isRead ? 0 : 1),
 		0,
 	);
-	const articleSearchParams = new URLSearchParams(
-		feedId ? { feedId } : categoryId ? { categoryId } : undefined,
-	).toString();
 	const density = normalizeDensityPreference(prefs?.density);
 	const keyboardShortcutsEnabled = prefs?.keyboardShortcutsEnabled ?? true;
 	const autoMarkReadMode = normalizeAutoMarkReadPreference(prefs?.autoMarkReadMode);
@@ -255,13 +253,14 @@ export function FeedView({
 		},
 		onOpenExternal: (id) => {
 			const article = readingQueue.find((a) => a.id === id);
-			if (article) {
-				window.open(
-					`/articles/${id}${articleSearchParams ? `?${articleSearchParams}` : ''}`,
-					'_blank',
-					'noopener,noreferrer',
-				);
+			if (article?.canonicalUrl) {
+				const target = URL.parse(article.canonicalUrl);
+				if (target && (target.protocol === 'https:' || target.protocol === 'http:')) {
+					window.open(target.href, '_blank', 'noopener,noreferrer');
+					return;
+				}
 			}
+			setExternalShortcutStatus('The original publisher link is unavailable for this article.');
 		},
 		onRefresh: () => {
 			if (!isRefreshingCurrentSelection) {
@@ -309,7 +308,7 @@ export function FeedView({
 					onCancelReplacement={() => void handleCancelReplacement()}
 					isActionPending={lifecycleActionPending}
 				/>
-
+				<ExternalShortcutStatus message={externalShortcutStatus} />
 				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
 					<div className="flex items-start justify-between gap-3">
 						<div className="min-w-0">

@@ -13,6 +13,7 @@ import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.SyncResponse
+import com.selffeed.android.network.SyncRun
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,10 @@ data class FeedsUiState(
     val lastImportSummary: OpmlImportSummary? = null,
     val errorMessage: PresentationText? = null,
     val statusMessage: PresentationText? = null,
+    val externalFeedUrl: String? = null,
+    val syncHistoryByFeed: Map<String, List<SyncRun>> = emptyMap(),
+    val syncHistoryLoadingFeedId: String? = null,
+    val syncHistoryErrorByFeed: Map<String, PresentationText> = emptyMap(),
 )
 
 /**
@@ -64,6 +69,40 @@ class FeedsViewModel @Inject constructor(
     private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
     private var syncMonitorJob: Job? = null
+
+    fun offerExternalFeed(url: String) {
+        _state.update { it.copy(externalFeedUrl = url) }
+    }
+
+    fun consumeExternalFeed() {
+        _state.update { it.copy(externalFeedUrl = null) }
+    }
+
+    fun loadFeedSyncHistory(feedId: String) {
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    syncHistoryLoadingFeedId = feedId,
+                    syncHistoryErrorByFeed = it.syncHistoryErrorByFeed - feedId,
+                )
+            }
+            when (val result = repository.feedSyncHistory(feedId)) {
+                is AppResult.Success -> _state.update {
+                    it.copy(
+                        syncHistoryByFeed = it.syncHistoryByFeed + (feedId to result.data.runs),
+                        syncHistoryLoadingFeedId = null,
+                    )
+                }
+                is AppResult.Error -> _state.update {
+                    it.copy(
+                        syncHistoryLoadingFeedId = null,
+                        syncHistoryErrorByFeed = it.syncHistoryErrorByFeed +
+                            (feedId to PresentationText.dynamic(result.message)),
+                    )
+                }
+            }
+        }
+    }
 
     fun loadCategories() {
         viewModelScope.launch {

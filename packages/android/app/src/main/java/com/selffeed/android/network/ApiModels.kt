@@ -379,8 +379,28 @@ data class StatsResponse(
     val totalRead: Int,
     val totalFeeds: Int,
     val totalCategories: Int,
-    val recentSyncRuns: List<Map<String, Any?>> = emptyList(),
+    val recentSyncRuns: List<SyncRun> = emptyList(),
     val dailyMetrics: List<DailyMetric> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class SyncRun(
+    val id: String,
+    val feedId: String,
+    val feedTitle: String? = null,
+    val startedAt: String,
+    val finishedAt: String? = null,
+    val status: String,
+    val httpStatus: Int? = null,
+    val itemCount: Int = 0,
+    val errorMessage: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class FeedSyncHistoryResponse(
+    val runs: List<SyncRun>,
+    val cursor: String? = null,
+    val hasMore: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)
@@ -395,6 +415,29 @@ data class DailyMetric(
 data class AppSettingsResponse(
     val registrationLocked: Boolean,
 )
+
+@JsonClass(generateAdapter = true)
+data class AdminUsersResponse(
+    val users: List<User>,
+    val cursor: String? = null,
+    val hasMore: Boolean = false,
+)
+
+@JsonClass(generateAdapter = true)
+data class AdminCreateUserRequest(
+    val email: String,
+    val password: String,
+    val role: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class AdminUpdateUserRequest(
+    val role: String? = null,
+    val isActive: Boolean? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class AdminResetPasswordRequest(val password: String)
 
 @JsonClass(generateAdapter = true)
 data class SuccessResponse(

@@ -19,6 +19,7 @@ function article(id: string, overrides: Partial<ArticleListItem> = {}): ArticleL
 		feedId: 'feed-1',
 		feedTitle: 'Feed',
 		feedFaviconUrl: null,
+		canonicalUrl: null,
 		title: id,
 		author: null,
 		excerpt: null,

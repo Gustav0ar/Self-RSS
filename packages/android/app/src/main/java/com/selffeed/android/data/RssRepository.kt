@@ -261,10 +261,12 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
-        feedRemote.syncAllFeeds(feedId, categoryId).also { response ->
-            response.requestId?.let(sessionStore::setFeedRefreshRequestId)
-        }
+	override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
+		val response = feedRemote.syncAllFeeds(feedId, categoryId)
+		if (response.requestId != null) {
+			sessionStore.setFeedRefreshRequestId(response.requestId)
+		}
+		response
     }
 
     override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall {
@@ -274,10 +276,15 @@ class RssRepository @Inject constructor(
             sessionStore.setFeedRefreshRequestId(null)
             feedRemote.syncAllFeedsStatus(null)
         } else trackedStatus
-        status.also {
-            if (status.active) status.requestId?.let(sessionStore::setFeedRefreshRequestId)
-            if (!status.active) invalidateFeedAndArticleRuntimeCaches()
-        }
+		if (status.active && status.requestId != null) {
+			sessionStore.setFeedRefreshRequestId(status.requestId)
+		}
+		if (!status.active) invalidateFeedAndArticleRuntimeCaches()
+		status
+    }
+
+    override suspend fun feedSyncHistory(feedId: String) = safeReadCall {
+        feedRemote.feedSyncHistory(feedId)
     }
 
     override suspend fun selectDiscoveryCandidate(candidateId: String) = safeCall {
@@ -576,6 +583,22 @@ class RssRepository @Inject constructor(
         settingsRemote.updateAdminSettings(registrationLocked).also {
             runtime.invalidateByPrefix("admin:settings")
         }
+    }
+
+    override suspend fun adminUsers() = safeReadCall {
+        settingsRemote.adminUsers().users
+    }
+
+    override suspend fun adminCreateUser(email: String, password: String, role: String) = safeCall {
+        settingsRemote.adminCreateUser(email, password, role)
+    }
+
+    override suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?) = safeCall {
+        settingsRemote.adminUpdateUser(id, role, isActive)
+    }
+
+    override suspend fun adminResetPassword(id: String, password: String) = safeCall {
+        settingsRemote.adminResetPassword(id, password)
     }
 
     override fun isLoggedIn(): Boolean =

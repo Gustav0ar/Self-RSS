@@ -183,6 +183,17 @@ export function createFeedRoutes(
 		);
 	});
 
+	routes.get('/:feedId/sync-runs', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'feeds-read', RATE_LIMITS.feedsRead);
+		const userId = c.get('userId');
+		const feedId = parseUuidParam(c, 'feedId');
+		const params = new URL(c.req.url).searchParams;
+		const limit = Math.min(100, Math.max(1, Number(params.get('limit') ?? 25) || 25));
+		const cursor = params.get('cursor');
+		const offset = cursor && /^\d+$/.test(cursor) ? Number(cursor) : 0;
+		return c.json({ data: await feedService.getSyncHistory(userId, feedId, limit, offset) });
+	});
+
 	routes.patch('/:feedId', async (c) => {
 		await enforceRateLimit(c, rateLimiter, 'feeds-mutate', RATE_LIMITS.feedsMutate);
 		const userId = c.get('userId');

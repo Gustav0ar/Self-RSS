@@ -2,7 +2,14 @@ import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
 import { useEffect, useRef, useState } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { createDialogErrorFallback } from '@/components/error-fallbacks';
-import { useCreateCategory, useCreateFeed, useUpdateFeed } from '@/hooks/queries';
+import { QueryFailure } from '@/components/query-failure';
+import {
+	useCreateCategory,
+	useCreateFeed,
+	useFeedSyncHistory,
+	useSyncFeed,
+	useUpdateFeed,
+} from '@/hooks/queries';
 import { categoryPathLabel } from '@/lib/categories';
 import { feedHealthIssue } from '@/lib/feed-health';
 import { ModalShell } from './modal-shell';
@@ -25,6 +32,8 @@ function FeedDialogContent({
 	const createCategory = useCreateCategory();
 	const createFeed = useCreateFeed();
 	const updateFeed = useUpdateFeed();
+	const history = useFeedSyncHistory(mode === 'edit' ? feed?.id : undefined);
+	const syncFeed = useSyncFeed();
 	const [feedUrl, setFeedUrl] = useState('');
 	const [title, setTitle] = useState('');
 	const [categoryId, setCategoryId] = useState(defaultCategoryId ?? categories[0]?.id ?? '');
@@ -137,6 +146,53 @@ function FeedDialogContent({
 							</p>
 						</div>
 					) : null}
+					{mode === 'edit' && feed ? (
+						<details className="rounded-2xl border border-border/70 bg-background/50 px-4 py-3">
+							<summary className="cursor-pointer text-sm font-semibold">Refresh history</summary>
+							<div className="mt-3" aria-live="polite">
+								{history.isLoading ? (
+									<p className="text-xs text-muted-foreground">Loading refresh history...</p>
+								) : history.isError && !history.data ? (
+									<QueryFailure
+										title="Could not load refresh history"
+										error={history.error}
+										onRetry={() => void history.refetch()}
+										isRetrying={history.isFetching}
+										compact
+									/>
+								) : (
+									<>
+										{history.isError ? (
+											<QueryFailure
+												title="Refresh history could not be updated"
+												description="Showing the last available attempts."
+												error={history.error}
+												onRetry={() => void history.refetch()}
+												isRetrying={history.isFetching}
+												compact
+												className="mb-3"
+											/>
+										) : null}
+										<FeedRefreshHistory
+											runs={history.data?.pages.flatMap((page) => page.runs) ?? []}
+											onRetry={() => syncFeed.mutate(feed.id)}
+											retryPending={syncFeed.isPending}
+										/>
+										{history.hasNextPage ? (
+											<button
+												type="button"
+												onClick={() => void history.fetchNextPage()}
+												disabled={history.isFetchingNextPage}
+												className="mt-3 h-9 w-full rounded-xl border border-border text-xs font-medium hover:bg-accent disabled:opacity-60"
+											>
+												{history.isFetchingNextPage ? 'Loading...' : 'Load older attempts'}
+											</button>
+										) : null}
+									</>
+								)}
+							</div>
+						</details>
+					) : null}
 					<form onSubmit={handleSubmit} className="space-y-4">
 						<div>
 							<label htmlFor="feed-url" className="mb-2 block text-sm font-medium">
@@ -240,6 +296,62 @@ function FeedDialogContent({
 				</>
 			)}
 		</ModalShell>
+	);
+}
+
+type SyncRun = NonNullable<
+	ReturnType<typeof useFeedSyncHistory>['data']
+>['pages'][number]['runs'][number];
+
+function FeedRefreshHistory({
+	runs,
+	onRetry,
+	retryPending,
+}: {
+	runs: SyncRun[];
+	onRetry: () => void;
+	retryPending: boolean;
+}) {
+	if (runs.length === 0) {
+		return <p className="text-xs text-muted-foreground">No refresh attempts recorded yet.</p>;
+	}
+
+	return (
+		<ol className="space-y-2" aria-label="Feed refresh attempts">
+			{runs.map((run) => {
+				const durationMs = run.finishedAt
+					? Math.max(0, new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime())
+					: null;
+				return (
+					<li key={run.id} className="rounded-xl border border-border/60 bg-card/60 p-3">
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<p className="text-xs font-medium capitalize">{run.status}</p>
+							<time className="text-[11px] text-muted-foreground" dateTime={run.startedAt}>
+								{new Date(run.startedAt).toLocaleString()}
+							</time>
+						</div>
+						<p className="mt-1 text-[11px] text-muted-foreground">
+							{run.httpStatus ? `HTTP ${run.httpStatus} · ` : ''}
+							{run.itemCount} items
+							{durationMs !== null ? ` · ${Math.round(durationMs / 1000)}s` : ''}
+						</p>
+						{run.errorMessage ? (
+							<p className="mt-1 text-xs leading-5 text-red-500">{run.errorMessage}</p>
+						) : null}
+						{run.status === 'failed' ? (
+							<button
+								type="button"
+								onClick={onRetry}
+								disabled={retryPending}
+								className="mt-2 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-60"
+							>
+								Retry now
+							</button>
+						) : null}
+					</li>
+				);
+			})}
+		</ol>
 	);
 }
 

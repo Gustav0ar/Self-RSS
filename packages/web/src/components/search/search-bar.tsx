@@ -2,6 +2,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
+import { QueryFailure } from '@/components/query-failure';
 import { usePrefetchArticle, useSearch } from '@/hooks/queries';
 import type { SearchScope } from '@/routes/article-route-search';
 
@@ -40,8 +41,12 @@ export function SearchBar({
 		data: results,
 		fetchNextPage,
 		hasNextPage,
+		error,
+		isError,
+		isFetching,
 		isFetchingNextPage,
 		isLoading,
+		refetch,
 	} = useSearch(debouncedQuery, activeCategoryId);
 
 	const updateQuery = useCallback(
@@ -227,12 +232,32 @@ export function SearchBar({
 							</div>
 						) : null}
 					</div>
-					<div id={listboxId} role="listbox" aria-label="Search results">
-						{isLoading ? (
+					{isError ? (
+						<QueryFailure
+							title={renderedResults.length > 0 ? 'Search could not be refreshed' : 'Search failed'}
+							error={error}
+							description={
+								renderedResults.length > 0
+									? 'Showing the last available results. Try refreshing them again.'
+									: 'Articles could not be searched. Try again.'
+							}
+							onRetry={() => void refetch()}
+							isRetrying={isFetching}
+							compact
+							className="mx-2 mb-2"
+						/>
+					) : null}
+					<div
+						id={listboxId}
+						{...(renderedResults.length > 0
+							? { role: 'listbox', 'aria-label': 'Search results' }
+							: {})}
+					>
+						{isLoading && renderedResults.length === 0 ? (
 							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
 								Searching...
 							</div>
-						) : renderedResults.length === 0 ? (
+						) : isError && renderedResults.length === 0 ? null : renderedResults.length === 0 ? (
 							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
 								No results found
 							</div>

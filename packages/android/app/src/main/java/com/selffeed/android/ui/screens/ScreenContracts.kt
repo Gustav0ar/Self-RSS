@@ -7,7 +7,9 @@ import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.network.SyncRun
 import com.selffeed.android.network.UserPreferences
+import com.selffeed.android.network.User
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.PresentationText
 
@@ -23,6 +25,10 @@ data class FeedTabState(
     val lastImportSummary: OpmlImportSummary? = null,
     val syncStatus: FeedSyncAllStatus? = null,
     val lifecycleActionFeedId: String? = null,
+    val externalFeedUrl: String? = null,
+    val syncHistoryByFeed: Map<String, List<SyncRun>> = emptyMap(),
+    val syncHistoryLoadingFeedId: String? = null,
+    val syncHistoryErrorByFeed: Map<String, PresentationText> = emptyMap(),
 )
 
 data class FeedTabActions(
@@ -40,6 +46,9 @@ data class FeedTabActions(
     val onDismissImportSummary: () -> Unit = {},
     val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
     val onCancelFeedReplacement: (String) -> Unit = {},
+    val onConsumeExternalFeed: () -> Unit = {},
+    val onLoadFeedSyncHistory: (String) -> Unit = {},
+    val onRetryFeedSync: (String) -> Unit = {},
 )
 
 data class ArticleTabState(
@@ -91,6 +100,8 @@ data class SettingsTabState(
     val preferencesLoadError: PresentationText? = null,
     val stats: StatsResponse?,
     val authSessions: List<AuthSession>,
+    val adminRegistrationLocked: Boolean? = null,
+    val adminUsers: List<User> = emptyList(),
 )
 
 data class SettingsTabActions(
@@ -102,6 +113,11 @@ data class SettingsTabActions(
     val onFontChanged: (com.selffeed.android.ui.ReaderFontPreference) -> Unit = {},
     val onAutoMarkReadModeChanged: (com.selffeed.android.ui.AutoMarkReadPreference) -> Unit = {},
     val onRevokeAuthSession: (String) -> Unit,
+    val onRegistrationLockChanged: (Boolean) -> Unit = {},
+    val onRetryFeedSync: (String) -> Unit = {},
+    val onCreateAdminUser: (String, String, String) -> Unit = { _, _, _ -> },
+    val onUpdateAdminUser: (String, String?, Boolean?) -> Unit = { _, _, _ -> },
+    val onResetAdminPassword: (String, String) -> Unit = { _, _ -> },
     val onLogout: () -> Unit,
     val onRetryPreferences: () -> Unit = {},
 )

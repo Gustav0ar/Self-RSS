@@ -174,6 +174,7 @@ describe('FeedView refresh', () => {
 							{
 								id: 'article-7',
 								feedId: 'feed-42',
+								canonicalUrl: 'https://example.com/article-7',
 								displayedAt: '2026-06-01T12:00:00.000Z',
 								isRead: false,
 							},
@@ -445,7 +446,7 @@ describe('FeedView refresh', () => {
 		expect(refreshFeed).toHaveBeenCalled();
 	});
 
-	it('opens article URLs with the active feed context in a new tab', () => {
+	it('opens the original publisher URL in a new tab', () => {
 		useKeyboardNavMock.mockImplementation((options: { onOpenExternal?: (id: string) => void }) => {
 			options.onOpenExternal?.('article-7');
 		});
@@ -453,7 +454,7 @@ describe('FeedView refresh', () => {
 		render(<FeedView feedId="feed-42" selectedArticleId="article-7" onSelectArticle={() => {}} />);
 
 		expect(openWindowMock).toHaveBeenCalledWith(
-			'/articles/article-7?feedId=feed-42',
+			'https://example.com/article-7',
 			'_blank',
 			'noopener,noreferrer',
 		);

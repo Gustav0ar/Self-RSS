@@ -8,7 +8,9 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 				defaultOptions: {
 					queries: {
 						staleTime: 1000 * 60,
-						retry: 1,
+						// apiFetch owns the bounded GET retry budget. Retrying the
+						// query function here would multiply one read into six requests.
+						retry: false,
 						refetchOnWindowFocus: false,
 					},
 				},

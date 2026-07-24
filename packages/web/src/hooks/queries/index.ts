@@ -3,7 +3,14 @@
 
 // Re-export search from search-queries
 export { useSearch } from '../search-queries';
-
+export {
+	useAdminSettings,
+	useAdminUsers,
+	useCreateAdminUser,
+	useResetAdminPassword,
+	useUpdateAdminSettings,
+	useUpdateAdminUser,
+} from './admin-hooks';
 // Re-export article hooks
 export {
 	useArticle,
@@ -59,6 +66,7 @@ export {
 	useCreateFeed,
 	useDeleteFeed,
 	useExportOpml,
+	useFeedSyncHistory,
 	useFeeds,
 	useImportOpml,
 	useQueryClient,
@@ -68,7 +76,6 @@ export {
 	useSyncFeed,
 	useUpdateFeed,
 } from './feed-hooks';
-
 // Re-export preferences hooks
 export {
 	type AuthSession,

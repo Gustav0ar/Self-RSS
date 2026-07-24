@@ -1,4 +1,4 @@
-import type { ApiResponse, LoginResponse, RegisterResponse } from '@self-feed/shared';
+import type { ApiResponse, LoginResponse, RegisterResponse, User } from '@self-feed/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import {
@@ -15,6 +15,7 @@ interface AuthState {
 	isAuthenticated: boolean;
 	isLoading: boolean;
 	username: string | null;
+	user: User | null;
 	authLostMessage: string | null;
 	logoutError: string | null;
 	isLoggingOut: boolean;
@@ -31,6 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 	const [isLoading, setIsLoading] = useState(true);
 	const [username, setUsername] = useState<string | null>(null);
+	const [user, setUser] = useState<User | null>(null);
 	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
 	const [logoutError, setLogoutError] = useState<string | null>(null);
 	const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -42,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setLogoutError(null);
 			setIsAuthenticated(false);
 			setUsername(null);
+			setUser(null);
 			setAuthLostMessage(message);
 			setIsLoading(false);
 		});
@@ -64,16 +67,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					queryClient.clear();
 					setIsAuthenticated(false);
 					setUsername(null);
+					setUser(null);
 					setIsLoading(false);
 				}
 				return;
 			}
 
 			try {
-				const user = await apiFetch<ApiResponse<{ email: string }>>('/auth/me');
+				const response = await apiFetch<ApiResponse<User>>('/auth/me');
 				if (!cancelled) {
 					setIsAuthenticated(true);
-					setUsername(user.data.email);
+					setUsername(response.data.email);
+					setUser(response.data);
 				}
 			} catch {
 				clearTokens();
@@ -81,6 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 					queryClient.clear();
 					setIsAuthenticated(false);
 					setUsername(null);
+					setUser(null);
 				}
 			} finally {
 				if (!cancelled) {
@@ -107,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
+			setUser(res.data.user);
 			setIsAuthenticated(true);
 		},
 		[queryClient],
@@ -123,6 +130,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
+			setUser(res.data.user);
 			setIsAuthenticated(true);
 		},
 		[queryClient],
@@ -142,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		queryClient.clear();
 		setIsAuthenticated(false);
 		setUsername(null);
+		setUser(null);
 		setAuthLostMessage(null);
 		setLogoutError(null);
 		setIsLoggingOut(false);
@@ -158,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				isAuthenticated,
 				isLoading,
 				username,
+				user,
 				authLostMessage,
 				logoutError,
 				isLoggingOut,

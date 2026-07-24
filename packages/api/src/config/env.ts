@@ -31,6 +31,9 @@ const rawEnvSchema = z
 		JWT_REFRESH_SECRET: z.string().min(32),
 		JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
 		JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+		AUTH_SESSION_ABSOLUTE_TTL_DAYS: z.coerce.number().int().min(1).max(730).default(400),
+		AUTH_SESSION_IDLE_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+		AUTH_SESSION_CLEANUP_BATCH_SIZE: z.coerce.number().int().min(1).max(5000).default(250),
 		API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 		API_HOST: z.string().default('0.0.0.0'),
 		API_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(600).default(120),
@@ -65,6 +68,14 @@ const rawEnvSchema = z
 		RETENTION_DRY_RUN: booleanCoercible.default(true),
 	})
 	.superRefine((env, ctx) => {
+		if (env.AUTH_SESSION_IDLE_TTL_DAYS > env.AUTH_SESSION_ABSOLUTE_TTL_DAYS) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['AUTH_SESSION_IDLE_TTL_DAYS'],
+				message: 'Auth session idle lifetime must not exceed absolute lifetime',
+			});
+		}
+
 		if (env.JWT_SECRET === env.JWT_REFRESH_SECRET) {
 			ctx.addIssue({
 				code: 'custom',

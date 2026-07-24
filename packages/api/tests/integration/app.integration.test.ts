@@ -1,12 +1,20 @@
 import { createServer } from 'node:http';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
 import { CacheKeys, CacheTTL, closeRedis, getRedis } from '../../src/db/redis.js';
-import { articles, auditLogs, authSessions, feedFetchJobs, users } from '../../src/db/schema.js';
+import {
+	articles,
+	auditLogs,
+	authSessions,
+	feedFetchJobs,
+	feeds,
+	syncRuns,
+	users,
+} from '../../src/db/schema.js';
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
@@ -248,6 +256,105 @@ afterAll(async () => {
 });
 
 describe('API integration', () => {
+	it('rejects access and refresh after absolute or idle session expiration', async () => {
+		const absolute = await registerUser('absolute-expiry@example.com');
+		const [absoluteSession] = await db.select().from(authSessions);
+		expect(absoluteSession).toBeDefined();
+		await db
+			.update(authSessions)
+			.set({ expiresAt: new Date(Date.now() - 1_000) })
+			.where(eq(authSessions.id, absoluteSession!.id));
+		await redis.del(CacheKeys.authSessionActive(absoluteSession!.id));
+		expect(
+			(await authedRequest('/api/v1/auth/me', absolute.body.data.tokens.accessToken as string))
+				.response.status,
+		).toBe(401);
+		expect(
+			(
+				await jsonRequest('/api/v1/auth/refresh', {
+					method: 'POST',
+					headers: { Cookie: getCookieHeader(absolute.response)! },
+				})
+			).response.status,
+		).toBe(401);
+
+		await resetDatabase();
+		const idle = await registerUser('idle-expiry@example.com');
+		const [idleSession] = await db.select().from(authSessions);
+		expect(idleSession).toBeDefined();
+		await db
+			.update(authSessions)
+			.set({ lastSeenAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1_000) })
+			.where(eq(authSessions.id, idleSession!.id));
+		await redis.del(CacheKeys.authSessionActive(idleSession!.id));
+		expect(
+			(await authedRequest('/api/v1/auth/me', idle.body.data.tokens.accessToken as string)).response
+				.status,
+		).toBe(401);
+	});
+
+	it('paginates owned feed sync history and sanitizes stored errors', async () => {
+		const owner = await registerUser('history-owner@example.com');
+		const ownerToken = owner.body.data.tokens.accessToken as string;
+		const category = await authedRequest('/api/v1/categories', ownerToken, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'History' }),
+		});
+		const [feed] = await db
+			.insert(feeds)
+			.values({
+				userId: owner.body.data.user.id,
+				categoryId: category.body.data.id,
+				feedUrl: 'https://example.com/history.xml',
+				title: 'History feed',
+			})
+			.returning();
+		expect(feed).toBeDefined();
+		await db.insert(syncRuns).values([
+			{
+				feedId: feed!.id,
+				status: 'failed',
+				startedAt: new Date('2026-01-02T00:00:00.000Z'),
+				finishedAt: new Date('2026-01-02T00:00:05.000Z'),
+				httpStatus: 503,
+				errorMessage: 'x'.repeat(700),
+			},
+			{
+				feedId: feed!.id,
+				status: 'success',
+				startedAt: new Date('2026-01-01T00:00:00.000Z'),
+				finishedAt: new Date('2026-01-01T00:00:03.000Z'),
+				httpStatus: 200,
+				itemCount: 12,
+			},
+		]);
+
+		const firstPage = await authedRequest(
+			`/api/v1/feeds/${feed!.id}/sync-runs?limit=1`,
+			ownerToken,
+		);
+		expect(firstPage.response.status).toBe(200);
+		expect(firstPage.body.data.runs).toHaveLength(1);
+		expect(firstPage.body.data.runs[0].feedTitle).toBe('History feed');
+		expect(firstPage.body.data.runs[0].errorMessage).toHaveLength(500);
+		expect(firstPage.body.data.hasMore).toBe(true);
+
+		const secondPage = await authedRequest(
+			`/api/v1/feeds/${feed!.id}/sync-runs?limit=1&cursor=${firstPage.body.data.cursor}`,
+			ownerToken,
+		);
+		expect(secondPage.body.data.runs[0].status).toBe('success');
+		expect(secondPage.body.data.hasMore).toBe(false);
+
+		const foreign = await registerUser('history-foreign@example.com');
+		const foreignResult = await authedRequest(
+			`/api/v1/feeds/${feed!.id}/sync-runs`,
+			foreign.body.data.tokens.accessToken,
+		);
+		expect(foreignResult.response.status).toBe(404);
+		expect(await db.select().from(feeds)).toHaveLength(1);
+	});
+
 	it('blocks public registration when ALLOW_REGISTRATION is false, even for bootstrap admin', async () => {
 		const previousAllowRegistration = process.env.ALLOW_REGISTRATION;
 		process.env.ALLOW_REGISTRATION = 'false';
@@ -400,6 +507,67 @@ describe('API integration', () => {
 
 		const auditLogCounts = await db.select({ count: sql<number>`count(*)` }).from(auditLogs);
 		expect(auditLogCounts[0]?.count).toBe(2);
+
+		const listedUsers = await authedRequest('/api/v1/admin/users?limit=1', adminToken);
+		expect(listedUsers.response.status).toBe(200);
+		expect(listedUsers.body.data.users).toHaveLength(1);
+		expect(listedUsers.body.data.users[0]).not.toHaveProperty('passwordHash');
+		expect(listedUsers.body.data.hasMore).toBe(true);
+
+		const manualLogin = await jsonRequest('/api/v1/auth/login', {
+			method: 'POST',
+			body: JSON.stringify({ email: 'manual@example.com', password: 'password123' }),
+		});
+		expect(manualLogin.response.status).toBe(200);
+		const manualToken = manualLogin.body.data.tokens.accessToken as string;
+
+		const deactivateManual = await authedRequest(
+			`/api/v1/admin/users/${createdByAdmin.body.data.id}`,
+			adminToken,
+			{ method: 'PATCH', body: JSON.stringify({ isActive: false }) },
+		);
+		expect(deactivateManual.response.status).toBe(200);
+		expect(deactivateManual.body.data.isActive).toBe(false);
+		expect((await authedRequest('/api/v1/auth/me', manualToken)).response.status).toBe(401);
+
+		const reactivateManual = await authedRequest(
+			`/api/v1/admin/users/${createdByAdmin.body.data.id}`,
+			adminToken,
+			{ method: 'PATCH', body: JSON.stringify({ isActive: true }) },
+		);
+		expect(reactivateManual.response.status).toBe(200);
+
+		const resetManual = await authedRequest(
+			`/api/v1/admin/users/${createdByAdmin.body.data.id}/reset-password`,
+			adminToken,
+			{ method: 'POST', body: JSON.stringify({ password: 'new-password123' }) },
+		);
+		expect(resetManual.response.status).toBe(200);
+		expect(resetManual.body.data).not.toHaveProperty('passwordHash');
+		expect(
+			(
+				await jsonRequest('/api/v1/auth/login', {
+					method: 'POST',
+					body: JSON.stringify({ email: 'manual@example.com', password: 'password123' }),
+				})
+			).response.status,
+		).toBe(401);
+		expect(
+			(
+				await jsonRequest('/api/v1/auth/login', {
+					method: 'POST',
+					body: JSON.stringify({ email: 'manual@example.com', password: 'new-password123' }),
+				})
+			).response.status,
+		).toBe(200);
+
+		const blockedSelfDemotion = await authedRequest(
+			`/api/v1/admin/users/${registered.body.data.user.id}`,
+			adminToken,
+			{ method: 'PATCH', body: JSON.stringify({ role: 'user' }) },
+		);
+		expect(blockedSelfDemotion.response.status).toBe(400);
+		expect((await authedRequest('/api/v1/auth/me', adminToken)).response.status).toBe(200);
 
 		const logout = await jsonRequest('/api/v1/auth/logout', {
 			method: 'POST',

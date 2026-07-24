@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errors.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
+import type { SyncRunRepository } from '../repositories/settings.repository.js';
 import { readResponseTextWithinLimit } from '../utils/bounded-response.js';
 import { createFeedFetchHeaders } from '../utils/feed-fetch-headers.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
@@ -40,6 +41,7 @@ export class FeedService {
 		private redis?: Redis,
 		private durableFacade?: DurableFeedFacadeService,
 		private pipelineMode: 'legacy' | 'v2' = 'legacy',
+		private syncRunRepo?: SyncRunRepository,
 	) {
 		this.parser = new RSSParser({
 			timeout: 15_000,
@@ -50,6 +52,25 @@ export class FeedService {
 
 	usesDurablePipeline() {
 		return this.pipelineMode === 'v2' && Boolean(this.durableFacade);
+	}
+
+	async getSyncHistory(userId: string, feedId: string, limit: number, offset: number) {
+		const feed = await this.feedRepo.findById(feedId, userId);
+		if (!feed) throw AppError.notFound('Feed not found');
+		if (!this.syncRunRepo) return { runs: [], cursor: null, hasMore: false };
+
+		const rows = await this.syncRunRepo.findByFeedForUser(userId, feedId, limit, offset);
+		const hasMore = rows.length > limit;
+		return {
+			runs: rows.slice(0, limit).map((run) => ({
+				...run,
+				startedAt: run.startedAt.toISOString(),
+				finishedAt: run.finishedAt?.toISOString() ?? null,
+				errorMessage: run.errorMessage?.slice(0, 500) ?? null,
+			})),
+			cursor: hasMore ? String(offset + limit) : null,
+			hasMore,
+		};
 	}
 
 	async getAll(userId: string) {

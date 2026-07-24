@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
+import type { AuthSessionRepository } from '../repositories/auth-session.repository.js';
 import type { ArticleCacheService } from '../services/article-cache.service.js';
 import type { FeedSyncService } from '../services/feed-sync.service.js';
 import { createLogger } from '../utils/logger.js';
@@ -9,6 +10,31 @@ const logger = createLogger();
 
 interface SyncCoordinator {
 	isRunning: boolean;
+}
+
+export function startAuthSessionCleanup(
+	sessionRepo: AuthSessionRepository,
+	batchSize: number,
+	intervalMs: number = 6 * 60 * 60 * 1000,
+) {
+	let running = false;
+	const cleanup = async () => {
+		if (running) return;
+		running = true;
+		try {
+			const deleted = await sessionRepo.cleanupExpired(batchSize);
+			if (deleted > 0) logger.info('Expired auth session cleanup complete', { deleted });
+		} catch (error) {
+			logger.error('Expired auth session cleanup failed', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			running = false;
+		}
+	};
+	void cleanup();
+	const interval = setInterval(() => void cleanup(), intervalMs);
+	return () => clearInterval(interval);
 }
 
 export function startSyncScheduler(

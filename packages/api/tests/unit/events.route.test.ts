@@ -18,9 +18,11 @@ describe('event routes', () => {
 		app.route('/events', createEventRoutes(realtimeService as never));
 
 		const response = await app.request('/events/read-state');
-		await response.text().catch(() => undefined);
+		const body = await response.text();
 
 		expect(realtimeService.subscribeToEvents).toHaveBeenCalledTimes(1);
 		expect(sseRegistry.count).toBe(0);
+		expect(body).toContain('event: read-state.error');
+		expect(body).not.toContain('redis subscriber unavailable');
 	});
 });

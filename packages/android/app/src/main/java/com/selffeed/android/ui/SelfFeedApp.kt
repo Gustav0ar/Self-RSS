@@ -142,6 +142,8 @@ data class SelfFeedAppActions(
     val onDismissImportSummary: () -> Unit = {},
     val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
     val onCancelFeedReplacement: (String) -> Unit = {},
+    val onConsumeExternalFeed: () -> Unit = {},
+    val onLoadFeedSyncHistory: (String) -> Unit = {},
     val onRefreshArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
     val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
@@ -163,6 +165,11 @@ data class SelfFeedAppActions(
     val onFontChanged: (ReaderFontPreference) -> Unit = {},
     val onAutoMarkReadModeChanged: (AutoMarkReadPreference) -> Unit = {},
     val onRevokeAuthSession: (String) -> Unit,
+    val onRegistrationLockChanged: (Boolean) -> Unit = {},
+    val onRetryFeedSync: (String) -> Unit = {},
+    val onCreateAdminUser: (String, String, String) -> Unit = { _, _, _ -> },
+    val onUpdateAdminUser: (String, String?, Boolean?) -> Unit = { _, _, _ -> },
+    val onResetAdminPassword: (String, String) -> Unit = { _, _ -> },
     val onRetryPreferences: () -> Unit = {},
     val onClearMessages: () -> Unit,
 )
@@ -317,6 +324,10 @@ fun SelfFeedApp(
         state.feeds.lastImportSummary,
         state.feeds.syncStatus,
         state.feeds.lifecycleActionFeedId,
+        state.feeds.externalFeedUrl,
+        state.feeds.syncHistoryByFeed,
+        state.feeds.syncHistoryLoadingFeedId,
+        state.feeds.syncHistoryErrorByFeed,
     ) {
         FeedTabState(
             categories = state.feeds.categories,
@@ -329,6 +340,10 @@ fun SelfFeedApp(
             lastImportSummary = state.feeds.lastImportSummary,
             syncStatus = state.feeds.syncStatus,
             lifecycleActionFeedId = state.feeds.lifecycleActionFeedId,
+            externalFeedUrl = state.feeds.externalFeedUrl,
+            syncHistoryByFeed = state.feeds.syncHistoryByFeed,
+            syncHistoryLoadingFeedId = state.feeds.syncHistoryLoadingFeedId,
+            syncHistoryErrorByFeed = state.feeds.syncHistoryErrorByFeed,
         )
     }
     val articleTabState = remember(
@@ -390,6 +405,8 @@ fun SelfFeedApp(
         state.settings.preferencesLoadError,
         state.settings.stats,
         state.settings.authSessions,
+        state.settings.adminRegistrationLocked,
+        state.settings.adminUsers,
     ) {
         SettingsTabState(
             preferences = state.settings.preferences,
@@ -397,6 +414,8 @@ fun SelfFeedApp(
             preferencesLoadError = state.settings.preferencesLoadError,
             stats = state.settings.stats,
             authSessions = state.settings.authSessions,
+            adminRegistrationLocked = state.settings.adminRegistrationLocked,
+            adminUsers = state.settings.adminUsers,
         )
     }
     val feedActions = remember(actions) {
@@ -415,6 +434,9 @@ fun SelfFeedApp(
             onDismissImportSummary = actions.onDismissImportSummary,
             onSelectDiscoveryCandidate = actions.onSelectDiscoveryCandidate,
             onCancelFeedReplacement = actions.onCancelFeedReplacement,
+            onConsumeExternalFeed = actions.onConsumeExternalFeed,
+            onLoadFeedSyncHistory = actions.onLoadFeedSyncHistory,
+            onRetryFeedSync = actions.onRetryFeedSync,
         )
     }
     val articleActions = remember(actions, snackbarHostState, scope) {
@@ -449,6 +471,11 @@ fun SelfFeedApp(
             onFontChanged = actions.onFontChanged,
             onAutoMarkReadModeChanged = actions.onAutoMarkReadModeChanged,
             onRevokeAuthSession = actions.onRevokeAuthSession,
+            onRegistrationLockChanged = actions.onRegistrationLockChanged,
+            onRetryFeedSync = actions.onRetryFeedSync,
+            onCreateAdminUser = actions.onCreateAdminUser,
+            onUpdateAdminUser = actions.onUpdateAdminUser,
+            onResetAdminPassword = actions.onResetAdminPassword,
             onLogout = actions.onLogout,
             onRetryPreferences = actions.onRetryPreferences,
         )

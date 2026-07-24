@@ -56,6 +56,7 @@ const { refetchStats, statsData, statsResult } = vi.hoisted(() => {
 
 vi.mock('../../src/hooks/queries', () => ({
 	useStats: () => statsResult.current,
+	useSyncFeed: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 describe('StatsPanel', () => {
@@ -78,6 +79,9 @@ describe('StatsPanel', () => {
 		expect(screen.getByText('12 total actions')).toBeTruthy();
 		expect(screen.getByRole('img', { name: 'Daily activity chart' })).toBeTruthy();
 		expect(screen.getByText('2026-01-02')).toBeTruthy();
+		const tallestBar = screen.getByTitle('2026-01-02: 8 actions');
+		expect(tallestBar.style.height).toBe('100%');
+		expect(tallestBar.parentElement?.className).toContain('h-full');
 	});
 
 	it('shows an actionable failure instead of loading forever when no stats are available', () => {

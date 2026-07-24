@@ -8,6 +8,7 @@ import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.User
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -264,6 +265,21 @@ class AuthViewModelTest {
         val state = viewModel.state.value
         assertFalse(state.isAuthenticated)
         coVerify { repository.logout() }
+    }
+
+    @Test
+    fun `confirmed external server switch revokes locally and waits for a new login`() = runTest {
+        val viewModel = AuthViewModel(repository)
+        viewModel.bootstrap()
+
+        viewModel.switchServerForExternalAction("https://other.example")
+
+        assertFalse(viewModel.state.value.isAuthenticated)
+        assertEquals("other.example", viewModel.state.value.apiBaseUrl)
+        coVerifyOrder {
+            repository.logout()
+            repository.setApiBaseUrl("https://other.example")
+        }
     }
 
     @Test

@@ -19,22 +19,30 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.selffeed.android.R
 import com.selffeed.android.ui.ArticleSortPreference
@@ -238,7 +246,61 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 }
             }
         }
+        if (!state.stats?.recentSyncRuns.isNullOrEmpty()) {
+            item {
+                FeedSurfaceCard {
+                    Text(
+                        stringResource(R.string.stats_recent_syncs),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    state.stats?.recentSyncRuns?.forEach { syncRun ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                        ) {
+                            Text(
+                                syncRun.feedTitle ?: stringResource(R.string.stats_unknown_feed),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.stats_sync_outcome,
+                                    syncRun.status,
+                                    syncRun.httpStatus?.toString() ?: "—",
+                                    syncRun.itemCount,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            syncRun.errorMessage?.let { error ->
+                                Text(
+                                    error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            if (syncRun.status == "failed") {
+                                Button(onClick = { actions.onRetryFeedSync(syncRun.feedId) }) {
+                                    Text(stringResource(R.string.stats_retry_sync))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         item { AuthenticatedDevicesSection(sessions = state.authSessions, onRevokeSession = actions.onRevokeAuthSession) }
+        state.adminRegistrationLocked?.let { registrationLocked ->
+            item {
+                FeedSurfaceCard {
+                    AdminSection(state, actions, registrationLocked)
+                }
+            }
+        }
         item {
             FeedSurfaceCard {
                 Button(onClick = actions.onLogout, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
@@ -248,6 +310,195 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AdminSection(
+    state: SettingsTabState,
+    actions: SettingsTabActions,
+    registrationLocked: Boolean,
+) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var createAsAdmin by remember { mutableStateOf(false) }
+    var resetUserId by remember { mutableStateOf<String?>(null) }
+    var resetPassword by remember { mutableStateOf("") }
+    var pendingUserUpdate by remember {
+        mutableStateOf<Triple<String, String?, Boolean?>?>(null)
+    }
+
+    Text(
+        stringResource(R.string.settings_administration),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        stringResource(R.string.settings_administration_detail),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(stringResource(R.string.settings_registration_lock))
+        Switch(
+            checked = registrationLocked,
+            onCheckedChange = actions.onRegistrationLockChanged,
+        )
+    }
+    Spacer(modifier = Modifier.height(16.dp))
+    Text(stringResource(R.string.settings_admin_create_user), fontWeight = FontWeight.SemiBold)
+    OutlinedTextField(
+        value = email,
+        onValueChange = { email = it },
+        label = { Text(stringResource(R.string.auth_email)) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+    OutlinedTextField(
+        value = password,
+        onValueChange = { password = it },
+        label = { Text(stringResource(R.string.auth_password)) },
+        modifier = Modifier.fillMaxWidth(),
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.settings_admin_role))
+        Switch(checked = createAsAdmin, onCheckedChange = { createAsAdmin = it })
+    }
+    Button(
+        onClick = {
+            actions.onCreateAdminUser(
+                email,
+                password,
+                if (createAsAdmin) "admin" else "user",
+            )
+            email = ""
+            password = ""
+            createAsAdmin = false
+        },
+        enabled = email.isNotBlank() && password.length >= 8,
+    ) {
+        Text(stringResource(R.string.settings_admin_create))
+    }
+    state.adminUsers.forEach { user ->
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(user.email, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(
+                R.string.settings_admin_user_summary,
+                user.role,
+                if (user.isActive) {
+                    stringResource(R.string.settings_admin_active)
+                } else {
+                    stringResource(R.string.settings_admin_inactive)
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(
+                onClick = {
+                    pendingUserUpdate = Triple(
+                        user.id,
+                        if (user.role == "admin") "user" else "admin",
+                        null,
+                    )
+                },
+            ) {
+                Text(
+                    stringResource(
+                        if (user.role == "admin") {
+                            R.string.settings_admin_make_reader
+                        } else {
+                            R.string.settings_admin_make_admin
+                        },
+                    ),
+                )
+            }
+            OutlinedButton(
+                onClick = {
+                    pendingUserUpdate = Triple(user.id, null, !user.isActive)
+                },
+            ) {
+                Text(
+                    stringResource(
+                        if (user.isActive) {
+                            R.string.settings_admin_deactivate
+                        } else {
+                            R.string.settings_admin_activate
+                        },
+                    ),
+                )
+            }
+        }
+        TextButton(onClick = { resetUserId = user.id }) {
+            Text(stringResource(R.string.settings_admin_reset_password))
+        }
+    }
+
+    if (resetUserId != null) {
+        AlertDialog(
+            onDismissRequest = {
+                resetUserId = null
+                resetPassword = ""
+            },
+            title = { Text(stringResource(R.string.settings_admin_reset_password)) },
+            text = {
+                OutlinedTextField(
+                    value = resetPassword,
+                    onValueChange = { resetPassword = it },
+                    label = { Text(stringResource(R.string.auth_password)) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { resetUserId = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        actions.onResetAdminPassword(resetUserId.orEmpty(), resetPassword)
+                        resetUserId = null
+                        resetPassword = ""
+                    },
+                    enabled = resetPassword.length >= 8,
+                ) {
+                    Text(stringResource(R.string.settings_admin_reset_password))
+                }
+            },
+        )
+    }
+    pendingUserUpdate?.let { update ->
+        AlertDialog(
+            onDismissRequest = { pendingUserUpdate = null },
+            title = { Text(stringResource(R.string.settings_admin_confirm_change)) },
+            text = { Text(stringResource(R.string.settings_admin_confirm_change_detail)) },
+            dismissButton = {
+                TextButton(onClick = { pendingUserUpdate = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        actions.onUpdateAdminUser(update.first, update.second, update.third)
+                        pendingUserUpdate = null
+                    },
+                ) {
+                    Text(stringResource(R.string.action_confirm))
+                }
+            },
+        )
     }
 }
 

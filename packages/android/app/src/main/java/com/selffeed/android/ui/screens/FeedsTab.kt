@@ -119,6 +119,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.network.SyncRun
 import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.AutoMarkReadPreference
@@ -134,10 +135,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.ByteArrayOutputStream
+import java.time.Duration
+import java.time.Instant
 
 private sealed interface FeedManagementDialog {
     data class CategoryEditor(val category: CategoryWithCounts?) : FeedManagementDialog
-    data class FeedEditor(val feed: FeedWithCounts?) : FeedManagementDialog
+    data class FeedEditor(
+        val feed: FeedWithCounts?,
+        val initialUrl: String? = null,
+    ) : FeedManagementDialog
     data class DeleteCategory(val category: CategoryWithCounts) : FeedManagementDialog
     data class DeleteFeed(val feed: FeedWithCounts) : FeedManagementDialog
 }
@@ -195,6 +201,16 @@ fun FeedsTab(
     var managementDialog by remember { mutableStateOf<FeedManagementDialog?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     val opmlReadError = stringResource(R.string.feeds_read_opml_error)
+
+    LaunchedEffect(state.externalFeedUrl) {
+        val url = state.externalFeedUrl ?: return@LaunchedEffect
+        managementDialog = FeedManagementDialog.FeedEditor(feed = null, initialUrl = url)
+        actions.onConsumeExternalFeed()
+    }
+    val historyFeedId = (managementDialog as? FeedManagementDialog.FeedEditor)?.feed?.id
+    LaunchedEffect(historyFeedId) {
+        historyFeedId?.let(actions.onLoadFeedSyncHistory)
+    }
 
     LaunchedEffect(state.categories) {
         fun seed(category: CategoryWithCounts) {
@@ -504,10 +520,20 @@ fun FeedsTab(
         )
         is FeedManagementDialog.FeedEditor -> FeedEditorDialog(
             feed = dialog.feed,
+            initialUrl = dialog.initialUrl,
             categories = allCategories,
             onDismiss = { managementDialog = null },
             onCreateCategory = { name -> actions.onCreateCategory(name, null) },
             actionPending = state.lifecycleActionFeedId == dialog.feed?.id,
+            syncHistory = dialog.feed?.id?.let(state.syncHistoryByFeed::get).orEmpty(),
+            syncHistoryLoading = state.syncHistoryLoadingFeedId == dialog.feed?.id,
+            syncHistoryError = dialog.feed?.id?.let(state.syncHistoryErrorByFeed::get),
+            onReloadSyncHistory = {
+                dialog.feed?.id?.let(actions.onLoadFeedSyncHistory)
+            },
+            onRetrySync = {
+                dialog.feed?.id?.let(actions.onRetryFeedSync)
+            },
             onSelectCandidate = { candidateId ->
                 dialog.feed?.let { actions.onSelectDiscoveryCandidate(it.id, candidateId) }
             },
@@ -642,15 +668,23 @@ private fun CategoryEditorDialog(
 @Composable
 private fun FeedEditorDialog(
     feed: FeedWithCounts?,
+    initialUrl: String? = null,
     categories: List<CategoryWithCounts>,
     onDismiss: () -> Unit,
     onCreateCategory: (String) -> Unit,
     actionPending: Boolean,
+    syncHistory: List<SyncRun>,
+    syncHistoryLoading: Boolean,
+    syncHistoryError: PresentationText?,
+    onReloadSyncHistory: () -> Unit,
+    onRetrySync: () -> Unit,
     onSelectCandidate: (String) -> Unit,
     onCancelReplacement: () -> Unit,
     onSave: (url: String, title: String?, categoryId: String, pollingIntervalMinutes: Int?) -> Unit,
 ) {
-    var url by remember(feed?.id) { mutableStateOf(feed?.feedUrl.orEmpty()) }
+    var url by remember(feed?.id, initialUrl) {
+        mutableStateOf(feed?.feedUrl ?: initialUrl.orEmpty())
+    }
     var title by remember(feed?.id) { mutableStateOf(feed?.title.orEmpty()) }
     var categoryId by remember(feed?.id) { mutableStateOf(feed?.categoryId ?: categories.firstOrNull()?.id.orEmpty()) }
     var pollingInterval by remember(feed?.id) { mutableStateOf(feed?.pollingIntervalMinutes?.toString().orEmpty()) }
@@ -769,6 +803,95 @@ private fun FeedEditorDialog(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                    }
+                }
+                if (feed != null) {
+                    Text(
+                        text = stringResource(R.string.stats_recent_syncs),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    when {
+                        syncHistoryLoading && syncHistory.isEmpty() -> CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        syncHistoryError != null && syncHistory.isEmpty() -> {
+                            Text(
+                                text = syncHistoryError.resolve(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            TextButton(onClick = onReloadSyncHistory) {
+                                Text(stringResource(R.string.action_retry))
+                            }
+                        }
+                        syncHistory.isEmpty() -> Text(
+                            text = stringResource(R.string.feeds_refresh_history_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        else -> {
+                            if (syncHistoryError != null) {
+                                Text(
+                                    text = stringResource(R.string.feeds_refresh_history_error),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                TextButton(onClick = onReloadSyncHistory) {
+                                    Text(stringResource(R.string.action_retry))
+                                }
+                            }
+                            syncHistory.take(5).forEach { run ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        Text(
+                                            text = syncRunStatusLabel(run.status),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Text(
+                                            text = formatPublishedAt(run.startedAt),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            text = stringResource(
+                                                R.string.feeds_refresh_history_duration,
+                                                run.httpStatus?.let { "HTTP $it" }
+                                                    ?: stringResource(R.string.stats_sync_no_http),
+                                                run.itemCount,
+                                                syncRunDurationSeconds(run),
+                                            ),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        run.errorMessage?.let { error ->
+                                            Text(
+                                                text = error,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                        if (run.status == "failed") {
+                                            TextButton(
+                                                onClick = onRetrySync,
+                                                enabled = !actionPending,
+                                            ) {
+                                                Text(stringResource(R.string.stats_retry_sync))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1225,6 +1348,22 @@ internal fun feedHealthIssue(feed: FeedWithCounts): FeedHealthIssue? {
             } ?: PresentationText.dynamic(""),
         ),
     )
+}
+
+@Composable
+private fun syncRunStatusLabel(status: String): String = stringResource(
+    when (status) {
+        "failed" -> R.string.feeds_refresh_status_failed
+        "running" -> R.string.feeds_refresh_status_running
+        else -> R.string.feeds_refresh_status_success
+    },
+)
+
+private fun syncRunDurationSeconds(run: SyncRun): Long {
+    val finishedAt = run.finishedAt ?: return 0
+    return runCatching {
+        Duration.between(Instant.parse(run.startedAt), Instant.parse(finishedAt)).seconds.coerceAtLeast(0)
+    }.getOrDefault(0)
 }
 
 @Composable

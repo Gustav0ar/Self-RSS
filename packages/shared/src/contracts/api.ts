@@ -143,6 +143,7 @@ export interface ArticleListItem {
 	feedId: string;
 	feedTitle: string;
 	feedFaviconUrl: string | null;
+	canonicalUrl: string | null;
 	title: string;
 	author: string | null;
 	excerpt: string | null;
@@ -267,11 +268,23 @@ export interface StatsResponse {
 	dailyMetrics: UserMetricsDaily[];
 }
 
+export interface FeedSyncHistoryResponse {
+	runs: SyncRun[];
+	cursor: string | null;
+	hasMore: boolean;
+}
+
 // Preferences
 export type PreferencesResponse = UserPreferences;
 
 // Admin
 export type AppSettingsResponse = AppSettings;
+
+export interface AdminUsersResponse {
+	users: User[];
+	cursor: string | null;
+	hasMore: boolean;
+}
 
 export interface RegistrationStatusResponse {
 	registrationEnabled: boolean;

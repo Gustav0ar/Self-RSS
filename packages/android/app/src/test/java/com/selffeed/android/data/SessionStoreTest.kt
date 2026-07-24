@@ -45,7 +45,7 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `clear wipes tokens but keeps the client id`() {
+    fun `clear wipes tokens but keeps the client id`() = runBlocking {
         val clientIdBefore = store.getClientId()
         // setAccessToken / setRefreshCookie may fail in a Robolectric
         // environment without a real AndroidKeyStore; gate the call
@@ -62,19 +62,20 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `api server host is persisted across store instances`() {
+    fun `api server host is persisted across store instances`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val writer = SessionStore(context)
 
         val normalized = writer.setApiBaseUrl("rss.example.com")
         val reader = SessionStore(context)
+        reader.preload()
 
         assertEquals("rss.example.com", normalized)
         assertEquals(normalized, reader.getApiBaseUrl())
     }
 
     @Test
-    fun `clear preserves api server host`() {
+    fun `clear preserves api server host`() = runBlocking {
         val normalized = store.setApiBaseUrl("10.0.22.22:3000")
 
         store.clear()
@@ -84,13 +85,13 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `changing api base url clears tokens from the previous server`() {
+    fun `changing api base url clears tokens from the previous server`() = runBlocking {
         store.setApiBaseUrl("https://old.example.com")
         val ok = runCatching {
             store.setAccessToken("token")
             store.setRefreshCookie("rss_refresh_token=cookie; Domain=old.example.com")
         }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
 
         store.setApiBaseUrl("https://new.example.com")
 
@@ -99,7 +100,7 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `full api url stored by older versions is displayed as server host`() {
+    fun `full api url stored by older versions is displayed as server host`() = runBlocking {
         val normalized = store.setApiBaseUrl("http://10.0.22.22:3000/api/rss")
 
         assertEquals("10.0.22.22:3000", normalized)
@@ -107,48 +108,50 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `set and get refresh cookie round-trips when the key store is available`() {
+    fun `set and get refresh cookie round-trips when the key store is available`() = runBlocking {
         // Skip if the AndroidKeyStore shim doesn't support AES/GCM.
         val ok = runCatching { store.setRefreshCookie("rss_refresh_token=abc; Domain=example.com") }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
         val read = store.getRefreshCookie()
         assertEquals("rss_refresh_token=abc; Domain=example.com", read)
     }
 
     @Test
-    fun `set and get access token round-trips when the key store is available`() {
+    fun `set and get access token round-trips when the key store is available`() = runBlocking {
         val ok = runCatching { store.setAccessToken("token-1") }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
         val read = store.getAccessToken()
         assertEquals("token-1", read)
     }
 
     @Test
-    fun `access token is lazy loaded when preload has not run`() {
+    fun `preload restores the persisted access token`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val writer = SessionStore(context)
         val ok = runCatching {
             writer.clear()
             writer.setAccessToken("lazy-token")
         }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
 
         val reader = SessionStore(context)
+        reader.preload()
 
         assertEquals("lazy-token", reader.getAccessToken())
     }
 
     @Test
-    fun `refresh cookie is lazy loaded when preload has not run`() {
+    fun `preload restores the persisted refresh cookie`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val writer = SessionStore(context)
         val ok = runCatching {
             writer.clear()
             writer.setRefreshCookie("rss_refresh_token=lazy-cookie; Domain=example.com")
         }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
 
         val reader = SessionStore(context)
+        reader.preload()
 
         assertEquals("rss_refresh_token=lazy-cookie; Domain=example.com", reader.getRefreshCookie())
     }
@@ -164,9 +167,9 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `two encryptions of the same plaintext produce different ciphertexts (IV)`() {
+    fun `two encryptions of the same plaintext produce different ciphertexts (IV)`() = runBlocking {
         val ok = runCatching { store.setAccessToken("token-x") }.isSuccess
-        if (!ok) return
+        if (!ok) return@runBlocking
         val first = store.getAccessToken()
         val second = store.getAccessToken()
         // The read path is deterministic; this test just confirms the
@@ -178,7 +181,7 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `clear on a fresh store still leaves a stable client id`() {
+    fun `clear on a fresh store still leaves a stable client id`() = runBlocking {
         val first = store.getClientId()
         store.clear()
         val after = store.getClientId()
@@ -195,10 +198,10 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `legacy session migration re-encrypts plaintext values supplied by legacy reader when available`() {
+    fun `legacy session migration re-encrypts plaintext values supplied by legacy reader when available`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val keyStoreOk = runCatching { store.setAccessToken("probe") }.isSuccess
-        if (!keyStoreOk) return
+        if (!keyStoreOk) return@runBlocking
         store.clear()
 
         val legacy = context.getSharedPreferences("rss_secure_session", Context.MODE_PRIVATE)
@@ -209,7 +212,8 @@ class SessionStoreTest {
             .putString("client_id", "123e4567-e89b-12d3-a456-426614174000")
             .commit()
 
-        val migrated = SessionStore(context) { legacy }
+        val migrated = SessionStore(context, legacyPreferencesFactory = { legacy })
+        migrated.preload()
 
         assertEquals("legacy-access", migrated.getAccessToken())
         assertEquals("legacy-refresh", migrated.getRefreshCookie())

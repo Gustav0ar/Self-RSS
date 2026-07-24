@@ -109,6 +109,11 @@ Tests are split into unit, integration, and E2E tiers. Make sure dependencies ar
 - **Run Integration Tests:** `bun run test:integration` (Spins up an isolated Redis container, creates a temporary SQLite file, and runs API integration tests).
 - **Run End-to-End Tests:** `bun run test:e2e` (Installs Playwright dependencies, seeds the database, and runs full visual flow tests against headless Chromium).
 - **Run All Suites:** Run unit, integration, and E2E tests together with `bun run test:all`.
+- **Run the production gate:** Install the pinned toolchain with `mise install`, then run
+  `mise exec -- bun run check:all`. This longer command adds builds, OpenAPI drift
+  detection, Android unit/lint/release checks, and a high-severity dependency audit.
+  It requires a working Podman or Docker engine plus an installed Android SDK/JDK.
+  Focused commands above remain the faster choice while iterating.
 
 
 ## Project Structure

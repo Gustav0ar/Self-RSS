@@ -26,7 +26,7 @@ function commandExists(command: string) {
 	return result.status === 0;
 }
 
-function getRuntime(): 'podman' | 'docker' {
+export function getRuntime(): 'podman' | 'docker' {
 	if (commandExists('podman')) return 'podman';
 	if (commandExists('docker')) return 'docker';
 	throw new Error('Neither podman nor docker is available');
@@ -54,7 +54,7 @@ export async function getFreePort(): Promise<number> {
 	});
 }
 
-function runChecked(command: string, args: string[], options: RunOptions = {}) {
+export function runChecked(command: string, args: string[], options: RunOptions = {}) {
 	const result = spawnSync(command, args, {
 		cwd: options.cwd ?? rootDir,
 		env: options.env ?? process.env,

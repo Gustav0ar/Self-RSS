@@ -10,6 +10,7 @@ export interface ArticleScope {
 export interface RawSearchRow {
 	id: string;
 	feedId: string;
+	canonicalUrl: string | null;
 	title: string | null;
 	author: string | null;
 	excerpt: string | null;
@@ -27,6 +28,7 @@ export interface RawSearchRow {
 export interface SearchRow {
 	id: string;
 	feedId: string;
+	canonicalUrl: string | null;
 	title: string | null;
 	author: string | null;
 	excerpt: string | null;

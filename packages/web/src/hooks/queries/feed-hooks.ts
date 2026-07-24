@@ -1,5 +1,10 @@
-import type { ApiResponse, FeedWithCounts, OpmlImportSummary } from '@self-feed/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+	ApiResponse,
+	FeedSyncHistoryResponse,
+	FeedWithCounts,
+	OpmlImportSummary,
+} from '@self-feed/shared';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiDownload, apiFetch } from '@/lib/api';
 import {
 	type FeedSyncAllStatus,
@@ -23,6 +28,24 @@ export function useFeeds(categoryId?: string) {
 				(r) => r.data,
 			);
 		},
+	});
+}
+
+export function useFeedSyncHistory(feedId?: string) {
+	return useInfiniteQuery({
+		queryKey: ['feeds', feedId, 'sync-runs'],
+		queryFn: ({ pageParam, signal }) => {
+			if (!feedId) throw new Error('Feed id is required');
+			const params = new URLSearchParams({ limit: '20' });
+			if (pageParam) params.set('cursor', pageParam);
+			return apiFetch<ApiResponse<FeedSyncHistoryResponse>>(
+				`/feeds/${feedId}/sync-runs?${params}`,
+				{ signal },
+			).then((response) => response.data);
+		},
+		initialPageParam: null as string | null,
+		getNextPageParam: (page) => (page.hasMore ? page.cursor : undefined),
+		enabled: Boolean(feedId),
 	});
 }
 
@@ -111,10 +134,12 @@ export function useSyncFeed() {
 				`/feeds/sync?feedId=${encodeURIComponent(feedId)}`,
 				{ method: 'POST' },
 			),
-		onSuccess: (response) => {
+		onSuccess: (response, feedId) => {
 			qc.setQueryData<FeedSyncAllStatus | undefined>(['feeds', 'sync', 'status'], (current) =>
 				mergeFeedSyncStatus(current, response.data.status),
 			);
+			void qc.invalidateQueries({ queryKey: ['feeds', feedId, 'sync-runs'] });
+			void qc.invalidateQueries({ queryKey: ['stats'] });
 		},
 	});
 }

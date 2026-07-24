@@ -34,5 +34,5 @@ export default defineConfig({
 			testMatch: boundedBrowserMatrix,
 			use: { ...devices['Desktop Safari'] },
 		},
-	],
+	].filter((project) => process.env.PLAYWRIGHT_EXCLUDE_WEBKIT !== '1' || project.name !== 'webkit'),
 });

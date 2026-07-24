@@ -271,6 +271,37 @@ export class AuthService {
 		return this.sanitizeUser(user);
 	}
 
+	async adminListUsers(limit: number, offset: number) {
+		const rows = await this.userRepo.listForAdmin(limit, offset);
+		const hasMore = rows.length > limit;
+		const users = rows.slice(0, limit).map((user) => this.sanitizeUser(user));
+		return {
+			users,
+			hasMore,
+			cursor: hasMore ? String(offset + limit) : null,
+		};
+	}
+
+	async adminUpdateUser(
+		actorUserId: string,
+		targetUserId: string,
+		data: { role?: 'admin' | 'user'; isActive?: boolean },
+	) {
+		await this.userRepo.assertAdminUpdateAllowed(actorUserId, targetUserId, data);
+		if (data.isActive === false || data.role !== undefined) {
+			await this.revokeAllUserSessions(targetUserId);
+		}
+		const user = await this.userRepo.updateForAdmin(actorUserId, targetUserId, data);
+		return this.sanitizeUser(user);
+	}
+
+	async adminResetPassword(targetUserId: string, password: string) {
+		await this.revokeAllUserSessions(targetUserId);
+		const passwordHash = await hashPassword(password);
+		const user = await this.userRepo.updatePasswordHash(targetUserId, passwordHash);
+		return this.sanitizeUser(user);
+	}
+
 	private async issueTokens(userId: string, role: string, metadata: AuthSessionMetadataInput) {
 		const refreshToken = createRefreshToken();
 		const sessionId = parseRefreshToken(refreshToken)?.sessionId;
@@ -391,6 +422,12 @@ export class AuthService {
 			this.logSessionCacheFailure('revoke', sessionId, error);
 			throw AppError.internal('Unable to revoke session. Please try again.');
 		}
+	}
+
+	private async revokeAllUserSessions(userId: string) {
+		const sessions = await this.sessionRepo.listActiveByUserId(userId);
+		await Promise.all(sessions.map((session) => this.prepareSessionRevocation(session.id)));
+		await this.sessionRepo.revokeAllForUser(userId);
 	}
 
 	private logSessionCacheFailure(operation: string, sessionId: string, error: unknown) {

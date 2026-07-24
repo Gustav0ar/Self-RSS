@@ -10,14 +10,16 @@ import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.
 import { parseBody } from '../utils/validation.js';
 
 const COOKIE_NAME = 'rss_refresh_token';
-const REFRESH_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
-const COOKIE_OPTIONS = {
-	httpOnly: true,
-	secure: process.env.NODE_ENV === 'production',
-	sameSite: 'strict' as const,
-	path: '/api/v1/auth',
-	maxAge: REFRESH_COOKIE_MAX_AGE_SECONDS,
-};
+function getCookieOptions() {
+	const env = getEnv();
+	return {
+		httpOnly: true,
+		secure: env.NODE_ENV === 'production',
+		sameSite: 'strict' as const,
+		path: '/api/v1/auth',
+		maxAge: env.AUTH_SESSION_ABSOLUTE_TTL_DAYS * 24 * 60 * 60,
+	};
+}
 
 function deriveDeviceName(userAgent?: string | null) {
 	const ua = userAgent ?? '';
@@ -84,7 +86,7 @@ export function createAuthRoutes(
 		const body = await parseBody(c, registerSchema);
 		const result = await authService.register(body.email, body.password, getSessionMetadata(c));
 
-		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, COOKIE_OPTIONS);
+		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
 
 		return c.json(
 			{ data: { user: result.user, tokens: { accessToken: result.tokens.accessToken } } },
@@ -97,7 +99,7 @@ export function createAuthRoutes(
 		const body = await parseBody(c, loginSchema);
 		const result = await authService.login(body.email, body.password, getSessionMetadata(c));
 
-		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, COOKIE_OPTIONS);
+		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
 
 		return c.json({
 			data: { user: result.user, tokens: { accessToken: result.tokens.accessToken } },
@@ -123,7 +125,7 @@ export function createAuthRoutes(
 
 		try {
 			const result = await authService.refresh(refreshToken, getSessionMetadata(c));
-			setCookie(c, COOKIE_NAME, result.tokens.refreshToken, COOKIE_OPTIONS);
+			setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
 			return c.json({ data: { tokens: { accessToken: result.tokens.accessToken } } });
 		} catch (err) {
 			deleteCookie(c, COOKIE_NAME, { path: '/api/v1/auth' });

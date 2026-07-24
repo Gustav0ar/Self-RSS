@@ -12,6 +12,7 @@ import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
+import com.selffeed.android.network.FeedSyncHistoryResponse
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -55,6 +56,7 @@ interface FeedRepository {
     suspend fun syncFeed(id: String): AppResult<SyncResponse>
     suspend fun syncAllFeeds(feedId: String? = null, categoryId: String? = null): AppResult<SyncResponse>
     suspend fun syncAllFeedsStatus(requestId: String? = null): AppResult<FeedSyncAllStatus>
+    suspend fun feedSyncHistory(feedId: String): AppResult<FeedSyncHistoryResponse>
     suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts>
     suspend fun cancelFeedReplacement(feedId: String): AppResult<FeedWithCounts>
     suspend fun importOpml(fileName: String, fileBytes: ByteArray): AppResult<OpmlImportSummary>
@@ -99,6 +101,10 @@ interface SettingsRepository {
     suspend fun revokeAuthSession(id: String): AppResult<Boolean>
     suspend fun adminSettings(): AppResult<AppSettingsResponse>
     suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse>
+    suspend fun adminUsers(): AppResult<List<User>>
+    suspend fun adminCreateUser(email: String, password: String, role: String): AppResult<User>
+    suspend fun adminUpdateUser(id: String, role: String? = null, isActive: Boolean? = null): AppResult<User>
+    suspend fun adminResetPassword(id: String, password: String): AppResult<User>
     fun getDebugResilienceSnapshot(): Map<String, Long>
     fun resetDebugResilienceMetrics()
 }

@@ -12,6 +12,7 @@ import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UpdateAppSettingsRequest
 import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.UserPreferences
+import com.selffeed.android.network.User
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,7 @@ data class SettingsUiState(
     val stats: StatsResponse? = null,
     val authSessions: List<AuthSession> = emptyList(),
     val adminRegistrationLocked: Boolean? = null,
+    val adminUsers: List<User> = emptyList(),
     val debugSnapshot: Map<String, Long> = emptyMap(),
     val loading: Boolean = false,
     val statusMessage: PresentationText? = null,
@@ -166,6 +168,67 @@ class SettingsViewModel @Inject constructor(
             when (val result = repository.adminSettings()) {
                 is AppResult.Success -> _state.update { it.copy(adminRegistrationLocked = result.data.registrationLocked) }
                 is AppResult.Error -> { /* admin not available; leave state alone */ }
+            }
+            loadAdminUsers()
+        }
+    }
+
+    fun loadAdminUsers() {
+        viewModelScope.launch {
+            when (val result = repository.adminUsers()) {
+                is AppResult.Success -> _state.update { it.copy(adminUsers = result.data) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
+            }
+        }
+    }
+
+    fun createAdminUser(email: String, password: String, role: String) {
+        viewModelScope.launch {
+            when (val result = repository.adminCreateUser(email.trim(), password, role)) {
+                is AppResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            adminUsers = listOf(result.data) + it.adminUsers,
+                            statusMessage = PresentationText.resource(R.string.settings_admin_user_created),
+                        )
+                    }
+                }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
+            }
+        }
+    }
+
+    fun updateAdminUser(id: String, role: String? = null, isActive: Boolean? = null) {
+        viewModelScope.launch {
+            when (val result = repository.adminUpdateUser(id, role, isActive)) {
+                is AppResult.Success -> _state.update { state ->
+                    state.copy(
+                        adminUsers = state.adminUsers.map { user ->
+                            if (user.id == id) result.data else user
+                        },
+                        statusMessage = PresentationText.resource(R.string.settings_admin_user_updated),
+                    )
+                }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
+            }
+        }
+    }
+
+    fun resetAdminPassword(id: String, password: String) {
+        viewModelScope.launch {
+            when (val result = repository.adminResetPassword(id, password)) {
+                is AppResult.Success -> _state.update {
+                    it.copy(statusMessage = PresentationText.resource(R.string.settings_admin_password_reset))
+                }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }

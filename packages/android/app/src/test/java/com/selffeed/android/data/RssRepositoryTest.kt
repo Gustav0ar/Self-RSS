@@ -439,7 +439,7 @@ class RssRepositoryTest {
         assertEquals("latest-request", (result as AppResult.Success).data.requestId)
         coVerify { api.syncAllFeedsStatus("old-request") }
         coVerify(exactly = 1) { api.syncAllFeedsStatus(null) }
-        io.mockk.verify { sessionStore.setFeedRefreshRequestId("latest-request") }
+        coVerify { sessionStore.setFeedRefreshRequestId("latest-request") }
     }
 
     @Test
@@ -625,7 +625,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Error)
         assertEquals("Authentication was lost. Please sign in again.", (result as AppResult.Error).message)
-        io.mockk.verify(exactly = 1) { sessionStore.clear() }
+        coVerify(exactly = 1) { sessionStore.clear() }
         coVerify(exactly = 0) { api.me() }
     }
 
@@ -640,7 +640,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Error)
         assertEquals("Unable to refresh session. Please check your connection.", (result as AppResult.Error).message)
-        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+        coVerify(exactly = 0) { sessionStore.clear() }
         coVerify(exactly = 0) { api.me() }
     }
 
@@ -656,7 +656,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Error)
         assertEquals("Session could not be refreshed. Please try again.", (result as AppResult.Error).message)
-        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+        coVerify(exactly = 0) { sessionStore.clear() }
     }
 
     @Test
@@ -671,7 +671,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Error)
         assertEquals("Session could not be refreshed. Please try again.", (result as AppResult.Error).message)
-        io.mockk.verify(exactly = 0) { sessionStore.clear() }
+        coVerify(exactly = 0) { sessionStore.clear() }
     }
 
     @Test
@@ -686,7 +686,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Error)
         assertEquals("Authentication was lost. Please sign in again.", (result as AppResult.Error).message)
-        io.mockk.verify(exactly = 1) { sessionStore.clear() }
+        coVerify(exactly = 1) { sessionStore.clear() }
     }
 
     @Test

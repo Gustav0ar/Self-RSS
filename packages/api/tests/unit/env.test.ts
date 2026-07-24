@@ -21,6 +21,20 @@ afterEach(() => {
 });
 
 describe('getEnv', () => {
+	it('validates durable auth session lifetime settings', () => {
+		applyEnv({
+			AUTH_SESSION_ABSOLUTE_TTL_DAYS: undefined,
+			AUTH_SESSION_IDLE_TTL_DAYS: undefined,
+			AUTH_SESSION_CLEANUP_BATCH_SIZE: undefined,
+		});
+		expect(getEnv().AUTH_SESSION_ABSOLUTE_TTL_DAYS).toBe(400);
+		expect(getEnv().AUTH_SESSION_IDLE_TTL_DAYS).toBe(30);
+		expect(getEnv().AUTH_SESSION_CLEANUP_BATCH_SIZE).toBe(250);
+
+		applyEnv({ AUTH_SESSION_ABSOLUTE_TTL_DAYS: '10', AUTH_SESSION_IDLE_TTL_DAYS: '11' });
+		expect(() => getEnv()).toThrowError(/idle lifetime must not exceed absolute lifetime/);
+	});
+
 	it('defaults the feed pipeline to legacy and validates an explicit v2 rollout', () => {
 		applyEnv({ FEED_PIPELINE_MODE: undefined });
 		expect(getEnv().FEED_PIPELINE_MODE).toBe('legacy');

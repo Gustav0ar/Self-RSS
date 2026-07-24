@@ -75,11 +75,13 @@ export const authSessions = sqliteTable(
 		rotatedAt: timestamp('rotated_at')
 			.notNull()
 			.$defaultFn(() => new Date()),
+		expiresAt: timestamp('expires_at').notNull().default(sql`(unixepoch() + 34560000)`),
 		revokedAt: timestamp('revoked_at'),
 	},
 	(t) => [
 		index('auth_sessions_user_id_idx').on(t.userId),
 		index('auth_sessions_user_revoked_idx').on(t.userId, t.revokedAt),
+		index('auth_sessions_expires_at_idx').on(t.expiresAt),
 		uniqueIndex('auth_sessions_refresh_token_hash_idx').on(t.refreshTokenHash),
 	],
 );

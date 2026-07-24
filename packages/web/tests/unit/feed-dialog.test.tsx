@@ -5,6 +5,8 @@ import { FeedDialog } from '../../src/components/management/feed-dialog';
 const createMutateAsync = vi.fn();
 const createCategoryMutateAsync = vi.fn();
 const updateMutateAsync = vi.fn();
+const syncMutate = vi.fn();
+const historyRefetch = vi.fn();
 
 vi.mock('@/hooks/queries', () => ({
 	useCreateCategory: () => ({
@@ -17,6 +19,42 @@ vi.mock('@/hooks/queries', () => ({
 	}),
 	useUpdateFeed: () => ({
 		mutateAsync: updateMutateAsync,
+		isPending: false,
+	}),
+	useFeedSyncHistory: (feedId?: string) => ({
+		data: feedId
+			? {
+					pages: [
+						{
+							runs: [
+								{
+									id: 'run-1',
+									feedId,
+									startedAt: '2026-07-15T10:00:00.000Z',
+									finishedAt: '2026-07-15T10:00:05.000Z',
+									status: 'failed',
+									httpStatus: 503,
+									itemCount: 0,
+									errorMessage: 'Publisher unavailable',
+								},
+							],
+							hasMore: false,
+							cursor: null,
+						},
+					],
+				}
+			: undefined,
+		isLoading: false,
+		isError: false,
+		isFetching: false,
+		error: null,
+		refetch: historyRefetch,
+		hasNextPage: false,
+		isFetchingNextPage: false,
+		fetchNextPage: vi.fn(),
+	}),
+	useSyncFeed: () => ({
+		mutate: syncMutate,
 		isPending: false,
 	}),
 }));
@@ -260,6 +298,20 @@ describe('FeedDialog - edit mode', () => {
 			'HTTP 403: Forbidden',
 		);
 		expect(screen.getByText(/Review the URL and polling interval/)).toBeTruthy();
+	});
+
+	it('shows typed per-feed refresh history and retries through the queued sync action', () => {
+		render(
+			<FeedDialog mode="edit" categories={sampleCategories} feed={sampleFeed} onClose={() => {}} />,
+		);
+
+		fireEvent.click(screen.getByText('Refresh history'));
+		expect(screen.getByRole('list', { name: 'Feed refresh attempts' }).textContent).toContain(
+			'Publisher unavailable',
+		);
+		expect(screen.getByText(/HTTP 503/).textContent).toContain('5s');
+		fireEvent.click(screen.getByRole('button', { name: 'Retry now' }));
+		expect(syncMutate).toHaveBeenCalledWith('feed-1');
 	});
 
 	it('submits only the editable fields on save', async () => {

@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { BarChart3, LogOut, Menu, Monitor, Moon, Rss, Sun } from 'lucide-react';
+import { BarChart3, LogOut, Menu, Monitor, Moon, Rss, ShieldCheck, Sun } from 'lucide-react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TopBarErrorFallback } from '@/components/error-fallbacks';
 import { PreferencesPanel } from '@/components/preferences/preferences-panel';
@@ -30,7 +30,7 @@ function TopBarContent({
 }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
-	const { isAuthenticated, isLoggingOut, logout, logoutError, username } = useAuth();
+	const { isAuthenticated, isLoggingOut, logout, logoutError, user, username } = useAuth();
 
 	function cycleTheme() {
 		const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
@@ -109,6 +109,16 @@ function TopBarContent({
 								<BarChart3 className="h-4 w-4 sm:mr-1.5" />
 								<span className="sr-only sm:not-sr-only">Stats</span>
 							</Link>
+							{user?.role === 'admin' ? (
+								<Link
+									to="/admin"
+									aria-label="Administration"
+									className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:w-auto sm:px-3"
+								>
+									<ShieldCheck className="h-4 w-4 sm:mr-1.5" />
+									<span className="sr-only sm:not-sr-only">Admin</span>
+								</Link>
+							) : null}
 							{username ? (
 								<div className="surface-muted hidden max-w-52 items-center rounded-full px-3 py-1.5 text-xs text-muted-foreground lg:flex">
 									<span className="truncate">{username}</span>

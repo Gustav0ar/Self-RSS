@@ -28,6 +28,7 @@ import { RealtimeService } from '../services/realtime.service.js';
 import { StatsService } from '../services/stats.service.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
 import type { TokenUtils } from '../utils/tokens.js';
+import { getEnv } from './env.js';
 
 export interface AppDeps {
 	db: Database;
@@ -78,9 +79,13 @@ export function createDeps(
 		pipelineMode?: 'legacy' | 'v2';
 	},
 ): AppDeps {
+	const env = getEnv();
 	const repos = {
 		user: new UserRepository(db),
-		authSession: new AuthSessionRepository(db),
+		authSession: new AuthSessionRepository(db, {
+			absoluteTtlMs: env.AUTH_SESSION_ABSOLUTE_TTL_DAYS * 24 * 60 * 60 * 1000,
+			idleTtlMs: env.AUTH_SESSION_IDLE_TTL_DAYS * 24 * 60 * 60 * 1000,
+		}),
 		category: new CategoryRepository(db),
 		feed: new FeedRepository(db),
 		feedIngestion: new FeedIngestionRepository(db),
@@ -141,6 +146,7 @@ export function createDeps(
 			redis,
 			durableFeed,
 			resolvedSyncConfig.pipelineMode ?? 'legacy',
+			repos.syncRun,
 		),
 		durableFeed,
 		opmlExport: new OpmlExportService(repos.category, repos.feed),

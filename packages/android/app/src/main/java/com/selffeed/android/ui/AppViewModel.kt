@@ -2,8 +2,10 @@ package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.selffeed.android.R
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.repository.AppStatusRepository
+import com.selffeed.android.network.normalizeApiServerHost
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,12 +27,15 @@ data class AppChromeState(
     val isSyncingFeeds: Boolean = false,
     val globalStatus: PresentationText? = null,
     val globalError: PresentationText? = null,
+    val sessionReady: Boolean = false,
+    val pendingExternalAction: ExternalAction? = null,
+    val serverChangeConfirmation: ExternalAction.OpenArticle? = null,
 )
 
 @HiltViewModel
 class AppViewModel @Inject constructor(
     private val repository: AppStatusRepository,
-    sessionStore: SessionStore,
+    private val sessionStore: SessionStore,
 ) : ViewModel() {
     private val _chrome = MutableStateFlow(AppChromeState())
     val chrome: StateFlow<AppChromeState> = _chrome.asStateFlow()
@@ -39,6 +44,7 @@ class AppViewModel @Inject constructor(
         // Preload session data early to avoid runBlocking on main thread
         viewModelScope.launch {
             sessionStore.preload()
+            _chrome.value = _chrome.value.copy(sessionReady = true)
         }
     }
 
@@ -48,6 +54,40 @@ class AppViewModel @Inject constructor(
 
     fun setTab(tab: HomeTab) {
         _chrome.value = _chrome.value.copy(activeTab = tab, globalError = null, globalStatus = null)
+    }
+
+    fun offerExternalAction(action: ExternalAction?) {
+        if (action == null || action.key == _chrome.value.pendingExternalAction?.key) return
+        _chrome.value = _chrome.value.copy(pendingExternalAction = action)
+    }
+
+    fun consumeExternalAction(): ExternalAction? {
+        val action = _chrome.value.pendingExternalAction ?: return null
+        if (action is ExternalAction.OpenArticle && action.serverOrigin != null) {
+            val requested = runCatching { normalizeApiServerHost(action.serverOrigin) }.getOrNull()
+            if (requested != sessionStore.getApiBaseUrl()) {
+                _chrome.value = _chrome.value.copy(
+                    serverChangeConfirmation = action,
+                )
+                return null
+            }
+        }
+        _chrome.value = _chrome.value.copy(
+            pendingExternalAction = null,
+            serverChangeConfirmation = null,
+        )
+        return action
+    }
+
+    fun confirmExternalServerChange() {
+        _chrome.value = _chrome.value.copy(serverChangeConfirmation = null)
+    }
+
+    fun cancelExternalServerChange() {
+        _chrome.value = _chrome.value.copy(
+            pendingExternalAction = null,
+            serverChangeConfirmation = null,
+        )
     }
 
     /**

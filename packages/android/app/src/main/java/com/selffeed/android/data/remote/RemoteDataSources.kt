@@ -1,6 +1,10 @@
 package com.selffeed.android.data.remote
 
 import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.network.AdminCreateUserRequest
+import com.selffeed.android.network.AdminResetPasswordRequest
+import com.selffeed.android.network.AdminUpdateUserRequest
+import com.selffeed.android.network.AdminUsersResponse
 import com.selffeed.android.network.AppSettingsResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -12,6 +16,7 @@ import com.selffeed.android.network.CreateFeedRequest
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
+import com.selffeed.android.network.FeedSyncHistoryResponse
 import com.selffeed.android.network.LoginRequest
 import com.selffeed.android.network.MarkAllReadRequest
 import com.selffeed.android.network.MarkReadRequest
@@ -78,6 +83,8 @@ class FeedRemoteDataSource @Inject constructor(
     suspend fun syncAllFeeds(feedId: String?, categoryId: String?): SyncResponse =
         api.syncAllFeeds(feedId, categoryId).data
     suspend fun syncAllFeedsStatus(requestId: String?): FeedSyncAllStatus = api.syncAllFeedsStatus(requestId).data
+    suspend fun feedSyncHistory(feedId: String): FeedSyncHistoryResponse =
+        api.feedSyncRuns(feedId, limit = 20, cursor = null).data
     suspend fun discoveryCandidates(requestId: String) = api.discoveryCandidates(requestId).data
     suspend fun selectDiscoveryCandidate(candidateId: String) = api.selectDiscoveryCandidate(candidateId).data
     suspend fun cancelFeedReplacement(feedId: String) = api.cancelFeedReplacement(feedId).data
@@ -127,4 +134,11 @@ class SettingsRemoteDataSource @Inject constructor(
     suspend fun adminSettings(): AppSettingsResponse = api.adminSettings().data
     suspend fun updateAdminSettings(registrationLocked: Boolean): AppSettingsResponse =
         api.updateAdminSettings(UpdateAppSettingsRequest(registrationLocked)).data
+    suspend fun adminUsers(): AdminUsersResponse = api.adminUsers().data
+    suspend fun adminCreateUser(email: String, password: String, role: String): User =
+        api.adminCreateUser(AdminCreateUserRequest(email, password, role)).data
+    suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?): User =
+        api.adminUpdateUser(id, AdminUpdateUserRequest(role, isActive)).data
+    suspend fun adminResetPassword(id: String, password: String): User =
+        api.adminResetPassword(id, AdminResetPasswordRequest(password)).data
 }

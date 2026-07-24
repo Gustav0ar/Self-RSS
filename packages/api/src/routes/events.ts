@@ -81,11 +81,19 @@ export function createEventRoutes(realtimeService: RealtimeService) {
 						return;
 					}
 					cleanup = unsubscribe;
-				} catch (error) {
+				} catch {
 					if (!closed) {
-						closed = true;
-						cleanupConnection();
-						controller.error(error);
+						// A rejected subscription is an expected connection-level
+						// failure (for example, the per-user limit). Ending the
+						// SSE body cleanly avoids surfacing it as an unhandled
+						// ReadableStream rejection in the server runtime.
+						enqueue(
+							encodeSse(`${eventName}.error`, {
+								code: 'CONNECTION_UNAVAILABLE',
+								message: 'Realtime updates are temporarily unavailable',
+							}),
+						);
+						close();
 					}
 					return;
 				}

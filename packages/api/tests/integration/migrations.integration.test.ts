@@ -209,13 +209,78 @@ function copyMigrationsBeforeDurableIngestion(baseDir: string) {
 		entries: { tag: string }[];
 	};
 	journal.entries = journal.entries.filter(
-		(entry) => entry.tag !== '0017_smiling_naoko' && entry.tag !== '0018_nifty_dragon_man',
+		(entry) =>
+			entry.tag !== '0017_smiling_naoko' &&
+			entry.tag !== '0018_nifty_dragon_man' &&
+			entry.tag !== '0019_tidy_wong',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
 }
 
+function copyMigrationsBeforeAuthSessionExpiry(baseDir: string) {
+	const folder = join(baseDir, 'pre-auth-session-expiry-drizzle');
+	cpSync(migrationsFolder, folder, { recursive: true });
+	const journalPath = join(folder, 'meta/_journal.json');
+	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+		version: string;
+		dialect: string;
+		entries: { tag: string }[];
+	};
+	journal.entries = journal.entries.filter((entry) => entry.tag !== '0019_tidy_wong');
+	writeFileSync(journalPath, JSON.stringify(journal));
+	return folder;
+}
+
 describe('SQLite migrations', () => {
+	it('backfills auth session expiry on an existing database', async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-auth-session-migration-'));
+		tempDirs.push(tempDir);
+		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
+		sqlite.exec('PRAGMA foreign_keys = ON;');
+
+		try {
+			const db = drizzle(sqlite, { schema });
+			applyMigrations(db, {
+				migrationsFolder: copyMigrationsBeforeAuthSessionExpiry(tempDir),
+			});
+			const createdAt = 1_700_000_000;
+			sqlite
+				.query(
+					`INSERT INTO users
+					 (id, email, password_hash, role, is_active, created_at, updated_at)
+					 VALUES ('user-1', 'reader@example.com', 'hash', 'user', 1, ?, ?)`,
+				)
+				.run(createdAt, createdAt);
+			sqlite
+				.query(
+					`INSERT INTO auth_sessions
+					 (id, user_id, refresh_token_hash, created_at, last_seen_at, rotated_at)
+					 VALUES ('session-1', 'user-1', 'refresh-hash', ?, ?, ?)`,
+				)
+				.run(createdAt, createdAt, createdAt);
+
+			expect(() => applyMigrations(db, { migrationsFolder })).not.toThrow();
+			expect(
+				sqlite
+					.query<{ expires_at: number }, [string]>(
+						'SELECT expires_at FROM auth_sessions WHERE id = ?',
+					)
+					.get('session-1'),
+			).toEqual({ expires_at: createdAt + 34_560_000 });
+			expect(
+				sqlite
+					.query(
+						`SELECT name FROM sqlite_master
+						 WHERE type = 'index' AND name = 'auth_sessions_expires_at_idx'`,
+					)
+					.get(),
+			).toEqual({ name: 'auth_sessions_expires_at_idx' });
+		} finally {
+			sqlite.close();
+		}
+	});
+
 	it('backfills shared source identity without changing subscriptions, articles, or reads', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-durable-migration-'));
 		tempDirs.push(tempDir);

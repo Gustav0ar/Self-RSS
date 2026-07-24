@@ -18,6 +18,7 @@ function realtimeChannel(userId: string) {
 export class RealtimeService {
 	private subscriber: Redis | null = null;
 	private handlersByChannel = new Map<string, Set<RealtimeEventHandler>>();
+	private pendingSubscriptionsByChannel = new Map<string, Promise<void>>();
 	private connecting: Promise<void> | null = null;
 	private connectionsByUser = new Map<string, number>();
 	private reconnectAttempts = 0;
@@ -68,22 +69,41 @@ export class RealtimeService {
 			);
 		}
 
-		let handlers = this.handlersByChannel.get(channel);
-		const firstSubscriberForChannel = !handlers;
-		if (!handlers) {
-			handlers = new Set();
-			this.handlersByChannel.set(channel, handlers);
+		if (!this.handlersByChannel.has(channel)) {
+			let pendingSubscription = this.pendingSubscriptionsByChannel.get(channel);
+			if (!pendingSubscription) {
+				const subscriber = this.subscriber;
+				if (!subscriber) {
+					throw new Error('Realtime subscriber is unavailable');
+				}
+				pendingSubscription = subscriber.subscribe(channel).then(() => undefined);
+				this.pendingSubscriptionsByChannel.set(channel, pendingSubscription);
+			}
+			try {
+				await pendingSubscription;
+			} finally {
+				if (this.pendingSubscriptionsByChannel.get(channel) === pendingSubscription) {
+					this.pendingSubscriptionsByChannel.delete(channel);
+				}
+			}
 		}
 
+		if (this.closed || !this.subscriber) {
+			throw new Error('Realtime subscriber closed while subscribing');
+		}
+
+		const committedConnections = this.connectionsByUser.get(userId) ?? 0;
+		if (committedConnections >= MAX_CONNECTIONS_PER_USER) {
+			throw new Error(
+				`User ${userId} has reached the maximum number of connections (${MAX_CONNECTIONS_PER_USER})`,
+			);
+		}
+
+		const handlers = this.handlersByChannel.get(channel) ?? new Set<RealtimeEventHandler>();
+		this.handlersByChannel.set(channel, handlers);
 		handlers.add(handler);
-
-		// Track SSE connection count
-		this.connectionsByUser.set(userId, currentConnections + 1);
+		this.connectionsByUser.set(userId, committedConnections + 1);
 		this.metrics.incrementSseConnections();
-
-		if (firstSubscriberForChannel) {
-			await this.subscriber?.subscribe(channel);
-		}
 
 		let cleanedUp = false;
 		return () => {
@@ -98,6 +118,7 @@ export class RealtimeService {
 	async close() {
 		this.closed = true;
 		this.handlersByChannel.clear();
+		this.pendingSubscriptionsByChannel.clear();
 		this.connectionsByUser.clear();
 		this.reconnectAttempts = 0;
 		await this.cleanup();

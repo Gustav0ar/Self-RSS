@@ -29,6 +29,7 @@ function article(id: string, feedId: string, isRead: boolean): ArticleListItem {
 		feedId,
 		feedTitle: `Feed ${feedId}`,
 		feedFaviconUrl: null,
+		canonicalUrl: null,
 		title: `Article ${id}`,
 		author: null,
 		excerpt: null,

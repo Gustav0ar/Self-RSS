@@ -16,6 +16,18 @@ vi.mock('../../src/hooks/queries', () => ({
 	useCreateCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCreateFeed: () => ({ mutateAsync: createFeedMutateAsync, isPending: false }),
 	useUpdateFeed: () => ({ mutateAsync: updateFeedMutateAsync, isPending: false }),
+	useFeedSyncHistory: () => ({
+		data: undefined,
+		isLoading: false,
+		isError: false,
+		isFetching: false,
+		error: null,
+		refetch: vi.fn(),
+		hasNextPage: false,
+		isFetchingNextPage: false,
+		fetchNextPage: vi.fn(),
+	}),
+	useSyncFeed: () => ({ mutate: vi.fn(), isPending: false }),
 	useImportOpml: () => ({ mutateAsync: importOpmlMutateAsync, isPending: false }),
 }));
 

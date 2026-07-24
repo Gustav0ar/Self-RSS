@@ -184,6 +184,64 @@ describe('RealtimeService - close', () => {
 });
 
 describe('RealtimeService - per-user connection limits', () => {
+	it('does not leak a handler or connection slot when Redis subscribe fails', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+		let shouldFail = true;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		redis.duplicate = (...args) => {
+			const subscriber = originalDuplicate(...args);
+			const originalSubscribe = subscriber.subscribe.bind(subscriber);
+			subscriber.subscribe = async (...subscribeArgs) => {
+				if (shouldFail) {
+					shouldFail = false;
+					throw new Error('temporary subscribe failure');
+				}
+				return originalSubscribe(...subscribeArgs);
+			};
+			return subscriber;
+		};
+
+		await expect(service.subscribeToReadStateEvents('user-1', vi.fn())).rejects.toThrow(
+			'temporary subscribe failure',
+		);
+		expect(service.getConnectionCount()).toBe(0);
+		expect(redis.bus.subscribers.size).toBe(0);
+
+		await expect(service.subscribeToReadStateEvents('user-1', vi.fn())).resolves.toBeDefined();
+		expect(service.getConnectionCount()).toBe(1);
+	});
+
+	it('shares one in-flight Redis subscribe between concurrent handlers', async () => {
+		const redis = new FakeRedis();
+		const service = new RealtimeService(redis as never);
+		let releaseSubscribe: (() => void) | undefined;
+		let subscribeCalls = 0;
+		const originalDuplicate = redis.duplicate.bind(redis);
+		redis.duplicate = (...args) => {
+			const subscriber = originalDuplicate(...args);
+			const originalSubscribe = subscriber.subscribe.bind(subscriber);
+			subscriber.subscribe = async (...subscribeArgs) => {
+				subscribeCalls++;
+				await new Promise<void>((resolve) => {
+					releaseSubscribe = resolve;
+				});
+				return originalSubscribe(...subscribeArgs);
+			};
+			return subscriber;
+		};
+
+		const first = service.subscribeToReadStateEvents('user-1', vi.fn());
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = service.subscribeToReadStateEvents('user-1', vi.fn());
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(subscribeCalls).toBe(1);
+		releaseSubscribe!();
+		await Promise.all([first, second]);
+		expect(service.getConnectionCount()).toBe(2);
+		expect(subscribeCalls).toBe(1);
+	});
+
 	it('allows up to MAX_CONNECTIONS_PER_USER connections for a single user', async () => {
 		const redis = new FakeRedis();
 		const service = new RealtimeService(redis as never);

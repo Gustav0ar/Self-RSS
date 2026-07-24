@@ -50,6 +50,7 @@ export class SyncRunRepository {
 			.select({
 				id: syncRuns.id,
 				feedId: syncRuns.feedId,
+				feedTitle: feeds.title,
 				startedAt: syncRuns.startedAt,
 				finishedAt: syncRuns.finishedAt,
 				status: syncRuns.status,
@@ -64,6 +65,27 @@ export class SyncRunRepository {
 			.limit(limit);
 
 		return result;
+	}
+
+	async findByFeedForUser(userId: string, feedId: string, limit: number, offset: number) {
+		return this.db
+			.select({
+				id: syncRuns.id,
+				feedId: syncRuns.feedId,
+				feedTitle: feeds.title,
+				startedAt: syncRuns.startedAt,
+				finishedAt: syncRuns.finishedAt,
+				status: syncRuns.status,
+				httpStatus: syncRuns.httpStatus,
+				itemCount: syncRuns.itemCount,
+				errorMessage: syncRuns.errorMessage,
+			})
+			.from(syncRuns)
+			.innerJoin(feeds, eq(syncRuns.feedId, feeds.id))
+			.where(and(eq(feeds.userId, userId), eq(feeds.id, feedId)))
+			.orderBy(desc(syncRuns.startedAt), desc(syncRuns.id))
+			.limit(limit + 1)
+			.offset(offset);
 	}
 }
 

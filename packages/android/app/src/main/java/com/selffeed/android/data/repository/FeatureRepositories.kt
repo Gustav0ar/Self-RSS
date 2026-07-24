@@ -12,6 +12,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
+import com.selffeed.android.network.FeedSyncHistoryResponse
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -73,6 +74,8 @@ class FeedRepositoryImpl @Inject constructor(
         source.syncAllFeeds(feedId, categoryId)
     override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> =
         source.syncAllFeedsStatus(requestId)
+    override suspend fun feedSyncHistory(feedId: String): AppResult<FeedSyncHistoryResponse> =
+        source.feedSyncHistory(feedId)
     override suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts> =
         source.selectDiscoveryCandidate(candidateId)
     override suspend fun cancelFeedReplacement(feedId: String): AppResult<FeedWithCounts> =
@@ -144,6 +147,16 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun adminSettings(): AppResult<AppSettingsResponse> = source.adminSettings()
     override suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse> =
         source.updateAdminSettings(registrationLocked)
+    override suspend fun adminUsers(): AppResult<List<User>> = source.adminUsers()
+    override suspend fun adminCreateUser(email: String, password: String, role: String): AppResult<User> =
+        source.adminCreateUser(email, password, role)
+    override suspend fun adminUpdateUser(
+        id: String,
+        role: String?,
+        isActive: Boolean?,
+    ): AppResult<User> = source.adminUpdateUser(id, role, isActive)
+    override suspend fun adminResetPassword(id: String, password: String): AppResult<User> =
+        source.adminResetPassword(id, password)
 
     override fun getDebugResilienceSnapshot(): Map<String, Long> = source.getDebugResilienceSnapshot()
     override fun resetDebugResilienceMetrics() = source.resetDebugResilienceMetrics()

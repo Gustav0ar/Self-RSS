@@ -115,3 +115,63 @@ web offline/PWA mode, and optional digests/notifications. These are product
 initiatives rather than bounded defects and are intentionally not mixed into
 the implementation batch above. They require separate product decisions,
 schema/API design, and rollout plans.
+
+## 2026-07-24 reliability, administration, and diagnostics batch
+
+This third batch was planned against deployed commit `b34c5b9`. It includes
+every selected finding from the follow-up review except backup work, which the
+operator explicitly excluded. It also turns the three selected product
+directions into implementation plans. Use `mise install` once and
+`mise exec -- bun ...` for every Bun command.
+
+### Execution order and status
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| [022](022-expire-auth-sessions.md) | Enforce absolute and idle expiration for durable auth sessions | P0 | M | - | DONE |
+| [023](023-rollback-failed-realtime-subscriptions.md) | Roll back failed realtime subscriptions atomically | P1 | S | - | DONE |
+| [024](024-single-web-retry-budget.md) | Give web reads one bounded retry budget | P1 | S | - | DONE |
+| [025](025-search-failure-state.md) | Distinguish failed searches from empty results | P1 | S | 024 | DONE |
+| [026](026-nonblocking-android-session-store.md) | Remove main-thread blocking from Android session persistence | P1 | M | - | DONE |
+| [027](027-open-original-shortcut.md) | Make the web `v` shortcut open the publisher article | P2 | M | - | DONE |
+| [028](028-cross-platform-check-command.md) | Add one complete cross-platform quality command | P2 | S | - | DONE |
+| [029](029-admin-user-lifecycle.md) | Deliver a safe cross-platform administration console | P1 | L | 022 | DONE |
+| [030](030-android-deep-links.md) | Add secure Android article and feed deep links | P2 | M | 026 | DONE |
+| [031](031-feed-health-dashboard.md) | Expose actionable feed sync history on web and Android | P2 | L | 023, 024 | DONE |
+| [032](032-regression-and-production-deploy.md) | Validate the complete batch and deploy it to production | P0 | L | 022-031 | DONE |
+
+### Dependency and execution notes
+
+- Plans 022, 023, 024, 026, 027, and 028 are independent foundations and may
+  be executed in any order on one clean integration branch.
+- Plan 025 follows 024 so search tests assert the final three-attempt transport
+  budget rather than the old layered six-attempt behavior.
+- Plan 029 follows 022 because password reset and user deactivation must revoke
+  sessions under the final expiration/cache rules.
+- Plan 030 follows 026 so deep-link bootstrap consumes the final non-blocking
+  session snapshot rather than creating a second startup path.
+- Plan 031 follows 023 and 024 so history refresh uses leak-free realtime and
+  the final retry/error-state convention.
+- Plan 032 is mandatory and cannot start until every implementation plan is
+  DONE. It owns final local verification, browser/emulator smoke checks, exact
+  commit review, production push, workflow approval, and post-deploy health.
+
+### Batch-wide rules
+
+- Work from the clean deployed SHA, never from the unrelated dirty checkout.
+- Preserve shared-contract-first ordering and API
+  `route -> service -> repository` layering.
+- Add focused regression tests with every behavior change; do not defer all
+  coverage to plan 032.
+- Never weaken authorization, ownership, session revocation, URL validation,
+  Android encryption, or CI gates to make a test pass.
+- Do not push or approve deployment until plan 032 and all of its gates are
+  ready.
+
+### Findings considered and rejected
+
+- Scheduled/off-host backup implementation: explicitly excluded by the user
+  from this batch. Existing deploy-time backup behavior remains unchanged.
+- Wildcard verified Android HTTPS links: rejected because SelfFeed supports
+  arbitrary self-hosted domains. Plan 030 uses an explicit custom scheme and
+  confirmation boundaries instead of claiming ownership of unknown hosts.

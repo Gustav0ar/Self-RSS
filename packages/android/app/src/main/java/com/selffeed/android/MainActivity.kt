@@ -1,5 +1,6 @@
 package com.selffeed.android
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -19,6 +20,8 @@ import com.selffeed.android.ui.SearchViewModel
 import com.selffeed.android.ui.SelfFeedAppRoute
 import com.selffeed.android.ui.SettingsViewModel
 import com.selffeed.android.ui.benchmarkScenarioFor
+import com.selffeed.android.ui.parseSelfFeedAction
+import com.selffeed.android.ui.parseSharedFeedAction
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -81,6 +84,24 @@ class MainActivity : ComponentActivity() {
                 benchmarkScenario = benchmarkScenario,
             )
         }
+        acceptExternalIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptExternalIntent(intent)
+    }
+
+    private fun acceptExternalIntent(intent: Intent?) {
+        val action = when {
+            intent?.action == Intent.ACTION_VIEW ->
+                intent.dataString?.let(::parseSelfFeedAction)
+            intent?.action == Intent.ACTION_SEND && intent.type == "text/plain" ->
+                parseSharedFeedAction(intent.getStringExtra(Intent.EXTRA_TEXT))
+            else -> null
+        }
+        appViewModel.offerExternalAction(action)
     }
 
     override fun onResume() {

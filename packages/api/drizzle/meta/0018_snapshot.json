@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d3683e3d-d706-4df3-a36a-c527ccc58281",
-  "prevId": "ec85ffbb-0c65-45fb-b0c1-1c2519836313",
+  "id": "b0009661-bc57-464a-ac84-1fdc2ac94d66",
+  "prevId": "d3683e3d-d706-4df3-a36a-c527ccc58281",
   "tables": {
     "app_settings": {
       "name": "app_settings",
@@ -600,6 +600,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch() + 34560000)"
+        },
         "revoked_at": {
           "name": "revoked_at",
           "type": "integer",
@@ -621,6 +629,13 @@
           "columns": [
             "user_id",
             "revoked_at"
+          ],
+          "isUnique": false
+        },
+        "auth_sessions_expires_at_idx": {
+          "name": "auth_sessions_expires_at_idx",
+          "columns": [
+            "expires_at"
           ],
           "isUnique": false
         },
@@ -1258,28 +1273,28 @@
           "notNull": false,
           "autoincrement": false
         },
-		"content_type": {
-		  "name": "content_type",
-		  "type": "text",
-		  "primaryKey": false,
-		  "notNull": false,
-		  "autoincrement": false
-		},
-		"cache_control": {
-		  "name": "cache_control",
-		  "type": "text",
-		  "primaryKey": false,
-		  "notNull": false,
-		  "autoincrement": false
-		},
-		"expires": {
-		  "name": "expires",
-		  "type": "text",
-		  "primaryKey": false,
-		  "notNull": false,
-		  "autoincrement": false
-		},
-		"etag": {
+        "content_type": {
+          "name": "content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cache_control": {
+          "name": "cache_control",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "expires": {
+          "name": "expires",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "etag": {
           "name": "etag",
           "type": "text",
           "primaryKey": false,

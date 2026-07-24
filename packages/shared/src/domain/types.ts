@@ -142,6 +142,7 @@ export interface ArticleRead {
 export interface SyncRun {
 	id: string;
 	feedId: string;
+	feedTitle: string | null;
 	startedAt: string;
 	finishedAt: string | null;
 	status: SyncRunStatus;

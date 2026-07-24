@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { authSessions } from '../db/schema.js';
 
@@ -19,8 +19,30 @@ export interface AuthSessionMetadataInput {
 	ipAddress?: string | null;
 }
 
+export interface AuthSessionLifetimePolicy {
+	absoluteTtlMs: number;
+	idleTtlMs: number;
+}
+
+const DEFAULT_POLICY: AuthSessionLifetimePolicy = {
+	absoluteTtlMs: 400 * 24 * 60 * 60 * 1000,
+	idleTtlMs: 30 * 24 * 60 * 60 * 1000,
+};
+
 export class AuthSessionRepository {
-	constructor(private db: Database) {}
+	constructor(
+		private db: Database,
+		private policy: AuthSessionLifetimePolicy = DEFAULT_POLICY,
+	) {}
+
+	private activeWhere(id: string, now = new Date()) {
+		return and(
+			eq(authSessions.id, id),
+			isNull(authSessions.revokedAt),
+			gt(authSessions.expiresAt, now),
+			gt(authSessions.lastSeenAt, new Date(now.getTime() - this.policy.idleTtlMs)),
+		);
+	}
 
 	async create(data: AuthSessionCreateInput) {
 		const now = new Date();
@@ -37,6 +59,7 @@ export class AuthSessionRepository {
 				createdAt: now,
 				lastSeenAt: now,
 				rotatedAt: now,
+				expiresAt: new Date(now.getTime() + this.policy.absoluteTtlMs),
 			})
 			.returning();
 		return session;
@@ -48,7 +71,7 @@ export class AuthSessionRepository {
 
 	async findActiveById(id: string) {
 		return this.db.query.authSessions.findFirst({
-			where: and(eq(authSessions.id, id), isNull(authSessions.revokedAt)),
+			where: this.activeWhere(id),
 		});
 	}
 
@@ -56,7 +79,14 @@ export class AuthSessionRepository {
 		return this.db
 			.select()
 			.from(authSessions)
-			.where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
+			.where(
+				and(
+					eq(authSessions.userId, userId),
+					isNull(authSessions.revokedAt),
+					gt(authSessions.expiresAt, new Date()),
+					gt(authSessions.lastSeenAt, new Date(Date.now() - this.policy.idleTtlMs)),
+				),
+			)
 			.orderBy(desc(authSessions.lastSeenAt), desc(authSessions.createdAt));
 	}
 
@@ -82,7 +112,7 @@ export class AuthSessionRepository {
 				and(
 					eq(authSessions.id, id),
 					eq(authSessions.refreshTokenHash, currentRefreshTokenHash),
-					isNull(authSessions.revokedAt),
+					this.activeWhere(id),
 				),
 			)
 			.returning();
@@ -99,7 +129,7 @@ export class AuthSessionRepository {
 				ipAddress: metadata.ipAddress ?? undefined,
 				lastSeenAt: new Date(),
 			})
-			.where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
+			.where(this.activeWhere(id))
 			.returning();
 		return session;
 	}
@@ -126,5 +156,35 @@ export class AuthSessionRepository {
 			.where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
 			.returning();
 		return session;
+	}
+
+	async revokeAllForUser(userId: string) {
+		return this.db
+			.update(authSessions)
+			.set({ revokedAt: new Date() })
+			.where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
+			.returning();
+	}
+
+	async cleanupExpired(batchSize: number, now = new Date()) {
+		const revokedCutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+		const rows = await this.db
+			.select({ id: authSessions.id })
+			.from(authSessions)
+			.where(
+				or(
+					lte(authSessions.expiresAt, now),
+					and(isNotNull(authSessions.revokedAt), lte(authSessions.revokedAt, revokedCutoff)),
+				),
+			)
+			.limit(batchSize);
+		if (rows.length === 0) return 0;
+		await this.db.delete(authSessions).where(
+			inArray(
+				authSessions.id,
+				rows.map((row) => row.id),
+			),
+		);
+		return rows.length;
 	}
 }

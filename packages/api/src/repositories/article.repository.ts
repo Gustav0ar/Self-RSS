@@ -62,6 +62,7 @@ export class ArticleRepository {
 			.select({
 				id: articles.id,
 				feedId: articles.feedId,
+				canonicalUrl: articles.canonicalUrl,
 				title: articles.title,
 				author: articles.author,
 				excerpt: articles.excerpt,
@@ -113,6 +114,7 @@ export class ArticleRepository {
 			.select({
 				id: articles.id,
 				feedId: articles.feedId,
+				canonicalUrl: articles.canonicalUrl,
 				title: articles.title,
 				author: articles.author,
 				excerpt: articles.excerpt,

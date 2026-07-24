@@ -1,9 +1,12 @@
 import type { ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	getFreePort,
+	getRuntime,
 	runBun,
+	runChecked,
 	spawnBackground,
 	startTestServices,
 	stopProcess,
@@ -11,6 +14,9 @@ import {
 } from './test-env.js';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const needsContainerizedWebKit =
+	process.platform === 'linux' &&
+	/\b(?:arch|cachyos)\b/i.test(readFileSync('/etc/os-release', 'utf8'));
 const services = await startTestServices('rss-playwright');
 const relayToken = 'playwright-relay-token-that-is-long-enough';
 const blockedFeedPort = await getFreePort();
@@ -102,9 +108,47 @@ try {
 		],
 		{
 			cwd: rootDir,
-			env,
+			env: {
+				...env,
+				...(needsContainerizedWebKit ? { PLAYWRIGHT_EXCLUDE_WEBKIT: '1' } : {}),
+			},
 		},
 	);
+
+	if (needsContainerizedWebKit) {
+		const runtime = getRuntime();
+		const forwardedEnvironment = [
+			'PLAYWRIGHT_BASE_URL',
+			'PLAYWRIGHT_API_BASE_URL',
+			'PLAYWRIGHT_RELAY_BLOCKED_FEED_URL',
+		].flatMap((key) => ['--env', `${key}=${env[key]}`]);
+		runChecked(
+			runtime,
+			[
+				'run',
+				'--rm',
+				'--network',
+				'host',
+				...(runtime === 'podman' ? ['--userns=keep-id'] : []),
+				'--volume',
+				`${rootDir}:${rootDir}`,
+				'--workdir',
+				`${rootDir}/packages/web`,
+				...forwardedEnvironment,
+				'--env',
+				'PLAYWRIGHT_BROWSERS_PATH=/ms-playwright',
+				'mcr.microsoft.com/playwright:v1.60.0-noble',
+				'node',
+				'node_modules/@playwright/test/cli.js',
+				'test',
+				'--config',
+				'playwright.config.ts',
+				'--project',
+				'webkit',
+			],
+			{ cwd: rootDir, env },
+		);
+	}
 } finally {
 	await stopProcess(webProcess);
 	await stopProcess(workerProcess);

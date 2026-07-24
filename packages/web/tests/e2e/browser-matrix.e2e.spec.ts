@@ -55,6 +55,7 @@ const alphaArticle: ArticleListItem = {
 	feedId: bunFeedId,
 	feedTitle: 'Bun Blog',
 	feedFaviconUrl: null,
+	canonicalUrl: 'https://example.com/alpha-launch',
 	title: 'Alpha Launch',
 	author: 'Bun Team',
 	excerpt: 'Alpha launch ships fast JavaScript tooling.',
@@ -217,13 +218,13 @@ function unreadBadgeName(name: string) {
 	return new RegExp(`^${escaped}(?: \\d+)?$`);
 }
 
-async function loginThroughUi(page: Page) {
+async function loginThroughUi(page: Page, email = 'reader@example.com', password = 'password123') {
 	await page.goto('/');
-	await page.getByLabel('Email').fill('reader@example.com');
-	await page.getByLabel('Password').fill('password123');
+	await page.getByLabel('Email').fill(email);
+	await page.getByLabel('Password').fill(password);
 	await page.getByRole('button', { name: 'Sign In' }).click();
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
-	await expect(page.getByText('Reading queue')).toBeVisible();
+	await expect(page.getByText('Reading queue', { exact: true })).toBeVisible();
 }
 
 async function openSidebarWhenCollapsed(page: Page) {
@@ -299,5 +300,61 @@ test.describe('bounded browser matrix', () => {
 		await expect(dialog).toHaveCount(0);
 		expect(markAllRequests).toBe(0);
 		await expect(page.getByRole('button', { name: /Alpha Launch/ })).toBeVisible();
+	});
+
+	test('failed search is distinct from an empty result and Retry recovers', async ({ page }) => {
+		await installStableReaderFixture(page);
+		let attempts = 0;
+		await page.route('**/api/v1/search**', async (route) => {
+			attempts += 1;
+			if (attempts <= 3) {
+				await route.fulfill({
+					status: 503,
+					contentType: 'application/json',
+					body: JSON.stringify({ error: { message: 'Search is temporarily unavailable' } }),
+				});
+				return;
+			}
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ data: [gammaArticle], hasMore: false, cursor: null }),
+			});
+		});
+		await loginThroughUi(page);
+
+		await page.getByRole('combobox', { name: 'Search articles' }).fill('Gamma');
+		await expect(page.getByRole('alert')).toContainText('Search failed');
+		await expect(page.getByText('No results found')).toHaveCount(0);
+		await page.getByRole('button', { name: 'Retry' }).click();
+		await expect(page.getByRole('option', { name: /Gamma World/ })).toBeVisible();
+		expect(attempts).toBe(4);
+	});
+
+	test('the v shortcut opens the canonical publisher URL', async ({ page }) => {
+		await installStableReaderFixture(page);
+		await loginThroughUi(page);
+		await selectBunFeed(page);
+		await page.getByRole('button', { name: /Alpha Launch/ }).click();
+		await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
+
+		const popupPromise = page.waitForEvent('popup');
+		await page.keyboard.press('v');
+		const popup = await popupPromise;
+		await expect(popup).toHaveURL('https://example.com/alpha-launch');
+		await popup.close();
+	});
+
+	test('administrators can reach the protected account console', async ({ page }) => {
+		await installStableReaderFixture(page);
+		await loginThroughUi(page, 'admin@example.com');
+
+		await page.getByRole('link', { name: 'Administration' }).click();
+		await expect(page).toHaveURL(/\/admin$/);
+		await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
+		await expect(
+			page.getByRole('main').getByText('admin@example.com', { exact: true }),
+		).toBeVisible();
 	});
 });

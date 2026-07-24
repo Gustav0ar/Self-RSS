@@ -65,6 +65,13 @@ interface RssApi {
     @POST("feeds/{id}/sync")
     suspend fun syncFeed(@Path("id") id: String): ApiEnvelope<SyncResponse>
 
+    @GET("feeds/{id}/sync-runs")
+    suspend fun feedSyncRuns(
+        @Path("id") id: String,
+        @Query("limit") limit: Int = 25,
+        @Query("cursor") cursor: String? = null,
+    ): ApiEnvelope<FeedSyncHistoryResponse>
+
     @POST("feeds/sync")
     suspend fun syncAllFeeds(
         @Query("feedId") feedId: String? = null,
@@ -134,4 +141,25 @@ interface RssApi {
 
     @PATCH("admin/settings")
     suspend fun updateAdminSettings(@Body request: UpdateAppSettingsRequest): ApiEnvelope<AppSettingsResponse>
+
+    @GET("admin/users")
+    suspend fun adminUsers(
+        @Query("limit") limit: Int = 100,
+        @Query("cursor") cursor: String? = null,
+    ): ApiEnvelope<AdminUsersResponse>
+
+    @POST("admin/users")
+    suspend fun adminCreateUser(@Body request: AdminCreateUserRequest): ApiEnvelope<User>
+
+    @PATCH("admin/users/{id}")
+    suspend fun adminUpdateUser(
+        @Path("id") id: String,
+        @Body request: AdminUpdateUserRequest,
+    ): ApiEnvelope<User>
+
+    @POST("admin/users/{id}/reset-password")
+    suspend fun adminResetPassword(
+        @Path("id") id: String,
+        @Body request: AdminResetPasswordRequest,
+    ): ApiEnvelope<User>
 }

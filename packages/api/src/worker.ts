@@ -8,6 +8,7 @@ import {
 } from './jobs/durable-ingestion-runtime.js';
 import {
 	startArticleEnrichmentWorker,
+	startAuthSessionCleanup,
 	startCacheWarmer,
 	startQueuedSyncWorker,
 	startRetentionCleanup,
@@ -113,6 +114,10 @@ try {
 		enabled: env.RETENTION_DELETION_ENABLED,
 		dryRun: env.RETENTION_DRY_RUN,
 	});
+	const stopAuthSessionCleanup = startAuthSessionCleanup(
+		deps.repos.authSession,
+		env.AUTH_SESSION_CLEANUP_BATCH_SIZE,
+	);
 	const stopCacheWarmer = startCacheWarmer(deps.services.articleCache, deps.repos.user, {
 		intervalMs: env.CACHE_WARMER_INTERVAL_MS,
 		recentWindowMinutes: env.CACHE_WARMER_RECENT_WINDOW_MINUTES,
@@ -178,6 +183,7 @@ try {
 		stopQueuedSyncWorker();
 		stopArticleEnrichmentWorker();
 		stopRetentionCleanup();
+		stopAuthSessionCleanup();
 		stopCacheWarmer();
 		stopWorkerHeartbeat();
 		await durableRuntime?.stop();

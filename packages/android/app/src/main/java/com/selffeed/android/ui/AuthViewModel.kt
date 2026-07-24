@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.AuthRepository
+import com.selffeed.android.network.User
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ data class AuthUiState(
     val authMode: AuthMode = AuthMode.LOGIN,
     val apiBaseUrl: String = "",
     val registrationEnabled: Boolean = false,
+    val user: User? = null,
     val statusMessage: PresentationText? = null,
     val errorMessage: PresentationText? = null,
 )
@@ -60,6 +62,7 @@ class AuthViewModel @Inject constructor(
                     is AppResult.Success -> _state.value = _state.value.copy(
                         loading = false,
                         isAuthenticated = true,
+                        user = result.data,
                         apiBaseUrl = apiBaseUrl,
                         errorMessage = null,
                     )
@@ -120,6 +123,7 @@ class AuthViewModel @Inject constructor(
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
+                    user = result.data,
                     apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_welcome_back),
                 )
@@ -151,6 +155,7 @@ class AuthViewModel @Inject constructor(
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
+                    user = result.data,
                     apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_account_created),
                 )
@@ -171,6 +176,29 @@ class AuthViewModel @Inject constructor(
                 apiBaseUrl = repository.getApiBaseUrl(),
                 registrationEnabled = enabled,
             )
+        }
+    }
+
+    fun switchServerForExternalAction(serverOrigin: String) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(loading = true, errorMessage = null)
+            // Revoke the old session when reachable. Changing the base URL
+            // still clears local credentials if that best-effort call fails.
+            repository.logout()
+            when (val result = repository.setApiBaseUrl(serverOrigin)) {
+                is AppResult.Success -> {
+                    val enabled = loadRegistrationEnabled()
+                    _state.value = AuthUiState(
+                        loading = false,
+                        apiBaseUrl = result.data,
+                        registrationEnabled = enabled,
+                    )
+                }
+                is AppResult.Error -> _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = result.message.toApiBaseUrlPresentationText(),
+                )
+            }
         }
     }
 

@@ -10,6 +10,8 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.JsonReader
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.ToJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import okhttp3.Authenticator
 import okhttp3.Cache
 import okhttp3.CertificatePinner
@@ -100,7 +102,9 @@ class SessionRefreshCoordinator(
                                 IOException("Refresh response was empty or invalid"),
                             )
                         val accessToken = parsed.data.tokens.accessToken
-                        sessionStore.setAccessToken(accessToken)
+                        runBlocking(Dispatchers.IO) {
+                            sessionStore.setAccessToken(accessToken)
+                        }
                         lastRejectedAtMs = 0L
                         SessionRefreshResult.Success(accessToken)
                     }
@@ -135,7 +139,11 @@ class PersistedRefreshCookieJar(
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         val refresh = cookies.firstOrNull { it.name == REFRESH_COOKIE_NAME }
         if (refresh != null) {
-            runCatching { sessionStore.setRefreshCookie(refresh.toString()) }
+            runCatching {
+                runBlocking(Dispatchers.IO) {
+                    sessionStore.setRefreshCookie(refresh.toString())
+                }
+            }
                 .onFailure { logCookieJarError("Failed to persist refresh cookie", it) }
         }
     }
@@ -147,7 +155,11 @@ class PersistedRefreshCookieJar(
             ?: return emptyList()
         val cookie = Cookie.parse(url, rawCookie) ?: return emptyList()
         return if (cookie.expiresAt < System.currentTimeMillis()) {
-            runCatching { sessionStore.setRefreshCookie(null) }
+            runCatching {
+                runBlocking(Dispatchers.IO) {
+                    sessionStore.setRefreshCookie(null)
+                }
+            }
                 .onFailure { logCookieJarError("Failed to clear expired refresh cookie", it) }
             emptyList()
         } else {

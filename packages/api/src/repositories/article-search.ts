@@ -71,7 +71,7 @@ function appendSearchCursor(params: (string | number)[], cursor?: string) {
 }
 
 function searchSelectSql() {
-	return 'WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, a.content_status as contentStatus, a.content_version as contentVersion, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ?';
+	return 'WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.canonical_url as canonicalUrl, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, a.content_status as contentStatus, a.content_version as contentVersion, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ?';
 }
 
 function searchOrderSql() {

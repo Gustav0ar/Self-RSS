@@ -18,6 +18,7 @@ export interface CachedArticle {
 	feedId: string;
 	feedTitle: string;
 	feedFaviconUrl: string | null;
+	canonicalUrl: string | null;
 	title: string;
 	author: string | null;
 	excerpt: string | null;
@@ -65,6 +66,7 @@ export function cacheableArticleRows(
 			feedId: article.feedId,
 			feedTitle: article.feedTitle,
 			feedFaviconUrl: article.feedFaviconUrl,
+			canonicalUrl: article.canonicalUrl,
 			title: article.title,
 			author: article.author,
 			excerpt: article.excerpt,

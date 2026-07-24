@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter, useRouter } from '@tanstack/react-router';
 import { useEffect } from 'react';
+import { AdminPanel } from '@/components/admin/admin-panel';
 import { FeedView } from '@/components/articles/feed-view';
 import { RootLayout } from '@/components/layout/root-layout';
 import { StatsPanel } from '@/components/stats/stats-panel';
@@ -107,7 +108,13 @@ const statsRoute = createRoute({
 	},
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, articleRoute, statsRoute]);
+const adminRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/admin',
+	component: AdminPanel,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, articleRoute, statsRoute, adminRoute]);
 
 export const router = createRouter({ routeTree });
 
