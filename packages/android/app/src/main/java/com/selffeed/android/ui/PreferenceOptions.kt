@@ -1,6 +1,8 @@
 package com.selffeed.android.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.ui.text.font.FontFamily
+import com.selffeed.android.R
 import com.selffeed.android.network.UserPreferences
 
 enum class ThemePreference(val apiValue: String) {
@@ -61,31 +63,31 @@ enum class AutoMarkReadPreference(val apiValue: String) {
 
 enum class ReaderFontPreference(
     val apiValue: String,
-    val label: String,
+    @param:StringRes val labelRes: Int,
     val composeFontFamily: FontFamily,
     val cssFontFamily: String,
 ) {
     SYSTEM(
         apiValue = "system-ui",
-        label = "System",
+        labelRes = R.string.reader_font_system,
         composeFontFamily = FontFamily.SansSerif,
         cssFontFamily = "system-ui, -apple-system, BlinkMacSystemFont, \\\"Roboto\\\", sans-serif",
     ),
     SANS(
         apiValue = "Inter",
-        label = "Sans serif",
+        labelRes = R.string.reader_font_sans_serif,
         composeFontFamily = FontFamily.SansSerif,
         cssFontFamily = "Inter, Arial, Verdana, sans-serif",
     ),
     SERIF(
         apiValue = "Georgia",
-        label = "Serif",
+        labelRes = R.string.reader_font_serif,
         composeFontFamily = FontFamily.Serif,
         cssFontFamily = "Georgia, \\\"Times New Roman\\\", serif",
     ),
     MONOSPACE(
         apiValue = "Courier New",
-        label = "Monospace",
+        labelRes = R.string.reader_font_monospace,
         composeFontFamily = FontFamily.Monospace,
         cssFontFamily = "\\\"Courier New\\\", monospace",
     ),

@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.AppSettingsResponse
@@ -70,7 +71,10 @@ class SettingsViewModelTest {
 
         assertNull(viewModel.state.value.preferences)
         assertEquals(false, viewModel.state.value.preferencesLoading)
-        assertEquals("Settings request failed", viewModel.state.value.preferencesLoadError)
+        assertEquals(
+            PresentationText.dynamic("Settings request failed"),
+            viewModel.state.value.preferencesLoadError,
+        )
 
         viewModel.loadPreferences()
 

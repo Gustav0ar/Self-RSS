@@ -9,6 +9,7 @@ import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.ui.DensityPreference
+import com.selffeed.android.ui.PresentationText
 
 /** Feature-owned immutable models and events consumed by the app shell. */
 data class FeedTabState(
@@ -51,7 +52,7 @@ data class ArticleTabState(
     val density: DensityPreference = DensityPreference.COMFORTABLE,
     val isOffline: Boolean = false,
     val feedCount: Int = 0,
-    val refreshBlockedGuidance: String? = null,
+    val refreshBlockedGuidance: PresentationText? = null,
 )
 
 data class ArticleTabActions(
@@ -87,7 +88,7 @@ data class SearchTabActions(
 data class SettingsTabState(
     val preferences: UserPreferences?,
     val preferencesLoading: Boolean = false,
-    val preferencesLoadError: String? = null,
+    val preferencesLoadError: PresentationText? = null,
     val stats: StatsResponse?,
     val authSessions: List<AuthSession>,
 )

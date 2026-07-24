@@ -1,4 +1,316 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SelfFeed</string>
+
+    <!-- Shared actions -->
+    <string name="action_add">Add</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_create">Create</string>
+    <string name="action_done">Done</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_ok">OK</string>
+    <string name="action_remove">Remove</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_retry_loading">Retry loading</string>
+    <string name="action_save">Save</string>
+    <string name="action_undo">Undo</string>
+
+    <!-- App shell and navigation -->
+    <string name="nav_articles">Articles</string>
+    <string name="nav_search">Search</string>
+    <string name="nav_feeds">Feeds</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_stats">Stats</string>
+    <string name="title_all_feeds">All Feeds</string>
+    <string name="title_feed_fallback">Feed</string>
+    <string name="title_category_fallback">Category</string>
+    <string name="title_manage_feeds">Manage Feeds</string>
+    <string name="cd_articles_tab">Articles tab</string>
+    <string name="cd_search_tab">Search tab</string>
+    <string name="cd_feeds_tab">Feeds tab</string>
+    <string name="cd_settings_tab">Settings tab</string>
+    <string name="cd_back_to_article_list">Back to list</string>
+    <string name="cd_open_feeds">Open feeds</string>
+    <string name="cd_share_article">Share article</string>
+    <string name="cd_offline">Offline</string>
+    <string name="loading_reading_workspace">Loading your reading workspace</string>
+
+    <!-- Authentication -->
+    <string name="auth_tagline">A modern reading experience with synced feeds, search, and rich article views.</string>
+    <string name="auth_login">Login</string>
+    <string name="auth_register">Register</string>
+    <string name="auth_server">Server</string>
+    <string name="auth_server_address">Server address</string>
+    <string name="auth_server_placeholder">10.0.22.22:3000</string>
+    <string name="auth_email">Email</string>
+    <string name="auth_email_address">Email address</string>
+    <string name="auth_password">Password</string>
+    <string name="auth_continue">Continue</string>
+    <string name="auth_create_account">Create account</string>
+    <string name="auth_registration_closed">Registration is currently closed</string>
+    <string name="auth_welcome_back">Welcome back</string>
+    <string name="auth_account_created">Account created</string>
+    <string name="auth_session_lost">Authentication was lost. Please sign in again.</string>
+    <string name="auth_invalid_server_url">Enter a valid server URL.</string>
+    <string name="auth_invalid_server_host">Enter a valid server, for example 10.0.22.22:3000.</string>
+    <string name="cd_app_logo">SelfFeed app logo</string>
+
+    <!-- Articles and reader -->
+    <string name="article_choose">Choose an article</string>
+    <string name="article_choose_detail">Its reader will appear here.</string>
+    <string name="article_mark_all_title">Mark all as read?</string>
+    <string name="article_mark_all_detail">This marks every article in the current feed or category as read.</string>
+    <string name="article_mark_all_action">Mark all read</string>
+    <string name="article_mark_all_cd">Mark all as read</string>
+    <string name="article_mark_read">Mark read</string>
+    <string name="article_mark_unread">Mark unread</string>
+    <string name="article_mark_as_read">Mark as read</string>
+    <string name="article_mark_as_unread">Mark as unread</string>
+    <string name="article_marked_read">Marked as read</string>
+    <string name="article_marked_unread">Marked as unread</string>
+    <string name="article_update_read_failed">Failed to update read state</string>
+    <string name="article_empty_cd">No articles</string>
+    <string name="article_empty_no_feeds_title">Start by adding a feed</string>
+    <string name="article_empty_no_feeds_detail">Open Feeds to add a subscription or import an OPML file.</string>
+    <string name="article_empty_queue_title">No articles left to read</string>
+    <string name="article_empty_queue_detail">Your queue is empty. Pull down to refresh or check other feeds.</string>
+    <string name="article_offline_notice">Offline — showing saved articles. Read changes will sync when you reconnect.</string>
+    <string name="article_read_state_read">Read</string>
+    <string name="article_read_state_unread">Unread</string>
+    <string name="article_accessibility_label">%1$s article: %2$s, from %3$s</string>
+    <string name="article_sync_progress_cd">Refreshing feeds in background, %1$d of %2$d complete</string>
+    <string name="article_syncing_cd">Refreshing feeds in background</string>
+    <string name="article_sync_progress">%1$d/%2$d</string>
+    <string name="article_sync_progress_unknown">…</string>
+    <string name="reader_open_original">Open original article</string>
+    <string name="reader_rich_mode">Rich</string>
+    <string name="reader_text_mode">Text</string>
+    <string name="reader_unknown_author">Unknown author</string>
+    <string name="reader_media">Media</string>
+    <string name="reader_media_preview">Preview</string>
+    <string name="reader_embedded_media">Embedded Media</string>
+    <string name="reader_loading_article">Loading %1$s</string>
+    <string name="reader_no_text_content">No text content</string>
+    <string name="share_opml_chooser">Share OPML</string>
+    <string name="share_article_chooser">Share article</string>
+    <string name="sync_finished">Sync finished</string>
+    <plurals name="sync_refreshed_count">
+        <item quantity="one">%d refreshed</item>
+        <item quantity="other">%d refreshed</item>
+    </plurals>
+    <plurals name="sync_feeds_refreshed_count">
+        <item quantity="one">%d feed refreshed</item>
+        <item quantity="other">%d feeds refreshed</item>
+    </plurals>
+    <plurals name="sync_failed_count">
+        <item quantity="one">%d failed</item>
+        <item quantity="other">%d failed</item>
+    </plurals>
+    <plurals name="article_marked_all_read">
+        <item quantity="one">Marked %d article as read</item>
+        <item quantity="other">Marked %d articles as read</item>
+    </plurals>
+
+    <!-- Search -->
+    <string name="search_hint">Search titles and article content</string>
+    <string name="search_articles_cd">Search articles</string>
+    <string name="search_scope_all">All</string>
+    <string name="search_scope_current">Current</string>
+    <string name="search_load_more">Load more results</string>
+    <string name="search_limit_notice">Showing first %1$d results. Refine the search to narrow them.</string>
+    <plurals name="search_result_count">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
+
+    <!-- Settings and sessions -->
+    <string name="settings_loading">Loading settings…</string>
+    <string name="settings_unavailable">Settings unavailable</string>
+    <string name="settings_unavailable_detail">The settings request did not complete. Check your connection and try again.</string>
+    <string name="settings_preferences">Preferences</string>
+    <string name="settings_preferences_detail">Control theme, density, sorting, and whether read items stay visible in your queue.</string>
+    <string name="settings_reader_font">Reader font</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_toggle_light_mode">Toggle light mode</string>
+    <string name="settings_toggle_dark_mode">Toggle dark mode</string>
+    <string name="settings_hide_read">Hide read articles</string>
+    <string name="settings_hide_read_detail">Keep the main queue focused on unread items.</string>
+    <string name="settings_sort_order">Sort order</string>
+    <string name="settings_sort_newest">Newest</string>
+    <string name="settings_sort_oldest">Oldest</string>
+    <string name="settings_density">Density</string>
+    <string name="settings_density_comfortable">Comfortable</string>
+    <string name="settings_density_compact">Compact</string>
+    <string name="settings_reader_text_size">Reader text size</string>
+    <string name="settings_text_size_sp">%1$dsp</string>
+    <string name="settings_auto_mark_read">Auto-mark as read</string>
+    <string name="settings_auto_mark_read_detail">Choose when reading should change an article\'s state.</string>
+    <string name="settings_auto_mark_disabled">Disabled</string>
+    <string name="settings_auto_mark_navigate">When navigating</string>
+    <string name="settings_auto_mark_open">When content opens</string>
+    <string name="settings_activity">Activity</string>
+    <string name="stats_unread">Unread</string>
+    <string name="stats_read">Read</string>
+    <string name="stats_feeds">Feeds</string>
+    <string name="stats_categories">Categories</string>
+    <string name="settings_sign_out_cd">Sign out</string>
+    <string name="settings_logout">Logout</string>
+    <string name="settings_saved">Preferences saved</string>
+    <string name="settings_sessions_title">Authenticated devices</string>
+    <string name="settings_sessions_description">Review active app and browser sessions, then revoke any device you no longer use.</string>
+    <string name="settings_sessions_empty">No active sessions found.</string>
+    <string name="settings_this_device">This device</string>
+    <string name="settings_revoke_session_cd">Revoke session</string>
+    <string name="settings_revoke">Revoke</string>
+    <string name="settings_unknown_ip">Unknown IP</string>
+    <string name="settings_last_seen">%1$s - Last seen %2$s</string>
+    <string name="settings_unknown_time">unknown</string>
+    <string name="settings_session_revoked">Session revoked</string>
+    <string name="settings_registration_locked">Registration locked</string>
+    <string name="settings_registration_unlocked">Registration unlocked</string>
+    <string name="reader_font_system">System</string>
+    <string name="reader_font_sans_serif">Sans serif</string>
+    <string name="reader_font_serif">Serif</string>
+    <string name="reader_font_monospace">Monospace</string>
+
+    <!-- Feed management -->
+    <string name="feeds_add">Add feed</string>
+    <string name="feeds_category">Category</string>
+    <string name="feeds_unread_only">Unread only</string>
+    <string name="feeds_refresh_queued">Refresh queued</string>
+    <string name="feeds_refreshing">Refreshing feeds</string>
+    <string name="feeds_refresh_issues">Refresh completed with issues</string>
+    <string name="feeds_refresh_complete">Refresh complete</string>
+    <string name="feeds_next_publisher_check">Next publisher check: %1$s</string>
+    <string name="feeds_manage_subscriptions">Manage subscriptions</string>
+    <string name="feeds_first_uncategorized">Your first feed will be placed in an Uncategorized category.</string>
+    <string name="feeds_read_opml_error">Unable to read that OPML file. Choose a file smaller than 5 MB.</string>
+    <string name="feeds_import_opml">Import OPML</string>
+    <string name="feeds_export_opml">Export OPML</string>
+    <string name="feeds_everything_stream">Everything in one stream</string>
+    <string name="feeds_dismiss_health_summary_cd">Dismiss feed health summary</string>
+    <string name="feeds_delete_category_title">Delete category?</string>
+    <string name="feeds_delete_category_message">Delete &quot;%1$s&quot; and its organization? Feeds in the category may also be removed.</string>
+    <string name="feeds_delete_category_action">Delete category</string>
+    <string name="feeds_remove_feed_title">Remove feed?</string>
+    <string name="feeds_remove_feed_message">Remove &quot;%1$s&quot; and its saved articles from this device?</string>
+    <string name="feeds_remove_feed_action">Remove feed</string>
+    <string name="feeds_import_title">OPML import</string>
+    <string name="feeds_new_category">New category</string>
+    <string name="feeds_edit_category">Edit category</string>
+    <string name="feeds_name">Name</string>
+    <string name="feeds_parent_category">Parent category</string>
+    <string name="feeds_add_title">Add feed</string>
+    <string name="feeds_edit_title">Edit feed</string>
+    <string name="feeds_discovery_expired">Discovery choices expired. Save the URL to validate it again.</string>
+    <string name="feeds_cancel_replacement">Cancel replacement</string>
+    <string name="feeds_latest_refresh_failed">Latest refresh failed</string>
+    <string name="feeds_latest_refresh_failed_sentence">Latest refresh failed.</string>
+    <string name="feeds_last_attempt">Last attempt: %1$s</string>
+    <string name="feeds_health_edit_guidance">Review the URL and refresh interval, then save any correction.</string>
+    <string name="feeds_url">Feed or website URL</string>
+    <string name="feeds_url_hint">Paste a feed URL or a site such as example.com</string>
+    <string name="feeds_display_name_optional">Display name (optional)</string>
+    <string name="feeds_refresh_interval_minutes">Refresh interval (minutes)</string>
+    <string name="feeds_refresh_interval_range">5 to 1,440 minutes</string>
+    <string name="feeds_create_category">Create category</string>
+    <string name="feeds_category_name">Category name</string>
+    <string name="feeds_choose_category">Choose a category</string>
+    <string name="feeds_no_parent">No parent (top level)</string>
+    <string name="feeds_create_new_category">Create new category</string>
+    <string name="feeds_picker_value">%1$s: %2$s</string>
+    <string name="feeds_imported_title">OPML imported</string>
+    <string name="feeds_imported_summary">Added %1$d feeds in %2$d categories.</string>
+    <string name="feeds_more_options_cd">More options</string>
+    <string name="feeds_icon_cd">Feed icon for %1$s</string>
+    <string name="feeds_attention_cd">Feed needs attention. Open Edit for details.</string>
+    <string name="feeds_health_open_edit">Open a feed\'s menu and choose Edit for details.</string>
+    <string name="feeds_health_warning">%1$s is not updating. %2$s%3$s</string>
+    <string name="feeds_health_last_attempt"> Last attempt %1$s.</string>
+    <string name="feeds_waiting_progress">Waiting for progress</string>
+    <string name="feeds_up_to_date">Feeds are up to date</string>
+    <string name="feeds_sync_checked">%1$d/%2$d checked</string>
+    <string name="feeds_sync_background">Refreshing feeds in the background</string>
+    <string name="feeds_sync_background_progress">Refreshing feeds in background · %1$d/%2$d</string>
+    <string name="feeds_sync_checking">Checking background refresh</string>
+    <string name="feeds_sync_stale">Refresh progress is stale; the server will reconcile it before another overlapping refresh.</string>
+    <string name="feeds_sync_continues">Refresh continues on the server; progress will be checked on the next app status check.</string>
+    <string name="feeds_sync_slow">Feed refresh is taking longer than usual</string>
+    <string name="feeds_category_created">Category created</string>
+    <string name="feeds_category_updated">Category updated</string>
+    <string name="feeds_category_deleted">Category deleted</string>
+    <string name="feeds_created_validation_queued">Feed added · validation queued</string>
+    <string name="feeds_created">Feed added</string>
+    <string name="feeds_updated_validation_queued">Replacement validation queued · existing articles remain available</string>
+    <string name="feeds_updated">Feed updated</string>
+    <string name="feeds_removed">Feed removed</string>
+    <string name="feeds_selected_validation_queued">Feed selected · validation queued</string>
+    <string name="feeds_replacement_cancelled">Replacement cancelled · existing feed kept</string>
+    <string name="feeds_import_status">OPML imported: %1$d feeds, %2$d categories</string>
+    <string name="feeds_export_ready">OPML export is ready to share</string>
+    <plurals name="feeds_count">
+        <item quantity="one">%d feed</item>
+        <item quantity="other">%d feeds</item>
+    </plurals>
+    <plurals name="feeds_not_updating">
+        <item quantity="one">%d feed is not updating</item>
+        <item quantity="other">%d feeds are not updating</item>
+    </plurals>
+    <plurals name="feeds_sync_new_short">
+        <item quantity="one">%d new</item>
+        <item quantity="other">%d new</item>
+    </plurals>
+    <plurals name="feeds_sync_failed_short">
+        <item quantity="one">%d failed</item>
+        <item quantity="other">%d failed</item>
+    </plurals>
+    <plurals name="feeds_sync_deferred_short">
+        <item quantity="one">%d deferred</item>
+        <item quantity="other">%d deferred</item>
+    </plurals>
+    <plurals name="feeds_import_duplicates">
+        <item quantity="one">Skipped %d duplicate.</item>
+        <item quantity="other">Skipped %d duplicates.</item>
+    </plurals>
+    <plurals name="feeds_import_invalid">
+        <item quantity="one">Skipped %d invalid entry.</item>
+        <item quantity="other">Skipped %d invalid entries.</item>
+    </plurals>
+    <plurals name="feeds_sync_new_articles">
+        <item quantity="one">%d new article</item>
+        <item quantity="other">%d new articles</item>
+    </plurals>
+    <plurals name="feeds_sync_failed_feeds">
+        <item quantity="one">%d feed failed</item>
+        <item quantity="other">%d feeds failed</item>
+    </plurals>
+    <plurals name="feeds_sync_skipped_feeds">
+        <item quantity="one">%d feed skipped</item>
+        <item quantity="other">%d feeds skipped</item>
+    </plurals>
+
+    <!-- Feed lifecycle -->
+    <string name="feed_lifecycle_validation_queued_title">Validation queued</string>
+    <string name="feed_lifecycle_validation_queued_detail">Articles will appear after the first successful fetch.</string>
+    <string name="feed_lifecycle_validation_queued_guidance">Validation is already queued.</string>
+    <string name="feed_lifecycle_replacement_title">Replacement validating</string>
+    <string name="feed_lifecycle_replacement_detail">Existing articles remain available until the new source succeeds.</string>
+    <string name="feed_lifecycle_replacement_guidance">Replacement validation is already queued.</string>
+    <string name="feed_lifecycle_discovery_title">Choose a feed</string>
+    <string name="feed_lifecycle_discovery_detail">This website needs an explicit feed choice. SelfFeed will not repeatedly fetch it.</string>
+    <string name="feed_lifecycle_discovery_guidance">Choose a discovered feed before refreshing.</string>
+    <string name="feed_lifecycle_backoff_title">Publisher cooldown</string>
+    <string name="feed_lifecycle_backoff_waiting_detail">The publisher can be checked again after %1$s. Existing articles remain available.</string>
+    <string name="feed_lifecycle_backoff_ready_detail">The publisher can be checked again safely.</string>
+    <string name="feed_lifecycle_available_after">Available after %1$s.</string>
+    <string name="feed_lifecycle_paused_title">Feed needs attention</string>
+    <string name="feed_lifecycle_paused_source_detail">%1$s Review the source URL to resume safely.</string>
+    <string name="feed_lifecycle_paused_detail">Automatic fetching paused after repeated or permanent failures. Review the source URL.</string>
+    <string name="feed_lifecycle_paused_guidance">Edit the feed URL to resume validation safely.</string>
+    <string name="feed_lifecycle_error_title">Latest refresh failed</string>
+    <string name="feed_lifecycle_error_detail">The publisher could not be reached during the latest attempt.</string>
 </resources>

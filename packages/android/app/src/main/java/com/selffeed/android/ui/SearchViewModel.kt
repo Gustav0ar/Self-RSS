@@ -25,7 +25,7 @@ data class SearchUiState(
     val selectedCategoryId: String? = null,
     val currentCategoryOnly: Boolean = false,
     val resultLimitReached: Boolean = false,
-    val errorMessage: String? = null,
+    val errorMessage: PresentationText? = null,
 )
 
 /**
@@ -208,7 +208,11 @@ class SearchViewModel @Inject constructor(
             is AppResult.Error -> {
                 if (!isCurrentRequest(query, categoryId, generation)) return
                 _state.update {
-                    it.copy(loading = false, loadingMore = false, errorMessage = result.message)
+                    it.copy(
+                        loading = false,
+                        loadingMore = false,
+                        errorMessage = PresentationText.dynamic(result.message),
+                    )
                 }
             }
         }

@@ -73,6 +73,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -185,11 +186,21 @@ fun SelfFeedApp(
     val readerFeedTitle = state.articles.currentReaderFeedTitle()
     val readStateOverrides by readStateOverrides.collectAsStateWithLifecycle()
     var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
-    val offerReadUndo: (String, Boolean, Boolean) -> Unit = remember(actions, snackbarHostState, scope) {
+    val markedReadMessage = stringResource(R.string.article_marked_read)
+    val markedUnreadMessage = stringResource(R.string.article_marked_unread)
+    val undoLabel = stringResource(R.string.action_undo)
+    val offerReadUndo: (String, Boolean, Boolean) -> Unit = remember(
+        actions,
+        snackbarHostState,
+        scope,
+        markedReadMessage,
+        markedUnreadMessage,
+        undoLabel,
+    ) {
         { articleId, previousRead, read ->
             scope.launch {
-                val message = if (read) "Marked as read" else "Marked as unread"
-                if (snackbarHostState.showSnackbar(message = message, actionLabel = "Undo") == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                val message = if (read) markedReadMessage else markedUnreadMessage
+                if (snackbarHostState.showSnackbar(message = message, actionLabel = undoLabel) == androidx.compose.material3.SnackbarResult.ActionPerformed) {
                     actions.onToggleRead(articleId, previousRead)
                 }
             }
@@ -201,7 +212,7 @@ fun SelfFeedApp(
             offerReadUndo(articleId, !read, read)
         }
     }
-    val topBarLabel = remember(
+    val topBarText = remember(
         activeTab,
         selectedArticle,
         readerFeedTitle,
@@ -219,7 +230,7 @@ fun SelfFeedApp(
             feeds = state.feeds.feeds,
             categories = state.feeds.categories,
         )
-    }
+    }.resolve()
 
     val errorMessage = (if (state.auth.isAuthenticated) state.auth.errorMessage else null)
         ?: state.feeds.errorMessage
@@ -232,15 +243,17 @@ fun SelfFeedApp(
         ?: state.articles.statusMessage
         ?: state.settings.statusMessage
         ?: state.chrome.globalStatus
+    val resolvedErrorMessage = errorMessage?.resolve()
+    val resolvedStatusMessage = statusMessage?.resolve()
 
-    LaunchedEffect(errorMessage) {
-        errorMessage?.let {
+    LaunchedEffect(resolvedErrorMessage) {
+        resolvedErrorMessage?.let {
             actions.onClearMessages()
             snackbarHostState.showSnackbar(it)
         }
     }
-    LaunchedEffect(statusMessage) {
-        statusMessage?.let {
+    LaunchedEffect(resolvedStatusMessage) {
+        resolvedStatusMessage?.let {
             actions.onClearMessages()
             snackbarHostState.showSnackbar(
                 message = it,
@@ -496,7 +509,7 @@ fun SelfFeedApp(
                 AppTopBar(
                     activeTab = activeTab,
                     selectedArticle = selectedArticle,
-                    currentLabel = topBarLabel,
+                    currentLabel = topBarText,
                     showMarkAllRead = activeTab == HomeTab.ARTICLES &&
                         selectedArticle == null &&
                         articleQueue.isNotEmpty(),
@@ -578,17 +591,19 @@ fun SelfFeedApp(
     if (confirmMarkAllRead) {
         AlertDialog(
             onDismissRequest = { confirmMarkAllRead = false },
-            title = { Text("Mark all as read?") },
-            text = { Text("This marks every article in the current feed or category as read.") },
+            title = { Text(stringResource(R.string.article_mark_all_title)) },
+            text = { Text(stringResource(R.string.article_mark_all_detail)) },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { confirmMarkAllRead = false }) { Text("Cancel") }
+                androidx.compose.material3.TextButton(onClick = { confirmMarkAllRead = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     actions.onArticleSnapshot(articlePagingItems.itemSnapshotList.items)
                     actions.onMarkAllRead()
                     confirmMarkAllRead = false
-                }) { Text("Mark all read") }
+                }) { Text(stringResource(R.string.article_mark_all_action)) }
             },
         )
     }
@@ -625,7 +640,7 @@ private fun LoadingScreen() {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Loading your reading workspace",
+                text = stringResource(R.string.loading_reading_workspace),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -640,12 +655,13 @@ private fun LoadingScreen() {
  */
 @Composable
 private fun OnlineDot() {
+    val offlineDescription = stringResource(R.string.cd_offline)
     Box(
         modifier = Modifier
             .size(8.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.error)
-            .semantics { contentDescription = "Offline" },
+            .semantics { contentDescription = offlineDescription },
     )
 }
 
@@ -689,23 +705,28 @@ private fun AppTopBar(
         navigationIcon = {
             if (showReaderBack) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to list")
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.cd_back_to_article_list),
+                    )
                 }
             } else {
                 IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Default.Menu, contentDescription = "Open feeds")
+                    Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.cd_open_feeds))
                 }
             }
         },
         actions = {
             if (isArticleSelected) {
                 IconButton(onClick = onShare) {
-                    Icon(Icons.Default.Share, contentDescription = "Share article")
+                    Icon(Icons.Default.Share, contentDescription = stringResource(R.string.cd_share_article))
                 }
                 IconButton(onClick = onToggleRead) {
                     val isRead = selectedArticle?.isRead == true
                     val icon = if (isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
-                    val description = if (isRead) "Mark as unread" else "Mark as read"
+                    val description = stringResource(
+                        if (isRead) R.string.article_mark_as_unread else R.string.article_mark_as_read,
+                    )
                     Icon(
                         imageVector = icon,
                         contentDescription = description,
@@ -714,7 +735,10 @@ private fun AppTopBar(
                 }
             } else if (showMarkAllRead) {
                 IconButton(onClick = onMarkAllRead) {
-                    Icon(Icons.Default.MarkEmailRead, contentDescription = "Mark all as read")
+                    Icon(
+                        Icons.Default.MarkEmailRead,
+                        contentDescription = stringResource(R.string.article_mark_all_cd),
+                    )
                 }
             } else {
                 Spacer(modifier = Modifier.width(48.dp))
@@ -743,26 +767,34 @@ private fun AppBottomBar(
         NavigationBarItem(
             selected = activeTab == HomeTab.ARTICLES,
             onClick = { onTabSelected(HomeTab.ARTICLES) },
-            icon = { Icon(Icons.Default.GridView, contentDescription = "Articles tab") },
-            label = { Text("Articles") },
+            icon = {
+                Icon(Icons.Default.GridView, contentDescription = stringResource(R.string.cd_articles_tab))
+            },
+            label = { Text(stringResource(R.string.nav_articles)) },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.SEARCH,
             onClick = { onTabSelected(HomeTab.SEARCH) },
-            icon = { Icon(Icons.Default.Search, contentDescription = "Search tab") },
-            label = { Text("Search") },
+            icon = {
+                Icon(Icons.Default.Search, contentDescription = stringResource(R.string.cd_search_tab))
+            },
+            label = { Text(stringResource(R.string.nav_search)) },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.FEEDS,
             onClick = { onTabSelected(HomeTab.FEEDS) },
-            icon = { Icon(Icons.Default.RssFeed, contentDescription = "Feeds tab") },
-            label = { Text("Feeds") },
+            icon = {
+                Icon(Icons.Default.RssFeed, contentDescription = stringResource(R.string.cd_feeds_tab))
+            },
+            label = { Text(stringResource(R.string.nav_feeds)) },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.SETTINGS,
             onClick = { onTabSelected(HomeTab.SETTINGS) },
-            icon = { Icon(Icons.Outlined.Settings, contentDescription = "Settings tab") },
-            label = { Text("Settings") },
+            icon = {
+                Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.cd_settings_tab))
+            },
+            label = { Text(stringResource(R.string.nav_settings)) },
         )
     }
 }
@@ -775,17 +807,21 @@ private fun topBarLabel(
     selectedCategoryId: String?,
     feeds: List<FeedWithCounts>,
     categories: List<CategoryWithCounts>,
-): String = when (activeTab) {
+): PresentationText = when (activeTab) {
     HomeTab.ARTICLES -> when {
-        selectedArticle != null -> readerFeedTitle ?: selectedArticle.feedTitle
-        selectedFeedId != null -> feeds.find { it.id == selectedFeedId }?.title ?: "Feed"
-        selectedCategoryId != null -> categories.find { it.id == selectedCategoryId }?.name ?: "Category"
-        else -> "All Feeds"
+        selectedArticle != null -> PresentationText.dynamic(readerFeedTitle ?: selectedArticle.feedTitle)
+        selectedFeedId != null -> feeds.find { it.id == selectedFeedId }?.title
+            ?.let(PresentationText::dynamic)
+            ?: PresentationText.resource(R.string.title_feed_fallback)
+        selectedCategoryId != null -> categories.find { it.id == selectedCategoryId }?.name
+            ?.let(PresentationText::dynamic)
+            ?: PresentationText.resource(R.string.title_category_fallback)
+        else -> PresentationText.resource(R.string.title_all_feeds)
     }
-    HomeTab.SEARCH -> "Search"
-    HomeTab.FEEDS -> "Manage Feeds"
-    HomeTab.SETTINGS -> "Settings"
-    HomeTab.STATS -> "Stats"
+    HomeTab.SEARCH -> PresentationText.resource(R.string.nav_search)
+    HomeTab.FEEDS -> PresentationText.resource(R.string.title_manage_feeds)
+    HomeTab.SETTINGS -> PresentationText.resource(R.string.nav_settings)
+    HomeTab.STATS -> PresentationText.resource(R.string.nav_stats)
 }
 
 internal fun ArticlesUiState.currentReaderFeedTitle(): String? {
@@ -802,7 +838,7 @@ internal fun AuthScreen(
     mode: AuthMode,
     apiBaseUrl: String,
     registrationEnabled: Boolean,
-    errorMessage: String?,
+    errorMessage: PresentationText?,
     onModeChange: (AuthMode) -> Unit,
     onLogin: (String, String, String) -> Unit,
     onRegister: (String, String, String) -> Unit,
@@ -811,7 +847,10 @@ internal fun AuthScreen(
     var email by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     val configuredServer = apiBaseUrl.trim()
-    val serverPlaceholder = configuredServer.ifEmpty { "10.0.22.22:3000" }
+    val serverPlaceholder = configuredServer.ifEmpty {
+        stringResource(R.string.auth_server_placeholder)
+    }
+    val resolvedErrorMessage = errorMessage?.resolve().orEmpty()
 
     Box(
         modifier = Modifier
@@ -850,17 +889,17 @@ internal fun AuthScreen(
                 ) {
                     Image(
                         painter = painterResource(R.drawable.ic_self_feed_logo),
-                        contentDescription = "SelfFeed app logo",
+                        contentDescription = stringResource(R.string.cd_app_logo),
                         modifier = Modifier.size(56.dp),
                     )
                 }
                 Text(
-                    "SelfFeed",
+                    stringResource(R.string.app_name),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "A modern reading experience with synced feeds, search, and rich article views.",
+                    stringResource(R.string.auth_tagline),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -869,13 +908,13 @@ internal fun AuthScreen(
                     FilterChip(
                         selected = mode == AuthMode.LOGIN,
                         onClick = { onModeChange(AuthMode.LOGIN) },
-                        label = { Text("Login") },
+                        label = { Text(stringResource(R.string.auth_login)) },
                     )
                     if (registrationEnabled) {
                         FilterChip(
                             selected = mode == AuthMode.REGISTER,
                             onClick = { onModeChange(AuthMode.REGISTER) },
-                            label = { Text("Register") },
+                            label = { Text(stringResource(R.string.auth_register)) },
                         )
                     }
                 }
@@ -883,9 +922,14 @@ internal fun AuthScreen(
                 OutlinedTextField(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
-                    label = { Text("Server") },
+                    label = { Text(stringResource(R.string.auth_server)) },
                     placeholder = { Text(serverPlaceholder) },
-                    leadingIcon = { Icon(Icons.Default.RssFeed, contentDescription = "Server address") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.RssFeed,
+                            contentDescription = stringResource(R.string.auth_server_address),
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
@@ -894,8 +938,13 @@ internal fun AuthScreen(
                 OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },
-                    label = { Text("Email") },
-                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = "Email address") },
+                    label = { Text(stringResource(R.string.auth_email)) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Email,
+                            contentDescription = stringResource(R.string.auth_email_address),
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
@@ -904,8 +953,13 @@ internal fun AuthScreen(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Password") },
-                    leadingIcon = { Icon(Icons.Default.Password, contentDescription = "Password") },
+                    label = { Text(stringResource(R.string.auth_password)) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Password,
+                            contentDescription = stringResource(R.string.auth_password),
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
@@ -925,11 +979,15 @@ internal fun AuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(22.dp),
                 ) {
-                    Text(if (mode == AuthMode.LOGIN) "Continue" else "Create account")
-                }
-                AnimatedVisibility(visible = !errorMessage.isNullOrBlank()) {
                     Text(
-                        text = errorMessage.orEmpty(),
+                        stringResource(
+                            if (mode == AuthMode.LOGIN) R.string.auth_continue else R.string.auth_create_account,
+                        ),
+                    )
+                }
+                AnimatedVisibility(visible = resolvedErrorMessage.isNotBlank()) {
+                    Text(
+                        text = resolvedErrorMessage,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )

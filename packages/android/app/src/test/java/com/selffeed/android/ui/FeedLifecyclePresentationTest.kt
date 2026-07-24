@@ -1,13 +1,23 @@
 package com.selffeed.android.ui
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.FeedSyncScope
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class FeedLifecyclePresentationTest {
+    private val resources
+        get() = ApplicationProvider.getApplicationContext<Context>().resources
+
     @Test
     fun `pending and discovery feeds cannot enqueue duplicate refreshes`() {
         val pending = feedLifecyclePresentation(feed(lifecycleStatus = "pending"))
@@ -30,8 +40,8 @@ class FeedLifecyclePresentationTest {
         )
 
         assertTrue(waiting?.refreshBlocked == true)
-        assertTrue(waiting?.refreshGuidance?.startsWith("Available after ") == true)
-        assertTrue(waiting?.detail?.contains("Existing articles remain") == true)
+        assertTrue(waiting?.refreshGuidance?.resolve(resources)?.startsWith("Available after ") == true)
+        assertTrue(waiting?.detail?.resolve(resources)?.contains("Existing articles remain") == true)
         assertFalse(eligible?.refreshBlocked == true)
     }
 
@@ -39,7 +49,7 @@ class FeedLifecyclePresentationTest {
     fun `replacement explains old articles remain and can be cancelled`() {
         val lifecycle = feedLifecyclePresentation(feed(lifecycleStatus = "replacement_pending"))
 
-        assertTrue(lifecycle?.detail?.contains("Existing articles remain") == true)
+        assertTrue(lifecycle?.detail?.resolve(resources)?.contains("Existing articles remain") == true)
         assertTrue(lifecycle?.canCancelReplacement == true)
     }
 

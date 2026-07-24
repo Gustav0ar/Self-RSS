@@ -32,10 +32,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.ui.utils.canPreviewMedia
 import com.selffeed.android.ui.utils.formatPublishedAt
@@ -61,7 +63,7 @@ fun ArticleReaderDialog(
         onDismissRequest = onClose,
         confirmButton = {
             TextButton(onClick = onClose) {
-                Text("Close")
+                Text(stringResource(R.string.action_close))
             }
         },
         title = {
@@ -71,7 +73,7 @@ fun ArticleReaderDialog(
                 } else {
                     Modifier.clickable(
                         role = Role.Button,
-                        onClickLabel = "Open original article",
+                        onClickLabel = stringResource(R.string.reader_open_original),
                         onClick = { openExternalUrl(context, article.canonicalUrl) },
                     )
                 }
@@ -113,7 +115,7 @@ fun ArticleReaderDialog(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     Text(
-                        text = article.author ?: "Unknown author",
+                        text = article.author ?: stringResource(R.string.reader_unknown_author),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -125,12 +127,12 @@ fun ArticleReaderDialog(
                             FilterChip(
                                 selected = showHtml,
                                 onClick = { showHtml = true },
-                                label = { Text("Rich") },
+                                label = { Text(stringResource(R.string.reader_rich_mode)) },
                             )
                             FilterChip(
                                 selected = !showHtml,
                                 onClick = { showHtml = false },
-                                label = { Text("Text") },
+                                label = { Text(stringResource(R.string.reader_text_mode)) },
                             )
                         }
                     }
@@ -168,7 +170,11 @@ fun ArticleReaderDialog(
                 // available in Rich mode, where its inline context is intact.
                 if (showHtml && article.media.isNotEmpty()) {
                     item {
-                        Text("Media", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(R.string.reader_media),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                     items(article.media.take(8)) { media ->
                         Surface(
@@ -185,7 +191,7 @@ fun ArticleReaderDialog(
                                 }
                                 if (canPreviewMedia(media.provider, media.embedUrl)) {
                                     TextButton(onClick = { previewEmbedUrl = media.embedUrl }) {
-                                        Text("Preview")
+                                        Text(stringResource(R.string.reader_media_preview))
                                     }
                                 }
                             }
@@ -200,9 +206,11 @@ fun ArticleReaderDialog(
         AlertDialog(
             onDismissRequest = { previewEmbedUrl = null },
             confirmButton = {
-                TextButton(onClick = { previewEmbedUrl = null }) { Text("Close") }
+                TextButton(onClick = { previewEmbedUrl = null }) {
+                    Text(stringResource(R.string.action_close))
+                }
             },
-            title = { Text("Embedded Media") },
+            title = { Text(stringResource(R.string.reader_embedded_media)) },
             text = {
                 AndroidView(
                     modifier = Modifier

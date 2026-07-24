@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.R
 import com.selffeed.android.network.FeedWithCounts
 import java.time.Instant
 import java.time.ZoneId
@@ -7,10 +8,10 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 data class FeedLifecyclePresentation(
-    val title: String,
-    val detail: String,
+    val title: PresentationText,
+    val detail: PresentationText,
     val refreshBlocked: Boolean,
-    val refreshGuidance: String? = null,
+    val refreshGuidance: PresentationText? = null,
     val discoveryRequired: Boolean = false,
     val canCancelReplacement: Boolean = false,
 )
@@ -28,48 +29,69 @@ fun feedLifecyclePresentation(feed: FeedWithCounts, nowEpochMillis: Long = Syste
         ?: feed.lastSyncError?.takeIf(String::isNotBlank)
     return when (lifecycle) {
         "pending" -> FeedLifecyclePresentation(
-            title = "Validation queued",
-            detail = "Articles will appear after the first successful fetch.",
+            title = PresentationText.resource(R.string.feed_lifecycle_validation_queued_title),
+            detail = PresentationText.resource(R.string.feed_lifecycle_validation_queued_detail),
             refreshBlocked = true,
-            refreshGuidance = "Validation is already queued.",
+            refreshGuidance = PresentationText.resource(R.string.feed_lifecycle_validation_queued_guidance),
         )
         "replacement_pending" -> FeedLifecyclePresentation(
-            title = "Replacement validating",
-            detail = "Existing articles remain available until the new source succeeds.",
+            title = PresentationText.resource(R.string.feed_lifecycle_replacement_title),
+            detail = PresentationText.resource(R.string.feed_lifecycle_replacement_detail),
             refreshBlocked = true,
-            refreshGuidance = "Replacement validation is already queued.",
+            refreshGuidance = PresentationText.resource(R.string.feed_lifecycle_replacement_guidance),
             canCancelReplacement = true,
         )
         "discovery_required" -> FeedLifecyclePresentation(
-            title = "Choose a feed",
-            detail = "This website needs an explicit feed choice. SelfFeed will not repeatedly fetch it.",
+            title = PresentationText.resource(R.string.feed_lifecycle_discovery_title),
+            detail = PresentationText.resource(R.string.feed_lifecycle_discovery_detail),
             refreshBlocked = true,
-            refreshGuidance = "Choose a discovered feed before refreshing.",
+            refreshGuidance = PresentationText.resource(R.string.feed_lifecycle_discovery_guidance),
             discoveryRequired = true,
             canCancelReplacement = feed.sourceId != null && feed.pendingSourceId != null,
         )
         "backoff" -> FeedLifecyclePresentation(
-            title = "Publisher cooldown",
+            title = PresentationText.resource(R.string.feed_lifecycle_backoff_title),
             detail = if (waiting) {
-                "The publisher can be checked again after $nextEligibleLabel. Existing articles remain available."
-            } else "The publisher can be checked again safely.",
+                PresentationText.resource(
+                    R.string.feed_lifecycle_backoff_waiting_detail,
+                    nextEligibleLabel.orEmpty(),
+                )
+            } else {
+                PresentationText.resource(R.string.feed_lifecycle_backoff_ready_detail)
+            },
             refreshBlocked = waiting,
-            refreshGuidance = if (waiting) "Available after $nextEligibleLabel." else null,
+            refreshGuidance = if (waiting) {
+                PresentationText.resource(
+                    R.string.feed_lifecycle_available_after,
+                    nextEligibleLabel.orEmpty(),
+                )
+            } else {
+                null
+            },
             canCancelReplacement = feed.pendingSourceId != null,
         )
         "paused" -> FeedLifecyclePresentation(
-            title = "Feed needs attention",
-            detail = sourceDetail?.let { "$it Review the source URL to resume safely." }
-                ?: "Automatic fetching paused after repeated or permanent failures. Review the source URL.",
+            title = PresentationText.resource(R.string.feed_lifecycle_paused_title),
+            detail = sourceDetail?.let {
+                PresentationText.resource(R.string.feed_lifecycle_paused_source_detail, it)
+            } ?: PresentationText.resource(R.string.feed_lifecycle_paused_detail),
             refreshBlocked = true,
-            refreshGuidance = "Edit the feed URL to resume validation safely.",
+            refreshGuidance = PresentationText.resource(R.string.feed_lifecycle_paused_guidance),
             canCancelReplacement = feed.pendingSourceId != null,
         )
         "error" -> FeedLifecyclePresentation(
-            title = "Latest refresh failed",
-            detail = sourceDetail ?: "The publisher could not be reached during the latest attempt.",
+            title = PresentationText.resource(R.string.feed_lifecycle_error_title),
+            detail = sourceDetail?.let(PresentationText::dynamic)
+                ?: PresentationText.resource(R.string.feed_lifecycle_error_detail),
             refreshBlocked = waiting,
-            refreshGuidance = if (waiting) "Available after $nextEligibleLabel." else null,
+            refreshGuidance = if (waiting) {
+                PresentationText.resource(
+                    R.string.feed_lifecycle_available_after,
+                    nextEligibleLabel.orEmpty(),
+                )
+            } else {
+                null
+            },
             canCancelReplacement = feed.pendingSourceId != null,
         )
         "active", "idle" -> null

@@ -33,13 +33,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.selffeed.android.R
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.AutoMarkReadPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ReaderFontPreference
 import com.selffeed.android.ui.ThemePreference
+import com.selffeed.android.ui.resolve
 import kotlin.math.roundToInt
 
 @Composable
@@ -58,21 +61,24 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
             ) {
                 if (state.preferencesLoading) {
                     CircularProgressIndicator()
-                    Text("Loading settings…", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(R.string.settings_loading),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 } else {
                     Text(
-                        "Settings unavailable",
+                        stringResource(R.string.settings_unavailable),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        state.preferencesLoadError
-                            ?: "The settings request did not complete. Check your connection and try again.",
+                        state.preferencesLoadError?.resolve()
+                            ?: stringResource(R.string.settings_unavailable_detail),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Button(onClick = actions.onRetryPreferences) {
-                        Text("Retry")
+                        Text(stringResource(R.string.action_retry))
                     }
                 }
             }
@@ -93,10 +99,14 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
     ) {
         item {
             FeedSurfaceCard {
-                Text("Preferences", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_preferences),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "Control theme, density, sorting, and whether read items stay visible in your queue.",
+                    stringResource(R.string.settings_preferences_detail),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -104,7 +114,11 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text("Reader font", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_reader_font),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ReaderFontPreference.entries.chunked(2).forEach { row ->
@@ -113,7 +127,7 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                                 FilterChip(
                                     selected = selectedFont == option,
                                     onClick = { actions.onFontChanged(option) },
-                                    label = { Text(option.label) },
+                                    label = { Text(stringResource(option.labelRes)) },
                                 )
                             }
                         }
@@ -123,12 +137,16 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text("Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_theme),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text("Light") }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = "Toggle light mode") })
-                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text("Dark") }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = "Toggle dark mode") })
-                    FilterChip(selected = selectedTheme == ThemePreference.SYSTEM, onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) }, label = { Text("System") })
+                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text(stringResource(R.string.settings_theme_light)) }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = stringResource(R.string.settings_toggle_light_mode)) })
+                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text(stringResource(R.string.settings_theme_dark)) }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = stringResource(R.string.settings_toggle_dark_mode)) })
+                    FilterChip(selected = selectedTheme == ThemePreference.SYSTEM, onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) }, label = { Text(stringResource(R.string.settings_theme_system)) })
                 }
             }
         }
@@ -140,8 +158,8 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Hide read articles", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text("Keep the main queue focused on unread items.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.settings_hide_read), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.settings_hide_read_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = prefs.hideRead, onCheckedChange = actions.onHideReadChanged)
                 }
@@ -149,27 +167,27 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text("Sort order", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_sort_order), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedSort == ArticleSortPreference.LATEST, onClick = { actions.onSortChanged(ArticleSortPreference.LATEST) }, label = { Text("Newest") })
-                    FilterChip(selected = selectedSort == ArticleSortPreference.OLDEST, onClick = { actions.onSortChanged(ArticleSortPreference.OLDEST) }, label = { Text("Oldest") })
+                    FilterChip(selected = selectedSort == ArticleSortPreference.LATEST, onClick = { actions.onSortChanged(ArticleSortPreference.LATEST) }, label = { Text(stringResource(R.string.settings_sort_newest)) })
+                    FilterChip(selected = selectedSort == ArticleSortPreference.OLDEST, onClick = { actions.onSortChanged(ArticleSortPreference.OLDEST) }, label = { Text(stringResource(R.string.settings_sort_oldest)) })
                 }
             }
         }
         item {
             FeedSurfaceCard {
-                Text("Density", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_density), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedDensity == DensityPreference.COMFORTABLE, onClick = { actions.onDensityChanged(DensityPreference.COMFORTABLE) }, label = { Text("Comfortable") })
-                    FilterChip(selected = selectedDensity == DensityPreference.COMPACT, onClick = { actions.onDensityChanged(DensityPreference.COMPACT) }, label = { Text("Compact") })
+                    FilterChip(selected = selectedDensity == DensityPreference.COMFORTABLE, onClick = { actions.onDensityChanged(DensityPreference.COMFORTABLE) }, label = { Text(stringResource(R.string.settings_density_comfortable)) })
+                    FilterChip(selected = selectedDensity == DensityPreference.COMPACT, onClick = { actions.onDensityChanged(DensityPreference.COMPACT) }, label = { Text(stringResource(R.string.settings_density_compact)) })
                 }
             }
         }
         item {
             FeedSurfaceCard {
-                Text("Reader text size", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_reader_text_size), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Slider(
                     value = draftTextSize.intValue.toFloat(),
@@ -177,14 +195,14 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     onValueChangeFinished = { actions.onTextSizeChanged(draftTextSize.intValue) },
                     valueRange = 12f..24f,
                 )
-                Text("${draftTextSize.intValue}sp", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.settings_text_size_sp, draftTextSize.intValue), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         item {
             FeedSurfaceCard {
-                Text("Auto-mark as read", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_auto_mark_read), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(6.dp))
-                Text("Choose when reading should change an article's state.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.settings_auto_mark_read_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     AutoMarkReadPreference.entries.forEach { option ->
@@ -194,10 +212,10 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                             label = {
                                 Text(
                                     when (option) {
-                                        AutoMarkReadPreference.DISABLED -> "Disabled"
-                                        AutoMarkReadPreference.ON_NAVIGATE -> "When navigating"
-                                        AutoMarkReadPreference.ON_OPEN -> "When content opens"
-                                    },
+                                        AutoMarkReadPreference.DISABLED -> R.string.settings_auto_mark_disabled
+                                        AutoMarkReadPreference.ON_NAVIGATE -> R.string.settings_auto_mark_navigate
+                                        AutoMarkReadPreference.ON_OPEN -> R.string.settings_auto_mark_open
+                                    }.let { stringResource(it) },
                                 )
                             },
                         )
@@ -207,16 +225,16 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text("Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_activity), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("Unread", (state.stats?.totalUnread ?: 0).toString(), Modifier.weight(1f))
-                    StatCard("Read", (state.stats?.totalRead ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(stringResource(R.string.stats_unread), (state.stats?.totalUnread ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(stringResource(R.string.stats_read), (state.stats?.totalRead ?: 0).toString(), Modifier.weight(1f))
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard("Feeds", (state.stats?.totalFeeds ?: 0).toString(), Modifier.weight(1f))
-                    StatCard("Categories", (state.stats?.totalCategories ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(stringResource(R.string.stats_feeds), (state.stats?.totalFeeds ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(stringResource(R.string.stats_categories), (state.stats?.totalCategories ?: 0).toString(), Modifier.weight(1f))
                 }
             }
         }
@@ -224,9 +242,9 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         item {
             FeedSurfaceCard {
                 Button(onClick = actions.onLogout, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Sign out")
+                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = stringResource(R.string.settings_sign_out_cd))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Logout")
+                    Text(stringResource(R.string.settings_logout))
                 }
             }
         }

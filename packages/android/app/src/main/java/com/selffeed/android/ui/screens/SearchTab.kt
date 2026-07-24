@@ -26,8 +26,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.selffeed.android.R
 
 @Composable
 fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
@@ -45,8 +48,13 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                         if (it.length >= 2) actions.onSearchRequested()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search titles and article content") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search articles") },
+                    placeholder = { Text(stringResource(R.string.search_hint)) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = stringResource(R.string.search_articles_cd),
+                        )
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
                 )
@@ -56,12 +64,12 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                         FilterChip(
                             selected = !state.currentCategoryOnly,
                             onClick = { actions.onCurrentCategoryOnlyChanged(false) },
-                            label = { Text("All") },
+                            label = { Text(stringResource(R.string.search_scope_all)) },
                         )
                         FilterChip(
                             selected = state.currentCategoryOnly,
                             onClick = { actions.onCurrentCategoryOnlyChanged(true) },
-                            label = { Text("Current") },
+                            label = { Text(stringResource(R.string.search_scope_current)) },
                         )
                     }
                 }
@@ -71,7 +79,11 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
         item {
             if (state.query.length >= 2) {
                 Text(
-                    text = "${state.results.size} results",
+                    text = pluralStringResource(
+                        R.plurals.search_result_count,
+                        state.results.size,
+                        state.results.size,
+                    ),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -109,7 +121,7 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
         if (state.resultLimitReached) {
             item(key = "search-result-limit") {
                 Text(
-                    text = "Showing first ${state.results.size} results. Refine the search to narrow them.",
+                    text = stringResource(R.string.search_limit_notice, state.results.size),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -123,7 +135,10 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                     if (state.loadingMoreResults) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                     } else {
-                        AssistChip(onClick = actions.onLoadMore, label = { Text("Load more results") })
+                        AssistChip(
+                            onClick = actions.onLoadMore,
+                            label = { Text(stringResource(R.string.search_load_more)) },
+                        )
                     }
                 }
             }

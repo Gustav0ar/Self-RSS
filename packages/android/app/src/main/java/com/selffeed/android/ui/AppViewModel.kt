@@ -23,8 +23,8 @@ data class AppChromeState(
     val readerOrigin: HomeTab = HomeTab.ARTICLES,
     val isOnline: Boolean = true,
     val isSyncingFeeds: Boolean = false,
-    val globalStatus: String? = null,
-    val globalError: String? = null,
+    val globalStatus: PresentationText? = null,
+    val globalError: PresentationText? = null,
 )
 
 @HiltViewModel
@@ -74,11 +74,11 @@ class AppViewModel @Inject constructor(
     }
 
     fun postStatus(message: String?) {
-        _chrome.value = _chrome.value.copy(globalStatus = message)
+        _chrome.value = _chrome.value.copy(globalStatus = message?.let(PresentationText::dynamic))
     }
 
     fun postError(message: String?) {
-        _chrome.value = _chrome.value.copy(globalError = message)
+        _chrome.value = _chrome.value.copy(globalError = message?.let(PresentationText::dynamic))
     }
 
     fun clearMessages() {

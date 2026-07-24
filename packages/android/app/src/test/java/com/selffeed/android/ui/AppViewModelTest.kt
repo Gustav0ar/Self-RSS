@@ -80,16 +80,16 @@ class AppViewModelTest {
     fun `postError bumps the message and stores it`() = runTest {
         val viewModel = AppViewModel(repository, sessionStore)
         viewModel.postError("first")
-        assertEquals("first", viewModel.chrome.value.globalError)
+        assertEquals(PresentationText.dynamic("first"), viewModel.chrome.value.globalError)
         viewModel.postError("second")
-        assertEquals("second", viewModel.chrome.value.globalError)
+        assertEquals(PresentationText.dynamic("second"), viewModel.chrome.value.globalError)
     }
 
     @Test
     fun `postStatus null clears the message`() = runTest {
         val viewModel = AppViewModel(repository, sessionStore)
         viewModel.postStatus("hello")
-        assertEquals("hello", viewModel.chrome.value.globalStatus)
+        assertEquals(PresentationText.dynamic("hello"), viewModel.chrome.value.globalStatus)
         viewModel.postStatus(null)
         assertNull(viewModel.chrome.value.globalStatus)
     }

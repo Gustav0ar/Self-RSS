@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.CategoryWithCounts
@@ -90,7 +91,10 @@ class FeedsViewModelTest {
     fun `createCategory surfaces status message`() = runTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.createCategory("Tech")
-        assertEquals("Category created", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_category_created),
+            viewModel.state.value.statusMessage,
+        )
         coVerify { repository.createCategory("Tech", null) }
     }
 
@@ -113,7 +117,10 @@ class FeedsViewModelTest {
     fun `deleteCategory surfaces status and reloads`() = runTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.deleteCategory("c-1")
-        assertEquals("Category deleted", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_category_deleted),
+            viewModel.state.value.statusMessage,
+        )
         coVerify { repository.deleteCategory("c-1") }
     }
 
@@ -183,7 +190,10 @@ class FeedsViewModelTest {
 
         assertEquals(false, viewModel.state.value.loading)
         assertEquals(true, viewModel.state.value.syncInBackground)
-        assertEquals("Checking background refresh", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_sync_checking),
+            viewModel.state.value.statusMessage,
+        )
         coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
 
         delayedResponse.complete(AppResult.Success(SyncResponse(status = "queued")))
@@ -235,7 +245,10 @@ class FeedsViewModelTest {
         viewModel.syncAllFeeds()
 
         coVerify(exactly = 1) { repository.syncAllFeeds() }
-        assertEquals("Refreshing feeds in background · 1/4", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_sync_background_progress, 1, 4),
+            viewModel.state.value.statusMessage,
+        )
     }
 
     @Test
@@ -291,7 +304,10 @@ class FeedsViewModelTest {
         viewModel.syncAllFeeds()
 
         assertEquals(true, viewModel.state.value.syncInBackground)
-        assertEquals("Refreshing feeds in the background", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_sync_background),
+            viewModel.state.value.statusMessage,
+        )
         assertNull(viewModel.state.value.errorMessage)
 
         advanceTimeBy(750L)
@@ -318,7 +334,7 @@ class FeedsViewModelTest {
         assertEquals(false, viewModel.state.value.syncInBackground)
         assertNull(viewModel.state.value.errorMessage)
         assertEquals(
-            "Refresh continues on the server; progress will be checked on the next app status check.",
+            PresentationText.resource(R.string.feeds_sync_continues),
             viewModel.state.value.statusMessage,
         )
     }
@@ -335,7 +351,7 @@ class FeedsViewModelTest {
         assertEquals(false, viewModel.state.value.syncInBackground)
         assertNull(viewModel.state.value.errorMessage)
         assertEquals(
-            "Refresh progress is stale; the server will reconcile it before another overlapping refresh.",
+            PresentationText.resource(R.string.feeds_sync_stale),
             viewModel.state.value.statusMessage,
         )
     }
@@ -355,7 +371,13 @@ class FeedsViewModelTest {
         viewModel.syncAllFeeds()
 
         assertEquals(
-            "1 new article · 1 feed failed · 2 feeds skipped",
+            PresentationText.joined(
+                listOf(
+                    PresentationText.plural(R.plurals.feeds_sync_new_articles, 1),
+                    PresentationText.plural(R.plurals.feeds_sync_failed_feeds, 1),
+                    PresentationText.plural(R.plurals.feeds_sync_skipped_feeds, 2),
+                ),
+            ),
             viewModel.state.value.statusMessage,
         )
         assertEquals(false, viewModel.state.value.syncInBackground)
@@ -376,7 +398,10 @@ class FeedsViewModelTest {
         viewModel.importOpml("feeds.opml", "<opml/>".encodeToByteArray())
 
         assertEquals(3, viewModel.state.value.lastImportSummary?.createdFeeds)
-        assertEquals("OPML imported: 3 feeds, 2 categories", viewModel.state.value.statusMessage)
+        assertEquals(
+            PresentationText.resource(R.string.feeds_import_status, 3, 2),
+            viewModel.state.value.statusMessage,
+        )
         coVerify { repository.categories() }
         coVerify { repository.feeds(null) }
     }
@@ -395,7 +420,7 @@ class FeedsViewModelTest {
         coEvery { repository.categories() } returns AppResult.Error("boom")
         val viewModel = FeedsViewModel(repository)
         viewModel.loadCategories()
-        assertEquals("boom", viewModel.state.value.errorMessage)
+        assertEquals(PresentationText.dynamic("boom"), viewModel.state.value.errorMessage)
     }
 
     @Test

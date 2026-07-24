@@ -3,6 +3,7 @@ package com.selffeed.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,14 +22,14 @@ import javax.inject.Inject
 data class SettingsUiState(
     val preferences: UserPreferences? = null,
     val preferencesLoading: Boolean = false,
-    val preferencesLoadError: String? = null,
+    val preferencesLoadError: PresentationText? = null,
     val stats: StatsResponse? = null,
     val authSessions: List<AuthSession> = emptyList(),
     val adminRegistrationLocked: Boolean? = null,
     val debugSnapshot: Map<String, Long> = emptyMap(),
     val loading: Boolean = false,
-    val statusMessage: String? = null,
-    val errorMessage: String? = null,
+    val statusMessage: PresentationText? = null,
+    val errorMessage: PresentationText? = null,
 )
 
 /**
@@ -65,8 +66,8 @@ class SettingsViewModel @Inject constructor(
                 is AppResult.Error -> _state.update {
                     it.copy(
                         preferencesLoading = false,
-                        preferencesLoadError = result.message,
-                        errorMessage = result.message,
+                        preferencesLoadError = PresentationText.dynamic(result.message),
+                        errorMessage = PresentationText.dynamic(result.message),
                     )
                 }
             }
@@ -77,9 +78,14 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.updatePreferences(request)) {
                 is AppResult.Success -> _state.update {
-                    it.copy(preferences = result.data.withNormalizedTheme(), statusMessage = "Preferences saved")
+                    it.copy(
+                        preferences = result.data.withNormalizedTheme(),
+                        statusMessage = PresentationText.resource(R.string.settings_saved),
+                    )
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }
@@ -103,7 +109,9 @@ class SettingsViewModel @Inject constructor(
                     _state.update { it.copy(stats = result.data) }
                     loadDebugSnapshot()
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }
@@ -112,7 +120,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.authSessions()) {
                 is AppResult.Success -> _state.update { it.copy(authSessions = result.data) }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }
@@ -124,12 +134,14 @@ class SettingsViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             authSessions = it.authSessions.filterNot { session -> session.id == id },
-                            statusMessage = "Session revoked",
+                            statusMessage = PresentationText.resource(R.string.settings_session_revoked),
                         )
                     }
                     loadAuthSessions()
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }
@@ -162,9 +174,20 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.updateAdminSettings(locked)) {
                 is AppResult.Success -> _state.update {
-                    it.copy(adminRegistrationLocked = result.data.registrationLocked, statusMessage = if (locked) "Registration locked" else "Registration unlocked")
+                    it.copy(
+                        adminRegistrationLocked = result.data.registrationLocked,
+                        statusMessage = PresentationText.resource(
+                            if (locked) {
+                                R.string.settings_registration_locked
+                            } else {
+                                R.string.settings_registration_unlocked
+                            },
+                        ),
+                    )
                 }
-                is AppResult.Error -> _state.update { it.copy(errorMessage = result.message) }
+                is AppResult.Error -> _state.update {
+                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+                }
             }
         }
     }

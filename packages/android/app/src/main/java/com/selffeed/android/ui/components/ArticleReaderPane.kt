@@ -53,10 +53,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.selffeed.android.R
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
@@ -265,7 +267,7 @@ private fun ArticleDetailView(
         } else {
             Modifier.clickable(
                 role = Role.Button,
-                onClickLabel = "Open original article",
+                onClickLabel = stringResource(R.string.reader_open_original),
                 onClick = onOpenOriginal,
             )
         }
@@ -285,12 +287,12 @@ private fun ArticleDetailView(
                 FilterChip(
                     selected = preferHtml,
                     onClick = { onPreferHtmlChanged(true) },
-                    label = { Text("Rich") },
+                    label = { Text(stringResource(R.string.reader_rich_mode)) },
                 )
                 FilterChip(
                     selected = !preferHtml,
                     onClick = { onPreferHtmlChanged(false) },
-                    label = { Text("Text") },
+                    label = { Text(stringResource(R.string.reader_text_mode)) },
                 )
             }
         }
@@ -391,7 +393,7 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             CircularProgressIndicator()
             Text(
-                text = "Loading ${article.title}",
+                text = stringResource(R.string.reader_loading_article, article.title),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

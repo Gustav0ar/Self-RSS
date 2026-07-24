@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
+import com.selffeed.android.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,7 +36,7 @@ fun shareOpmlContent(context: Context, content: String) {
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    val chooser = Intent.createChooser(shareIntent, "Share OPML")
+    val chooser = Intent.createChooser(shareIntent, context.getString(R.string.share_opml_chooser))
     context.startActivity(chooser)
 
     // The Android docs guarantee `deleteOnExit` only fires on JVM shutdown,
@@ -72,7 +73,9 @@ fun shareArticle(context: Context, title: String, url: String?) {
         putExtra(Intent.EXTRA_SUBJECT, title)
         putExtra(Intent.EXTRA_TEXT, "$title\n$safeUrl")
     }
-    context.startActivity(Intent.createChooser(shareIntent, "Share article"))
+    context.startActivity(
+        Intent.createChooser(shareIntent, context.getString(R.string.share_article_chooser)),
+    )
 }
 
 fun openExternalUrl(context: Context, url: String?, onCustomTabClosed: (() -> Unit)? = null) {

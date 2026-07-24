@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.selffeed.android.R
 import androidx.paging.cachedIn
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
@@ -42,8 +43,8 @@ data class ArticlesUiState(
     val sort: String? = null,
     val hideRead: Boolean = false,
     val autoMarkReadMode: AutoMarkReadPreference = AutoMarkReadPreference.ON_NAVIGATE,
-    val statusMessage: String? = null,
-    val errorMessage: String? = null,
+    val statusMessage: PresentationText? = null,
+    val errorMessage: PresentationText? = null,
 )
 
 sealed interface ArticleFeatureEvent {
@@ -250,7 +251,7 @@ class ArticlesViewModel @Inject constructor(
                 }
                 is AppResult.Error -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
-                    _state.update { it.copy(errorMessage = result.message) }
+                    _state.update { it.copy(errorMessage = PresentationText.dynamic(result.message)) }
                 }
             }
         }
@@ -360,7 +361,9 @@ class ArticlesViewModel @Inject constructor(
                     publishReadStateOverridesWithout(id)
                 }
                 // Emit error message
-                _state.update { it.copy(errorMessage = "Failed to update read state") }
+                _state.update {
+                    it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed))
+                }
             },
             onConfirm = { id, fId, confirmed, prevState ->
                 applyArticleReadStateConfirmed(id, fId, confirmed, prevState)
@@ -375,7 +378,14 @@ class ArticlesViewModel @Inject constructor(
             selectedCategoryId = snapshot.selectedCategoryId,
             onSuccess = { feedId, categoryId, affectedFeedIds, markedCount ->
                 applyScopeReadState(affectedFeedIds)
-                _state.update { it.copy(statusMessage = "Marked $markedCount articles as read") }
+                _state.update {
+                    it.copy(
+                        statusMessage = PresentationText.plural(
+                            R.plurals.article_marked_all_read,
+                            markedCount,
+                        ),
+                    )
+                }
                 _events.tryEmit(
                     ArticleFeatureEvent.ScopeMarkedRead(
                         feedId = feedId,
@@ -386,7 +396,7 @@ class ArticlesViewModel @Inject constructor(
                 )
             },
             onError = { message ->
-                _state.update { it.copy(errorMessage = message) }
+                _state.update { it.copy(errorMessage = PresentationText.dynamic(message)) }
             },
         )
     }

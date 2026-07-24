@@ -55,6 +55,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -68,8 +69,10 @@ import androidx.paging.compose.LazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
+import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -168,7 +171,7 @@ fun ArticlesTab(
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ) {
                         Text(
-                            text = guidance,
+                            text = guidance.resolve(),
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -196,24 +199,32 @@ fun ArticlesTab(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.MarkEmailRead,
-                                contentDescription = "No articles",
+                                contentDescription = stringResource(R.string.article_empty_cd),
                                 modifier = Modifier.size(64.dp),
                                 tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = if (state.feedCount == 0) "Start by adding a feed" else "No articles left to read",
+                                text = stringResource(
+                                    if (state.feedCount == 0) {
+                                        R.string.article_empty_no_feeds_title
+                                    } else {
+                                        R.string.article_empty_queue_title
+                                    },
+                                ),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = if (state.feedCount == 0) {
-                                    "Open Feeds to add a subscription or import an OPML file."
-                                } else {
-                                    "Your queue is empty. Pull down to refresh or check other feeds."
-                                },
+                                text = stringResource(
+                                    if (state.feedCount == 0) {
+                                        R.string.article_empty_no_feeds_detail
+                                    } else {
+                                        R.string.article_empty_queue_detail
+                                    },
+                                ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                 textAlign = TextAlign.Center,
@@ -276,7 +287,12 @@ fun ArticlesTab(
                         } else if (appendLoadState is LoadState.Error) {
                             AssistChip(
                                 onClick = pagedArticles::retry,
-                                label = { Text(appendLoadState.error.message ?: "Retry loading") },
+                                label = {
+                                    Text(
+                                        appendLoadState.error.message
+                                            ?: stringResource(R.string.action_retry_loading),
+                                    )
+                                },
                             )
                         }
                     }
@@ -294,7 +310,12 @@ fun ArticlesTab(
                     ) {
                         AssistChip(
                             onClick = pagedArticles::retry,
-                            label = { Text(refreshLoadState.error.message ?: "Retry") },
+                            label = {
+                                Text(
+                                    refreshLoadState.error.message
+                                        ?: stringResource(R.string.action_retry),
+                                )
+                            },
                         )
                     }
                 }
@@ -317,17 +338,30 @@ private fun BackgroundFeedSyncIndicator(
     totalFeeds: Int,
     modifier: Modifier = Modifier,
 ) {
-    val progressLabel = if (totalFeeds > 0) "$completedFeeds/$totalFeeds" else "…"
+    val progressLabel = if (totalFeeds > 0) {
+        stringResource(
+            R.string.article_sync_progress,
+            completedFeeds,
+            totalFeeds,
+        )
+    } else {
+        stringResource(R.string.article_sync_progress_unknown)
+    }
+    val progressDescription = if (totalFeeds > 0) {
+        stringResource(
+            R.string.article_sync_progress_cd,
+            completedFeeds,
+            totalFeeds,
+        )
+    } else {
+        stringResource(R.string.article_syncing_cd)
+    }
     Surface(
         modifier = modifier
             .padding(top = 8.dp, end = 12.dp)
             .testTag("articles-background-sync")
             .semantics {
-                contentDescription = if (totalFeeds > 0) {
-                    "Refreshing feeds in background, $completedFeeds of $totalFeeds complete"
-                } else {
-                    "Refreshing feeds in background"
-                }
+                contentDescription = progressDescription
             },
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -371,7 +405,7 @@ private fun OfflineArticlesBanner() {
         shape = RoundedCornerShape(16.dp),
     ) {
         Text(
-            text = "Offline — showing saved articles. Read changes will sync when you reconnect.",
+            text = stringResource(R.string.article_offline_notice),
             modifier = Modifier.padding(12.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -415,7 +449,9 @@ private fun ArticleListRow(
         backgroundContent = {
             val color = if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
             val icon = if (effectiveIsRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
-            val label = if (effectiveIsRead) "Mark unread" else "Mark read"
+            val label = stringResource(
+                if (effectiveIsRead) R.string.article_mark_unread else R.string.article_mark_read,
+            )
 
             Box(
                 Modifier
@@ -448,10 +484,18 @@ private fun ArticleListRow(
             }
         },
     ) {
-        val readState = if (effectiveIsRead) "Read" else "Unread"
+        val readState = stringResource(
+            if (effectiveIsRead) R.string.article_read_state_read else R.string.article_read_state_unread,
+        )
+        val articleDescription = stringResource(
+            R.string.article_accessibility_label,
+            readState,
+            article.title,
+            article.feedTitle,
+        )
         Column(
             modifier = Modifier
-                .semantics { contentDescription = "$readState article: ${article.title}, from ${article.feedTitle}" }
+                .semantics { contentDescription = articleDescription }
                 .clickable(onClick = onClick),
         ) {
             ArticleCard(

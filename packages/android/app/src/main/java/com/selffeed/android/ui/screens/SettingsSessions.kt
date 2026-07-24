@@ -21,9 +21,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.selffeed.android.R
 import com.selffeed.android.network.AuthSession
 
 @Composable
@@ -32,17 +34,21 @@ fun AuthenticatedDevicesSection(
     onRevokeSession: (String) -> Unit,
 ) {
     FeedSurfaceCard {
-        Text("Authenticated devices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(R.string.settings_sessions_title),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            "Review active app and browser sessions, then revoke any device you no longer use.",
+            stringResource(R.string.settings_sessions_description),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(12.dp))
         if (sessions.isEmpty()) {
             Text(
-                "No active sessions found.",
+                stringResource(R.string.settings_sessions_empty),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -90,12 +96,20 @@ private fun AuthenticatedDeviceRow(
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         if (session.current) {
-                            AssistChip(onClick = {}, label = { Text("This device") })
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(stringResource(R.string.settings_this_device)) },
+                            )
                         }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "${session.ipAddress ?: "Unknown IP"} - Last seen ${formatSessionTimestamp(session.lastSeenAt)}",
+                        stringResource(
+                            R.string.settings_last_seen,
+                            session.ipAddress ?: stringResource(R.string.settings_unknown_ip),
+                            formatSessionTimestamp(session.lastSeenAt)
+                                .ifBlank { stringResource(R.string.settings_unknown_time) },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -107,9 +121,12 @@ private fun AuthenticatedDeviceRow(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
             ) {
-                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Revoke session")
+                Icon(
+                    Icons.AutoMirrored.Filled.Logout,
+                    contentDescription = stringResource(R.string.settings_revoke_session_cd),
+                )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Revoke")
+                Text(stringResource(R.string.settings_revoke))
             }
         }
     }
@@ -120,4 +137,3 @@ private fun formatSessionTimestamp(value: String): String =
         .replace('T', ' ')
         .replace("Z", "")
         .take(16)
-        .ifBlank { "unknown" }

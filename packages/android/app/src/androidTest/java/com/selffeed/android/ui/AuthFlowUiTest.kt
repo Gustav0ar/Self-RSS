@@ -79,7 +79,9 @@ class AuthFlowUiTest {
                             loading = false,
                             isAuthenticated = false,
                             apiBaseUrl = "rss.example.test",
-                            errorMessage = "Unable to reach the selected server",
+                            errorMessage = PresentationText.dynamic(
+                                "Unable to reach the selected server",
+                            ),
                         ),
                         chrome = AppChromeState(),
                         feeds = FeedsUiState(),

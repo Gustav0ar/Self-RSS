@@ -1,11 +1,22 @@
 package com.selffeed.android.ui.screens
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import com.selffeed.android.ui.resolve
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class FeedDrawerRowsTest {
+    private val resources
+        get() = ApplicationProvider.getApplicationContext<Context>().resources
+
     @Test
     fun `buildFeedDrawerRows includes nested categories and feeds with depth`() {
         val child = sampleCategory(id = "child", name = "Child")
@@ -53,7 +64,7 @@ class FeedDrawerRowsTest {
 
         assertEquals(
             "phoronix is not updating. HTTP 403: Forbidden.",
-            feedSyncWarning(feed),
+            feedSyncWarning(feed)?.resolve(resources),
         )
     }
 
@@ -73,8 +84,11 @@ class FeedDrawerRowsTest {
             ),
         )
 
-        assertEquals("Connection timed out.", issue?.detail)
-        assertEquals("broken is not updating. Connection timed out.", issue?.warning)
+        assertEquals("Connection timed out.", issue?.detail?.resolve(resources))
+        assertEquals(
+            "broken is not updating. Connection timed out.",
+            issue?.warning?.resolve(resources),
+        )
     }
 
     private fun sampleCategory(

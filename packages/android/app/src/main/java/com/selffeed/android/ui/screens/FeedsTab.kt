@@ -2,6 +2,7 @@ package com.selffeed.android.ui.screens
 
 import android.content.Context
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -95,6 +96,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -109,6 +112,7 @@ import androidx.paging.compose.LazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
@@ -120,8 +124,10 @@ import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.AutoMarkReadPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ReaderFontPreference
+import com.selffeed.android.ui.PresentationText
 import com.selffeed.android.ui.ThemePreference
 import com.selffeed.android.ui.feedLifecyclePresentation
+import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
@@ -188,6 +194,7 @@ fun FeedsTab(
     val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
     var managementDialog by remember { mutableStateOf<FeedManagementDialog?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
+    val opmlReadError = stringResource(R.string.feeds_read_opml_error)
 
     LaunchedEffect(state.categories) {
         fun seed(category: CategoryWithCounts) {
@@ -220,7 +227,7 @@ fun FeedsTab(
         if (uri == null) return@rememberLauncherForActivityResult
         val contents = readBoundedOpml(context, uri)
         if (contents == null) {
-            importError = "Unable to read that OPML file. Choose a file smaller than 5 MB."
+            importError = opmlReadError
         } else {
             actions.onImportOpml(uri.lastPathSegment?.substringAfterLast('/') ?: "feeds.opml", contents)
         }
@@ -241,7 +248,7 @@ fun FeedsTab(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Unread only",
+                        text = stringResource(R.string.feeds_unread_only),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -255,30 +262,33 @@ fun FeedsTab(
 
         state.syncStatus?.let { syncStatus ->
             item(key = "durable-feed-refresh-status") {
+                val syncSummary = durableSyncSummary(syncStatus)
                 FeedSurfaceCard(
                     modifier = Modifier.semantics {
                         liveRegion = LiveRegionMode.Polite
-                        contentDescription = durableSyncSummary(syncStatus)
+                        contentDescription = syncSummary
                     },
                 ) {
                     Text(
-                        text = when {
-                            syncStatus.queued -> "Refresh queued"
-                            syncStatus.running -> "Refreshing feeds"
-                            syncStatus.failedFeeds > 0 -> "Refresh completed with issues"
-                            else -> "Refresh complete"
-                        },
+                        text = stringResource(
+                            when {
+                                syncStatus.queued -> R.string.feeds_refresh_queued
+                                syncStatus.running -> R.string.feeds_refreshing
+                                syncStatus.failedFeeds > 0 -> R.string.feeds_refresh_issues
+                                else -> R.string.feeds_refresh_complete
+                            },
+                        ),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = durableSyncSummary(syncStatus),
+                        text = syncSummary,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     earliestNextEligible(syncStatus)?.let { next ->
                         Text(
-                            text = "Next publisher check: $next",
+                            text = stringResource(R.string.feeds_next_publisher_check, next),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -290,7 +300,7 @@ fun FeedsTab(
         item {
             FeedSurfaceCard {
                 Text(
-                    text = "Manage subscriptions",
+                    text = stringResource(R.string.feeds_manage_subscriptions),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -303,7 +313,7 @@ fun FeedsTab(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Add feed")
+                        Text(stringResource(R.string.feeds_add))
                     }
                     OutlinedButton(
                         onClick = { managementDialog = FeedManagementDialog.CategoryEditor(category = null) },
@@ -312,13 +322,13 @@ fun FeedsTab(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Category")
+                        Text(stringResource(R.string.feeds_category))
                     }
                 }
                 if (allCategories.isEmpty()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Your first feed will be placed in an Uncategorized category.",
+                        text = stringResource(R.string.feeds_first_uncategorized),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -332,7 +342,7 @@ fun FeedsTab(
                     ) {
                         Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Import OPML")
+                        Text(stringResource(R.string.feeds_import_opml))
                     }
                     OutlinedButton(
                         onClick = actions.onExportOpml,
@@ -341,7 +351,7 @@ fun FeedsTab(
                     ) {
                         Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Export OPML")
+                        Text(stringResource(R.string.feeds_export_opml))
                     }
                 }
             }
@@ -351,8 +361,8 @@ fun FeedsTab(
             FeedSurfaceCard {
                 DrawerItem(
                     icon = { Icon(Icons.Default.RssFeed, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) },
-                    label = "All Feeds",
-                    subtitle = "Everything in one stream",
+                    label = stringResource(R.string.title_all_feeds),
+                    subtitle = stringResource(R.string.feeds_everything_stream),
                     count = state.totalUnread,
                     selected = state.selectedCategoryId == null && state.selectedFeedId == null,
                     onClick = {
@@ -379,17 +389,17 @@ fun FeedsTab(
                         Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (failedFeedWarnings.size == 1) {
-                                    "1 feed is not updating"
-                                } else {
-                                    "${failedFeedWarnings.size} feeds are not updating"
-                                },
+                                text = pluralStringResource(
+                                    R.plurals.feeds_not_updating,
+                                    failedFeedWarnings.size,
+                                    failedFeedWarnings.size,
+                                ),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = WarningAmber,
                             )
                             Text(
-                                text = "Open a feed's menu and choose Edit for details.",
+                                text = stringResource(R.string.feeds_health_open_edit),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -402,7 +412,9 @@ fun FeedsTab(
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Dismiss feed health summary",
+                                contentDescription = stringResource(
+                                    R.string.feeds_dismiss_health_summary_cd,
+                                ),
                                 modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -437,7 +449,11 @@ fun FeedsTab(
                                 )
                             },
                             label = category.name,
-                            subtitle = "${category.feedCount} feeds",
+                            subtitle = pluralStringResource(
+                                R.plurals.feeds_count,
+                                category.feedCount,
+                                category.feedCount,
+                            ),
                             count = category.unreadCount,
                             selected = state.selectedCategoryId == category.id,
                             onClick = {
@@ -509,9 +525,12 @@ fun FeedsTab(
             },
         )
         is FeedManagementDialog.DeleteCategory -> DeleteConfirmationDialog(
-            title = "Delete category?",
-            message = "Delete \"${dialog.category.name}\" and its organization? Feeds in the category may also be removed.",
-            confirmLabel = "Delete category",
+            title = PresentationText.resource(R.string.feeds_delete_category_title),
+            message = PresentationText.resource(
+                R.string.feeds_delete_category_message,
+                dialog.category.name,
+            ),
+            confirmLabel = PresentationText.resource(R.string.feeds_delete_category_action),
             onDismiss = { managementDialog = null },
             onConfirm = {
                 actions.onDeleteCategory(dialog.category.id)
@@ -519,9 +538,12 @@ fun FeedsTab(
             },
         )
         is FeedManagementDialog.DeleteFeed -> DeleteConfirmationDialog(
-            title = "Remove feed?",
-            message = "Remove \"${dialog.feed.title}\" and its saved articles from this device?",
-            confirmLabel = "Remove feed",
+            title = PresentationText.resource(R.string.feeds_remove_feed_title),
+            message = PresentationText.resource(
+                R.string.feeds_remove_feed_message,
+                dialog.feed.title,
+            ),
+            confirmLabel = PresentationText.resource(R.string.feeds_remove_feed_action),
             onDismiss = { managementDialog = null },
             onConfirm = {
                 actions.onDeleteFeed(dialog.feed.id)
@@ -537,8 +559,12 @@ fun FeedsTab(
     importError?.let { message ->
         AlertDialog(
             onDismissRequest = { importError = null },
-            confirmButton = { TextButton(onClick = { importError = null }) { Text("OK") } },
-            title = { Text("OPML import") },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            },
+            title = { Text(stringResource(R.string.feeds_import_title)) },
             text = { Text(message) },
         )
     }
@@ -576,18 +602,24 @@ private fun CategoryEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (category == null) "New category" else "Edit category") },
+        title = {
+            Text(
+                stringResource(
+                    if (category == null) R.string.feeds_new_category else R.string.feeds_edit_category,
+                ),
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Name") },
+                    label = { Text(stringResource(R.string.feeds_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 CategoryPicker(
-                    label = "Parent category",
+                    labelRes = R.string.feeds_parent_category,
                     categoryId = parentCategoryId,
                     categories = availableParents,
                     includeRoot = true,
@@ -595,12 +627,14 @@ private fun CategoryEditorDialog(
                 )
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
         confirmButton = {
             TextButton(
                 enabled = name.trim().isNotEmpty(),
                 onClick = { onSave(name.trim(), parentCategoryId) },
-            ) { Text("Save") }
+            ) { Text(stringResource(R.string.action_save)) }
         },
     )
 }
@@ -635,7 +669,13 @@ private fun FeedEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (feed == null) "Add feed" else "Edit feed") },
+        title = {
+            Text(
+                stringResource(
+                    if (feed == null) R.string.feeds_add_title else R.string.feeds_edit_title,
+                ),
+            )
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -650,8 +690,12 @@ private fun FeedEditorDialog(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(presentation.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text(presentation.detail, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                presentation.title.resolve(),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(presentation.detail.resolve(), style = MaterialTheme.typography.bodySmall)
                             if (presentation.discoveryRequired) {
                                 feed.discovery?.candidates.orEmpty().forEach { candidate ->
                                     OutlinedButton(
@@ -666,12 +710,15 @@ private fun FeedEditorDialog(
                                     }
                                 }
                                 if (feed.discovery?.candidates.isNullOrEmpty()) {
-                                    Text("Discovery choices expired. Save the URL to validate it again.", style = MaterialTheme.typography.labelSmall)
+                                    Text(
+                                        stringResource(R.string.feeds_discovery_expired),
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
                                 }
                             }
                             if (presentation.canCancelReplacement) {
                                 TextButton(onClick = onCancelReplacement, enabled = !actionPending) {
-                                    Text("Cancel replacement")
+                                    Text(stringResource(R.string.feeds_cancel_replacement))
                                 }
                             }
                         }
@@ -696,7 +743,7 @@ private fun FeedEditorDialog(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Latest refresh failed",
+                                    text = stringResource(R.string.feeds_latest_refresh_failed),
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                     color = WarningAmber,
@@ -704,21 +751,21 @@ private fun FeedEditorDialog(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = issue.detail,
+                                text = issue.detail.resolve(),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             issue.failedAt?.let { failedAt ->
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Last attempt: $failedAt",
+                                    text = stringResource(R.string.feeds_last_attempt, failedAt),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Review the URL and refresh interval, then save any correction.",
+                                text = stringResource(R.string.feeds_health_edit_guidance),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -728,20 +775,20 @@ private fun FeedEditorDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Feed or website URL") },
-                    supportingText = { Text("Paste a feed URL or a site such as example.com") },
+                    label = { Text(stringResource(R.string.feeds_url)) },
+                    supportingText = { Text(stringResource(R.string.feeds_url_hint)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("feed-url-field"),
                 )
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Display name (optional)") },
+                    label = { Text(stringResource(R.string.feeds_display_name_optional)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 CategoryPicker(
-                    label = "Category",
+                    labelRes = R.string.feeds_category,
                     categoryId = categoryId,
                     categories = categories,
                     onCategorySelected = { categoryId = it.orEmpty() },
@@ -752,8 +799,8 @@ private fun FeedEditorDialog(
                     OutlinedTextField(
                         value = pollingInterval,
                         onValueChange = { pollingInterval = it.filter(Char::isDigit) },
-                        label = { Text("Refresh interval (minutes)") },
-                        supportingText = { Text("5 to 1,440 minutes") },
+                        label = { Text(stringResource(R.string.feeds_refresh_interval_minutes)) },
+                        supportingText = { Text(stringResource(R.string.feeds_refresh_interval_range)) },
                         isError = pollingInterval.isNotEmpty() && validInterval == null,
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -761,12 +808,18 @@ private fun FeedEditorDialog(
                 }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
         confirmButton = {
             TextButton(
                 enabled = canSave,
                 onClick = { onSave(url.trim(), title.trim().ifBlank { null }, categoryId, validInterval) },
-            ) { Text(if (feed == null) "Add" else "Save") }
+            ) {
+                Text(
+                    stringResource(if (feed == null) R.string.action_add else R.string.action_save),
+                )
+            }
         },
     )
 
@@ -774,16 +827,20 @@ private fun FeedEditorDialog(
         var categoryName by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showCreateCategory = false },
-            title = { Text("Create category") },
+            title = { Text(stringResource(R.string.feeds_create_category)) },
             text = {
                 OutlinedTextField(
                     value = categoryName,
                     onValueChange = { categoryName = it },
-                    label = { Text("Category name") },
+                    label = { Text(stringResource(R.string.feeds_category_name)) },
                     singleLine = true,
                 )
             },
-            dismissButton = { TextButton(onClick = { showCreateCategory = false }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { showCreateCategory = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
             confirmButton = {
                 TextButton(
                     enabled = categoryName.trim().isNotEmpty(),
@@ -791,7 +848,7 @@ private fun FeedEditorDialog(
                         onCreateCategory(categoryName.trim())
                         showCreateCategory = false
                     },
-                ) { Text("Create") }
+                ) { Text(stringResource(R.string.action_create)) }
             },
         )
     }
@@ -799,7 +856,7 @@ private fun FeedEditorDialog(
 
 @Composable
 private fun CategoryPicker(
-    label: String,
+    @StringRes labelRes: Int,
     categoryId: String?,
     categories: List<CategoryWithCounts>,
     includeRoot: Boolean = false,
@@ -809,15 +866,22 @@ private fun CategoryPicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = categories.firstOrNull { it.id == categoryId }?.name
-        ?: if (includeRoot) "No parent (top level)" else "Choose a category"
+        ?: stringResource(
+            if (includeRoot) R.string.feeds_no_parent else R.string.feeds_choose_category,
+        )
+    val label = stringResource(labelRes)
     Box {
         OutlinedButton(onClick = { expanded = true }, modifier = modifier.fillMaxWidth()) {
-            Text("$label: $selectedLabel", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                stringResource(R.string.feeds_picker_value, label, selectedLabel),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (includeRoot) {
                 DropdownMenuItem(
-                    text = { Text("No parent (top level)") },
+                    text = { Text(stringResource(R.string.feeds_no_parent)) },
                     onClick = {
                         onCategorySelected(null)
                         expanded = false
@@ -826,7 +890,7 @@ private fun CategoryPicker(
             }
             onCreateCategory?.let { createCategory ->
                 DropdownMenuItem(
-                    text = { Text("Create new category") },
+                    text = { Text(stringResource(R.string.feeds_create_new_category)) },
                     leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -851,18 +915,20 @@ private fun CategoryPicker(
 
 @Composable
 private fun DeleteConfirmationDialog(
-    title: String,
-    message: String,
-    confirmLabel: String,
+    title: PresentationText,
+    message: PresentationText,
+    confirmLabel: PresentationText,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(message) },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
+        title = { Text(title.resolve()) },
+        text = { Text(message.resolve()) },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel.resolve()) } },
     )
 }
 
@@ -870,12 +936,34 @@ private fun DeleteConfirmationDialog(
 private fun OpmlImportSummaryDialog(summary: OpmlImportSummary, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("OPML imported") },
+        title = { Text(stringResource(R.string.feeds_imported_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Added ${summary.createdFeeds} feeds in ${summary.createdCategories} categories.")
-                if (summary.skippedDuplicates > 0) Text("Skipped ${summary.skippedDuplicates} duplicates.")
-                if (summary.invalidEntries > 0) Text("Skipped ${summary.invalidEntries} invalid entries.")
+                Text(
+                    stringResource(
+                        R.string.feeds_imported_summary,
+                        summary.createdFeeds,
+                        summary.createdCategories,
+                    ),
+                )
+                if (summary.skippedDuplicates > 0) {
+                    Text(
+                        pluralStringResource(
+                            R.plurals.feeds_import_duplicates,
+                            summary.skippedDuplicates,
+                            summary.skippedDuplicates,
+                        ),
+                    )
+                }
+                if (summary.invalidEntries > 0) {
+                    Text(
+                        pluralStringResource(
+                            R.plurals.feeds_import_invalid,
+                            summary.invalidEntries,
+                            summary.invalidEntries,
+                        ),
+                    )
+                }
                 summary.warnings.take(2).forEach { warning ->
                     Text(
                         text = warning.message,
@@ -885,7 +973,9 @@ private fun OpmlImportSummaryDialog(summary: OpmlImportSummary, onDismiss: () ->
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+        },
     )
 }
 
@@ -993,12 +1083,15 @@ private fun FeedOverflowMenu(
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(modifier = modifier, onClick = { expanded = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "More options")
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = stringResource(R.string.feeds_more_options_cd),
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             onEdit?.let { edit ->
                 DropdownMenuItem(
-                    text = { Text("Edit") },
+                    text = { Text(stringResource(R.string.action_edit)) },
                     leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -1008,7 +1101,7 @@ private fun FeedOverflowMenu(
             }
             onDelete?.let { delete ->
                 DropdownMenuItem(
-                    text = { Text("Remove") },
+                    text = { Text(stringResource(R.string.action_remove)) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -1031,7 +1124,7 @@ private fun FeedRow(
 ) {
     val healthIssue = feedHealthIssue(feed)
     val lifecycle = feed.takeIf { it.lifecycleStatus != null }?.let(::feedLifecyclePresentation)
-    val subtitle = lifecycle?.title ?: feed.description ?: feed.feedUrl
+    val subtitle = lifecycle?.title?.resolve() ?: feed.description ?: feed.feedUrl
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -1043,7 +1136,7 @@ private fun FeedRow(
     ) {
         AsyncImage(
             model = feed.faviconUrl,
-            contentDescription = "Feed icon for ${feed.title}",
+            contentDescription = stringResource(R.string.feeds_icon_cd, feed.title),
             modifier = Modifier
                 .size(24.dp)
                 .clip(RoundedCornerShape(6.dp))
@@ -1066,7 +1159,7 @@ private fun FeedRow(
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         Icons.Default.Warning,
-                        contentDescription = "Feed needs attention. Open Edit for details.",
+                        contentDescription = stringResource(R.string.feeds_attention_cd),
                         modifier = Modifier.size(14.dp),
                         tint = WarningAmber,
                     )
@@ -1104,38 +1197,83 @@ private fun FeedRow(
 }
 
 internal data class FeedHealthIssue(
-    val detail: String,
+    val detail: PresentationText,
     val failedAt: String?,
-    val warning: String,
+    val warning: PresentationText,
 )
 
 internal fun feedHealthIssue(feed: FeedWithCounts): FeedHealthIssue? {
     if (feed.syncStatus != "error" && feed.lastSyncError.isNullOrBlank()) return null
-    val detail = feed.lastSyncError?.trim()?.takeIf { it.isNotEmpty() } ?: "Latest refresh failed"
-    val message = if (detail.lastOrNull() in setOf('.', '!', '?')) detail else "$detail."
+    val sourceDetail = feed.lastSyncError?.trim()?.takeIf { it.isNotEmpty() }
+    val message = sourceDetail?.let { detail ->
+        if (detail.lastOrNull() in setOf('.', '!', '?')) detail else "$detail."
+    }
     val failedAt = feed.lastSyncErrorAt
         ?.let(::formatPublishedAt)
         ?.takeIf { it.isNotBlank() }
     return FeedHealthIssue(
-        detail = message,
+        detail = message?.let(PresentationText::dynamic)
+            ?: PresentationText.resource(R.string.feeds_latest_refresh_failed_sentence),
         failedAt = failedAt,
-        warning = "${feed.title} is not updating. $message${failedAt?.let { " Last attempt $it." }.orEmpty()}",
+        warning = PresentationText.resource(
+            R.string.feeds_health_warning,
+            feed.title,
+            message?.let(PresentationText::dynamic)
+                ?: PresentationText.resource(R.string.feeds_latest_refresh_failed_sentence),
+            failedAt?.let {
+                PresentationText.resource(R.string.feeds_health_last_attempt, it)
+            } ?: PresentationText.dynamic(""),
+        ),
     )
 }
 
-private fun durableSyncSummary(status: com.selffeed.android.network.FeedSyncAllStatus): String = buildList {
-    if (status.totalFeeds > 0) add("${status.completedFeeds}/${status.totalFeeds} checked")
-    if (status.newArticles > 0) add("${status.newArticles} new")
-    if (status.failedFeeds > 0) add("${status.failedFeeds} failed")
-    if (status.skippedFeeds > 0) add("${status.skippedFeeds} deferred")
-}.joinToString(" · ").ifEmpty { if (status.active) "Waiting for progress" else "Feeds are up to date" }
+@Composable
+private fun durableSyncSummary(status: com.selffeed.android.network.FeedSyncAllStatus): String {
+    val parts = buildList {
+        if (status.totalFeeds > 0) {
+            add(stringResource(R.string.feeds_sync_checked, status.completedFeeds, status.totalFeeds))
+        }
+        if (status.newArticles > 0) {
+            add(
+                pluralStringResource(
+                    R.plurals.feeds_sync_new_short,
+                    status.newArticles,
+                    status.newArticles,
+                ),
+            )
+        }
+        if (status.failedFeeds > 0) {
+            add(
+                pluralStringResource(
+                    R.plurals.feeds_sync_failed_short,
+                    status.failedFeeds,
+                    status.failedFeeds,
+                ),
+            )
+        }
+        if (status.skippedFeeds > 0) {
+            add(
+                pluralStringResource(
+                    R.plurals.feeds_sync_deferred_short,
+                    status.skippedFeeds,
+                    status.skippedFeeds,
+                ),
+            )
+        }
+    }
+    return parts.joinToString(" · ").ifEmpty {
+        stringResource(
+            if (status.active) R.string.feeds_waiting_progress else R.string.feeds_up_to_date,
+        )
+    }
+}
 
 private fun earliestNextEligible(status: com.selffeed.android.network.FeedSyncAllStatus): String? =
     status.items.mapNotNull { it.nextEligibleAt }
         .minByOrNull { runCatching { java.time.Instant.parse(it) }.getOrNull() ?: java.time.Instant.MAX }
         ?.let(::formatPublishedAt)
 
-internal fun feedSyncWarning(feed: FeedWithCounts): String? = feedHealthIssue(feed)?.warning
+internal fun feedSyncWarning(feed: FeedWithCounts): PresentationText? = feedHealthIssue(feed)?.warning
 
 private fun List<FeedWithCounts>.feedHealthFingerprint(): String =
     sortedBy { it.id }.joinToString("|") { feed ->

@@ -2,6 +2,7 @@ package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,8 +21,8 @@ data class AuthUiState(
     val authMode: AuthMode = AuthMode.LOGIN,
     val apiBaseUrl: String = "",
     val registrationEnabled: Boolean = false,
-    val statusMessage: String? = null,
-    val errorMessage: String? = null,
+    val statusMessage: PresentationText? = null,
+    val errorMessage: PresentationText? = null,
 )
 
 /**
@@ -45,7 +46,7 @@ class AuthViewModel @Inject constructor(
                     isAuthenticated = false,
                     apiBaseUrl = repository.getApiBaseUrl(),
                     registrationEnabled = enabled,
-                    errorMessage = message,
+                    errorMessage = PresentationText.dynamic(message),
                 )
             }
         }
@@ -71,7 +72,7 @@ class AuthViewModel @Inject constructor(
                                 authMode = AuthMode.LOGIN,
                                 apiBaseUrl = apiBaseUrl,
                                 registrationEnabled = enabled,
-                                errorMessage = result.message,
+                                errorMessage = PresentationText.resource(R.string.auth_session_lost),
                             )
                         } else {
                             _state.value = _state.value.copy(
@@ -98,7 +99,10 @@ class AuthViewModel @Inject constructor(
 
     fun setAuthMode(mode: AuthMode) {
         if (mode == AuthMode.REGISTER && !_state.value.registrationEnabled) {
-            _state.value = _state.value.copy(authMode = AuthMode.LOGIN, errorMessage = "Registration is currently closed")
+            _state.value = _state.value.copy(
+                authMode = AuthMode.LOGIN,
+                errorMessage = PresentationText.resource(R.string.auth_registration_closed),
+            )
             return
         }
         _state.value = _state.value.copy(authMode = mode, errorMessage = null)
@@ -117,9 +121,12 @@ class AuthViewModel @Inject constructor(
                     loading = false,
                     isAuthenticated = true,
                     apiBaseUrl = normalizedApiBaseUrl,
-                    statusMessage = "Welcome back",
+                    statusMessage = PresentationText.resource(R.string.auth_welcome_back),
                 )
-                is AppResult.Error -> _state.value = _state.value.copy(loading = false, errorMessage = result.message)
+                is AppResult.Error -> _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = PresentationText.dynamic(result.message),
+                )
             }
         }
     }
@@ -129,7 +136,7 @@ class AuthViewModel @Inject constructor(
             _state.value = _state.value.copy(
                 loading = false,
                 authMode = AuthMode.LOGIN,
-                errorMessage = "Registration is currently closed",
+                errorMessage = PresentationText.resource(R.string.auth_registration_closed),
             )
             return
         }
@@ -145,9 +152,12 @@ class AuthViewModel @Inject constructor(
                     loading = false,
                     isAuthenticated = true,
                     apiBaseUrl = normalizedApiBaseUrl,
-                    statusMessage = "Account created",
+                    statusMessage = PresentationText.resource(R.string.auth_account_created),
                 )
-                is AppResult.Error -> _state.value = _state.value.copy(loading = false, errorMessage = result.message)
+                is AppResult.Error -> _state.value = _state.value.copy(
+                    loading = false,
+                    errorMessage = PresentationText.dynamic(result.message),
+                )
             }
         }
     }
@@ -182,13 +192,29 @@ class AuthViewModel @Inject constructor(
             is AppResult.Error -> {
                 _state.value = _state.value.copy(
                     loading = false,
-                    errorMessage = result.message,
+                    errorMessage = result.message.toApiBaseUrlPresentationText(),
                 )
                 null
             }
         }
 
+    private fun String.toApiBaseUrlPresentationText(): PresentationText = when (this) {
+        INVALID_API_BASE_URL_MESSAGE ->
+            PresentationText.resource(R.string.auth_invalid_server_url)
+        INVALID_SERVER_HOST_MESSAGE ->
+            PresentationText.resource(R.string.auth_invalid_server_host)
+        else -> PresentationText.dynamic(this)
+    }
+
     private companion object {
+        // Protocol sentinel returned by the API. Compare the wire value here,
+        // then present localized app copy through auth_session_lost.
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
+
+        // Local validation sentinels emitted by ApiBaseUrl. They stay
+        // context-free here and are converted to localized presentation copy.
+        const val INVALID_API_BASE_URL_MESSAGE = "Enter a valid server URL."
+        const val INVALID_SERVER_HOST_MESSAGE =
+            "Enter a valid server, for example 10.0.22.22:3000."
     }
 }
