@@ -1,11 +1,29 @@
 import { Activity, AlertTriangle, BarChart3, BookOpen, FolderOpen, Rss } from 'lucide-react';
+import { QueryFailure } from '@/components/query-failure';
 import { useStats } from '@/hooks/queries';
 import { cn } from '@/lib/utils';
 
 export function StatsPanel() {
-	const { data: stats, isLoading } = useStats();
+	const { data: stats, error, isError, isFetching, isLoading, refetch } = useStats();
 
-	if (isLoading || !stats) {
+	if (isLoading && !stats) {
+		return <div className="p-4 text-sm text-muted-foreground">Loading stats...</div>;
+	}
+
+	if (isError && !stats) {
+		return (
+			<div className="p-4 sm:p-6">
+				<QueryFailure
+					title="Could not load stats"
+					error={error}
+					onRetry={() => void refetch()}
+					isRetrying={isFetching}
+				/>
+			</div>
+		);
+	}
+
+	if (!stats) {
 		return <div className="p-4 text-sm text-muted-foreground">Loading stats...</div>;
 	}
 
@@ -50,6 +68,17 @@ export function StatsPanel() {
 
 	return (
 		<div className="p-4 sm:p-6">
+			{isError ? (
+				<QueryFailure
+					title="Stats could not be refreshed"
+					error={error}
+					description="Showing the last available stats. Try refreshing them again."
+					onRetry={() => void refetch()}
+					isRetrying={isFetching}
+					compact
+					className="mb-5"
+				/>
+			) : null}
 			<div className="mb-5 flex flex-wrap items-end justify-between gap-3">
 				<div>
 					<p className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">

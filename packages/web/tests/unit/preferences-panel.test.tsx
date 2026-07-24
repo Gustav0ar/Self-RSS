@@ -6,6 +6,8 @@ const mutateMock = vi.fn();
 const revokeSessionMock = vi.fn();
 const resetMock = vi.fn();
 const setThemeMock = vi.fn();
+const refetchPreferencesMock = vi.fn();
+const refetchSessionsMock = vi.fn();
 
 const defaultPreferences = {
 	theme: 'dark',
@@ -18,10 +20,20 @@ const defaultPreferences = {
 	autoMarkReadMode: 'on_navigate',
 	accentColor: 'indigo',
 };
-let preferencesMock = { ...defaultPreferences };
+let preferencesMock: typeof defaultPreferences | undefined = { ...defaultPreferences };
+let preferencesError: Error | null = null;
+let preferencesFailed = false;
+let preferencesFetching = false;
 
 vi.mock('../../src/hooks/queries', () => ({
-	usePreferences: () => ({ data: preferencesMock, isLoading: false }),
+	usePreferences: () => ({
+		data: preferencesMock,
+		error: preferencesError,
+		isError: preferencesFailed,
+		isFetching: preferencesFetching,
+		isLoading: false,
+		refetch: refetchPreferencesMock,
+	}),
 	useAuthSessions: () => ({
 		data: [
 			{
@@ -35,7 +47,11 @@ vi.mock('../../src/hooks/queries', () => ({
 				current: true,
 			},
 		],
+		error: null,
+		isError: false,
+		isFetching: false,
 		isLoading: false,
+		refetch: refetchSessionsMock,
 	}),
 	useRevokeAuthSession: () => ({
 		mutate: revokeSessionMock,
@@ -60,7 +76,12 @@ describe('PreferencesPanel', () => {
 		revokeSessionMock.mockClear();
 		resetMock.mockClear();
 		setThemeMock.mockClear();
+		refetchPreferencesMock.mockClear();
+		refetchSessionsMock.mockClear();
 		preferencesMock = { ...defaultPreferences };
+		preferencesError = null;
+		preferencesFailed = false;
+		preferencesFetching = false;
 	});
 
 	afterEach(() => {
@@ -131,5 +152,19 @@ describe('PreferencesPanel', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
 
 		expect(revokeSessionMock).toHaveBeenCalledWith('session-1');
+	});
+
+	it('shows an actionable failure when preferences cannot be loaded', () => {
+		preferencesMock = undefined;
+		preferencesError = new Error('request failed');
+		preferencesFailed = true;
+
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+
+		expect(screen.getByRole('alert')).toBeTruthy();
+		expect(screen.getByText('Could not load preferences')).toBeTruthy();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(refetchPreferencesMock).toHaveBeenCalledTimes(1);
 	});
 });

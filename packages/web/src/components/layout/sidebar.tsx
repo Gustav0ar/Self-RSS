@@ -10,6 +10,7 @@ import {
 	shouldWarnOnCategoryDelete,
 } from '@/components/management/management-utils';
 import { OpmlImportDialog } from '@/components/management/opml-import-dialog';
+import { QueryFailure } from '@/components/query-failure';
 import {
 	useCategories,
 	useDeleteCategory,
@@ -43,7 +44,14 @@ function SidebarContent({
 	onSelectCategory,
 	variant = 'pane',
 }: SidebarProps) {
-	const { data: categories } = useCategories();
+	const {
+		data: categories,
+		error: categoriesError,
+		isError: categoriesFailed,
+		isFetching: categoriesFetching,
+		isLoading: categoriesLoading,
+		refetch: refetchCategories,
+	} = useCategories();
 	const categoryTree = categories ?? [];
 	const flatCategories = useMemo(() => flattenCategories(categoryTree), [categoryTree]);
 	const feeds = useMemo(() => flattenCategoryFeeds(categoryTree), [categoryTree]);
@@ -202,7 +210,7 @@ function SidebarContent({
 		}
 	}
 
-	const body = (
+	const sidebarBody = (
 		<SidebarBody
 			totalUnread={totalUnread}
 			feeds={feeds}
@@ -254,6 +262,37 @@ function SidebarContent({
 			}}
 		/>
 	);
+	const body =
+		categoriesLoading && !categories ? (
+			<div className="flex flex-1 items-center justify-center p-4 text-sm text-muted-foreground">
+				Loading feeds...
+			</div>
+		) : categoriesFailed && !categories ? (
+			<div className="flex flex-1 items-center justify-center p-4">
+				<QueryFailure
+					title="Could not load feeds"
+					error={categoriesError}
+					onRetry={() => void refetchCategories()}
+					isRetrying={categoriesFetching}
+					className="w-full"
+				/>
+			</div>
+		) : (
+			<>
+				{categoriesFailed ? (
+					<QueryFailure
+						title="Feeds could not be refreshed"
+						error={categoriesError}
+						description="Showing the last available feed list."
+						onRetry={() => void refetchCategories()}
+						isRetrying={categoriesFetching}
+						compact
+						className="mx-3 mt-3"
+					/>
+				) : null}
+				{sidebarBody}
+			</>
+		);
 
 	return (
 		<>

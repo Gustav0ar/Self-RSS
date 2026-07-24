@@ -1,6 +1,7 @@
 import { Monitor, MonitorSmartphone, Moon, Settings, ShieldX, Sun } from 'lucide-react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { QueryFailure } from '@/components/query-failure';
 import { Dialog } from '@/components/ui/dialog';
 import {
 	type Preferences,
@@ -25,8 +26,23 @@ function normalizePreferences(prefs: Preferences): Preferences {
 }
 
 export function PreferencesPanel() {
-	const { data: prefs, isLoading } = usePreferences();
-	const { data: sessions = [], isLoading: sessionsLoading } = useAuthSessions();
+	const {
+		data: prefs,
+		error: preferencesError,
+		isError: preferencesFailed,
+		isFetching: preferencesFetching,
+		isLoading,
+		refetch: refetchPreferences,
+	} = usePreferences();
+	const {
+		data: sessions,
+		error: sessionsError,
+		isError: sessionsFailed,
+		isFetching: sessionsFetching,
+		isLoading: sessionsLoading,
+		refetch: refetchSessions,
+	} = useAuthSessions();
+	const sessionList = sessions ?? [];
 	const updatePrefs = useUpdatePreferences();
 	const revokeSession = useRevokeAuthSession();
 	const { setTheme } = useTheme();
@@ -91,7 +107,40 @@ export function PreferencesPanel() {
 		);
 	}
 
-	if (isLoading || !draftPrefs) {
+	if (isLoading && !draftPrefs) {
+		return createPortal(
+			<Dialog
+				onClose={closePanel}
+				ariaLabel="Preferences"
+				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+				panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
+			>
+				<div className="p-4 text-sm text-muted-foreground">Loading...</div>
+			</Dialog>,
+			document.body,
+		);
+	}
+
+	if (preferencesFailed && !draftPrefs) {
+		return createPortal(
+			<Dialog
+				onClose={closePanel}
+				ariaLabel="Preferences"
+				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+				panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
+			>
+				<QueryFailure
+					title="Could not load preferences"
+					error={preferencesError}
+					onRetry={() => void refetchPreferences()}
+					isRetrying={preferencesFetching}
+				/>
+			</Dialog>,
+			document.body,
+		);
+	}
+
+	if (!draftPrefs) {
 		return createPortal(
 			<Dialog
 				onClose={closePanel}
@@ -162,6 +211,18 @@ export function PreferencesPanel() {
 					Close
 				</button>
 			</div>
+
+			{preferencesFailed ? (
+				<QueryFailure
+					title="Preferences could not be refreshed"
+					error={preferencesError}
+					description="Showing your last available settings. Try refreshing them again."
+					onRetry={() => void refetchPreferences()}
+					isRetrying={preferencesFetching}
+					compact
+					className="mb-5"
+				/>
+			) : null}
 
 			<div className="grid gap-5 md:grid-cols-2">
 				<section className="surface-muted rounded-[1.5rem] p-5">
@@ -349,41 +410,63 @@ export function PreferencesPanel() {
 					</div>
 
 					<div className="mt-4 space-y-3">
-						{sessionsLoading ? (
+						{sessionsLoading && !sessions ? (
 							<p className="text-sm text-muted-foreground">Loading devices...</p>
-						) : sessions.length === 0 ? (
-							<p className="text-sm text-muted-foreground">No active sessions found.</p>
+						) : sessionsFailed && !sessions ? (
+							<QueryFailure
+								title="Could not load devices"
+								error={sessionsError}
+								onRetry={() => void refetchSessions()}
+								isRetrying={sessionsFetching}
+								compact
+							/>
 						) : (
-							sessions.map((session) => (
-								<div
-									key={session.id}
-									className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/60 p-4 sm:flex-row sm:items-center sm:justify-between"
-								>
-									<div className="min-w-0">
-										<div className="flex flex-wrap items-center gap-2">
-											<p className="truncate text-sm font-medium">{session.deviceName}</p>
-											{session.current ? (
-												<span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-													This device
-												</span>
-											) : null}
+							<>
+								{sessionsFailed ? (
+									<QueryFailure
+										title="Devices could not be refreshed"
+										error={sessionsError}
+										description="Showing the last available device list."
+										onRetry={() => void refetchSessions()}
+										isRetrying={sessionsFetching}
+										compact
+									/>
+								) : null}
+								{sessionList.length === 0 ? (
+									<p className="text-sm text-muted-foreground">No active sessions found.</p>
+								) : (
+									sessionList.map((session) => (
+										<div
+											key={session.id}
+											className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/60 p-4 sm:flex-row sm:items-center sm:justify-between"
+										>
+											<div className="min-w-0">
+												<div className="flex flex-wrap items-center gap-2">
+													<p className="truncate text-sm font-medium">{session.deviceName}</p>
+													{session.current ? (
+														<span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+															This device
+														</span>
+													) : null}
+												</div>
+												<p className="mt-1 text-xs text-muted-foreground">
+													{session.ipAddress ?? 'Unknown IP'} - Last seen{' '}
+													{formatSessionDate(session.lastSeenAt)}
+												</p>
+											</div>
+											<button
+												type="button"
+												onClick={() => revokeSession.mutate(session.id)}
+												disabled={revokeSession.isPending}
+												className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-2xl border border-red-500/25 px-3 text-xs font-medium text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+											>
+												<ShieldX className="h-3.5 w-3.5" aria-hidden="true" />
+												Revoke
+											</button>
 										</div>
-										<p className="mt-1 text-xs text-muted-foreground">
-											{session.ipAddress ?? 'Unknown IP'} - Last seen{' '}
-											{formatSessionDate(session.lastSeenAt)}
-										</p>
-									</div>
-									<button
-										type="button"
-										onClick={() => revokeSession.mutate(session.id)}
-										disabled={revokeSession.isPending}
-										className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-2xl border border-red-500/25 px-3 text-xs font-medium text-red-500 hover:bg-red-500/10 disabled:opacity-50"
-									>
-										<ShieldX className="h-3.5 w-3.5" aria-hidden="true" />
-										Revoke
-									</button>
-								</div>
-							))
+									))
+								)}
+							</>
 						)}
 					</div>
 				</section>

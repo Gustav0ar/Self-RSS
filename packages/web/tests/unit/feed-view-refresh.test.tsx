@@ -487,4 +487,70 @@ describe('FeedView refresh', () => {
 			]);
 		});
 	});
+
+	it('shows a retryable failure instead of an empty state when articles fail without data', () => {
+		const refetch = vi.fn();
+		useInfiniteArticlesMock.mockReturnValue({
+			data: undefined,
+			error: new Error('request failed'),
+			isError: true,
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			refetch,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(screen.getByRole('alert')).toBeTruthy();
+		expect(screen.getByText('Could not load articles')).toBeTruthy();
+		expect(screen.queryByText('Article list')).toBeNull();
+		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps stale articles visible when their background refresh fails', () => {
+		const refetch = vi.fn();
+		useInfiniteArticlesMock.mockReturnValue({
+			data: {
+				pages: [{ data: [{ id: 'article-7', feedId: 'feed-42', isRead: false }] }],
+			},
+			error: new Error('refresh failed'),
+			isError: true,
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			refetch,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(screen.getByText('Articles could not be refreshed')).toBeTruthy();
+		expect(screen.getByText('Article list')).toBeTruthy();
+		expect(articleListProps?.articles).toEqual([expect.objectContaining({ id: 'article-7' })]);
+	});
+
+	it('keeps a successful empty article response as an empty list, not an error', () => {
+		useInfiniteArticlesMock.mockReturnValue({
+			data: { pages: [{ data: [] }] },
+			error: null,
+			isError: false,
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			refetch: vi.fn(),
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(screen.getByText('Article list')).toBeTruthy();
+		expect(articleListProps?.articles).toEqual([]);
+	});
 });

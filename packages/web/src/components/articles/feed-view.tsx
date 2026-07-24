@@ -3,6 +3,7 @@ import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-rea
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
+import { FeedQueryState } from '@/components/articles/feed-query-state';
 import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
 import { FeedToolbarButton as ToolbarButton } from '@/components/articles/feed-toolbar-button';
 import {
@@ -58,7 +59,8 @@ export function FeedView({
 }: FeedViewProps) {
 	const [unreadOnlyOverride, setUnreadOnly] = useState<boolean | null>(null);
 	const [sortOverride, setSort] = useState<SortOrder | null>(null);
-	const { data: prefs } = usePreferences();
+	const preferencesQuery = usePreferences();
+	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
 	const unreadOnly = unreadOnlyOverride ?? prefs?.hideRead ?? false;
 	const sort = sortOverride ?? normalizeSortPreference(prefs?.defaultSort);
@@ -77,19 +79,21 @@ export function FeedView({
 	const prefetchArticle = usePrefetchArticle();
 	const warmNextArticles = useWarmNextArticles();
 	const warmVisibleArticles = useWarmVisibleArticles();
-	const { data: categories } = useCategories();
+	const categoriesQuery = useCategories();
+	const { data: categories } = categoriesQuery;
 
+	const articlesQuery = useInfiniteArticles(
+		{
+			feedId,
+			categoryId,
+			unreadOnly,
+			sort,
+			limit: 30,
+		},
+		{ enabled: preferencesReady },
+	);
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
-		useInfiniteArticles(
-			{
-				feedId,
-				categoryId,
-				unreadOnly,
-				sort,
-				limit: 30,
-			},
-			{ enabled: preferencesReady },
-		);
+		articlesQuery;
 	const { data: searchData } = useSearch(
 		searchQuery,
 		searchScope === 'category' ? categoryId : undefined,
@@ -364,7 +368,11 @@ export function FeedView({
 					/>
 				</div>
 
-				<div className="min-h-0 flex-1">
+				<FeedQueryState
+					categories={categoriesQuery}
+					preferences={preferencesQuery}
+					articles={articlesQuery}
+				>
 					<ArticleList
 						articles={articles}
 						selectedId={effectiveArticleId}
@@ -395,7 +403,7 @@ export function FeedView({
 							)
 						}
 					/>
-				</div>
+				</FeedQueryState>
 			</div>
 
 			<div className="min-h-0 flex-1 bg-background/10">
