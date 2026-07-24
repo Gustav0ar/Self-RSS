@@ -1,5 +1,5 @@
 import type { CategoryWithCounts } from '@self-feed/shared';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedView } from '../../src/components/articles/feed-view';
 
@@ -9,6 +9,7 @@ const openWindowMock = vi.fn();
 const useInfiniteArticlesMock = vi.fn();
 const updatePreferencesMutate = vi.fn();
 const markReadMutate = vi.fn();
+const markAllReadMutateAsync = vi.fn();
 const warmNextArticlesMock = vi.fn();
 let articleListProps: {
 	articles: Array<{ id: string; isRead: boolean }>;
@@ -68,7 +69,10 @@ vi.mock('../../src/hooks/queries', () => ({
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: (...args: unknown[]) => useInfiniteArticlesMock(...args),
 	useSearch: () => ({ data: undefined }),
-	useMarkAllRead: () => ({ mutate: vi.fn() }),
+	useMarkAllRead: () => ({
+		mutateAsync: markAllReadMutateAsync,
+		isPending: false,
+	}),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	usePreferences: () => ({
 		data: preferencesLoaded
@@ -148,6 +152,8 @@ vi.mock('../../src/providers/app-state', () => ({
 describe('FeedView refresh', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		markAllReadMutateAsync.mockReset();
+		markAllReadMutateAsync.mockResolvedValue({ data: { markedRead: 6 } });
 		isRefreshingAllFeeds = false;
 		allFeedsRefreshIsTakingLonger = false;
 		allFeedsRefreshShouldShowStatus = false;
@@ -223,6 +229,162 @@ describe('FeedView refresh', () => {
 
 		fireEvent.click(refreshButton);
 		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true, categoryId: undefined });
+	});
+
+	it.each([
+		{
+			label: 'all feeds',
+			scope: {},
+			description: 'Mark 6 unread articles in all feeds as read?',
+		},
+		{
+			label: 'a category',
+			scope: { categoryId: 'category-1' },
+			description: 'Mark 6 unread articles in category “Review Feeds” as read?',
+		},
+		{
+			label: 'a feed',
+			scope: { feedId: 'feed-42' },
+			description: 'Mark 6 unread articles in feed “Feed 42” as read?',
+		},
+	])('describes the exact $label scope before marking articles read', ({ scope, description }) => {
+		render(<FeedView {...scope} selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+
+		const dialog = screen.getByRole('dialog', { name: 'Mark all as read?' });
+		expect(within(dialog).getByText(description)).toBeTruthy();
+		expect(markAllReadMutateAsync).not.toHaveBeenCalled();
+	});
+
+	it('cancels without a request or retained-read reset, then resets only after success', async () => {
+		hideReadPreference = true;
+		useInfiniteArticlesMock.mockReturnValue({
+			data: {
+				pages: [
+					{
+						data: [{ id: 'article-7', feedId: 'feed-42', isRead: false }],
+					},
+				],
+			},
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+		const view = render(
+			<FeedView feedId="feed-42" selectedArticleId={null} onSelectArticle={() => {}} />,
+		);
+
+		articleListProps?.onSelect('article-7');
+		useInfiniteArticlesMock.mockReturnValue({
+			data: { pages: [{ data: [] }] },
+			isFetching: false,
+			isFetchingNextPage: false,
+			isLoading: false,
+			fetchNextPage: vi.fn(),
+			hasNextPage: false,
+		});
+		view.rerender(
+			<FeedView feedId="feed-42" selectedArticleId="article-7" onSelectArticle={() => {}} />,
+		);
+		await waitFor(() => {
+			expect(articleListProps?.articles).toEqual([
+				expect.objectContaining({ id: 'article-7', isRead: true }),
+			]);
+		});
+
+		fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+		expect(articleListProps?.articles).toEqual([
+			expect.objectContaining({ id: 'article-7', isRead: true }),
+		]);
+		fireEvent.click(
+			within(screen.getByRole('dialog', { name: 'Mark all as read?' })).getByRole('button', {
+				name: 'Cancel',
+			}),
+		);
+
+		expect(markAllReadMutateAsync).not.toHaveBeenCalled();
+		expect(screen.queryByRole('dialog', { name: 'Mark all as read?' })).toBeNull();
+		expect(articleListProps?.articles).toEqual([
+			expect.objectContaining({ id: 'article-7', isRead: true }),
+		]);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+		fireEvent.click(
+			within(screen.getByRole('dialog', { name: 'Mark all as read?' })).getByRole('button', {
+				name: 'Mark all read',
+			}),
+		);
+
+		await waitFor(() => {
+			expect(markAllReadMutateAsync).toHaveBeenCalledWith({
+				feedId: 'feed-42',
+				categoryId: undefined,
+			});
+			expect(screen.queryByRole('dialog', { name: 'Mark all as read?' })).toBeNull();
+			expect(articleListProps?.articles).toEqual([]);
+		});
+	});
+
+	it('prevents repeat confirmation while the mark-all request is pending', async () => {
+		let resolveMutation: ((value: { data: { markedRead: number } }) => void) | undefined;
+		markAllReadMutateAsync.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveMutation = resolve;
+				}),
+		);
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+		const dialog = screen.getByRole('dialog', { name: 'Mark all as read?' });
+		fireEvent.click(within(dialog).getByRole('button', { name: 'Mark all read' }));
+
+		await waitFor(() => {
+			expect(markAllReadMutateAsync).toHaveBeenCalledTimes(1);
+			expect(
+				within(dialog).getByRole('button', { name: 'Working...' }) as HTMLButtonElement,
+			).toHaveProperty('disabled', true);
+		});
+		fireEvent.click(within(dialog).getByRole('button', { name: 'Working...' }));
+		expect(markAllReadMutateAsync).toHaveBeenCalledTimes(1);
+
+		resolveMutation?.({ data: { markedRead: 6 } });
+		await waitFor(() => {
+			expect(screen.queryByRole('dialog', { name: 'Mark all as read?' })).toBeNull();
+		});
+	});
+
+	it('keeps the dialog open with an actionable error and allows retry after rejection', async () => {
+		markAllReadMutateAsync
+			.mockRejectedValueOnce(new Error('Network unavailable.'))
+			.mockResolvedValueOnce({ data: { markedRead: 6 } });
+		render(
+			<FeedView categoryId="category-1" selectedArticleId={null} onSelectArticle={() => {}} />,
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+		let dialog = screen.getByRole('dialog', { name: 'Mark all as read?' });
+		fireEvent.click(within(dialog).getByRole('button', { name: 'Mark all read' }));
+
+		const error = await screen.findByRole('alert');
+		expect(error.textContent).toContain('Could not mark articles as read.');
+		expect(error.textContent).toContain('Network unavailable.');
+		expect(error.textContent).toContain('Check your connection and retry.');
+		expect(markAllReadMutateAsync).toHaveBeenCalledTimes(1);
+
+		dialog = screen.getByRole('dialog', { name: 'Mark all as read?' });
+		fireEvent.click(within(dialog).getByRole('button', { name: 'Mark all read' }));
+		await waitFor(() => {
+			expect(markAllReadMutateAsync).toHaveBeenCalledTimes(2);
+			expect(markAllReadMutateAsync).toHaveBeenLastCalledWith({
+				feedId: undefined,
+				categoryId: 'category-1',
+			});
+			expect(screen.queryByRole('dialog', { name: 'Mark all as read?' })).toBeNull();
+		});
 	});
 
 	it('labels publisher 403 failures as an external feed issue instead of an app access error', () => {

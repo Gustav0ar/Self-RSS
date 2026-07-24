@@ -124,6 +124,26 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await page.getByRole('button', { name: unreadBadgeName('Bun Blog') }).click();
 	const alphaRow = page.getByRole('button', { name: /Alpha Launch/ });
 	await expect(alphaRow).toBeVisible();
+	const unreadSummary = page
+		.locator('span')
+		.filter({ hasText: /^\d+ unread$/ })
+		.first();
+	const unreadBeforeCancel = await unreadSummary.textContent();
+	let markAllReadRequests = 0;
+	page.on('request', (request) => {
+		if (new URL(request.url()).pathname === '/api/v1/articles/mark-all-read') {
+			markAllReadRequests += 1;
+		}
+	});
+	await page.getByRole('button', { name: 'Mark all read' }).click();
+	const markAllDialog = page.getByRole('dialog', { name: 'Mark all as read?' });
+	await expect(markAllDialog).toContainText('in feed “Bun Blog”');
+	await markAllDialog.getByRole('button', { name: 'Cancel' }).click();
+	await expect(markAllDialog).toHaveCount(0);
+	expect(markAllReadRequests).toBe(0);
+	await expect(unreadSummary).toHaveText(unreadBeforeCancel ?? '');
+	await expect(alphaRow).toBeVisible();
+
 	await expect(alphaRow).toContainText('Bun Blog');
 	await expect(alphaRow).not.toContainText('Bun Team');
 	await expect(alphaRow).not.toContainText('Alpha launch excerpt');

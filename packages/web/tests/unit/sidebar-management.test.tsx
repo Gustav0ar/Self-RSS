@@ -13,6 +13,7 @@ const updateFeedMutateAsync = vi.fn();
 const importOpmlMutateAsync = vi.fn();
 
 vi.mock('../../src/hooks/queries', () => ({
+	useCreateCategory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCreateFeed: () => ({ mutateAsync: createFeedMutateAsync, isPending: false }),
 	useUpdateFeed: () => ({ mutateAsync: updateFeedMutateAsync, isPending: false }),
 	useImportOpml: () => ({ mutateAsync: importOpmlMutateAsync, isPending: false }),

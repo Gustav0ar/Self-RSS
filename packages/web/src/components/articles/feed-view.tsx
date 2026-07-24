@@ -11,12 +11,12 @@ import {
 	dedupeArticlePages,
 	resolveEffectiveArticleId,
 } from '@/components/articles/feed-view-model';
+import { MarkAllReadDialog } from '@/components/articles/mark-all-read-dialog';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import { useRetainedReadArticles } from '@/components/articles/use-retained-read-articles';
 import {
 	useCategories,
 	useInfiniteArticles,
-	useMarkAllRead,
 	useMarkRead,
 	usePreferences,
 	usePrefetchArticle,
@@ -59,6 +59,7 @@ export function FeedView({
 }: FeedViewProps) {
 	const [unreadOnlyOverride, setUnreadOnly] = useState<boolean | null>(null);
 	const [sortOverride, setSort] = useState<SortOrder | null>(null);
+	const [markAllDialogOpen, setMarkAllDialogOpen] = useState(false);
 	const preferencesQuery = usePreferences();
 	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
@@ -106,7 +107,6 @@ export function FeedView({
 
 	const markRead = useMarkRead();
 	const markReadMutate = markRead.mutate;
-	const markAllRead = useMarkAllRead();
 	const fetchedArticles = useMemo(() => dedupeArticlePages(data?.pages), [data?.pages]);
 	const categoryTree = categories ?? EMPTY_CATEGORY_TREE;
 	const { emptyState, scopeUnreadCount, selectedFeed, selectedFeedHealth, viewTitle } = useMemo(
@@ -272,8 +272,7 @@ export function FeedView({
 	});
 
 	function handleMarkAllRead() {
-		resetRetainedReadArticles();
-		markAllRead.mutate({ feedId, categoryId });
+		setMarkAllDialogOpen(true);
 	}
 
 	function handleRefresh() {
@@ -413,6 +412,18 @@ export function FeedView({
 					onSelectArticle={handleSelectArticle}
 				/>
 			</div>
+
+			{markAllDialogOpen ? (
+				<MarkAllReadDialog
+					feedId={feedId}
+					categoryId={categoryId}
+					feedTitle={selectedFeed?.title}
+					categoryTitle={categoryId ? viewTitle : undefined}
+					unreadCount={unreadBadgeCount}
+					onSuccess={resetRetainedReadArticles}
+					onClose={() => setMarkAllDialogOpen(false)}
+				/>
+			) : null}
 		</div>
 	);
 }

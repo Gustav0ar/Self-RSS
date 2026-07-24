@@ -23,16 +23,23 @@ function ConfirmDialogContent({
 	onConfirm,
 	onClose,
 }: ConfirmDialogProps) {
+	const handleClose = () => {
+		if (!isPending) {
+			onClose();
+		}
+	};
+
 	return (
 		<ModalShell
 			title={title}
-			onClose={onClose}
+			onClose={handleClose}
 			footer={
 				<>
 					<button
 						type="button"
-						onClick={onClose}
-						className="rounded-2xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-accent"
+						onClick={handleClose}
+						disabled={isPending}
+						className="rounded-2xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
 					>
 						Cancel
 					</button>
@@ -53,7 +60,10 @@ function ConfirmDialogContent({
 		>
 			<p className="text-sm leading-6 text-muted-foreground">{description}</p>
 			{error ? (
-				<div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+				<div
+					className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500"
+					role="alert"
+				>
 					{error}
 				</div>
 			) : null}

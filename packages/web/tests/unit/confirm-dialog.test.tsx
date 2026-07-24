@@ -77,6 +77,7 @@ describe('ConfirmDialog', () => {
 	});
 
 	it('shows the in-flight label and disables both buttons while pending', () => {
+		const onClose = vi.fn();
 		render(
 			<ConfirmDialog
 				title="Delete"
@@ -84,13 +85,17 @@ describe('ConfirmDialog', () => {
 				confirmLabel="Delete"
 				isPending
 				onConfirm={() => {}}
-				onClose={() => {}}
+				onClose={onClose}
 			/>,
 		);
 
 		const confirmButton = screen.getByRole('button', { name: 'Working...' });
 		expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+		expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
+			true,
+		);
+		fireEvent.keyDown(window, { key: 'Escape' });
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	it('renders the error message when the error prop is set', () => {
