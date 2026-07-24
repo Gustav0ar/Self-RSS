@@ -45,34 +45,35 @@ function makeContext({
 }
 
 describe('RateLimiter', () => {
-	it('counts calls in the window and reports remaining', async () => {
+	it('atomically creates the first window counter with a millisecond TTL', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValue(1),
-			pexpire: vi.fn().mockResolvedValue(1),
+			eval: vi.fn().mockResolvedValue(1),
 		};
 		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 		expect(result).toEqual({ allowed: true, remaining: 4 });
-		expect(redis.pexpire).toHaveBeenCalledWith('rl:auth', 60_000);
+		expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, 'rl:auth', '60000');
+		const script = redis.eval.mock.calls[0]?.[0];
+		expect(script).toContain('redis.call("INCR", KEYS[1])');
+		expect(script).toContain('if current == 1 then');
+		expect(script).toContain('redis.call("PEXPIRE", KEYS[1], ARGV[1])');
 	});
 
-	it('only sets the TTL on the first request in the window', async () => {
+	it('uses the atomic script result for later increments without changing count semantics', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValue(2),
-			pexpire: vi.fn().mockResolvedValue(0),
+			eval: vi.fn().mockResolvedValue(2),
 		};
 		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
-		expect(result.allowed).toBe(true);
-		expect(redis.pexpire).not.toHaveBeenCalled();
+		expect(result).toEqual({ allowed: true, remaining: 3 });
+		expect(redis.eval).toHaveBeenCalledTimes(1);
 	});
 
 	it('returns allowed=false once the cap is exceeded', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValue(6),
-			pexpire: vi.fn().mockResolvedValue(1),
+			eval: vi.fn().mockResolvedValue(6),
 		};
 		const limiter = new RateLimiter(redis as never);
 
@@ -80,37 +81,32 @@ describe('RateLimiter', () => {
 		expect(result).toEqual({ allowed: false, remaining: 0 });
 	});
 
-	it('fails open when Redis incr throws during check', async () => {
+	it('fails open when Redis eval throws during check', async () => {
 		const redis = {
-			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
-			pexpire: vi.fn().mockResolvedValue(1),
+			eval: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
 		};
 		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 
 		expect(result).toEqual({ allowed: true, remaining: Infinity });
-		expect(redis.pexpire).not.toHaveBeenCalled();
+		expect(redis.eval).toHaveBeenCalledTimes(1);
 	});
 
-	it('fails open when Redis pexpire throws during check', async () => {
+	it('fails open when Redis returns an invalid counter during check', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValue(1),
-			pexpire: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+			eval: vi.fn().mockResolvedValue('not-a-counter'),
 		};
 		const limiter = new RateLimiter(redis as never);
 
 		const result = await limiter.check('auth', { windowMs: 60_000, maxRequests: 5 });
 
-		// First request succeeded (incr returned 1), but pexpire failed
-		// The operation still allowed the request since the core incr worked
 		expect(result).toEqual({ allowed: true, remaining: Infinity });
 	});
 
 	it('fails closed when the bucket is configured for closed Redis failure mode', async () => {
 		const redis = {
-			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
-			pexpire: vi.fn().mockResolvedValue(1),
+			eval: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
 		};
 		const limiter = new RateLimiter(redis as never);
 
@@ -121,12 +117,12 @@ describe('RateLimiter', () => {
 		});
 
 		expect(result).toEqual({ allowed: false, remaining: 0 });
-		expect(redis.pexpire).not.toHaveBeenCalled();
+		expect(redis.eval).toHaveBeenCalledTimes(1);
 	});
 
-	it('fails closed when Redis incr throws during incrementDailyCount', async () => {
+	it('fails closed when Redis eval throws during incrementDailyCount', async () => {
 		const redis = {
-			incr: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+			eval: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
 		};
 		const limiter = new RateLimiter(redis as never);
 
@@ -135,10 +131,9 @@ describe('RateLimiter', () => {
 		);
 	});
 
-	it('fails closed when Redis expire throws during incrementDailyCount', async () => {
+	it('fails closed when Redis returns an invalid daily counter', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValue(1),
-			expire: vi.fn().mockRejectedValue(new Error('Redis connection refused')),
+			eval: vi.fn().mockResolvedValue(0),
 		};
 		const limiter = new RateLimiter(redis as never);
 
@@ -158,10 +153,9 @@ describe('RateLimiter', () => {
 		);
 	});
 
-	it('increments a daily counter with a 48h TTL only on the first hit of the day', async () => {
+	it('increments a daily counter atomically with an explicit 48h TTL', async () => {
 		const redis = {
-			incr: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2),
-			expire: vi.fn().mockResolvedValue(1),
+			eval: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2),
 		};
 		const limiter = new RateLimiter(redis as never);
 
@@ -169,9 +163,37 @@ describe('RateLimiter', () => {
 		expect(await limiter.incrementDailyCount('opml-import:user-1')).toBe(2);
 
 		const today = new Date().toISOString().slice(0, 10);
-		expect(redis.incr).toHaveBeenNthCalledWith(1, `rl:opml-import:user-1:${today}`);
-		expect(redis.expire).toHaveBeenCalledTimes(1);
-		expect(redis.expire).toHaveBeenCalledWith(`rl:opml-import:user-1:${today}`, 60 * 60 * 48);
+		expect(redis.eval).toHaveBeenNthCalledWith(
+			1,
+			expect.any(String),
+			1,
+			`rl:opml-import:user-1:${today}`,
+			String(48 * 60 * 60 * 1_000),
+		);
+		expect(redis.eval).toHaveBeenCalledTimes(2);
+	});
+
+	it('returns every exact increment under concurrent calls', async () => {
+		let counter = 0;
+		const redis = {
+			eval: vi.fn(async () => {
+				counter += 1;
+				return counter;
+			}),
+		};
+		const limiter = new RateLimiter(redis as never);
+
+		const results = await Promise.all(
+			Array.from({ length: 25 }, () =>
+				limiter.check('concurrent', { windowMs: 60_000, maxRequests: 25 }),
+			),
+		);
+
+		expect(redis.eval).toHaveBeenCalledTimes(25);
+		expect(results.map((result) => result.remaining).sort((a, b) => b - a)).toEqual(
+			Array.from({ length: 25 }, (_, index) => 24 - index),
+		);
+		expect(results.every((result) => result.allowed)).toBe(true);
 	});
 
 	it('releases a reserved daily counter slot', async () => {

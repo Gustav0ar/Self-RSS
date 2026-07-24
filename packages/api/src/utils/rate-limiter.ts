@@ -8,6 +8,15 @@ const STANDARD_READ_RATE_LIMIT_MAX = 100;
 const ARTICLE_READ_RATE_LIMIT_MAX = 300;
 const ARTICLE_MUTATE_RATE_LIMIT_MAX = 180;
 const TEST_READ_RATE_LIMIT_MAX = 1_000;
+const DAILY_COUNTER_TTL_MS = 48 * 60 * 60 * 1_000;
+
+const INCREMENT_WITH_TTL_SCRIPT = `
+local current = redis.call("INCR", KEYS[1])
+if current == 1 then
+	redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return current
+`;
 
 function getReadRateLimit(productionMaxRequests = STANDARD_READ_RATE_LIMIT_MAX) {
 	return {
@@ -25,16 +34,25 @@ export interface RateLimitConfig {
 export class RateLimiter {
 	constructor(private redis: Redis) {}
 
+	private async incrementWithTtl(redisKey: string, ttlMs: number): Promise<number> {
+		const result = await this.redis.eval(INCREMENT_WITH_TTL_SCRIPT, 1, redisKey, String(ttlMs));
+		if (typeof result !== 'number' && typeof result !== 'string') {
+			throw new Error('Invalid Redis rate limit counter response');
+		}
+		const current = Number(result);
+		if (!Number.isSafeInteger(current) || current < 1) {
+			throw new Error('Invalid Redis rate limit counter response');
+		}
+		return current;
+	}
+
 	async check(
 		key: string,
 		config: RateLimitConfig,
 	): Promise<{ allowed: boolean; remaining: number }> {
 		const redisKey = CacheKeys.rateLimit(key);
 		try {
-			const current = await this.redis.incr(redisKey);
-			if (current === 1) {
-				await this.redis.pexpire(redisKey, config.windowMs);
-			}
+			const current = await this.incrementWithTtl(redisKey, config.windowMs);
 			const remaining = Math.max(0, config.maxRequests - current);
 			return { allowed: current <= config.maxRequests, remaining };
 		} catch (error) {
@@ -66,12 +84,8 @@ export class RateLimiter {
 		const today = new Date().toISOString().slice(0, 10);
 		const redisKey = CacheKeys.rateLimit(`${baseKey}:${today}`);
 		try {
-			const current = await this.redis.incr(redisKey);
-			if (current === 1) {
-				// 48h covers the longest possible day boundary in any timezone.
-				await this.redis.expire(redisKey, 60 * 60 * 48);
-			}
-			return current;
+			// 48h covers the longest possible day boundary in any timezone.
+			return await this.incrementWithTtl(redisKey, DAILY_COUNTER_TTL_MS);
 		} catch (error) {
 			logger.error('Rate limiter Redis unavailable during daily count increment', {
 				key: baseKey,
