@@ -2,6 +2,7 @@ import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
 import { Download, FolderPlus, Radio, Upload } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import type { CategoryReorderHandler } from './sidebar-reorder';
 import { SidebarTree } from './sidebar-tree';
 
 interface SidebarBodyProps {
@@ -21,7 +22,7 @@ interface SidebarBodyProps {
 	onSelectCategory: (categoryId: string) => void;
 	onToggleCategory: (id: string) => void;
 	onToggleUncategorized: () => void;
-	onReorderCategory: (sourceId: string, targetId: string | null) => void;
+	onReorderCategory: CategoryReorderHandler;
 	draggingCategoryId: string | null;
 	dragOverCategoryId: string | null;
 	onCategoryDragStart: (id: string) => void;

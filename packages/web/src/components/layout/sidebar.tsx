@@ -154,14 +154,16 @@ function SidebarContent({
 
 	async function handleCategoryDrop(sourceId: string, targetId: string | null) {
 		const updates = computeCategoryReorderUpdates(flatCategories, sourceId, targetId);
-		if (updates.length === 0) return;
+		if (updates.length === 0) return false;
 
 		try {
 			await reorderCategories.mutateAsync({ updates });
+			return true;
 		} catch {
 			// Leave the current cache untouched on failure. The next
 			// successful server-backed refresh will repaint from the last
 			// committed order.
+			return false;
 		}
 	}
 
@@ -228,7 +230,7 @@ function SidebarContent({
 			onSelectCategory={onSelectCategory}
 			onToggleCategory={toggleCategory}
 			onToggleUncategorized={() => setUncategorizedExpanded((prev) => !prev)}
-			onReorderCategory={(sourceId, targetId) => void handleCategoryDrop(sourceId, targetId)}
+			onReorderCategory={handleCategoryDrop}
 			draggingCategoryId={draggingId}
 			dragOverCategoryId={dragOverId}
 			onCategoryDragStart={setDraggingId}

@@ -11,10 +11,12 @@ import {
 	TriangleAlert,
 	X,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { type ReactNode, useEffect, useState } from 'react';
 import { feedHealthFingerprint, feedHealthIssue } from '@/lib/feed-health';
 import { cn } from '@/lib/utils';
+import { SidebarCategoryMoveMenu } from './sidebar-category-move-menu';
+import { SidebarFeedHealthIndicator } from './sidebar-feed-health-indicator';
+import type { CategoryReorderHandler } from './sidebar-reorder';
 
 interface SidebarTreeProps {
 	totalUnread: number;
@@ -30,7 +32,7 @@ interface SidebarTreeProps {
 	onSelectCategory: (categoryId: string) => void;
 	onToggleCategory: (id: string) => void;
 	onToggleUncategorized: () => void;
-	onReorderCategory: (sourceId: string, targetId: string | null) => void;
+	onReorderCategory: CategoryReorderHandler;
 	draggingCategoryId: string | null;
 	dragOverCategoryId: string | null;
 	onCategoryDragStart: (id: string) => void;
@@ -96,6 +98,7 @@ export function SidebarTree({
 	);
 	const healthFingerprint = feedHealthFingerprint(failedFeeds);
 	const [dismissedHealthFingerprint, setDismissedHealthFingerprint] = useState<string | null>(null);
+	const [reorderAnnouncement, setReorderAnnouncement] = useState('');
 	useEffect(() => {
 		if (healthFingerprint.length === 0) setDismissedHealthFingerprint(null);
 	}, [healthFingerprint]);
@@ -124,6 +127,9 @@ export function SidebarTree({
 
 	return (
 		<nav className="flex-1 overflow-auto px-2.5 pb-2.5 pt-2.5">
+			<p className="sr-only" aria-live="polite" aria-atomic="true">
+				{reorderAnnouncement}
+			</p>
 			<div className="space-y-1">
 				<button
 					type="button"
@@ -169,7 +175,7 @@ export function SidebarTree({
 										: `${failedFeeds.length} feeds are not updating`}
 								</p>
 								<p className="mt-0.5 text-[11px] leading-4 text-amber-200/80">
-									Hover a warning icon for the latest details.
+									Open a warning icon for the latest details.
 								</p>
 							</div>
 							<button
@@ -184,8 +190,16 @@ export function SidebarTree({
 					</div>
 				) : null}
 
-				{categories.map((category) => (
-					<CategoryTreeRow key={category.id} category={category} depth={0} {...categoryHandlers} />
+				{categories.map((category, index) => (
+					<CategoryTreeRow
+						key={category.id}
+						category={category}
+						siblingCategories={categories}
+						siblingIndex={index}
+						depth={0}
+						onAnnounce={setReorderAnnouncement}
+						{...categoryHandlers}
+					/>
 				))}
 
 				{uncategorizedFeeds.length > 0 ? (
@@ -244,7 +258,10 @@ function uniqueFeeds(
 
 function CategoryTreeRow({
 	category,
+	siblingCategories,
+	siblingIndex,
 	depth,
+	onAnnounce,
 	selectedFeedId,
 	selectedCategoryId,
 	expandedCategories,
@@ -263,7 +280,13 @@ function CategoryTreeRow({
 	onDeleteCategory,
 	onEditFeed,
 	onDeleteFeed,
-}: { category: CategoryWithCounts; depth: number } & CategoryTreeHandlers) {
+}: {
+	category: CategoryWithCounts;
+	siblingCategories: CategoryWithCounts[];
+	siblingIndex: number;
+	depth: number;
+	onAnnounce: (message: string) => void;
+} & CategoryTreeHandlers) {
 	const isExpanded = expandedCategories.has(category.id);
 	const categoryFeeds = categoryFeedMap.get(category.id) ?? [];
 	const childCategories = category.children ?? [];
@@ -272,6 +295,20 @@ function CategoryTreeRow({
 	const isDragging = draggingCategoryId === category.id;
 	const isDropTarget = dragOverCategoryId === category.id && draggingCategoryId !== category.id;
 	const isNested = depth > 0;
+
+	async function handleDrop() {
+		const sourceId = draggingCategoryId;
+		onCategoryDragEnd();
+		if (!sourceId || sourceId === category.id) return;
+
+		const source = siblingCategories.find((sibling) => sibling.id === sourceId);
+		if (!source) return;
+		const sourceIndex = siblingCategories.findIndex((sibling) => sibling.id === sourceId);
+		const result = await onReorderCategory(sourceId, category.id);
+		if (result === false) return;
+		const nextIndex = sourceIndex < siblingIndex ? siblingIndex : siblingIndex + 1;
+		onAnnounce(`${source.name} moved to position ${nextIndex + 1} of ${siblingCategories.length}.`);
+	}
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: HTML5 drag-and-drop has no semantic primitive; the inner grip is a button.
@@ -295,16 +332,13 @@ function CategoryTreeRow({
 			}}
 			onDrop={(event) => {
 				event.preventDefault();
-				if (draggingCategoryId && draggingCategoryId !== category.id) {
-					onReorderCategory(draggingCategoryId, category.id);
-				}
-				onCategoryDragEnd();
+				void handleDrop();
 			}}
 		>
 			<div className="group/category relative">
 				<div
 					className={cn(
-						'flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 pr-20 text-left text-sm font-medium hover:bg-accent/80',
+						'flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 pr-28 text-left text-sm font-medium hover:bg-accent/80',
 						selectedCategoryId === category.id && 'bg-accent text-sidebar-active',
 					)}
 				>
@@ -315,6 +349,7 @@ function CategoryTreeRow({
 						type="button"
 						aria-label={`Drag to reorder ${category.name}`}
 						title="Drag to reorder"
+						tabIndex={-1}
 						draggable
 						onDragStart={(event) => {
 							event.dataTransfer.effectAllowed = 'move';
@@ -372,6 +407,13 @@ function CategoryTreeRow({
 					</button>
 				</div>
 				<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/category:opacity-100 group-focus-within/category:opacity-100 touch-only">
+					<SidebarCategoryMoveMenu
+						category={category}
+						siblingCategories={siblingCategories}
+						siblingIndex={siblingIndex}
+						onReorderCategory={onReorderCategory}
+						onAnnounce={onAnnounce}
+					/>
 					<SidebarIconButton
 						label={`Edit ${category.name}`}
 						onClick={() => onEditCategory(category)}
@@ -400,11 +442,14 @@ function CategoryTreeRow({
 							onDeleteFeed={onDeleteFeed}
 						/>
 					))}
-					{childCategories.map((childCategory) => (
+					{childCategories.map((childCategory, index) => (
 						<CategoryTreeRow
 							key={childCategory.id}
 							category={childCategory}
+							siblingCategories={childCategories}
+							siblingIndex={index}
 							depth={depth + 1}
+							onAnnounce={onAnnounce}
 							selectedFeedId={selectedFeedId}
 							selectedCategoryId={selectedCategoryId}
 							expandedCategories={expandedCategories}
@@ -445,51 +490,62 @@ function FeedTreeRow({
 	onDeleteFeed: (feed: FeedWithCounts) => void;
 }) {
 	const healthIssue = feedHealthIssue(feed);
+	const healthDescriptionId = `feed-health-${feed.id}`;
 
 	return (
 		<div className="group/feed relative">
-			<button
-				type="button"
-				onClick={() => onSelectFeed(feed.id)}
-				aria-label={(feed.unreadCount ?? 0) > 0 ? `${feed.title} ${feed.unreadCount}` : feed.title}
-				aria-describedby={healthIssue ? `feed-health-${feed.id}` : undefined}
+			<div
 				className={cn(
-					'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 pr-20 text-left text-sm hover:bg-accent/70',
+					'flex min-h-11 w-full min-w-0 items-center rounded-xl px-2.5 pr-20 text-sm hover:bg-accent/70',
 					selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
 				)}
 			>
-				<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
-					{feed.faviconUrl ? (
-						<img
-							src={feed.faviconUrl}
-							alt=""
-							className="h-4 w-4 rounded-sm"
-							loading="lazy"
-							decoding="async"
-							referrerPolicy="no-referrer"
-						/>
-					) : (
-						<RssIcon className="h-4 w-4 text-muted-foreground" />
-					)}
-				</div>
-				<div className="min-w-0 flex-1 overflow-hidden">
-					<div className="flex min-w-0 items-center gap-1.5">
-						<SidebarOverflowText text={feed.title} />
-						{healthIssue ? (
-							<FeedHealthIndicator
-								id={`feed-health-${feed.id}`}
-								severity={healthIssue.severity}
-								warning={healthIssue.warning}
+				<button
+					type="button"
+					onClick={() => onSelectFeed(feed.id)}
+					aria-label={
+						(feed.unreadCount ?? 0) > 0 ? `${feed.title} ${feed.unreadCount}` : feed.title
+					}
+					aria-describedby={healthIssue ? healthDescriptionId : undefined}
+					className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left"
+				>
+					<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
+						{feed.faviconUrl ? (
+							<img
+								src={feed.faviconUrl}
+								alt=""
+								className="h-4 w-4 rounded-sm"
+								loading="lazy"
+								decoding="async"
+								referrerPolicy="no-referrer"
 							/>
-						) : null}
+						) : (
+							<RssIcon className="h-4 w-4 text-muted-foreground" />
+						)}
 					</div>
-				</div>
-				{(feed.unreadCount ?? 0) > 0 ? (
-					<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
-						{feed.unreadCount}
-					</span>
+					<div className="min-w-0 flex-1 overflow-hidden">
+						<SidebarOverflowText text={feed.title} />
+					</div>
+					{(feed.unreadCount ?? 0) > 0 ? (
+						<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
+							{feed.unreadCount}
+						</span>
+					) : null}
+				</button>
+				{healthIssue ? (
+					<SidebarFeedHealthIndicator
+						descriptionId={healthDescriptionId}
+						feedTitle={feed.title}
+						severity={healthIssue.severity}
+						warning={healthIssue.warning}
+					/>
 				) : null}
-			</button>
+			</div>
+			{healthIssue ? (
+				<span id={healthDescriptionId} className="sr-only">
+					{healthIssue.warning}
+				</span>
+			) : null}
 			<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 touch-only">
 				<SidebarIconButton label={`Edit ${feed.title}`} onClick={() => onEditFeed(feed)}>
 					<Pencil className="h-3.5 w-3.5" />
@@ -503,60 +559,6 @@ function FeedTreeRow({
 				</SidebarIconButton>
 			</div>
 		</div>
-	);
-}
-
-function FeedHealthIndicator({
-	id,
-	severity,
-	warning,
-}: {
-	id: string;
-	severity: 'warning' | 'error';
-	warning: string;
-}) {
-	const anchorRef = useRef<HTMLSpanElement>(null);
-	const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-	const fallbackId = useId();
-	const tooltipId = id || fallbackId;
-
-	function showTooltip() {
-		const rect = anchorRef.current?.getBoundingClientRect();
-		if (!rect) return;
-		setPosition({ left: rect.left + rect.width / 2, top: rect.top - 8 });
-	}
-
-	return (
-		<span
-			ref={anchorRef}
-			className={cn(
-				'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2',
-				severity === 'error'
-					? 'text-amber-400 focus-visible:ring-amber-300/60'
-					: 'text-muted-foreground focus-visible:ring-muted-foreground/40',
-			)}
-			role="img"
-			aria-label={warning}
-			onMouseEnter={showTooltip}
-			onMouseLeave={() => setPosition(null)}
-			onFocus={showTooltip}
-			onBlur={() => setPosition(null)}
-		>
-			<TriangleAlert className="h-3.5 w-3.5" />
-			{position
-				? createPortal(
-						<div
-							id={tooltipId}
-							role="tooltip"
-							style={{ left: position.left, top: position.top }}
-							className="pointer-events-none fixed z-[100] w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-amber-300/20 bg-popover px-3 py-2 text-left text-xs font-normal leading-5 text-popover-foreground shadow-2xl"
-						>
-							{warning}
-						</div>,
-						document.body,
-					)
-				: null}
-		</span>
 	);
 }
 

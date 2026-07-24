@@ -5,6 +5,11 @@ export interface CategoryReorderUpdate {
 	sortOrder: number;
 }
 
+export type CategoryReorderHandler = (
+	sourceId: string,
+	targetId: string | null,
+) => Promise<boolean>;
+
 export function computeCategoryReorderUpdates(
 	categories: CategoryWithCounts[],
 	sourceId: string,

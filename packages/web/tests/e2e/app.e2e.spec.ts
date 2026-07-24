@@ -313,6 +313,15 @@ test('pending feed creation reports queued validation honestly', async ({ page }
 });
 
 test('feed health stays compact, dismissible, and actionable', async ({ page }) => {
+	let reorderBody: { updates: Array<{ id: string; sortOrder: number }> } | null = null;
+	await page.route('**/api/v1/categories/reorder', async (route) => {
+		reorderBody = route.request().postDataJSON() as typeof reorderBody;
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({ data: { updated: reorderBody?.updates.length ?? 0 } }),
+		});
+	});
 	await page.route('**/api/v1/categories', async (route) => {
 		if (route.request().method() !== 'GET') {
 			await route.continue();
@@ -358,6 +367,20 @@ test('feed health stays compact, dismissible, and actionable', async ({ page }) 
 							],
 							children: [],
 						},
+						{
+							id: 'saved-category',
+							userId: 'reader',
+							parentCategoryId: null,
+							name: 'Saved',
+							slug: 'saved',
+							sortOrder: 1,
+							createdAt: '2026-07-15T00:00:00.000Z',
+							updatedAt: '2026-07-15T00:00:00.000Z',
+							feedCount: 0,
+							unreadCount: 0,
+							feeds: [],
+							children: [],
+						},
 					],
 				},
 			}),
@@ -365,15 +388,27 @@ test('feed health stays compact, dismissible, and actionable', async ({ page }) 
 	});
 
 	await loginThroughUi(page, 'reader@example.com', 'password123');
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.getByRole('button', { name: 'Open menu' }).click();
 	const healthStatus = page.getByRole('status', { name: '1 feed is not updating' });
 	await expect(healthStatus).toBeVisible();
 	await page.getByRole('button', { name: 'Expand Health checks' }).click();
 
-	const warningIcon = page.getByLabel(
-		/Broken Feed is not updating\..*SelfFeed account is not blocked/,
-	);
-	await warningIcon.hover();
+	const warningIcon = page.getByRole('button', {
+		name: 'Show health details for Broken Feed',
+	});
+	await warningIcon.click();
 	await expect(page.getByRole('tooltip')).toContainText('Your SelfFeed account is not blocked');
+
+	await page.getByRole('button', { name: 'Move Health checks' }).click();
+	await page.getByRole('menuitem', { name: 'Move down' }).click();
+	await expect(page.getByText('Health checks moved down to position 2 of 2.')).toBeAttached();
+	expect(reorderBody).toEqual({
+		updates: [
+			{ id: 'saved-category', sortOrder: 0 },
+			{ id: 'health-category', sortOrder: 1 },
+		],
+	});
 
 	await page.getByRole('button', { name: 'Dismiss feed health summary' }).click();
 	await expect(healthStatus).toHaveCount(0);

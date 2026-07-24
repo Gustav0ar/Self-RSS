@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SidebarTree } from '../../src/components/layout/sidebar-tree';
 
 const noop = () => {};
+const reorderNoop = async () => true;
 
 function feed(overrides: Partial<FeedWithCounts> = {}): FeedWithCounts {
 	return {
@@ -41,7 +42,7 @@ function tree(uncategorizedFeeds: FeedWithCounts[]) {
 			onSelectCategory={noop}
 			onToggleCategory={noop}
 			onToggleUncategorized={noop}
-			onReorderCategory={noop}
+			onReorderCategory={reorderNoop}
 			draggingCategoryId={null}
 			dragOverCategoryId={null}
 			onCategoryDragStart={noop}
@@ -70,14 +71,34 @@ describe('SidebarTree feed sync warnings', () => {
 			}),
 		]);
 
-		const warning = screen.getByLabelText(
-			/Phoronix is not updating\. The publisher rejected this feed server's request \(HTTP 403: Forbidden\)\. Your SelfFeed account is not blocked\./,
-		);
-		expect(warning).toBeTruthy();
-		expect(screen.queryByText(/Phoronix is not updating\./)).toBeNull();
-		fireEvent.mouseEnter(warning);
+		const feedButton = screen.getByRole('button', { name: 'Phoronix' });
+		expect(feedButton.getAttribute('aria-describedby')).toBe('feed-health-feed-1');
+		const stableDescription = document.getElementById('feed-health-feed-1');
+		expect(stableDescription?.className).toContain('sr-only');
+		expect(stableDescription?.textContent).toMatch(/Your SelfFeed account is not blocked/);
+		expect(screen.queryByRole('tooltip')).toBeNull();
+
+		const warning = screen.getByRole('button', { name: 'Show health details for Phoronix' });
+		expect(warning.className).toContain('h-11');
+		fireEvent.focus(warning);
 		expect(screen.getByRole('tooltip').textContent).toMatch(/Your SelfFeed account is not blocked/);
+		expect(screen.getByText('Open a warning icon for the latest details.')).toBeTruthy();
 		expect(screen.getByRole('status', { name: '1 feed is not updating' })).toBeTruthy();
+	});
+
+	it('opens health details on click and closes them with Escape while keeping trigger focus', () => {
+		renderTree([feed({ syncStatus: 'error', lastSyncError: 'DNS lookup failed' })]);
+		const warning = screen.getByRole('button', { name: 'Show health details for Phoronix' });
+
+		warning.focus();
+		fireEvent.click(warning);
+		expect(screen.getByRole('tooltip').textContent).toContain('DNS lookup failed');
+		expect(warning.getAttribute('aria-expanded')).toBe('true');
+		fireEvent.keyDown(warning, { key: 'Escape' });
+
+		expect(screen.queryByRole('tooltip')).toBeNull();
+		expect(warning.getAttribute('aria-expanded')).toBe('false');
+		expect(document.activeElement).toBe(warning);
 	});
 
 	it('lets the user dismiss the aggregate warning without hiding row health', () => {
@@ -91,7 +112,8 @@ describe('SidebarTree feed sync warnings', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Dismiss feed health summary' }));
 
 		expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
-		expect(screen.getByLabelText(/Your SelfFeed account is not blocked/)).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Show health details for Phoronix' })).toBeTruthy();
+		expect(document.getElementById('feed-health-feed-1')).toBeTruthy();
 	});
 
 	it('clears dismissed state after recovery so a later failure is announced', async () => {
@@ -124,7 +146,10 @@ describe('SidebarTree feed sync warnings', () => {
 		]);
 
 		expect(screen.queryByRole('status', { name: '1 feed is not updating' })).toBeNull();
-		expect(screen.getByLabelText(/Phoronix updated with a warning/)).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Show health details for Phoronix' })).toBeTruthy();
+		expect(document.getElementById('feed-health-feed-1')?.textContent).toContain(
+			'Phoronix updated with a warning',
+		);
 	});
 
 	it('still opens the feed when the warning icon is present', () => {
@@ -147,7 +172,7 @@ describe('SidebarTree feed sync warnings', () => {
 				onSelectCategory={noop}
 				onToggleCategory={noop}
 				onToggleUncategorized={noop}
-				onReorderCategory={noop}
+				onReorderCategory={reorderNoop}
 				draggingCategoryId={null}
 				dragOverCategoryId={null}
 				onCategoryDragStart={noop}
