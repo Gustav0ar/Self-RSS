@@ -1,8 +1,8 @@
 import type { CategoryWithCounts, FeedWithCounts } from '@self-feed/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { createDialogErrorFallback } from '@/components/error-fallbacks';
-import { useCreateFeed, useUpdateFeed } from '@/hooks/queries';
+import { useCreateCategory, useCreateFeed, useUpdateFeed } from '@/hooks/queries';
 import { categoryPathLabel } from '@/lib/categories';
 import { feedHealthIssue } from '@/lib/feed-health';
 import { ModalShell } from './modal-shell';
@@ -22,6 +22,7 @@ function FeedDialogContent({
 	defaultCategoryId,
 	onClose,
 }: FeedDialogProps) {
+	const createCategory = useCreateCategory();
 	const createFeed = useCreateFeed();
 	const updateFeed = useUpdateFeed();
 	const [feedUrl, setFeedUrl] = useState('');
@@ -30,6 +31,8 @@ function FeedDialogContent({
 	const [pollingIntervalMinutes, setPollingIntervalMinutes] = useState('60');
 	const [error, setError] = useState<string | null>(null);
 	const [successMessage, setSuccessMessage] = useState<string | null>(null);
+	const createdDefaultCategoryIdRef = useRef<string | null>(null);
+	const needsDefaultCategory = mode === 'create' && categories.length === 0;
 
 	useEffect(() => {
 		if (mode === 'edit' && feed) {
@@ -46,9 +49,20 @@ function FeedDialogContent({
 
 		try {
 			if (mode === 'create') {
+				let targetCategoryId = categoryId || createdDefaultCategoryIdRef.current;
+				if (!targetCategoryId && needsDefaultCategory) {
+					const categoryResponse = await createCategory.mutateAsync({ name: 'General' });
+					targetCategoryId = categoryResponse.data.id;
+					createdDefaultCategoryIdRef.current = targetCategoryId;
+					setCategoryId(targetCategoryId);
+				}
+				if (!targetCategoryId) {
+					throw new Error('Choose a category for this feed');
+				}
+
 				const response = await createFeed.mutateAsync({
 					feedUrl,
-					categoryId,
+					categoryId: targetCategoryId,
 					title: title.trim() || undefined,
 				});
 				setSuccessMessage(
@@ -78,7 +92,7 @@ function FeedDialogContent({
 		}
 	}
 
-	const isPending = createFeed.isPending || updateFeed.isPending;
+	const isPending = createCategory.isPending || createFeed.isPending || updateFeed.isPending;
 	const healthIssue = mode === 'edit' && feed ? feedHealthIssue(feed) : null;
 
 	return (
@@ -153,24 +167,37 @@ function FeedDialogContent({
 							/>
 						</div>
 
-						<div>
-							<label htmlFor="feed-category" className="mb-2 block text-sm font-medium">
-								Feed category
-							</label>
-							<select
-								id="feed-category"
-								value={categoryId}
-								onChange={(event) => setCategoryId(event.target.value)}
-								required
-								className="input-surface h-12 w-full rounded-2xl px-4 text-sm outline-none"
+						{needsDefaultCategory ? (
+							<div
+								className="rounded-2xl border border-border/70 bg-background/60 px-4 py-3"
+								role="note"
+								aria-label="Default feed category"
 							>
-								{categories.map((category) => (
-									<option key={category.id} value={category.id}>
-										{categoryPathLabel(categories, category.id) || category.name}
-									</option>
-								))}
-							</select>
-						</div>
+								<p className="text-sm font-medium">General category</p>
+								<p className="mt-1 text-xs leading-5 text-muted-foreground">
+									SelfFeed will create General first, then add this feed to it.
+								</p>
+							</div>
+						) : (
+							<div>
+								<label htmlFor="feed-category" className="mb-2 block text-sm font-medium">
+									Feed category
+								</label>
+								<select
+									id="feed-category"
+									value={categoryId}
+									onChange={(event) => setCategoryId(event.target.value)}
+									required
+									className="input-surface h-12 w-full rounded-2xl px-4 text-sm outline-none"
+								>
+									{categories.map((category) => (
+										<option key={category.id} value={category.id}>
+											{categoryPathLabel(categories, category.id) || category.name}
+										</option>
+									))}
+								</select>
+							</div>
+						)}
 
 						{mode === 'edit' ? (
 							<div>
@@ -199,7 +226,11 @@ function FeedDialogContent({
 							</button>
 							<button
 								type="submit"
-								disabled={isPending || categories.length === 0}
+								disabled={
+									isPending ||
+									(mode === 'edit' && categories.length === 0) ||
+									(mode === 'create' && !needsDefaultCategory && !categoryId)
+								}
 								className="rounded-2xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
 							>
 								{isPending ? 'Saving...' : mode === 'create' ? 'Add feed' : 'Save changes'}

@@ -95,9 +95,8 @@ export function SidebarBody({
 				<div className="mt-3 grid grid-cols-4 gap-1.5">
 					<SidebarAction
 						label="Add Feed"
-						title="Add Feed"
+						title={hasCategories ? 'Add Feed' : 'Add Feed and create a General category'}
 						onClick={onAddFeed}
-						disabled={!hasCategories}
 					>
 						<Radio className="h-4 w-4" />
 					</SidebarAction>

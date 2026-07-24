@@ -58,7 +58,7 @@ async function loginThroughUi(page: Page, email: string, password: string) {
 	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
-async function submitQueuedFeed(page: Page, expectedLifecycle: 'pending' | 'active' = 'pending') {
+async function submitQueuedFeed(page: Page, expectedLifecycle?: 'pending' | 'active') {
 	const createResponse = page.waitForResponse((response) => {
 		const url = new URL(response.url());
 		return (
@@ -72,11 +72,14 @@ async function submitQueuedFeed(page: Page, expectedLifecycle: 'pending' | 'acti
 	const body = (await response.json()) as {
 		data: { lifecycleStatus?: string; ingestionRequestId?: string | null };
 	};
-	expect(body.data.lifecycleStatus).toBe(expectedLifecycle);
+	expect(['pending', 'active']).toContain(body.data.lifecycleStatus);
+	if (expectedLifecycle) {
+		expect(body.data.lifecycleStatus).toBe(expectedLifecycle);
+	}
 	expect(body.data.ingestionRequestId).toBeTruthy();
 	await expect(
 		page.getByText(
-			expectedLifecycle === 'pending' ? /Validation is queued/ : 'Feed added successfully.',
+			body.data.lifecycleStatus === 'pending' ? /Validation is queued/ : 'Feed added successfully.',
 		),
 	).toBeVisible();
 	await page.getByRole('button', { name: 'Done' }).click();
@@ -85,14 +88,28 @@ async function submitQueuedFeed(page: Page, expectedLifecycle: 'pending' | 'acti
 
 test.describe.configure({ mode: 'serial' });
 
-test('user can register and sign out', async ({ page }) => {
+test('new user can register, add a first feed immediately, and sign out', async ({ page }) => {
 	const email = `fresh-${Date.now()}@example.com`;
+	const firstFeedTitle = `First Feed ${Date.now()}`;
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Register' }).click();
 	await page.getByLabel('Email').fill(email);
 	await page.getByLabel('Password').fill('password123');
 	await page.getByRole('button', { name: 'Create Account' }).click();
 	await expect(page.getByText(email)).toBeVisible();
+	const appOrigin = new URL(page.url()).origin;
+
+	await page.getByRole('button', { name: 'Add Feed' }).click();
+	await expect(page.getByRole('note', { name: 'Default feed category' })).toContainText(
+		'SelfFeed will create General first',
+	);
+	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/devtools.xml`);
+	await page.getByLabel('Custom name (optional)').fill(firstFeedTitle);
+	await submitQueuedFeed(page);
+	await expect(page.getByRole('button', { name: unreadBadgeName('General') })).toBeVisible();
+	await page.getByRole('button', { name: unreadBadgeName('General') }).click();
+	await expect(page.getByRole('button', { name: unreadBadgeName(firstFeedTitle) })).toBeVisible();
+
 	await page.getByRole('button', { name: 'Sign out' }).click();
 	await expect(page.getByText('Sign in to your account')).toBeVisible();
 });

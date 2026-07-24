@@ -3,9 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedDialog } from '../../src/components/management/feed-dialog';
 
 const createMutateAsync = vi.fn();
+const createCategoryMutateAsync = vi.fn();
 const updateMutateAsync = vi.fn();
 
 vi.mock('@/hooks/queries', () => ({
+	useCreateCategory: () => ({
+		mutateAsync: createCategoryMutateAsync,
+		isPending: false,
+	}),
 	useCreateFeed: () => ({
 		mutateAsync: createMutateAsync,
 		isPending: false,
@@ -93,6 +98,95 @@ describe('FeedDialog - add mode', () => {
 		await waitFor(() => {
 			expect(screen.getByText('Could not fetch or parse the feed URL')).toBeTruthy();
 		});
+	});
+
+	it('creates a General category before adding the first feed', async () => {
+		createCategoryMutateAsync.mockResolvedValue({ data: { id: 'general-1' } });
+		createMutateAsync.mockResolvedValue({ data: { lifecycleStatus: 'pending' } });
+
+		render(<FeedDialog mode="create" categories={[]} onClose={() => {}} />);
+
+		expect(screen.getByRole('note', { name: 'Default feed category' }).textContent).toContain(
+			'SelfFeed will create General first',
+		);
+		expect(screen.queryByLabelText('Feed category')).toBeNull();
+		fireEvent.change(screen.getByLabelText('Feed URL'), {
+			target: { value: 'https://example.com/first.xml' },
+		});
+		fireEvent.change(screen.getByLabelText('Custom name (optional)'), {
+			target: { value: 'My first feed' },
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Add feed' }));
+
+		await waitFor(() => {
+			expect(createCategoryMutateAsync).toHaveBeenCalledWith({ name: 'General' });
+			expect(createMutateAsync).toHaveBeenCalledWith({
+				feedUrl: 'https://example.com/first.xml',
+				categoryId: 'general-1',
+				title: 'My first feed',
+			});
+		});
+		expect(screen.getByText(/Validation is queued/)).toBeTruthy();
+	});
+
+	it('preserves first-feed fields when creating General fails', async () => {
+		createCategoryMutateAsync.mockRejectedValue(new Error('Could not create General'));
+
+		render(<FeedDialog mode="create" categories={[]} onClose={() => {}} />);
+		fireEvent.change(screen.getByLabelText('Feed URL'), {
+			target: { value: 'https://example.com/first.xml' },
+		});
+		fireEvent.change(screen.getByLabelText('Custom name (optional)'), {
+			target: { value: 'Keep this title' },
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Add feed' }));
+
+		expect(await screen.findByText('Could not create General')).toBeTruthy();
+		expect(createMutateAsync).not.toHaveBeenCalled();
+		expect((screen.getByLabelText('Feed URL') as HTMLInputElement).value).toBe(
+			'https://example.com/first.xml',
+		);
+		expect((screen.getByLabelText('Custom name (optional)') as HTMLInputElement).value).toBe(
+			'Keep this title',
+		);
+	});
+
+	it('reuses General when feed creation fails and the user retries', async () => {
+		createCategoryMutateAsync.mockResolvedValue({ data: { id: 'general-1' } });
+		createMutateAsync
+			.mockRejectedValueOnce(new Error('Feed validation unavailable'))
+			.mockResolvedValueOnce({ data: { lifecycleStatus: 'pending' } });
+
+		render(<FeedDialog mode="create" categories={[]} onClose={() => {}} />);
+		fireEvent.change(screen.getByLabelText('Feed URL'), {
+			target: { value: 'https://example.com/retry.xml' },
+		});
+		fireEvent.change(screen.getByLabelText('Custom name (optional)'), {
+			target: { value: 'Retry feed' },
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Add feed' }));
+
+		expect(await screen.findByText('Feed validation unavailable')).toBeTruthy();
+		expect(createCategoryMutateAsync).toHaveBeenCalledTimes(1);
+		expect((screen.getByLabelText('Feed URL') as HTMLInputElement).value).toBe(
+			'https://example.com/retry.xml',
+		);
+		expect((screen.getByLabelText('Custom name (optional)') as HTMLInputElement).value).toBe(
+			'Retry feed',
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Add feed' }));
+		await waitFor(() => {
+			expect(createMutateAsync).toHaveBeenCalledTimes(2);
+		});
+
+		expect(createCategoryMutateAsync).toHaveBeenCalledTimes(1);
+		expect(createMutateAsync).toHaveBeenNthCalledWith(2, {
+			feedUrl: 'https://example.com/retry.xml',
+			categoryId: 'general-1',
+			title: 'Retry feed',
+		});
+		expect(screen.getByText(/Validation is queued/)).toBeTruthy();
 	});
 });
 

@@ -69,5 +69,8 @@ describe('Sidebar query states', () => {
 		expect(screen.queryByRole('alert')).toBeNull();
 		expect(screen.getByText('Your feeds')).toBeTruthy();
 		expect(screen.getByText('0')).toBeTruthy();
+		expect((screen.getByRole('button', { name: 'Add Feed' }) as HTMLButtonElement).disabled).toBe(
+			false,
+		);
 	});
 });
