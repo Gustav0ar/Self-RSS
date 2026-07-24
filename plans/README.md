@@ -64,3 +64,54 @@ Use `DEPLOY.md` as the source of truth for production environment assumptions. I
 ## Findings considered and rejected
 
 - None. The user explicitly requested a plan for every review finding.
+
+## 2026-07-24 full-app improvement batch
+
+This second batch was generated at commit `5a2575a` after a whole-repository
+review. The checked-out branch was 25 commits behind the local `origin/main`
+reference when these plans were written. Before dispatching an executor, the
+operator must decide whether to execute against this commit or first
+fast-forward and run the plans' drift checks. Never overwrite the existing
+uncommitted `CLAUDE.md` change.
+
+The implementation request selected the safer option: plans 010-021 were
+reconciled against local `origin/main` commit `49e78b4` before dispatch. Plan
+009 creates the isolated execution branch from that same commit.
+
+### Execution order and status
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| [009](009-pin-bun-runtime.md) | Pin one Bun runtime across local development, docs, and CI | P1 | S | - | DONE |
+| [010](010-web-query-failure-states.md) | Give every primary web query an actionable failure state | P1 | M | 009 | DONE |
+| [011](011-reliable-preferences-autosave.md) | Preserve preference changes until the server acknowledges them | P1 | M | 010 | DONE |
+| [012](012-first-feed-onboarding.md) | Let a new user add a first feed without prerequisite work | P1 | M | 010 | DONE |
+| [013](013-safe-mark-all-read.md) | Confirm and report the result of bulk read-state changes | P1 | S | 010 | DONE |
+| [014](014-accessible-feed-management.md) | Make feed health and category reordering keyboard- and touch-accessible | P1 | M | 010 | DONE |
+| [015](015-cancel-retried-responses.md) | Release failed HTTP responses before retrying | P2 | S | 009 | DONE |
+| [016](016-atomic-redis-counters.md) | Make Redis counters and expiration atomic | P1 | S | 009 | DONE |
+| [017](017-cache-auth-session-validation.md) | Cache active-session validation without weakening revocation | P2 | M | 016 | DONE |
+| [018](018-localize-android-ui.md) | Move Android user-facing text into resources | P2 | L | 009 | DONE |
+| [019](019-android-release-versioning.md) | Make Android release versions explicit and monotonic | P2 | S | 009 | DONE |
+| [020](020-browser-accessibility-matrix.md) | Add mobile-browser and automated accessibility coverage | P1 | M | 010-014 | DONE |
+| [021](021-full-regression-gate.md) | Run the complete cross-platform regression gate | P0 | M | 009-020 | DONE |
+
+### Dependency notes
+
+- 009 runs first so every later executor and CI job use the same Bun release.
+- 010 establishes the shared async-state vocabulary used by 011-014.
+- 016 precedes 017 because both touch Redis correctness and should use one
+  reviewed atomicity/failure-mode convention.
+- 020 runs after the web UX plans so its mobile and accessibility assertions
+  cover the final behavior rather than transient implementations.
+- 021 is mandatory. No implementation batch is complete until every applicable
+  unit, integration, E2E, Android, build, audit, and generated-contract gate
+  passes with no unrelated tracked-file changes.
+
+### Product roadmap tracked separately
+
+The review also identified saved/starred articles with smart collections, a
+web offline/PWA mode, and optional digests/notifications. These are product
+initiatives rather than bounded defects and are intentionally not mixed into
+the implementation batch above. They require separate product decisions,
+schema/API design, and rollout plans.
