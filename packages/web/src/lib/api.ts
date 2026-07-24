@@ -296,6 +296,15 @@ function isRetriableResponse(res: Response): boolean {
 	return res.status >= 500;
 }
 
+async function releaseResponseBody(res: Response): Promise<void> {
+	try {
+		await res.body?.cancel();
+	} catch {
+		// Releasing a discarded retry response is best-effort. Preserve the
+		// original response and retry behavior if the stream cannot be cancelled.
+	}
+}
+
 async function withRetry(
 	fetchFn: () => Promise<Response>,
 	isRetriable: (res: Response) => boolean,
@@ -316,6 +325,7 @@ async function withRetry(
 			// Server error and we have retries left
 			if (attempt < RETRY_MAX_ATTEMPTS - 1) {
 				lastError = new Error(`API error: ${res.status}`);
+				await releaseResponseBody(res);
 				await sleep(getExponentialBackoffDelay(attempt), signal);
 				continue;
 			}

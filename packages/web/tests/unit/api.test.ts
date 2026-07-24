@@ -375,13 +375,17 @@ describe('api module', () => {
 		it('stops retrying when a signal aborts during retry backoff', async () => {
 			vi.useFakeTimers();
 			const controller = new AbortController();
-			const fetchMock = vi.fn(async () => new Response('', { status: 503 }));
+			const retryResponse = new Response('', { status: 503 });
+			const cancel = vi.spyOn(retryResponse.body!, 'cancel');
+			const fetchMock = vi.fn(async () => retryResponse);
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const request = apiFetch('/test', { signal: controller.signal });
-			await Promise.resolve();
-			await Promise.resolve();
+			for (let tick = 0; tick < 10 && cancel.mock.calls.length === 0; tick++) {
+				await Promise.resolve();
+			}
 			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(cancel).toHaveBeenCalledTimes(1);
 
 			controller.abort();
 
@@ -420,6 +424,77 @@ describe('api module', () => {
 	});
 
 	describe('retry with exponential backoff', () => {
+		it('releases retriable 500 and 502 response bodies before retrying', async () => {
+			const firstResponse = new Response('temporary failure', { status: 500 });
+			const secondResponse = new Response('temporary failure', { status: 502 });
+			const firstCancel = vi.spyOn(firstResponse.body!, 'cancel');
+			const secondCancel = vi.spyOn(secondResponse.body!, 'cancel');
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(firstResponse)
+				.mockResolvedValueOnce(secondResponse)
+				.mockResolvedValueOnce(new Response('{"data":{"result":"success"}}', { status: 200 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(result.data.result).toBe('success');
+			expect(firstCancel).toHaveBeenCalledTimes(1);
+			expect(secondCancel).toHaveBeenCalledTimes(1);
+		});
+
+		it('retries safely when a retriable response has no body', async () => {
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(new Response(null, { status: 500 }))
+				.mockResolvedValueOnce(new Response('{"data":{"result":"success"}}', { status: 200 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(result.data.result).toBe('success');
+		});
+
+		it('preserves retry behavior when response cancellation rejects', async () => {
+			const retryResponse = new Response('temporary failure', { status: 500 });
+			const cancelError = new Error('stream cancellation failed');
+			const cancel = vi.spyOn(retryResponse.body!, 'cancel').mockRejectedValueOnce(cancelError);
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(retryResponse)
+				.mockResolvedValueOnce(new Response('{"data":{"result":"success"}}', { status: 200 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			const result = await apiFetch<{ data: { result: string } }>('/feeds');
+
+			expect(cancel).toHaveBeenCalledTimes(1);
+			expect(result.data.result).toBe('success');
+		});
+
+		it('leaves the final retriable response body for apiFetch error parsing', async () => {
+			const responses = [500, 502, 503].map(
+				(status) =>
+					new Response(JSON.stringify({ error: { message: `Request failed with ${status}` } }), {
+						status,
+					}),
+			);
+			const cancelSpies = responses.map((response) => vi.spyOn(response.body!, 'cancel'));
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(responses[0]!)
+				.mockResolvedValueOnce(responses[1]!)
+				.mockResolvedValueOnce(responses[2]!);
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/feeds')).rejects.toThrow('Request failed with 503');
+
+			expect(cancelSpies[0]).toHaveBeenCalledTimes(1);
+			expect(cancelSpies[1]).toHaveBeenCalledTimes(1);
+			expect(cancelSpies[2]).not.toHaveBeenCalled();
+			expect(responses[2]?.bodyUsed).toBe(true);
+		});
+
 		it('retries on 5xx responses for GET requests', async () => {
 			let callCount = 0;
 			const fetchMock = vi.fn(async () => {
@@ -439,16 +514,16 @@ describe('api module', () => {
 		});
 
 		it('does not retry on 4xx responses for GET requests', async () => {
-			let callCount = 0;
-			const fetchMock = vi.fn(async () => {
-				callCount++;
-				return new Response('{"error":{"message":"Not found"}}', { status: 404 });
-			});
+			const response = new Response('{"error":{"message":"Not found"}}', { status: 404 });
+			const cancel = vi.spyOn(response.body!, 'cancel');
+			const fetchMock = vi.fn(async () => response);
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			await expect(apiFetch('/feeds')).rejects.toThrow('Not found');
 
-			expect(callCount).toBe(1);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(cancel).not.toHaveBeenCalled();
+			expect(response.bodyUsed).toBe(true);
 		});
 
 		it('retries on network errors with backoff', async () => {
@@ -525,16 +600,16 @@ describe('api module', () => {
 		});
 
 		it('succeeds on first try without retry', async () => {
-			let callCount = 0;
-			const fetchMock = vi.fn(async () => {
-				callCount++;
-				return new Response('{"data":{"result":"success"}}', { status: 200 });
-			});
+			const response = new Response('{"data":{"result":"success"}}', { status: 200 });
+			const cancel = vi.spyOn(response.body!, 'cancel');
+			const fetchMock = vi.fn(async () => response);
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
 			const result = await apiFetch<{ data: { result: string } }>('/feeds');
 
-			expect(callCount).toBe(1);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(cancel).not.toHaveBeenCalled();
+			expect(response.bodyUsed).toBe(true);
 			expect(result.data.result).toBe('success');
 		});
 	});
