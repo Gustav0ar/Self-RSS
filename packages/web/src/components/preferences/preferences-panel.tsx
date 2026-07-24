@@ -1,29 +1,21 @@
 import { Monitor, MonitorSmartphone, Moon, Settings, ShieldX, Sun } from 'lucide-react';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useId, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { QueryFailure } from '@/components/query-failure';
 import { Dialog } from '@/components/ui/dialog';
 import {
-	type Preferences,
 	useAuthSessions,
 	usePreferences,
 	useRevokeAuthSession,
 	useUpdatePreferences,
 } from '@/hooks/queries';
+import {
+	normalizeThemePreference,
+	usePreferenceSaveQueue,
+} from '@/hooks/queries/preferences-hooks';
 import { ACCENT_COLOR_OPTIONS, FONT_FAMILY_OPTIONS, normalizeAccentColor } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/providers/theme';
-
-type WebTheme = 'light' | 'dark' | 'system';
-const PREFERENCES_SAVE_DEBOUNCE_MS = 450;
-
-function normalizeThemePreference(theme: string): WebTheme {
-	return theme === 'light' || theme === 'system' ? theme : 'dark';
-}
-
-function normalizePreferences(prefs: Preferences): Preferences {
-	return { ...prefs, theme: normalizeThemePreference(prefs.theme) };
-}
 
 export function PreferencesPanel() {
 	const {
@@ -43,24 +35,21 @@ export function PreferencesPanel() {
 		refetch: refetchSessions,
 	} = useAuthSessions();
 	const sessionList = sessions ?? [];
-	const updatePrefs = useUpdatePreferences();
 	const revokeSession = useRevokeAuthSession();
+	const updatePreferences = useUpdatePreferences();
 	const { setTheme } = useTheme();
-	const [isOpen, setIsOpen] = useState(false);
-	const [draftPrefs, setDraftPrefs] = useState<Preferences | null>(null);
-	const [pendingPatch, setPendingPatch] = useState<Partial<Preferences> | null>(null);
+	const {
+		closePanel,
+		closeRequested,
+		draftPreferences: draftPrefs,
+		handleChange,
+		isOpen,
+		openPanel,
+		retrySave,
+		revertChanges,
+		savePhase,
+	} = usePreferenceSaveQueue(prefs, setTheme, updatePreferences);
 	const titleId = useId();
-
-	useEffect(() => {
-		if (prefs) {
-			setDraftPrefs((current) => {
-				if (isOpen && current) {
-					return current;
-				}
-				return normalizePreferences(prefs);
-			});
-		}
-	}, [isOpen, prefs]);
 
 	const fontOptions = useMemo(() => {
 		if (
@@ -73,32 +62,11 @@ export function PreferencesPanel() {
 		return [...FONT_FAMILY_OPTIONS, { label: draftPrefs.fontFamily, value: draftPrefs.fontFamily }];
 	}, [draftPrefs?.fontFamily]);
 
-	useEffect(() => {
-		if (!isOpen || !pendingPatch) {
-			return;
-		}
-
-		const timer = window.setTimeout(() => {
-			updatePrefs.mutate(pendingPatch);
-			setPendingPatch(null);
-		}, PREFERENCES_SAVE_DEBOUNCE_MS);
-
-		return () => window.clearTimeout(timer);
-	}, [isOpen, pendingPatch, updatePrefs]);
-
-	function closePanel() {
-		if (pendingPatch) {
-			updatePrefs.mutate(pendingPatch);
-			setPendingPatch(null);
-		}
-		setIsOpen(false);
-	}
-
 	if (!isOpen) {
 		return (
 			<button
 				type="button"
-				onClick={() => setIsOpen(true)}
+				onClick={openPanel}
 				className="inline-flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
 				aria-label="Preferences"
 			>
@@ -154,26 +122,16 @@ export function PreferencesPanel() {
 		);
 	}
 
-	function handleChange<K extends keyof Preferences>(key: K, value: Preferences[K]) {
-		const nextValue =
-			key === 'theme' && typeof value === 'string' ? normalizeThemePreference(value) : value;
-		setDraftPrefs((current) => (current ? { ...current, [key]: nextValue } : current));
-		if (key === 'theme' && typeof value === 'string') {
-			setTheme(normalizeThemePreference(value));
-		}
-		if (updatePrefs.isError) {
-			updatePrefs.reset();
-		}
-		setPendingPatch((current) => ({ ...(current ?? {}), [key]: nextValue }));
-	}
-
-	const saveStatus = pendingPatch
-		? 'Saving shortly'
-		: updatePrefs.isPending
-			? 'Saving...'
-			: updatePrefs.isError
-				? 'Could not save changes'
-				: 'Saved';
+	const saveStatus =
+		savePhase === 'debounced'
+			? 'Saving shortly'
+			: savePhase === 'saving'
+				? 'Saving...'
+				: savePhase === 'retrying'
+					? 'Retrying...'
+					: savePhase === 'failed'
+						? 'Changes not saved'
+						: 'Saved';
 
 	return createPortal(
 		<Dialog
@@ -196,19 +154,38 @@ export function PreferencesPanel() {
 					<p
 						className={cn(
 							'mt-1 text-xs',
-							updatePrefs.isError ? 'text-red-500' : 'text-muted-foreground',
+							savePhase === 'failed' ? 'text-red-500' : 'text-muted-foreground',
 						)}
 						aria-live="polite"
 					>
 						{saveStatus}
 					</p>
+					{savePhase === 'failed' ? (
+						<div className="mt-2 flex flex-wrap gap-2" role="alert">
+							<button
+								type="button"
+								onClick={retrySave}
+								className="rounded-full border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+							>
+								Retry save
+							</button>
+							<button
+								type="button"
+								onClick={revertChanges}
+								className="rounded-full px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+							>
+								Revert changes
+							</button>
+						</div>
+					) : null}
 				</div>
 				<button
 					type="button"
 					onClick={closePanel}
+					disabled={closeRequested}
 					className="inline-flex h-10 items-center justify-center rounded-2xl px-4 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 				>
-					Close
+					{closeRequested ? 'Saving and closing...' : 'Close'}
 				</button>
 			</div>
 

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreferencesPanel } from '../../src/components/preferences/preferences-panel';
 
-const mutateMock = vi.fn();
+const mutateAsyncMock = vi.fn();
 const revokeSessionMock = vi.fn();
 const resetMock = vi.fn();
 const setThemeMock = vi.fn();
@@ -24,6 +24,16 @@ let preferencesMock: typeof defaultPreferences | undefined = { ...defaultPrefere
 let preferencesError: Error | null = null;
 let preferencesFailed = false;
 let preferencesFetching = false;
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, reject, resolve };
+}
 
 vi.mock('../../src/hooks/queries', () => ({
 	usePreferences: () => ({
@@ -58,9 +68,7 @@ vi.mock('../../src/hooks/queries', () => ({
 		isPending: false,
 	}),
 	useUpdatePreferences: () => ({
-		mutate: mutateMock,
-		isPending: false,
-		isError: false,
+		mutateAsync: mutateAsyncMock,
 		reset: resetMock,
 	}),
 }));
@@ -72,7 +80,11 @@ vi.mock('../../src/providers/theme', () => ({
 describe('PreferencesPanel', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
-		mutateMock.mockClear();
+		mutateAsyncMock.mockReset();
+		mutateAsyncMock.mockImplementation(async (patch) => ({
+			...(preferencesMock ?? defaultPreferences),
+			...patch,
+		}));
 		revokeSessionMock.mockClear();
 		resetMock.mockClear();
 		setThemeMock.mockClear();
@@ -84,15 +96,16 @@ describe('PreferencesPanel', () => {
 		preferencesFetching = false;
 	});
 
-	afterEach(() => {
-		act(() => {
+	afterEach(async () => {
+		await act(async () => {
 			vi.runOnlyPendingTimers();
+			await Promise.resolve();
 		});
 		vi.useRealTimers();
 		cleanup();
 	});
 
-	it('debounces high-frequency preference changes and persists the latest value', () => {
+	it('debounces high-frequency preference changes and persists the latest value', async () => {
 		render(<PreferencesPanel />);
 		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
 
@@ -102,28 +115,59 @@ describe('PreferencesPanel', () => {
 
 		expect(screen.getByText('Text Size: 20px')).toBeTruthy();
 		expect(screen.getByText('Saving shortly')).toBeTruthy();
-		expect(mutateMock).not.toHaveBeenCalled();
+		expect(mutateAsyncMock).not.toHaveBeenCalled();
 
 		act(() => {
 			vi.advanceTimersByTime(449);
 		});
-		expect(mutateMock).not.toHaveBeenCalled();
+		expect(mutateAsyncMock).not.toHaveBeenCalled();
 
-		act(() => {
+		await act(async () => {
 			vi.advanceTimersByTime(1);
+			await Promise.resolve();
 		});
-		expect(mutateMock).toHaveBeenCalledTimes(1);
-		expect(mutateMock).toHaveBeenCalledWith({ textSize: 20 });
+		expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+		expect(mutateAsyncMock).toHaveBeenCalledWith({ textSize: 20 });
 	});
 
-	it('flushes unsaved preferences when the panel closes', () => {
+	it('keeps the panel open while a final save is pending, then closes after acknowledgement', async () => {
+		const save = deferred<typeof defaultPreferences>();
+		mutateAsyncMock.mockReturnValueOnce(save.promise);
+
 		render(<PreferencesPanel />);
 		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
 
 		fireEvent.change(screen.getByLabelText('Density'), { target: { value: 'compact' } });
 		fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
-		expect(mutateMock).toHaveBeenCalledWith({ density: 'compact' });
+		expect(mutateAsyncMock).toHaveBeenCalledWith({ density: 'compact' });
+		expect(screen.getByRole('button', { name: 'Saving and closing...' })).toBeTruthy();
+
+		await act(async () => {
+			save.resolve({ ...defaultPreferences, density: 'compact' });
+			await save.promise;
+		});
+
+		expect(screen.getByRole('button', { name: 'Preferences' })).toBeTruthy();
+	});
+
+	it('keeps the panel open with recovery actions when its final save fails', async () => {
+		mutateAsyncMock.mockRejectedValueOnce(new Error('save failed'));
+
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		fireEvent.change(screen.getByLabelText('Density'), { target: { value: 'compact' } });
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+			await Promise.resolve();
+		});
+
+		expect(mutateAsyncMock).toHaveBeenCalledWith({ density: 'compact' });
+		expect(screen.getByText('Changes not saved')).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Retry save' })).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+		expect(screen.queryByRole('button', { name: 'Preferences' })).toBeNull();
 	});
 
 	it('keeps the open draft when the preferences query refreshes mid-edit', () => {
@@ -167,4 +211,82 @@ describe('PreferencesPanel', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 		expect(refetchPreferencesMock).toHaveBeenCalledTimes(1);
 	});
+
+	it('retains a rejected patch and retries the same changes successfully', async () => {
+		mutateAsyncMock
+			.mockRejectedValueOnce(new Error('save failed'))
+			.mockResolvedValueOnce({ ...defaultPreferences, textSize: 20 });
+
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		fireEvent.change(screen.getByLabelText(/Text Size/i), { target: { value: '20' } });
+
+		await act(async () => {
+			vi.advanceTimersByTime(PREFERENCES_SAVE_DEBOUNCE_MS_FOR_TEST);
+			await Promise.resolve();
+		});
+
+		expect(screen.getByText('Changes not saved')).toBeTruthy();
+		expect(screen.getByText('Text Size: 20px')).toBeTruthy();
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Retry save' }));
+			await Promise.resolve();
+		});
+
+		expect(mutateAsyncMock).toHaveBeenCalledTimes(2);
+		expect(mutateAsyncMock).toHaveBeenNthCalledWith(2, { textSize: 20 });
+		expect(screen.getByText('Saved')).toBeTruthy();
+	});
+
+	it('reverts a rejected draft to the last acknowledged preferences', async () => {
+		mutateAsyncMock.mockRejectedValueOnce(new Error('save failed'));
+
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		fireEvent.change(screen.getByLabelText(/Text Size/i), { target: { value: '22' } });
+
+		await act(async () => {
+			vi.advanceTimersByTime(PREFERENCES_SAVE_DEBOUNCE_MS_FOR_TEST);
+			await Promise.resolve();
+		});
+		fireEvent.click(screen.getByRole('button', { name: 'Revert changes' }));
+
+		expect(screen.getByText('Text Size: 16px')).toBeTruthy();
+		expect(screen.getByText('Saved')).toBeTruthy();
+		expect(resetMock).toHaveBeenCalled();
+	});
+
+	it('queues edits made during an in-flight save and sends them only after acknowledgement', async () => {
+		const firstSave = deferred<typeof defaultPreferences>();
+		mutateAsyncMock
+			.mockReturnValueOnce(firstSave.promise)
+			.mockResolvedValueOnce({ ...defaultPreferences, textSize: 20, density: 'compact' });
+
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		fireEvent.change(screen.getByLabelText(/Text Size/i), { target: { value: '18' } });
+		await act(async () => {
+			vi.advanceTimersByTime(PREFERENCES_SAVE_DEBOUNCE_MS_FOR_TEST);
+			await Promise.resolve();
+		});
+
+		fireEvent.change(screen.getByLabelText(/Text Size/i), { target: { value: '20' } });
+		fireEvent.change(screen.getByLabelText('Density'), { target: { value: 'compact' } });
+		expect(mutateAsyncMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			firstSave.resolve({ ...defaultPreferences, textSize: 18 });
+			await firstSave.promise;
+			await Promise.resolve();
+		});
+
+		expect(mutateAsyncMock).toHaveBeenCalledTimes(2);
+		expect(mutateAsyncMock).toHaveBeenNthCalledWith(2, {
+			textSize: 20,
+			density: 'compact',
+		});
+	});
 });
+
+const PREFERENCES_SAVE_DEBOUNCE_MS_FOR_TEST = 450;
