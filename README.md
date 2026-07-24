@@ -36,7 +36,7 @@ A self-hosted, Feedly-like RSS reader built with **Bun**, **Hono**, **React**, *
 Follow these steps to set up and run the application locally in development mode.
 
 ### 1. Prerequisites
-- **Runtime:** [Bun](https://bun.sh) (version 1.3.10 or higher)
+- **Runtime:** [Bun](https://bun.sh) 1.3.14
 - **Container Engine:** [Podman](https://podman.io) or **Docker** (with Docker Compose plugin) to run Redis locally.
 
 ### 2. Installation
