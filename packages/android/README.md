@@ -122,6 +122,35 @@ Install these in Android Studio SDK Manager:
 
 Before shipping a production build:
 
+- Choose `SELF_FEED_ANDROID_VERSION_CODE` as a positive integer greater than
+  every version code previously uploaded to the store. The release operator is
+  responsible for this monotonic increase; Gradle cannot infer the store's
+  current maximum. Choose a nonblank `SELF_FEED_ANDROID_VERSION_NAME` for the
+  user-visible release version.
+- For the next release after the local `1` / `1.0.0` defaults, validate version
+  code `2` and name `1.0.1` in Android CI with:
+  ```bash
+  gh workflow run android-ci.yml \
+    -f android_version_code=2 \
+    -f android_version_name=1.0.1
+  ```
+- To build and verify that same version locally, use Gradle properties (the
+  equivalent environment variables are also supported):
+  ```bash
+  SELF_FEED_API_BASE_URL=https://your-api.example/api/v1/ \
+    ./packages/android/gradlew -p packages/android \
+      -PSELF_FEED_ANDROID_VERSION_CODE=2 \
+      -PSELF_FEED_ANDROID_VERSION_NAME=1.0.1 \
+      :app:verifyAndroidReleaseVersion \
+      :app:printAndroidVersionMetadata
+  ```
+  `printAndroidVersionMetadata` emits a
+  `SELF_FEED_ANDROID_VERSION_METADATA=<json>` line for automation. Local builds
+  that omit both inputs deterministically use version code `1` and version name
+  `1.0.0`; CI release tasks reject omitted inputs. When both forms are present,
+  the `-P` Gradle property takes precedence over the same-named environment
+  variable. The isolated device-test variant retains the `-device-test`
+  version-name suffix.
 - Set `SELF_FEED_API_BASE_URL` to your HTTPS API domain before building release artifacts.
 - Set at least two valid pins across `SELF_FEED_CERTIFICATE_PINS` and `SELF_FEED_BACKUP_CERTIFICATE_PINS`; retain an overlap pin during certificate rotation.
 - Confirm release network policy keeps cleartext disabled (`src/release/res/xml/network_security_config.xml`).

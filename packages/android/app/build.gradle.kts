@@ -13,16 +13,74 @@ plugins {
 fun quotedBuildConfigValue(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
+val ANDROID_VERSION_CODE_INPUT = "SELF_FEED_ANDROID_VERSION_CODE"
+val ANDROID_VERSION_NAME_INPUT = "SELF_FEED_ANDROID_VERSION_NAME"
+val DEFAULT_ANDROID_VERSION_CODE = 1
+val DEFAULT_ANDROID_VERSION_NAME = "1.0.0"
+val DEVICE_TEST_VERSION_NAME_SUFFIX = "-device-test"
+
+data class ConfiguredValue(
+    val value: String?,
+    val source: String,
+)
+
+fun configuredValue(name: String): ConfiguredValue {
+    val propertyValue = providers.gradleProperty(name).orNull
+    if (propertyValue != null) return ConfiguredValue(propertyValue, "gradle-property")
+
+    val environmentValue = providers.environmentVariable(name).orNull
+    return if (environmentValue != null) {
+        ConfiguredValue(environmentValue, "environment")
+    } else {
+        ConfiguredValue(null, "default")
+    }
+}
+
+fun displayInput(value: String): String = value.ifBlank { "<blank>" }
+
+val configuredAndroidVersionCode = configuredValue(ANDROID_VERSION_CODE_INPUT)
+val configuredAndroidVersionName = configuredValue(ANDROID_VERSION_NAME_INPUT)
+
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true) ||
+        it.contains("BaselineProfile", ignoreCase = true)
+}
+val runningInCi = providers.environmentVariable("CI").orNull
+    ?.trim()
+    ?.lowercase() in setOf("1", "true")
+
+if (runningInCi && releaseTaskRequested) {
+    val missingInputs = buildList {
+        if (configuredAndroidVersionCode.value == null) add(ANDROID_VERSION_CODE_INPUT)
+        if (configuredAndroidVersionName.value == null) add(ANDROID_VERSION_NAME_INPUT)
+    }
+    if (missingInputs.isNotEmpty()) {
+        throw GradleException(
+            "CI release builds must explicitly set ${missingInputs.joinToString(" and ")}.",
+        )
+    }
+}
+
+val androidVersionCode = configuredAndroidVersionCode.value?.trim()?.let { rawValue ->
+    rawValue.toIntOrNull()?.takeIf { it > 0 }
+        ?: throw GradleException(
+            "$ANDROID_VERSION_CODE_INPUT must be a positive integer; received " +
+                "${displayInput(rawValue)}.",
+        )
+} ?: DEFAULT_ANDROID_VERSION_CODE
+
+val androidVersionName = configuredAndroidVersionName.value?.trim()?.also { rawValue ->
+    if (rawValue.isBlank()) {
+        throw GradleException("$ANDROID_VERSION_NAME_INPUT must be nonblank.")
+    }
+} ?: DEFAULT_ANDROID_VERSION_NAME
+
 val configuredReleaseApiBaseUrl = providers
     .gradleProperty("SELF_FEED_API_BASE_URL")
     .orElse(providers.environmentVariable("SELF_FEED_API_BASE_URL"))
     .orNull
     ?.trim()
     ?.takeIf { it.isNotBlank() }
-
-val releaseTaskRequested = gradle.startParameter.taskNames.any {
-    it.contains("Release", ignoreCase = true)
-}
 
 if (releaseTaskRequested) {
     if (configuredReleaseApiBaseUrl == null) {
@@ -66,8 +124,8 @@ android {
         applicationId = "com.selffeed.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = androidVersionCode
+        versionName = androidVersionName
 
         testInstrumentationRunner = "com.selffeed.android.HiltTestRunner"
         vectorDrawables {
@@ -114,7 +172,7 @@ android {
         create("deviceTest") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".devicetest"
-            versionNameSuffix = "-device-test"
+            versionNameSuffix = DEVICE_TEST_VERSION_NAME_SUFFIX
             matchingFallbacks += listOf("debug")
         }
     }
@@ -196,6 +254,82 @@ tasks.register("connectedNonDisruptiveDeviceTest") {
     group = "verification"
     description = "Runs instrumentation tests in the side-by-side deviceTest app variant."
     dependsOn("connectedDeviceTestAndroidTest")
+}
+
+fun jsonEscape(value: String): String = buildString {
+    value.forEach { character ->
+        when (character) {
+            '\\' -> append("\\\\")
+            '"' -> append("\\\"")
+            '\b' -> append("\\b")
+            '\u000C' -> append("\\f")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> if (character.code < 0x20) {
+                append("\\u%04x".format(character.code))
+            } else {
+                append(character)
+            }
+        }
+    }
+}
+
+fun androidVersionMetadataJson(): String =
+    """{"versionCode":$androidVersionCode,"versionName":"${jsonEscape(androidVersionName)}","deviceTestVersionName":"${jsonEscape(androidVersionName + DEVICE_TEST_VERSION_NAME_SUFFIX)}","versionCodeSource":"${configuredAndroidVersionCode.source}","versionNameSource":"${configuredAndroidVersionName.source}"}"""
+
+tasks.register("printAndroidVersionMetadata") {
+    group = "help"
+    description = "Prints resolved Android version metadata as a machine-readable JSON line."
+    doLast {
+        println("SELF_FEED_ANDROID_VERSION_METADATA=${androidVersionMetadataJson()}")
+    }
+}
+
+tasks.register("verifyAndroidReleaseVersion") {
+    group = "verification"
+    description = "Assembles release and verifies its output metadata against explicit version inputs."
+    dependsOn("assembleRelease")
+
+    doLast {
+        if (
+            configuredAndroidVersionCode.value == null ||
+            configuredAndroidVersionName.value == null
+        ) {
+            throw GradleException(
+                "verifyAndroidReleaseVersion requires $ANDROID_VERSION_CODE_INPUT and " +
+                    "$ANDROID_VERSION_NAME_INPUT.",
+            )
+        }
+
+        val outputMetadataFile = layout.buildDirectory
+            .file("outputs/apk/release/output-metadata.json")
+            .get()
+            .asFile
+        if (!outputMetadataFile.isFile) {
+            throw GradleException(
+                "Release output metadata was not found at ${outputMetadataFile.path}.",
+            )
+        }
+
+        val outputMetadata = outputMetadataFile.readText()
+        val versionCodeMatches = Regex(
+            "\"versionCode\"\\s*:\\s*$androidVersionCode(?:\\s*[,}])",
+        ).containsMatchIn(outputMetadata)
+        val escapedVersionName = Regex.escape(jsonEscape(androidVersionName))
+        val versionNameMatches = Regex(
+            "\"versionName\"\\s*:\\s*\"$escapedVersionName\"",
+        ).containsMatchIn(outputMetadata)
+
+        if (!versionCodeMatches || !versionNameMatches) {
+            throw GradleException(
+                "Built release version does not match supplied values: expected " +
+                    "versionCode=$androidVersionCode and versionName=$androidVersionName.",
+            )
+        }
+
+        println("SELF_FEED_ANDROID_RELEASE_VERSION_VERIFIED=${androidVersionMetadataJson()}")
+    }
 }
 
 ksp {

@@ -7,6 +7,7 @@ on:
       - 'packages/android/**'
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
+      - 'scripts/android-check.sh'
       - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
@@ -16,10 +17,24 @@ on:
       - 'packages/android/**'
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
+      - 'scripts/android-check.sh'
       - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
   workflow_dispatch:
+    inputs:
+      android_version_code:
+        description: Positive, monotonically increasing Android version code
+        required: true
+        type: string
+      android_version_name:
+        description: Nonblank Android release version name
+        required: true
+        type: string
+
+env:
+  SELF_FEED_ANDROID_VERSION_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.android_version_code || '1000000' }}
+  SELF_FEED_ANDROID_VERSION_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.android_version_name || format('ci.{0}', github.run_number) }}
 
 jobs:
   android-unit-tests:
@@ -49,10 +64,13 @@ jobs:
         run: ./packages/android/gradlew -p packages/android :app:lintDebug
       - name: Assemble Android debug
         run: ./packages/android/gradlew -p packages/android :app:assembleDebug
-      - name: Assemble Android release
+      - name: Assemble and verify Android release version
         env:
           SELF_FEED_API_BASE_URL: https://example.invalid/api/v1/
-        run: ./packages/android/gradlew -p packages/android :app:assembleRelease
+        run: |
+          ./packages/android/gradlew -p packages/android \
+            :app:verifyAndroidReleaseVersion \
+            :app:printAndroidVersionMetadata
 
   android-instrumentation:
     name: Android Instrumentation Tests

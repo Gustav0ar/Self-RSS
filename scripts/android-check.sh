@@ -12,6 +12,9 @@ fi
 echo "[android-check] Checking Android/OpenAPI compatibility..."
 bun "$ROOT_DIR/scripts/check-android-openapi-contract.ts"
 
+echo "[android-check] Reporting resolved Android version..."
+bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:printAndroidVersionMetadata
+
 echo "[android-check] Running Android unit tests..."
 bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:testDeviceTestUnitTest
 
