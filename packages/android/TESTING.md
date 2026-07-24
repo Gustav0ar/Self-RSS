@@ -32,7 +32,7 @@ Reader swipe regressions are covered by:
 # Run instrumentation tests without disturbing the normal app installation
 ./packages/android/gradlew -p packages/android :app:connectedNonDisruptiveDeviceTest
 
-# Repository Android verification
+# Repository Android verification (including instrumentation-test compilation)
 bun run android:check
 ```
 

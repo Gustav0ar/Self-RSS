@@ -11,6 +11,7 @@ import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.EnrichArticleResponse
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.network.FeedSyncHistoryResponse
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.MarkAllReadResponse
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -212,6 +213,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             stale = false,
         ),
     )
+    override suspend fun feedSyncHistory(feedId: String): AppResult<FeedSyncHistoryResponse> =
+        AppResult.Success(FeedSyncHistoryResponse(runs = emptyList()))
+
     override suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts> =
         AppResult.Error("Not supported in fake")
 
@@ -327,6 +331,30 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse> =
         AppResult.Success(AppSettingsResponse(registrationLocked = registrationLocked))
+
+    override suspend fun adminUsers(): AppResult<List<User>> = AppResult.Success(listOf(fakeUser))
+
+    override suspend fun adminCreateUser(email: String, password: String, role: String): AppResult<User> =
+        AppResult.Success(
+            User(
+                id = "created-user",
+                email = email,
+                role = role,
+                isActive = true,
+            ),
+        )
+
+    override suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?): AppResult<User> =
+        AppResult.Success(
+            fakeUser.copy(
+                id = id,
+                role = role ?: fakeUser.role,
+                isActive = isActive ?: fakeUser.isActive,
+            ),
+        )
+
+    override suspend fun adminResetPassword(id: String, password: String): AppResult<User> =
+        AppResult.Success(fakeUser.copy(id = id))
 
     override fun getDebugResilienceSnapshot(): Map<String, Long> = emptyMap()
     override fun resetDebugResilienceMetrics() = Unit

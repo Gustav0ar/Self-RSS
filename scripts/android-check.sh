@@ -18,6 +18,9 @@ bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:printAndroidVersionMetadata
 echo "[android-check] Running Android unit tests..."
 bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:testDeviceTestUnitTest
 
+echo "[android-check] Compiling Android instrumentation tests..."
+bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:assembleDeviceTestAndroidTest
+
 echo "[android-check] Running Android lint (debug)..."
 bash "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" :app:lintDebug
 
