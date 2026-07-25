@@ -1,5 +1,39 @@
+import type { ArticleDetail } from '@self-feed/shared';
 import type { RefObject } from 'react';
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEnrichArticle } from '@/hooks/queries';
+
+export function useSelectedArticleEnrichment(
+	articleId: string | null,
+	article: ArticleDetail | undefined,
+) {
+	const enrichArticle = useEnrichArticle();
+	const requestedArticleId = useRef<string | null>(null);
+
+	useEffect(() => {
+		if (!articleId || article?.id !== articleId) {
+			requestedArticleId.current = null;
+			return;
+		}
+		if (
+			article.contentStatus !== 'enrichment_pending' ||
+			!article.canonicalUrl ||
+			requestedArticleId.current === articleId
+		) {
+			return;
+		}
+
+		// Some feeds contain only an excerpt; their media is discovered from
+		// the canonical page. Visible-row warming covers only a small queue
+		// prefix, so opening an article must request enrichment independently.
+		requestedArticleId.current = articleId;
+		enrichArticle.mutate(articleId, {
+			onError: () => {
+				requestedArticleId.current = null;
+			},
+		});
+	}, [articleId, article, enrichArticle]);
+}
 
 export function useReaderScrollProgress(articleId: string | null) {
 	const scrollerRef = useRef<HTMLDivElement | null>(null);

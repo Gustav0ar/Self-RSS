@@ -12,6 +12,7 @@ const articleWithEmbeddedHtml = {
 	feedFaviconUrl: null,
 	isRead: false,
 	isEnriched: true,
+	contentStatus: 'full_ready',
 	excerpt: 'Excerpt',
 	contentHtml:
 		'<p>Body</p><img src="https://example.com/image-1.jpg" alt="Inline image" /><iframe class="embedded-media embedded-media--videopress" width="560" height="996" src="https://videopress.com/embed/PDGidPsP"></iframe>',
@@ -141,17 +142,18 @@ describe('ReaderPane', () => {
 		});
 	});
 
-	it('does not fetch canonical content from the reader navigation path', () => {
+	it('requests canonical enrichment when a selected article only has feed content', () => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
+			contentStatus: 'enrichment_pending',
 			contentHtml: '<p>Text-only feed content</p>',
 			media: [],
 		};
 
 		render(<ReaderPane articleId="article-1" />);
 
-		expect(enrichMutate).not.toHaveBeenCalled();
+		expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
 	});
 
 	it('shows a retry action for transient article failures', () => {

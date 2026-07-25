@@ -15,7 +15,11 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
-import { useReaderScrollProgress, useTwitterEmbedResize } from './reader-effects';
+import {
+	useReaderScrollProgress,
+	useSelectedArticleEnrichment,
+	useTwitterEmbedResize,
+} from './reader-effects';
 import { getReaderPanelMedia, ReaderMediaPanel } from './reader-media-panel';
 
 interface ReaderPaneProps {
@@ -52,6 +56,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const lastAutoMarkedId = useRef<string | null>(null);
 	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(articleId);
 	useTwitterEmbedResize(scrollerRef);
+	useSelectedArticleEnrichment(articleId, article);
 
 	const isRead = article?.isRead;
 	const readerHtml = useMemo(() => {
