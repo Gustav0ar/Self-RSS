@@ -2125,7 +2125,16 @@ describe('durable feed ingestion persistence', () => {
 		expect(await worker.drainOnce()).toBe(0);
 		expect(publisherRequests).toBe(1);
 
-		expect(await delivery.drainOnce('snapshot-reuse-second', { now, limit: 10 })).toBe(1);
+		const secondDelivery = await db.query.feedSnapshotDeliveries.findFirst({
+			where: (row, { eq }) => eq(row.feedId, second.feed.id),
+		});
+		expect(secondDelivery).not.toBeNull();
+		expect(
+			await delivery.drainOnce('snapshot-reuse-second', {
+				now: secondDelivery!.availableAt,
+				limit: 10,
+			}),
+		).toBe(1);
 		expect(
 			await db.query.articles.findFirst({
 				where: (article, { eq }) => eq(article.feedId, second.feed.id),
