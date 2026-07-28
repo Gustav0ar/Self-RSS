@@ -1,20 +1,21 @@
 import { MIN_SOURCE_INTERVAL_SECONDS } from './feed-publisher-hints.js';
 
-const ACTIVE_MAX_SECONDS = 24 * 60 * 60;
-export const PAUSED_SOURCE_PROBE_SECONDS = 7 * ACTIVE_MAX_SECONDS;
+const DAY_SECONDS = 24 * 60 * 60;
+export const PAUSED_SOURCE_PROBE_SECONDS = 7 * DAY_SECONDS;
 
 export interface NextFetchInput {
 	now?: Date;
-	publisherIntervalSeconds?: number | null;
-	observedChangeIntervalSeconds?: number | null;
-	consecutiveUnchanged: number;
 	state?: 'active' | 'paused' | 'circuit_open';
 	jitter?: () => number;
 	sourceBlockedUntil?: Date | null;
 	originBlockedUntil?: Date | null;
 }
 
-/** Computes a safe source schedule; manual callers use the same block-aware result. */
+/**
+ * Active sources are fetched on a fixed 15-minute cadence. Publisher hints and
+ * unchanged responses remain diagnostic data, but never make a healthy feed
+ * slower. Failed sources use the separate outcome/backoff policy.
+ */
 export function computeNextFetchAt(input: NextFetchInput) {
 	const now = input.now ?? new Date();
 	if (input.state === 'paused' || input.state === 'circuit_open') {
@@ -27,26 +28,7 @@ export function computeNextFetchAt(input: NextFetchInput) {
 		return probeAt;
 	}
 
-	const quietMultiplier = Math.min(
-		96,
-		2 ** Math.floor(Math.max(0, input.consecutiveUnchanged) / 3),
-	);
-	const observed = input.observedChangeIntervalSeconds
-		? Math.ceil(input.observedChangeIntervalSeconds * 0.75)
-		: 0;
-	const base = Math.min(
-		ACTIVE_MAX_SECONDS,
-		Math.max(
-			MIN_SOURCE_INTERVAL_SECONDS,
-			input.publisherIntervalSeconds ?? 0,
-			observed,
-			MIN_SOURCE_INTERVAL_SECONDS * quietMultiplier,
-		),
-	);
-	const sample = Math.max(0, Math.min(1, input.jitter?.() ?? 0));
-	const positiveJitter = Math.ceil(sample * Math.min(base * 0.1, MIN_SOURCE_INTERVAL_SECONDS));
-	const delay = Math.min(ACTIVE_MAX_SECONDS, base + positiveJitter);
-	let next = new Date(now.getTime() + delay * 1_000);
+	let next = new Date(now.getTime() + MIN_SOURCE_INTERVAL_SECONDS * 1_000);
 	for (const block of [input.sourceBlockedUntil, input.originBlockedUntil]) {
 		if (block && block > next) next = block;
 	}

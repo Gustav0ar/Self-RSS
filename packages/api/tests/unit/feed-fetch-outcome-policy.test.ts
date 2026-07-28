@@ -97,30 +97,16 @@ describe('feed fetch outcome policy', () => {
 	});
 });
 
-describe('adaptive next fetch policy', () => {
-	it('combines floor, publisher hints, cadence, and exponential quiet growth through 24h', () => {
-		expect(computeNextFetchAt({ now, consecutiveUnchanged: 0 })).toEqual(
-			new Date('2026-07-18T00:15:00Z'),
-		);
-		expect(
-			computeNextFetchAt({ now, consecutiveUnchanged: 0, publisherIntervalSeconds: 7200 }),
-		).toEqual(new Date('2026-07-18T02:00:00Z'));
-		expect(
-			computeNextFetchAt({ now, consecutiveUnchanged: 0, observedChangeIntervalSeconds: 14400 }),
-		).toEqual(new Date('2026-07-18T03:00:00Z'));
-		expect(computeNextFetchAt({ now, consecutiveUnchanged: 21 })).toEqual(
-			new Date('2026-07-19T00:00:00Z'),
-		);
+describe('fixed next fetch policy', () => {
+	it('keeps healthy sources on a fixed 15-minute cadence', () => {
+		expect(computeNextFetchAt({ now })).toEqual(new Date('2026-07-18T00:15:00Z'));
 	});
 
-	it('jitters active and weekly probes later while respecting the active max and hard blocks', () => {
-		const active = computeNextFetchAt({ now, consecutiveUnchanged: 3, jitter: () => 1 });
-		expect(active).toEqual(new Date('2026-07-18T00:33:00Z'));
-		const capped = computeNextFetchAt({ now, consecutiveUnchanged: 21, jitter: () => 1 });
-		expect(capped).toEqual(new Date('2026-07-19T00:00:00Z'));
+	it('jitters weekly probes while keeping active feeds exact and respecting hard blocks', () => {
+		const active = computeNextFetchAt({ now, jitter: () => 1 });
+		expect(active).toEqual(new Date('2026-07-18T00:15:00Z'));
 		const paused = computeNextFetchAt({
 			now,
-			consecutiveUnchanged: 0,
 			state: 'paused',
 			jitter: () => 1,
 		});
@@ -129,7 +115,6 @@ describe('adaptive next fetch policy', () => {
 		expect(
 			computeNextFetchAt({
 				now,
-				consecutiveUnchanged: 0,
 				state: 'circuit_open',
 				originBlockedUntil: blocked,
 			}),

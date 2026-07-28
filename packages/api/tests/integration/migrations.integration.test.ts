@@ -212,7 +212,8 @@ function copyMigrationsBeforeDurableIngestion(baseDir: string) {
 		(entry) =>
 			entry.tag !== '0017_smiling_naoko' &&
 			entry.tag !== '0018_nifty_dragon_man' &&
-			entry.tag !== '0019_tidy_wong',
+			entry.tag !== '0019_tidy_wong' &&
+			entry.tag !== '0020_fixed_feed_refresh_interval',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
@@ -227,7 +228,25 @@ function copyMigrationsBeforeAuthSessionExpiry(baseDir: string) {
 		dialect: string;
 		entries: { tag: string }[];
 	};
-	journal.entries = journal.entries.filter((entry) => entry.tag !== '0019_tidy_wong');
+	journal.entries = journal.entries.filter(
+		(entry) => entry.tag !== '0019_tidy_wong' && entry.tag !== '0020_fixed_feed_refresh_interval',
+	);
+	writeFileSync(journalPath, JSON.stringify(journal));
+	return folder;
+}
+
+function copyMigrationsBeforeFixedFeedRefresh(baseDir: string) {
+	const folder = join(baseDir, 'pre-fixed-feed-refresh-drizzle');
+	cpSync(migrationsFolder, folder, { recursive: true });
+	const journalPath = join(folder, 'meta/_journal.json');
+	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+		version: string;
+		dialect: string;
+		entries: { tag: string }[];
+	};
+	journal.entries = journal.entries.filter(
+		(entry) => entry.tag !== '0020_fixed_feed_refresh_interval',
+	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
 }
@@ -425,6 +444,51 @@ describe('SQLite migrations', () => {
 					)
 					.get()?.count,
 			).toBe(2);
+		} finally {
+			sqlite.close();
+		}
+	});
+
+	it('resets healthy sources to a fixed 15-minute refresh interval', async () => {
+		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-fixed-refresh-migration-'));
+		tempDirs.push(tempDir);
+		const sqlite = new BunDatabase(join(tempDir, 'rss.db'));
+		sqlite.exec('PRAGMA foreign_keys = ON;');
+
+		try {
+			const db = drizzle(sqlite, { schema });
+			applyMigrations(db, {
+				migrationsFolder: copyMigrationsBeforeFixedFeedRefresh(tempDir),
+			});
+			const now = Math.floor(Date.now() / 1_000);
+			sqlite
+				.query(
+					`INSERT INTO feed_origins
+					 (id, scheme, host, port, created_at, updated_at)
+					 VALUES ('origin-fixed', 'https', 'fixed.example.com', 443, ?, ?)`,
+				)
+				.run(now, now);
+			sqlite
+				.query(
+					`INSERT INTO feed_sources
+					 (id, normalized_url, requested_url, origin_id, next_fetch_at,
+					  min_interval_seconds, state, created_at, updated_at)
+					 VALUES ('source-fixed', 'https://fixed.example.com/feed.xml',
+					  'https://fixed.example.com/feed.xml', 'origin-fixed', ?, 86400, 'active', ?, ?)`,
+				)
+				.run(now + 86_400, now, now);
+
+			applyMigrations(db, { migrationsFolder });
+
+			const migrated = sqlite
+				.query<{ min_interval_seconds: number; next_fetch_at: number }, []>(
+					`SELECT min_interval_seconds, next_fetch_at
+					 FROM feed_sources WHERE id = 'source-fixed'`,
+				)
+				.get();
+			expect(migrated?.min_interval_seconds).toBe(900);
+			expect(migrated?.next_fetch_at).toBeGreaterThanOrEqual(now);
+			expect(migrated?.next_fetch_at).toBeLessThanOrEqual(now + 901);
 		} finally {
 			sqlite.close();
 		}

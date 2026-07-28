@@ -1191,7 +1191,7 @@ describe('durable feed ingestion persistence', () => {
 		expect(await db.select().from(schema.feedRefreshRequestItems)).toHaveLength(1);
 	});
 
-	it('lets manual refresh bypass adaptive cadence after the publisher safety interval', async () => {
+	it('lets manual refresh bypass scheduled cadence after the publisher safety interval', async () => {
 		const { db, facade, repository } = await setupReplacementFacade();
 		const now = new Date();
 		await db
@@ -1999,7 +1999,7 @@ describe('durable feed ingestion persistence', () => {
 		});
 	});
 
-	it('tracks changed and unchanged normalized hashes for adaptive cadence', async () => {
+	it('tracks changed and unchanged hashes without slowing the 15-minute cadence', async () => {
 		const { db, repository } = await setupDatabase();
 		let clock = new Date('2026-07-18T00:00:00Z');
 		const origin = await repository.upsertOrigin({
@@ -2031,7 +2031,12 @@ describe('durable feed ingestion persistence', () => {
 		const first = await db.query.feedSources.findFirst({
 			where: (row, { eq }) => eq(row.id, source.id),
 		});
-		expect(first).toMatchObject({ consecutiveUnchangedCount: 0, lastChangeAt: clock });
+		expect(first).toMatchObject({
+			consecutiveUnchangedCount: 0,
+			lastChangeAt: clock,
+			minIntervalSeconds: 900,
+			nextFetchAt: new Date(clock.getTime() + 15 * 60_000),
+		});
 
 		clock = new Date(clock.getTime() + 15 * 60_000);
 		await db
@@ -2047,6 +2052,8 @@ describe('durable feed ingestion persistence', () => {
 			consecutiveUnchangedCount: 1,
 			lastChangeAt: first!.lastChangeAt,
 			normalizedPayloadHash: first!.normalizedPayloadHash,
+			minIntervalSeconds: 900,
+			nextFetchAt: new Date(clock.getTime() + 15 * 60_000),
 		});
 
 		title = 'Version two';
@@ -2060,7 +2067,12 @@ describe('durable feed ingestion persistence', () => {
 		const changed = await db.query.feedSources.findFirst({
 			where: (row, { eq }) => eq(row.id, source.id),
 		});
-		expect(changed).toMatchObject({ consecutiveUnchangedCount: 0, lastChangeAt: clock });
+		expect(changed).toMatchObject({
+			consecutiveUnchangedCount: 0,
+			lastChangeAt: clock,
+			minIntervalSeconds: 900,
+			nextFetchAt: new Date(clock.getTime() + 15 * 60_000),
+		});
 		expect(changed?.normalizedPayloadHash).not.toBe(first?.normalizedPayloadHash);
 	});
 

@@ -20,6 +20,7 @@ import {
 } from './feed-fetch-outcome-policy.js';
 import { classifyNetworkError } from './feed-network-error.js';
 import { computeNextFetchAt } from './feed-next-fetch-policy.js';
+import { MIN_SOURCE_INTERVAL_SECONDS } from './feed-publisher-hints.js';
 import { FeedSnapshotParserService } from './feed-snapshot-parser.service.js';
 import type { fetchSourceSafely } from './feed-source-request.js';
 import type { NormalizedFeedPayload } from './normalized-feed.types.js';
@@ -313,16 +314,7 @@ export class DurableFeedWorker {
 	) {
 		const changed = parsed.normalizedPayloadHash !== claim.source.normalizedPayloadHash;
 		const unchangedCount = changed ? 0 : claim.source.consecutiveUnchangedCount + 1;
-		const observedSeconds =
-			changed && claim.source.lastChangeAt
-				? Math.max(900, Math.ceil((now.getTime() - claim.source.lastChangeAt.getTime()) / 1_000))
-				: null;
-		const nextFetchAt = computeNextFetchAt({
-			now,
-			publisherIntervalSeconds: parsed.publisherHints.effectiveIntervalSeconds,
-			observedChangeIntervalSeconds: observedSeconds,
-			consecutiveUnchanged: unchangedCount,
-		});
+		const nextFetchAt = computeNextFetchAt({ now });
 		await this.repository.finishFetchJob(
 			claim.job.id,
 			this.workerId,
@@ -343,7 +335,7 @@ export class DurableFeedWorker {
 					lastSuccessAt: now,
 					lastChangeAt: changed ? now : claim.source.lastChangeAt,
 					nextFetchAt,
-					minIntervalSeconds: parsed.publisherHints.effectiveIntervalSeconds,
+					minIntervalSeconds: MIN_SOURCE_INTERVAL_SECONDS,
 					consecutiveFailureCount: 0,
 					consecutiveUnchangedCount: unchangedCount,
 					backoffUntil: null,
@@ -379,15 +371,7 @@ export class DurableFeedWorker {
 		unconditional: boolean,
 	) {
 		const unchangedCount = claim.source.consecutiveUnchangedCount + 1;
-		const publisherInterval = Number(
-			(claim.source.publisherHints as { effectiveIntervalSeconds?: number } | null)
-				?.effectiveIntervalSeconds,
-		);
-		const nextFetchAt = computeNextFetchAt({
-			now,
-			publisherIntervalSeconds: Number.isFinite(publisherInterval) ? publisherInterval : null,
-			consecutiveUnchanged: unchangedCount,
-		});
+		const nextFetchAt = computeNextFetchAt({ now });
 		await this.repository.finishFetchJob(
 			claim.job.id,
 			this.workerId,
