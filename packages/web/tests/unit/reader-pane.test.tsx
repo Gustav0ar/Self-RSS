@@ -142,11 +142,14 @@ describe('ReaderPane', () => {
 		});
 	});
 
-	it('requests canonical enrichment when a selected article only has feed content', () => {
+	it.each([
+		'feed_ready',
+		'enrichment_pending',
+	])('requests canonical enrichment for selected %s content', (contentStatus) => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
-			contentStatus: 'enrichment_pending',
+			contentStatus,
 			contentHtml: '<p>Text-only feed content</p>',
 			media: [],
 		};

@@ -16,7 +16,7 @@ export function useSelectedArticleEnrichment(
 			return;
 		}
 		if (
-			article.contentStatus !== 'enrichment_pending' ||
+			!['feed_ready', 'enrichment_pending'].includes(article.contentStatus) ||
 			!article.canonicalUrl ||
 			requestedArticleId.current === articleId
 		) {

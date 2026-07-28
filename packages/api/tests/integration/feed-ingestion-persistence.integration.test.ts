@@ -1021,7 +1021,7 @@ describe('durable feed ingestion persistence', () => {
 			fetch() {
 				publisherRequests += 1;
 				return new Response(
-					'<rss version="2.0"><channel><title>Shared</title><link>https://publisher.example</link><item><guid>shared-1</guid><title>Shared one</title><description><![CDATA[<p>Thin body</p>]]></description></item></channel></rss>',
+					'<rss version="2.0"><channel><title>Shared</title><link>https://publisher.example</link><item><guid>shared-1</guid><link>https://publisher.example/shared-1</link><title>Shared one</title><description><![CDATA[<p>Thin body</p>]]></description></item></channel></rss>',
 					{ headers: { etag: '"shared-v1"', 'content-type': 'application/rss+xml' } },
 				);
 			},
@@ -1089,6 +1089,15 @@ describe('durable feed ingestion persistence', () => {
 		expect(articles).toHaveLength(2);
 		expect(new Set(articles.map((article) => article.feedId))).toEqual(
 			new Set(['shared-feed-1', 'shared-feed-2']),
+		);
+		expect(articles).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					contentStatus: 'enrichment_pending',
+					enrichmentQueuedAt: now,
+					nextEnrichmentAt: now,
+				}),
+			]),
 		);
 		expect(committed.sort()).toEqual(['shared-feed-1', 'shared-feed-2']);
 		expect(

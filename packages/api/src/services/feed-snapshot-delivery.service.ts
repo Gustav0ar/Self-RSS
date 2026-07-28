@@ -17,6 +17,7 @@ export function mapNormalizedItemToArticle(
 	article: typeof articles.$inferInsert;
 	media: (typeof articleMedia.$inferInsert)[];
 } {
+	const shouldEnrich = Boolean(item.canonicalUrl?.trim());
 	const hero = item.media.find(
 		(entry) => entry.medium === 'image' || entry.type?.toLowerCase().startsWith('image/'),
 	);
@@ -60,7 +61,9 @@ export function mapNormalizedItemToArticle(
 			publishedAt: item.publishedAt ? new Date(item.publishedAt) : null,
 			fetchedAt,
 			hash: articleHash,
-			contentStatus: 'feed_ready',
+			contentStatus: shouldEnrich ? 'enrichment_pending' : 'feed_ready',
+			enrichmentQueuedAt: shouldEnrich ? fetchedAt : null,
+			nextEnrichmentAt: shouldEnrich ? fetchedAt : null,
 		},
 		media,
 	};

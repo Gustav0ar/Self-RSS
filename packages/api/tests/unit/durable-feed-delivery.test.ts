@@ -42,6 +42,9 @@ describe('normalized delivery mapping', () => {
 			guid: 'item-1',
 			heroImageUrl: 'https://cdn.example.com/hero.jpg',
 			publishedAt: new Date('2026-07-18T00:00:00Z'),
+			contentStatus: 'enrichment_pending',
+			enrichmentQueuedAt: new Date('2026-07-18T01:00:00Z'),
+			nextEnrichmentAt: new Date('2026-07-18T01:00:00Z'),
 		});
 		expect(first.article.hash).toBe(repeated.article.hash);
 		expect(first.media).toMatchObject([
@@ -55,5 +58,19 @@ describe('normalized delivery mapping', () => {
 		const changed = mapNormalizedItemToArticle('feed-1', { ...item, contentText: 'Richer body' })
 			.article.hash;
 		expect(changed).not.toBe(first);
+	});
+
+	it('keeps articles without a canonical page out of the enrichment queue', () => {
+		const mapped = mapNormalizedItemToArticle(
+			'feed-1',
+			{ ...item, canonicalUrl: null },
+			new Date('2026-07-18T01:00:00Z'),
+		);
+
+		expect(mapped.article).toMatchObject({
+			contentStatus: 'feed_ready',
+			enrichmentQueuedAt: null,
+			nextEnrichmentAt: null,
+		});
 	});
 });
