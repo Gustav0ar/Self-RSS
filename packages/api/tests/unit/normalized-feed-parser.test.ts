@@ -17,7 +17,12 @@ describe('parseNormalizedFeed', () => {
 		expect(parsed).toMatchObject({
 			format: 'rss',
 			parserVersion: NORMALIZED_FEED_PARSER_VERSION,
-			source: { title: 'RSS Fixture', language: 'en-US', imageUrl: 'https://example.com/icon.png' },
+			source: {
+				title: 'RSS Fixture',
+				feedUrl: 'https://example.com/feed.xml',
+				language: 'en-US',
+				imageUrl: 'https://example.com/icon.png',
+			},
 			publisherHints: {
 				rssTtlSeconds: 1800,
 				syndicationIntervalSeconds: 21600,

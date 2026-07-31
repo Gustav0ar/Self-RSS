@@ -2085,6 +2085,57 @@ describe('durable feed ingestion persistence', () => {
 		expect(changed?.normalizedPayloadHash).not.toBe(first?.normalizedPayloadHash);
 	});
 
+	it('moves FeedBurner sources to their advertised canonical feed after the first fetch', async () => {
+		const { db, repository } = await setupDatabase();
+		let clock = new Date('2026-07-18T00:00:00Z');
+		const proxyUrl = 'https://feeds.feedburner.com/delayed-example';
+		const canonicalUrl = 'https://publisher.example.com/feed';
+		const origin = await repository.upsertOrigin({
+			id: 'feedburner-origin',
+			scheme: 'https',
+			host: 'feeds.feedburner.com',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'feedburner-source',
+			normalizedUrl: proxyUrl,
+			requestedUrl: proxyUrl,
+			originId: origin.id,
+			nextFetchAt: clock,
+		});
+		const requestedUrls: string[] = [];
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'feedburner-worker',
+			originStartGapSeconds: 0,
+			now: () => clock,
+			fetch: async (url) => {
+				requestedUrls.push(url);
+				return new Response(
+					`<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0"><channel><title>Canonical source</title><atom:link href="${canonicalUrl}" rel="self" type="application/rss+xml"/><item><guid>one</guid><title>One</title></item></channel></rss>`,
+					{ headers: { 'content-type': 'application/rss+xml' } },
+				);
+			},
+		});
+
+		await new DurableFeedScheduler(repository).tick(clock);
+		await worker.drainOnce();
+		expect(requestedUrls).toEqual([proxyUrl]);
+		expect(
+			await db.query.feedSources.findFirst({
+				where: (row, { eq }) => eq(row.id, source.id),
+			}),
+		).toMatchObject({ resolvedUrl: canonicalUrl });
+
+		clock = new Date(clock.getTime() + 15 * 60_000);
+		await db
+			.update(schema.feedSources)
+			.set({ nextFetchAt: clock })
+			.where(eq(schema.feedSources.id, source.id));
+		await new DurableFeedScheduler(repository).tick(clock);
+		await worker.drainOnce();
+		expect(requestedUrls).toEqual([proxyUrl, canonicalUrl]);
+	});
+
 	it('reuses a retained parsed snapshot when a user resubscribes without refetching', async () => {
 		const { db, repository } = await setupDatabase();
 		const facade = new DurableFeedFacadeService(

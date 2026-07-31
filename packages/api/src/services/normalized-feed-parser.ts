@@ -254,6 +254,7 @@ export async function parseNormalizedFeed(
 		null;
 	const source = {
 		title: text(feed.title),
+		feedUrl,
 		siteUrl,
 		description: text(feed.description ?? feed.subtitle),
 		language: text(feed.language),

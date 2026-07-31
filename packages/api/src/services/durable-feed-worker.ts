@@ -20,6 +20,7 @@ import {
 } from './feed-fetch-outcome-policy.js';
 import { classifyNetworkError } from './feed-network-error.js';
 import { computeNextFetchAt } from './feed-next-fetch-policy.js';
+import { resolveCanonicalProxyFeedUrl } from './feed-proxy-recovery.js';
 import { MIN_SOURCE_INTERVAL_SECONDS } from './feed-publisher-hints.js';
 import { FeedSnapshotParserService } from './feed-snapshot-parser.service.js';
 import type { fetchSourceSafely } from './feed-source-request.js';
@@ -315,13 +316,17 @@ export class DurableFeedWorker {
 		const changed = parsed.normalizedPayloadHash !== claim.source.normalizedPayloadHash;
 		const unchangedCount = changed ? 0 : claim.source.consecutiveUnchangedCount + 1;
 		const nextFetchAt = computeNextFetchAt({ now });
+		const publisherUrl =
+			(finalPublisherUrl ?? response?.url) || claim.source.resolvedUrl || claim.source.requestedUrl;
+		const resolvedUrl =
+			resolveCanonicalProxyFeedUrl(publisherUrl, parsed.source.feedUrl) ?? publisherUrl;
 		await this.repository.finishFetchJob(
 			claim.job.id,
 			this.workerId,
 			{
 				status: 'completed',
 				source: {
-					resolvedUrl: (finalPublisherUrl ?? response?.url) || claim.source.resolvedUrl,
+					resolvedUrl,
 					title: parsed.source.title,
 					siteUrl: parsed.source.siteUrl,
 					description: parsed.source.description,

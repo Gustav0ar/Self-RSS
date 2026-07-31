@@ -51,6 +51,23 @@ export function isKnownProxyFeedUrl(feedUrl: string) {
 	}
 }
 
+/**
+ * Proxy feeds commonly advertise the publisher's canonical feed URL in their
+ * XML. Prefer that URL for future fetches so delayed proxy refreshes do not
+ * release many hours of articles in one burst.
+ */
+export function resolveCanonicalProxyFeedUrl(currentUrl: string, advertisedFeedUrl: string | null) {
+	if (!isKnownProxyFeedUrl(currentUrl) || !advertisedFeedUrl) return null;
+	try {
+		const candidate = new URL(advertisedFeedUrl, currentUrl);
+		if (!['http:', 'https:'].includes(candidate.protocol)) return null;
+		if (isKnownProxyFeedUrl(candidate.toString())) return null;
+		return candidate.toString();
+	} catch {
+		return null;
+	}
+}
+
 export async function resolveStaleProxyFeed({
 	feedUrl,
 	parsed,

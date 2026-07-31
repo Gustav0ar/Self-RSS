@@ -25,6 +25,7 @@ export interface NormalizedFeedItem {
 
 export interface NormalizedFeedSourceMetadata {
 	title: string | null;
+	feedUrl: string | null;
 	siteUrl: string | null;
 	description: string | null;
 	language: string | null;
