@@ -93,6 +93,35 @@ describe('ReaderPane', () => {
 		);
 	});
 
+	it('constrains X embeds by URL when legacy media has a stale provider', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			contentHtml: '<p>Body</p>',
+			media: [
+				{
+					id: 'media-x',
+					articleId: 'article-1',
+					type: 'embed',
+					provider: 'unknown',
+					url: 'https://platform.twitter.com/embed/Tweet.html?id=2057476717095113156',
+					embedUrl: 'https://platform.twitter.com/embed/Tweet.html?id=2057476717095113156',
+					width: null,
+					height: null,
+					position: 0,
+				},
+			],
+		};
+
+		render(<ReaderPane articleId="article-1" />);
+
+		const iframe = document.querySelector<HTMLIFrameElement>('iframe[src*="platform.twitter.com"]');
+		const wrapperClasses = iframe?.parentElement?.classList;
+		expect(wrapperClasses?.contains('mx-auto')).toBe(true);
+		expect(wrapperClasses?.contains('w-full')).toBe(true);
+		expect(wrapperClasses?.contains('max-w-[560px]')).toBe(true);
+		expect(wrapperClasses?.contains('dark:bg-black')).toBe(true);
+	});
+
 	it('renders direct video media with a video player instead of an iframe', () => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,

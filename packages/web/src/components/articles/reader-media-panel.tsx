@@ -8,11 +8,22 @@ export function getReaderPanelMedia(media: ArticleMedia[]) {
 	);
 }
 
+function isXEmbed(item: ReaderPanelMedia) {
+	if (item.provider === 'x') return true;
+
+	try {
+		const url = new URL(item.embedUrl ?? item.url);
+		return url.hostname === 'platform.twitter.com' && url.pathname === '/embed/Tweet.html';
+	} catch {
+		return false;
+	}
+}
+
 export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 	if (media.length === 0) return null;
 
 	return (
-		<div className="surface-card motion-enter mt-6 space-y-4 rounded-xl p-4 sm:p-5">
+		<div className="surface-card motion-enter mt-6 space-y-4 rounded-xl p-4 dark:bg-black sm:p-5">
 			{media.map((item, index) => {
 				if (item.type === 'video') {
 					return (
@@ -37,12 +48,12 @@ export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 					);
 				}
 
-				const isX = item.provider === 'x';
+				const isX = isXEmbed(item);
 				return (
 					<div
 						key={item.url}
-						className={`overflow-hidden rounded-xl border border-border/70 bg-muted ${
-							isX ? 'w-full max-w-[560px] mx-auto' : ''
+						className={`overflow-hidden rounded-xl border border-border/70 bg-muted dark:bg-black ${
+							isX ? 'mx-auto w-full max-w-[560px]' : ''
 						}`}
 						style={
 							isX
