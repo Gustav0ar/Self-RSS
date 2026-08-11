@@ -188,7 +188,7 @@ describe('ReaderPane', () => {
 	it.each([
 		'feed_ready',
 		'enrichment_pending',
-	])('requests canonical enrichment for selected %s content', (contentStatus) => {
+	])('requests canonical enrichment for selected %s content', async (contentStatus) => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
@@ -199,22 +199,46 @@ describe('ReaderPane', () => {
 
 		render(<ReaderPane articleId="article-1" />);
 
-		expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
+		await waitFor(() => {
+			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
+		});
 	});
 
-	it('does not immediately retry failed enrichment for the same selection', () => {
+	it('does not immediately retry failed enrichment for the same selection', async () => {
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
 			contentStatus: 'enrichment_pending',
 		};
 		const { rerender } = render(<ReaderPane articleId="article-1" />);
+		await waitFor(() => expect(enrichMutate).toHaveBeenCalledOnce());
 		const options = enrichMutate.mock.calls[0]?.[1] as { onError?: () => void } | undefined;
 
 		options?.onError?.();
 		rerender(<ReaderPane articleId="article-1" />);
 
 		expect(enrichMutate).toHaveBeenCalledOnce();
+	});
+
+	it('enriches only the article that remains selected during rapid navigation', async () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			isEnriched: false,
+			contentStatus: 'enrichment_pending',
+		};
+		const { rerender } = render(<ReaderPane articleId="article-1" />);
+
+		currentArticle = {
+			...currentArticle,
+			id: 'article-2',
+			canonicalUrl: 'https://example.com/post-2',
+		};
+		rerender(<ReaderPane articleId="article-2" />);
+
+		await waitFor(() => {
+			expect(enrichMutate).toHaveBeenCalledWith('article-2', expect.any(Object));
+		});
+		expect(enrichMutate).not.toHaveBeenCalledWith('article-1', expect.any(Object));
 	});
 
 	it('shows a retry action for transient article failures', () => {

@@ -3,6 +3,8 @@ import type { RefObject } from 'react';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useEnrichArticle } from '@/hooks/queries';
 
+const ENRICHMENT_SELECTION_DELAY_MS = 300;
+
 export function useSelectedArticleEnrichment(
 	articleId: string | null,
 	article: ArticleDetail | undefined,
@@ -23,16 +25,20 @@ export function useSelectedArticleEnrichment(
 			return;
 		}
 
-		// Some feeds contain only an excerpt; their media is discovered from
-		// the canonical page. Visible-row warming covers only a small queue
-		// prefix, so opening an article must request enrichment independently.
-		requestedArticleId.current = articleId;
-		enrichArticle.mutate(articleId, {
-			// Keep the attempt latched on failure. Mutation state rerenders immediately,
-			// so resetting here would create an unbounded request loop. Selecting the
-			// article again after navigating away creates an intentional retry boundary.
-			onError: () => undefined,
-		});
+		// Avoid spending enrichment capacity on articles crossed during rapid keyboard
+		// navigation. Visible-row warming still covers the near queue, and a selection
+		// that remains active briefly gets the same on-demand enrichment behavior.
+		const timeoutId = window.setTimeout(() => {
+			requestedArticleId.current = articleId;
+			enrichArticle.mutate(articleId, {
+				// Keep the attempt latched on failure. Mutation state rerenders immediately,
+				// so resetting here would create an unbounded request loop. Selecting the
+				// article again after navigating away creates an intentional retry boundary.
+				onError: () => undefined,
+			});
+		}, ENRICHMENT_SELECTION_DELAY_MS);
+
+		return () => window.clearTimeout(timeoutId);
 	}, [articleId, article, enrichArticle]);
 }
 
