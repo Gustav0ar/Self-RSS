@@ -82,6 +82,7 @@ data class ArticleEntity(
     val publishedAt: String?,
     val displayedAt: String?,
     val isRead: Boolean,
+    val isSaved: Boolean = false,
     val contentStatus: String,
     val contentVersion: Int,
 )
@@ -147,6 +148,9 @@ interface LocalStoreDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticles(articles: List<ArticleEntity>)
+
+    @Query("UPDATE articles SET isSaved = :saved WHERE id = :articleId")
+    suspend fun updateArticleSavedState(articleId: String, saved: Boolean)
 
     @Query(
         """

@@ -29,6 +29,9 @@ interface RssApi {
     @GET("auth/me")
     suspend fun me(): ApiEnvelope<User>
 
+    @POST("auth/change-password")
+    suspend fun changePassword(@Body request: ChangePasswordRequest): ApiEnvelope<AuthResponse>
+
     @GET("auth/sessions")
     suspend fun authSessions(): ApiEnvelope<AuthSessionsResponse>
 
@@ -57,7 +60,10 @@ interface RssApi {
     suspend fun createFeed(@Body request: CreateFeedRequest): ApiEnvelope<FeedWithCounts>
 
     @PATCH("feeds/{id}")
-    suspend fun updateFeed(@Path("id") id: String, @Body request: UpdateFeedRequest): ApiEnvelope<FeedWithCounts>
+    suspend fun updateFeed(
+        @Path("id") id: String,
+        @Body request: UpdateFeedRequest
+    ): ApiEnvelope<FeedWithCounts>
 
     @DELETE("feeds/{id}")
     suspend fun deleteFeed(@Path("id") id: String): ApiEnvelope<SuccessResponse>
@@ -102,6 +108,7 @@ interface RssApi {
         @Query("feedId") feedId: String? = null,
         @Query("categoryId") categoryId: String? = null,
         @Query("unreadOnly") unreadOnly: Boolean? = null,
+        @Query("savedOnly") savedOnly: Boolean? = null,
         @Query("sort") sort: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("cursor") cursor: String? = null,
@@ -114,7 +121,16 @@ interface RssApi {
     suspend fun enrichArticle(@Path("id") id: String): ApiEnvelope<EnrichArticleResponse>
 
     @PATCH("articles/{id}/read")
-    suspend fun markRead(@Path("id") id: String, @Body request: MarkReadRequest): ApiEnvelope<MarkReadResponse>
+    suspend fun markRead(
+        @Path("id") id: String,
+        @Body request: MarkReadRequest
+    ): ApiEnvelope<MarkReadResponse>
+
+    @PATCH("articles/{id}/saved")
+    suspend fun setSaved(
+        @Path("id") id: String,
+        @Body request: SaveArticleRequest
+    ): ApiEnvelope<MarkReadResponse>
 
     @PATCH("articles/mark-all-read")
     suspend fun markAllRead(@Body request: MarkAllReadRequest): ApiEnvelope<MarkAllReadResponse>

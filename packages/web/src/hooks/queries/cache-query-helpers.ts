@@ -6,6 +6,7 @@ export interface ArticleQueryParams {
 	feedId?: string;
 	categoryId?: string;
 	unreadOnly?: boolean;
+	savedOnly?: boolean;
 	sort?: 'latest' | 'oldest';
 	limit?: number;
 	cursor?: string;
@@ -41,6 +42,7 @@ export function buildArticleSearchParams(params: ArticleQueryParams, cursor?: st
 	if (params.feedId) searchParams.set('feedId', params.feedId);
 	if (params.categoryId) searchParams.set('categoryId', params.categoryId);
 	if (params.unreadOnly) searchParams.set('unreadOnly', 'true');
+	if (params.savedOnly) searchParams.set('savedOnly', 'true');
 	if (params.sort) searchParams.set('sort', params.sort);
 	if (params.limit) searchParams.set('limit', String(params.limit));
 	if (cursor) searchParams.set('cursor', cursor);

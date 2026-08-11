@@ -1,6 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { formatDistanceToNow } from 'date-fns';
-import { Circle, CircleDot } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Circle, CircleDot } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { DisplayDensityPreference } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
@@ -17,12 +17,15 @@ interface ArticleListItemData {
 	publishedAt: string | null;
 	displayedAt?: string;
 	isRead: boolean;
+	isSaved: boolean;
 }
 
 interface ArticleListProps {
 	articles: ArticleListItemData[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
+	onToggleSaved?: (articleId: string, saved: boolean) => void;
+	savedActionsDisabled?: boolean;
 	onPrefetch?: (id: string) => void;
 	onVisible?: (articles: ArticleListItemData[]) => void;
 	loading?: boolean;
@@ -46,6 +49,8 @@ export function ArticleList({
 	articles,
 	selectedId,
 	onSelect,
+	onToggleSaved,
+	savedActionsDisabled = false,
 	onPrefetch,
 	onVisible,
 	loading,
@@ -93,6 +98,15 @@ export function ArticleList({
 			if (id) onPrefetch(id);
 		},
 		[onPrefetch],
+	);
+	const stableToggleSaved = useCallback(
+		(event: React.MouseEvent<HTMLButtonElement>) => {
+			if (!onToggleSaved) return;
+			const articleId = event.currentTarget.dataset.articleId;
+			const saved = event.currentTarget.dataset.saved === 'true';
+			if (articleId) onToggleSaved(articleId, !saved);
+		},
+		[onToggleSaved],
 	);
 
 	// Trigger `loadMore` when the last virtual item is within ~2 viewports
@@ -232,6 +246,8 @@ export function ArticleList({
 									isSelected={article.id === selectedId}
 									onSelect={onSelect}
 									onPrefetch={onPrefetch ? stablePrefetch : undefined}
+									onToggleSaved={onToggleSaved ? stableToggleSaved : undefined}
+									savedActionsDisabled={savedActionsDisabled}
 									density={density}
 									style={{ height: `${rowHeight}px` }}
 								/>
@@ -258,6 +274,8 @@ function ArticleRowImpl({
 	isSelected,
 	onSelect,
 	onPrefetch,
+	onToggleSaved,
+	savedActionsDisabled,
 	density,
 	style,
 }: {
@@ -265,6 +283,8 @@ function ArticleRowImpl({
 	isSelected: boolean;
 	onSelect: (id: string) => void;
 	onPrefetch?: (event: React.FocusEvent<HTMLElement> | React.PointerEvent<HTMLElement>) => void;
+	onToggleSaved?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+	savedActionsDisabled: boolean;
 	density: DisplayDensityPreference;
 	style?: React.CSSProperties;
 }) {
@@ -277,13 +297,7 @@ function ArticleRowImpl({
 	);
 
 	return (
-		<button
-			type="button"
-			onClick={() => onSelect(article.id)}
-			onFocus={onPrefetch}
-			onPointerEnter={onPrefetch}
-			data-article-id={article.id}
-			aria-current={isSelected ? 'true' : undefined}
+		<div
 			style={style}
 			className={cn(
 				'motion-enter surface-card surface-compact relative flex w-full overflow-hidden rounded-xl border text-left hover:bg-accent/45',
@@ -292,52 +306,77 @@ function ArticleRowImpl({
 				!isSelected && !article.isRead && 'border-primary/12 bg-card/95',
 			)}
 		>
-			<div className="mt-1 shrink-0">
-				{isSelected ? (
-					<CircleDot className="h-3.5 w-3.5 text-primary" />
-				) : article.isRead ? (
-					<Circle className="h-3 w-3 text-muted-foreground/30" />
-				) : (
-					<CircleDot className="h-3 w-3 text-primary" />
-				)}
-			</div>
-			<div className="min-w-0 flex-1">
-				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					{article.feedFaviconUrl ? (
-						<img
-							src={article.feedFaviconUrl}
-							alt=""
-							className="h-4 w-4 rounded-sm"
-							loading="lazy"
-							decoding="async"
-							referrerPolicy="no-referrer"
-						/>
-					) : null}
-					<span className="truncate">{article.feedTitle}</span>
-					{timeAgo ? (
-						<>
-							<span>·</span>
-							<span className="shrink-0">{timeAgo}</span>
-						</>
-					) : null}
-				</div>
-				<p
-					className={cn(
-						'mt-1 text-sm',
-						density === 'compact'
-							? 'line-clamp-1 break-words leading-5'
-							: 'line-clamp-2 break-words leading-5',
-						isSelected
-							? 'font-semibold text-foreground'
-							: !article.isRead
-								? 'font-semibold text-foreground'
-								: 'font-medium text-foreground/82',
+			<button
+				type="button"
+				onClick={() => onSelect(article.id)}
+				onFocus={onPrefetch}
+				onPointerEnter={onPrefetch}
+				data-article-id={article.id}
+				aria-current={isSelected ? 'true' : undefined}
+				className="flex min-w-0 flex-1 gap-2.5 text-left focus-visible:outline-none"
+			>
+				<div className="mt-1 shrink-0">
+					{isSelected ? (
+						<CircleDot className="h-3.5 w-3.5 text-primary" />
+					) : article.isRead ? (
+						<Circle className="h-3 w-3 text-muted-foreground/30" />
+					) : (
+						<CircleDot className="h-3 w-3 text-primary" />
 					)}
-				>
-					{article.title}
-				</p>
-			</div>
-		</button>
+				</div>
+				<div className="min-w-0 flex-1">
+					<div className="flex items-center gap-2 text-xs text-muted-foreground">
+						{article.feedFaviconUrl ? (
+							<img
+								src={article.feedFaviconUrl}
+								alt=""
+								className="h-4 w-4 rounded-sm"
+								loading="lazy"
+								decoding="async"
+								referrerPolicy="no-referrer"
+							/>
+						) : null}
+						<span className="truncate">{article.feedTitle}</span>
+						{timeAgo ? (
+							<>
+								<span>·</span>
+								<span className="shrink-0">{timeAgo}</span>
+							</>
+						) : null}
+					</div>
+					<p
+						className={cn(
+							'mt-1 text-sm',
+							density === 'compact'
+								? 'line-clamp-1 break-words leading-5'
+								: 'line-clamp-2 break-words leading-5',
+							isSelected
+								? 'font-semibold text-foreground'
+								: !article.isRead
+									? 'font-semibold text-foreground'
+									: 'font-medium text-foreground/82',
+						)}
+					>
+						{article.title}
+					</p>
+				</div>
+			</button>
+			<button
+				type="button"
+				onClick={onToggleSaved}
+				data-article-id={article.id}
+				data-saved={String(article.isSaved)}
+				disabled={savedActionsDisabled || !onToggleSaved}
+				aria-label={article.isSaved ? 'Remove from saved' : 'Save article'}
+				aria-pressed={article.isSaved}
+				className={cn(
+					'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40',
+					article.isSaved && 'text-primary',
+				)}
+			>
+				{article.isSaved ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+			</button>
+		</div>
 	);
 }
 
@@ -351,6 +390,8 @@ const ArticleRow = memo(ArticleRowImpl, (prev, next) => {
 		prev.isSelected === next.isSelected &&
 		prev.onSelect === next.onSelect &&
 		prev.onPrefetch === next.onPrefetch &&
+		prev.onToggleSaved === next.onToggleSaved &&
+		prev.savedActionsDisabled === next.savedActionsDisabled &&
 		prev.density === next.density &&
 		prev.style?.height === next.style?.height
 	);

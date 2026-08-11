@@ -41,7 +41,8 @@ class LocalStore(
     private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
         Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
     )
-    private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
+    private val articleDetailAdapter: JsonAdapter<ArticleDetail> =
+        moshi.adapter(ArticleDetail::class.java)
 
     private val _invalidations = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
     val invalidations = _invalidations.asSharedFlow()
@@ -127,6 +128,11 @@ class LocalStore(
     suspend fun updateArticleReadState(articleId: String, read: Boolean) {
         dao.upsertArticleReadOverride(articleId.toReadOverride(read))
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+    }
+
+    suspend fun updateArticleSavedState(articleId: String, saved: Boolean) {
+        dao.updateArticleSavedState(articleId, saved)
+        notifyInvalidation(TABLE_ARTICLES)
     }
 
     suspend fun readArticleReadOverrides(): Map<String, Boolean> =
@@ -215,6 +221,7 @@ class LocalStore(
                 dao.clearArticleQueryEntries()
                 dao.clearArticleRemoteKeys()
             }
+
             TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
             TABLE_ARTICLE_READ_OVERRIDES -> dao.clearArticleReadOverrides()
             else -> return
@@ -313,6 +320,7 @@ class LocalStore(
             publishedAt = publishedAt,
             displayedAt = displayedAt,
             isRead = isRead,
+            isSaved = isSaved,
             contentStatus = contentStatus,
             contentVersion = contentVersion,
         )
@@ -337,6 +345,7 @@ class LocalStore(
             publishedAt = publishedAt,
             displayedAt = displayedAt,
             isRead = isRead,
+            isSaved = isSaved,
             contentStatus = contentStatus,
             contentVersion = contentVersion,
         )

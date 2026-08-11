@@ -149,11 +149,7 @@ export function StatsPanel() {
 											<span
 												className={cn(
 													'h-2 w-2 rounded-full',
-													failed
-														? 'bg-red-500'
-														: running
-															? 'animate-pulse bg-amber-500'
-															: 'bg-emerald-500',
+													failed ? 'bg-red-500' : running ? 'bg-amber-500' : 'bg-emerald-500',
 												)}
 												aria-hidden="true"
 											/>
@@ -180,10 +176,7 @@ export function StatsPanel() {
 											disabled={syncFeed.isPending}
 											className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-border px-3 text-xs font-medium hover:bg-accent disabled:opacity-60"
 										>
-											<RefreshCw
-												className={cn('h-3.5 w-3.5', syncFeed.isPending && 'animate-spin')}
-												aria-hidden="true"
-											/>
+											<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
 											Retry now
 										</button>
 									) : null}

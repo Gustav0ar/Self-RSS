@@ -862,6 +862,7 @@
 					"canonicalUrl",
 					"title",
 					"isRead",
+					"isSaved",
 					"contentStatus",
 					"contentVersion"
 				],
@@ -927,6 +928,9 @@
 					"isRead": {
 						"type": "boolean"
 					},
+					"isSaved": {
+						"type": "boolean"
+					},
 					"contentStatus": {
 						"type": "string",
 						"enum": [
@@ -956,6 +960,7 @@
 					"contentStatus",
 					"contentVersion",
 					"isRead",
+					"isSaved",
 					"isEnriched"
 				],
 				"properties": {
@@ -1085,6 +1090,9 @@
 						]
 					},
 					"isRead": {
+						"type": "boolean"
+					},
+					"isSaved": {
 						"type": "boolean"
 					},
 					"isEnriched": {
@@ -1934,6 +1942,80 @@
 											"$ref": "#/components/schemas/User"
 										}
 									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/auth/change-password": {
+			"post": {
+				"tags": [
+					"Auth"
+				],
+				"security": [
+					{
+						"bearerAuth": []
+					}
+				],
+				"requestBody": {
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": [
+									"currentPassword",
+									"newPassword"
+								],
+								"properties": {
+									"currentPassword": {
+										"type": "string",
+										"minLength": 1,
+										"maxLength": 128
+									},
+									"newPassword": {
+										"type": "string",
+										"minLength": 8,
+										"maxLength": 128
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/AuthResponse"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiError"
+								}
+							}
+						}
+					},
+					"401": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiError"
 								}
 							}
 						}
@@ -3228,6 +3310,14 @@
 						}
 					},
 					{
+						"name": "savedOnly",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "boolean"
+						}
+					},
+					{
 						"name": "sort",
 						"in": "query",
 						"required": false,
@@ -3395,6 +3485,56 @@
 						"application/json": {
 							"schema": {
 								"type": "object"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/articles/{articleId}/saved": {
+			"patch": {
+				"tags": [
+					"Articles"
+				],
+				"security": [
+					{
+						"bearerAuth": []
+					}
+				],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "articleId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": [
+									"saved"
+								],
+								"properties": {
+									"saved": {
+										"type": "boolean"
+									}
+								}
 							}
 						}
 					}

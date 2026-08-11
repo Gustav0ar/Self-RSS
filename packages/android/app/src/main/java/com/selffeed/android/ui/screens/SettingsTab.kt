@@ -33,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -152,9 +153,30 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedTheme == ThemePreference.LIGHT, onClick = { actions.onThemeChanged(ThemePreference.LIGHT) }, label = { Text(stringResource(R.string.settings_theme_light)) }, leadingIcon = { Icon(Icons.Outlined.LightMode, contentDescription = stringResource(R.string.settings_toggle_light_mode)) })
-                    FilterChip(selected = selectedTheme == ThemePreference.DARK, onClick = { actions.onThemeChanged(ThemePreference.DARK) }, label = { Text(stringResource(R.string.settings_theme_dark)) }, leadingIcon = { Icon(Icons.Outlined.DarkMode, contentDescription = stringResource(R.string.settings_toggle_dark_mode)) })
-                    FilterChip(selected = selectedTheme == ThemePreference.SYSTEM, onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) }, label = { Text(stringResource(R.string.settings_theme_system)) })
+                    FilterChip(
+                        selected = selectedTheme == ThemePreference.LIGHT,
+                        onClick = { actions.onThemeChanged(ThemePreference.LIGHT) },
+                        label = { Text(stringResource(R.string.settings_theme_light)) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.LightMode,
+                                contentDescription = stringResource(R.string.settings_toggle_light_mode)
+                            )
+                        })
+                    FilterChip(
+                        selected = selectedTheme == ThemePreference.DARK,
+                        onClick = { actions.onThemeChanged(ThemePreference.DARK) },
+                        label = { Text(stringResource(R.string.settings_theme_dark)) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.DarkMode,
+                                contentDescription = stringResource(R.string.settings_toggle_dark_mode)
+                            )
+                        })
+                    FilterChip(
+                        selected = selectedTheme == ThemePreference.SYSTEM,
+                        onClick = { actions.onThemeChanged(ThemePreference.SYSTEM) },
+                        label = { Text(stringResource(R.string.settings_theme_system)) })
                 }
             }
         }
@@ -166,8 +188,16 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.settings_hide_read), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(R.string.settings_hide_read_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            stringResource(R.string.settings_hide_read),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.settings_hide_read_detail),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(checked = prefs.hideRead, onCheckedChange = actions.onHideReadChanged)
                 }
@@ -175,27 +205,51 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text(stringResource(R.string.settings_sort_order), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_sort_order),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedSort == ArticleSortPreference.LATEST, onClick = { actions.onSortChanged(ArticleSortPreference.LATEST) }, label = { Text(stringResource(R.string.settings_sort_newest)) })
-                    FilterChip(selected = selectedSort == ArticleSortPreference.OLDEST, onClick = { actions.onSortChanged(ArticleSortPreference.OLDEST) }, label = { Text(stringResource(R.string.settings_sort_oldest)) })
+                    FilterChip(
+                        selected = selectedSort == ArticleSortPreference.LATEST,
+                        onClick = { actions.onSortChanged(ArticleSortPreference.LATEST) },
+                        label = { Text(stringResource(R.string.settings_sort_newest)) })
+                    FilterChip(
+                        selected = selectedSort == ArticleSortPreference.OLDEST,
+                        onClick = { actions.onSortChanged(ArticleSortPreference.OLDEST) },
+                        label = { Text(stringResource(R.string.settings_sort_oldest)) })
                 }
             }
         }
         item {
             FeedSurfaceCard {
-                Text(stringResource(R.string.settings_density), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_density),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = selectedDensity == DensityPreference.COMFORTABLE, onClick = { actions.onDensityChanged(DensityPreference.COMFORTABLE) }, label = { Text(stringResource(R.string.settings_density_comfortable)) })
-                    FilterChip(selected = selectedDensity == DensityPreference.COMPACT, onClick = { actions.onDensityChanged(DensityPreference.COMPACT) }, label = { Text(stringResource(R.string.settings_density_compact)) })
+                    FilterChip(
+                        selected = selectedDensity == DensityPreference.COMFORTABLE,
+                        onClick = { actions.onDensityChanged(DensityPreference.COMFORTABLE) },
+                        label = { Text(stringResource(R.string.settings_density_comfortable)) })
+                    FilterChip(
+                        selected = selectedDensity == DensityPreference.COMPACT,
+                        onClick = { actions.onDensityChanged(DensityPreference.COMPACT) },
+                        label = { Text(stringResource(R.string.settings_density_compact)) })
                 }
             }
         }
         item {
             FeedSurfaceCard {
-                Text(stringResource(R.string.settings_reader_text_size), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_reader_text_size),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Slider(
                     value = draftTextSize.intValue.toFloat(),
@@ -203,14 +257,26 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                     onValueChangeFinished = { actions.onTextSizeChanged(draftTextSize.intValue) },
                     valueRange = 12f..24f,
                 )
-                Text(stringResource(R.string.settings_text_size_sp, draftTextSize.intValue), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    stringResource(R.string.settings_text_size_sp, draftTextSize.intValue),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
         item {
             FeedSurfaceCard {
-                Text(stringResource(R.string.settings_auto_mark_read), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_auto_mark_read),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(stringResource(R.string.settings_auto_mark_read_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    stringResource(R.string.settings_auto_mark_read_detail),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     AutoMarkReadPreference.entries.forEach { option ->
@@ -233,16 +299,36 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Text(stringResource(R.string.settings_activity), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.settings_activity),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard(stringResource(R.string.stats_unread), (state.stats?.totalUnread ?: 0).toString(), Modifier.weight(1f))
-                    StatCard(stringResource(R.string.stats_read), (state.stats?.totalRead ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(
+                        stringResource(R.string.stats_unread),
+                        (state.stats?.totalUnread ?: 0).toString(),
+                        Modifier.weight(1f)
+                    )
+                    StatCard(
+                        stringResource(R.string.stats_read),
+                        (state.stats?.totalRead ?: 0).toString(),
+                        Modifier.weight(1f)
+                    )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    StatCard(stringResource(R.string.stats_feeds), (state.stats?.totalFeeds ?: 0).toString(), Modifier.weight(1f))
-                    StatCard(stringResource(R.string.stats_categories), (state.stats?.totalCategories ?: 0).toString(), Modifier.weight(1f))
+                    StatCard(
+                        stringResource(R.string.stats_feeds),
+                        (state.stats?.totalFeeds ?: 0).toString(),
+                        Modifier.weight(1f)
+                    )
+                    StatCard(
+                        stringResource(R.string.stats_categories),
+                        (state.stats?.totalCategories ?: 0).toString(),
+                        Modifier.weight(1f)
+                    )
                 }
             }
         }
@@ -293,7 +379,15 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 }
             }
         }
-        item { AuthenticatedDevicesSection(sessions = state.authSessions, onRevokeSession = actions.onRevokeAuthSession) }
+        item {
+            PasswordSection(state = state, onChangePassword = actions.onChangePassword)
+        }
+        item {
+            AuthenticatedDevicesSection(
+                sessions = state.authSessions,
+                onRevokeSession = actions.onRevokeAuthSession
+            )
+        }
         state.adminRegistrationLocked?.let { registrationLocked ->
             item {
                 FeedSurfaceCard {
@@ -303,12 +397,108 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
         }
         item {
             FeedSurfaceCard {
-                Button(onClick = actions.onLogout, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = stringResource(R.string.settings_sign_out_cd))
+                Button(
+                    onClick = actions.onLogout,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Logout,
+                        contentDescription = stringResource(R.string.settings_sign_out_cd)
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.settings_logout))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PasswordSection(
+    state: SettingsTabState,
+    onChangePassword: (String, String) -> Unit,
+) {
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    val passwordsMatch = newPassword == confirmation
+
+    LaunchedEffect(state.passwordChangeGeneration) {
+        if (state.passwordChangeGeneration > 0) {
+            currentPassword = ""
+            newPassword = ""
+            confirmation = ""
+        }
+    }
+
+    FeedSurfaceCard {
+        Text(
+            stringResource(R.string.settings_change_password),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            stringResource(R.string.settings_change_password_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = currentPassword,
+            onValueChange = { currentPassword = it },
+            label = { Text(stringResource(R.string.settings_current_password)) },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = newPassword,
+            onValueChange = { newPassword = it },
+            label = { Text(stringResource(R.string.settings_new_password)) },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = confirmation,
+            onValueChange = { confirmation = it },
+            label = { Text(stringResource(R.string.settings_confirm_password)) },
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
+            supportingText = if (confirmation.isNotEmpty() && !passwordsMatch) {
+                { Text(stringResource(R.string.settings_passwords_do_not_match)) }
+            } else {
+                null
+            },
+            isError = confirmation.isNotEmpty() && !passwordsMatch,
+            singleLine = true,
+        )
+        Button(
+            onClick = { onChangePassword(currentPassword, newPassword) },
+            enabled = state.isOnline &&
+                    !state.passwordChangePending &&
+                    currentPassword.isNotEmpty() &&
+                    newPassword.length >= 8 &&
+                    passwordsMatch,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                stringResource(
+                    if (state.passwordChangePending) {
+                        R.string.settings_updating_password
+                    } else {
+                        R.string.settings_update_password
+                    },
+                ),
+            )
+        }
+        if (!state.isOnline) {
+            Text(
+                stringResource(R.string.settings_password_requires_connection),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -507,13 +697,25 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                alpha = 0.45f
+            )
+        ),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(modifier = Modifier.height(10.dp))
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                value,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

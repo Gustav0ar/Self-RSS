@@ -47,6 +47,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
 	categories: many(categories),
 	feeds: many(feeds),
 	articleReads: many(articleReads),
+	articleSaves: many(articleSaves),
 	feedRefreshRequests: many(feedRefreshRequests),
 	feedDiscoveryCandidates: many(feedDiscoveryCandidates),
 	auditLogs: many(auditLogs),
@@ -413,6 +414,7 @@ export const articlesRelations = relations(articles, ({ one, many }) => ({
 	feed: one(feeds, { fields: [articles.feedId], references: [feeds.id] }),
 	media: many(articleMedia),
 	reads: many(articleReads),
+	saves: many(articleSaves),
 }));
 
 // ─── Article Media ───
@@ -465,6 +467,33 @@ export const articleReads = sqliteTable(
 export const articleReadsRelations = relations(articleReads, ({ one }) => ({
 	user: one(users, { fields: [articleReads.userId], references: [users.id] }),
 	article: one(articles, { fields: [articleReads.articleId], references: [articles.id] }),
+}));
+
+// ─── Saved Articles ───
+
+export const articleSaves = sqliteTable(
+	'article_saves',
+	{
+		userId: uuid('user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'cascade' }),
+		articleId: uuid('article_id')
+			.notNull()
+			.references(() => articles.id, { onDelete: 'cascade' }),
+		savedAt: timestamp('saved_at')
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(t) => [
+		uniqueIndex('article_saves_pk').on(t.userId, t.articleId),
+		index('article_saves_user_saved_idx').on(t.userId, t.savedAt),
+		index('article_saves_article_id_idx').on(t.articleId),
+	],
+);
+
+export const articleSavesRelations = relations(articleSaves, ({ one }) => ({
+	user: one(users, { fields: [articleSaves.userId], references: [users.id] }),
+	article: one(articles, { fields: [articleSaves.articleId], references: [articles.id] }),
 }));
 
 // ─── Sync Runs ───

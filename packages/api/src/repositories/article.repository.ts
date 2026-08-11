@@ -1,7 +1,7 @@
 import type { Database as BunDatabase } from 'bun:sqlite';
 import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { articleMedia, articleReads, articles, feeds } from '../db/schema.js';
+import { articleMedia, articleReads, articleSaves, articles, feeds } from '../db/schema.js';
 import { decodeArticleCursor } from '../utils/article-cursor.js';
 import {
 	type EnrichedContentReplacement,
@@ -13,6 +13,7 @@ import {
 	replaceArticleEnrichedContent,
 } from './article-enrichment.persistence.js';
 import { type ArticleScope, type SearchRow, scopeConditions } from './article-query.helpers.js';
+import { saveArticle, unsaveArticle } from './article-save.persistence.js';
 import { searchArticles, searchArticlesByScope } from './article-search.js';
 
 export type { ArticleScope } from './article-query.helpers.js';
@@ -26,7 +27,13 @@ export class ArticleRepository {
 	async findByFeeds(
 		userId: string,
 		feedIds: string[],
-		options: { limit: number; cursor?: string; sort?: string; unreadOnly?: boolean },
+		options: {
+			limit: number;
+			cursor?: string;
+			sort?: string;
+			unreadOnly?: boolean;
+			savedOnly?: boolean;
+		},
 	) {
 		if (feedIds.length === 0) {
 			return [];
@@ -34,12 +41,7 @@ export class ArticleRepository {
 
 		const conditions: SQL[] = [inArray(articles.feedId, feedIds)];
 		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
-		// Decode the opaque cursor produced by `encodeCursor` in the
-		// service. The cursor embeds the sort timestamp of the last row
-		// on the previous page, so we don't need a second round-trip
-		// to look the row up by id. Falls back to the id-only shape
-		// for legacy cursors (which the service no longer emits, but
-		// in-flight pagination may still have one cached).
+		// The opaque cursor includes the last row's timestamp and supports legacy id-only cursors.
 		const decodedCursor = decodeArticleCursor(options.cursor, options.sort);
 		if (decodedCursor) {
 			conditions.push(
@@ -51,6 +53,9 @@ export class ArticleRepository {
 
 		if (options.unreadOnly) {
 			conditions.push(sql`${articleReads.userId} IS NULL`);
+		}
+		if (options.savedOnly) {
+			conditions.push(sql`${articleSaves.userId} IS NOT NULL`);
 		}
 
 		const orderBy =
@@ -74,12 +79,17 @@ export class ArticleRepository {
 				feedTitle: feeds.title,
 				feedFaviconUrl: feeds.faviconUrl,
 				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
 			})
 			.from(articles)
 			.innerJoin(feeds, eq(articles.feedId, feeds.id))
 			.leftJoin(
 				articleReads,
 				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
+			)
+			.leftJoin(
+				articleSaves,
+				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, userId)),
 			)
 			.where(and(...conditions))
 			.orderBy(orderBy)
@@ -88,7 +98,13 @@ export class ArticleRepository {
 
 	async findByScope(
 		scope: ArticleScope,
-		options: { limit: number; cursor?: string; sort?: string; unreadOnly?: boolean },
+		options: {
+			limit: number;
+			cursor?: string;
+			sort?: string;
+			unreadOnly?: boolean;
+			savedOnly?: boolean;
+		},
 	) {
 		const conditions: SQL[] = scopeConditions(scope);
 		const sortTimestamp = sql`coalesce(${articles.publishedAt}, ${articles.fetchedAt})`;
@@ -104,6 +120,9 @@ export class ArticleRepository {
 		if (options.unreadOnly) {
 			conditions.push(sql`${articleReads.userId} IS NULL`);
 		}
+		if (options.savedOnly) {
+			conditions.push(sql`${articleSaves.userId} IS NOT NULL`);
+		}
 
 		const orderBy =
 			options.sort === 'oldest'
@@ -126,12 +145,17 @@ export class ArticleRepository {
 				feedTitle: feeds.title,
 				feedFaviconUrl: feeds.faviconUrl,
 				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
 			})
 			.from(articles)
 			.innerJoin(feeds, eq(articles.feedId, feeds.id))
 			.leftJoin(
 				articleReads,
 				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, scope.userId)),
+			)
+			.leftJoin(
+				articleSaves,
+				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, scope.userId)),
 			)
 			.where(and(...conditions))
 			.orderBy(orderBy)
@@ -209,12 +233,17 @@ export class ArticleRepository {
 				feedFaviconUrl: feeds.faviconUrl,
 				feedSiteUrl: feeds.siteUrl,
 				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
 			})
 			.from(articles)
 			.innerJoin(feeds, and(eq(articles.feedId, feeds.id), eq(feeds.userId, userId)))
 			.leftJoin(
 				articleReads,
 				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
+			)
+			.leftJoin(
+				articleSaves,
+				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, userId)),
 			)
 			.where(eq(articles.id, articleId))
 			.limit(1);
@@ -299,6 +328,14 @@ export class ArticleRepository {
 			.where(and(eq(articleReads.userId, userId), eq(articleReads.articleId, articleId)))
 			.returning({ articleId: articleReads.articleId });
 		return deleted.length > 0;
+	}
+
+	async save(userId: string, articleId: string) {
+		return saveArticle(this.db, userId, articleId);
+	}
+
+	async unsave(userId: string, articleId: string) {
+		return unsaveArticle(this.db, userId, articleId);
 	}
 
 	async markAllRead(userId: string, feedIds: string[]) {
@@ -552,7 +589,7 @@ export class ArticleRepository {
 	}
 
 	/**
-	 * Delete articles older than the specified number of days that have not been read.
+	 * Delete articles older than the specified number of days that have neither been read nor saved.
 	 * When dryRun is true, returns the count of articles that would be deleted without
 	 * actually deleting them. This is useful for safely previewing cleanup impact.
 	 */
@@ -567,6 +604,7 @@ export class ArticleRepository {
 				and(
 					lt(articles.fetchedAt, cutoff),
 					sql`${articles.id} NOT IN (SELECT article_id FROM article_reads)`,
+					sql`${articles.id} NOT IN (SELECT article_id FROM article_saves)`,
 				),
 			);
 
@@ -581,6 +619,7 @@ export class ArticleRepository {
 				and(
 					lt(articles.fetchedAt, cutoff),
 					sql`${articles.id} NOT IN (SELECT article_id FROM article_reads)`,
+					sql`${articles.id} NOT IN (SELECT article_id FROM article_saves)`,
 				),
 			)
 			.returning({ id: articles.id });
@@ -589,7 +628,7 @@ export class ArticleRepository {
 
 	/**
 	 * Count articles that would be deleted by retention cleanup.
-	 * Returns the number of unread articles older than the cutoff date.
+	 * Returns the number of unread, unsaved articles older than the cutoff date.
 	 * This is always a read-only operation.
 	 */
 	async countOlderThan(days: number) {
@@ -601,6 +640,7 @@ export class ArticleRepository {
 				and(
 					lt(articles.fetchedAt, cutoff),
 					sql`${articles.id} NOT IN (SELECT article_id FROM article_reads)`,
+					sql`${articles.id} NOT IN (SELECT article_id FROM article_saves)`,
 				),
 			);
 		return result[0]?.count ?? 0;

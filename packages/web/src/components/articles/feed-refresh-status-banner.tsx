@@ -83,10 +83,7 @@ export function FeedRefreshStatusBanner({
 							<Check className="h-4 w-4" />
 						)
 					) : (
-						<>
-							<span className="absolute h-8 w-8 motion-safe:animate-ping rounded-full bg-primary/20" />
-							<RefreshCw className="relative h-4 w-4 motion-safe:animate-spin" />
-						</>
+						<RefreshCw className="h-4 w-4" />
 					)}
 				</div>
 				<div className="min-w-0 flex-1">
@@ -99,11 +96,6 @@ export function FeedRefreshStatusBanner({
 					) : null}
 				</div>
 			</div>
-			{!isDurableTerminal ? (
-				<div className="mt-3 h-1 overflow-hidden rounded-full bg-background/60">
-					<div className="h-full w-full motion-safe:animate-pulse rounded-full bg-primary/70" />
-				</div>
-			) : null}
 		</div>
 	);
 }

@@ -1,5 +1,5 @@
-import { Monitor, MonitorSmartphone, Moon, Settings, ShieldX, Sun } from 'lucide-react';
-import { useId, useMemo } from 'react';
+import { KeyRound, Monitor, MonitorSmartphone, Moon, Settings, ShieldX, Sun } from 'lucide-react';
+import { type FormEvent, useId, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { QueryFailure } from '@/components/query-failure';
 import { Dialog } from '@/components/ui/dialog';
@@ -15,6 +15,7 @@ import {
 } from '@/hooks/queries/preferences-hooks';
 import { ACCENT_COLOR_OPTIONS, FONT_FAMILY_OPTIONS, normalizeAccentColor } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
 
 export function PreferencesPanel() {
@@ -375,6 +376,8 @@ export function PreferencesPanel() {
 					</select>
 				</section>
 
+				<PasswordSection />
+
 				<section className="surface-muted rounded-[1.5rem] p-5 md:col-span-2">
 					<div className="flex items-start justify-between gap-4">
 						<div>
@@ -450,6 +453,129 @@ export function PreferencesPanel() {
 			</div>
 		</Dialog>,
 		document.body,
+	);
+}
+
+function PasswordSection() {
+	const { changePassword, isOffline } = useAuth();
+	const [currentPassword, setCurrentPassword] = useState('');
+	const [newPassword, setNewPassword] = useState('');
+	const [confirmation, setConfirmation] = useState('');
+	const [status, setStatus] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
+	const [isSaving, setIsSaving] = useState(false);
+	const passwordsMatch = newPassword === confirmation;
+	const canSubmit =
+		!isOffline &&
+		!isSaving &&
+		currentPassword.length > 0 &&
+		newPassword.length >= 8 &&
+		passwordsMatch;
+
+	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!canSubmit) return;
+		setIsSaving(true);
+		setStatus(null);
+		try {
+			await changePassword(currentPassword, newPassword);
+			setCurrentPassword('');
+			setNewPassword('');
+			setConfirmation('');
+			setStatus({ kind: 'success', message: 'Password updated. Other sessions were signed out.' });
+		} catch (error) {
+			setStatus({
+				kind: 'error',
+				message: error instanceof Error ? error.message : 'Could not update password.',
+			});
+		} finally {
+			setIsSaving(false);
+		}
+	}
+
+	return (
+		<section className="surface-muted rounded-[1.5rem] p-5 md:col-span-2">
+			<div className="flex items-start justify-between gap-4">
+				<div>
+					<h3 className="text-sm font-medium">Change password</h3>
+					<p className="mt-1 text-xs leading-5 text-muted-foreground">
+						Updating your password signs out every other device.
+					</p>
+				</div>
+				<KeyRound className="mt-1 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+			</div>
+			<form onSubmit={handleSubmit} className="mt-4 grid gap-3 sm:grid-cols-3">
+				<PasswordInput
+					label="Current password"
+					value={currentPassword}
+					onChange={setCurrentPassword}
+					autoComplete="current-password"
+				/>
+				<PasswordInput
+					label="New password"
+					value={newPassword}
+					onChange={setNewPassword}
+					autoComplete="new-password"
+				/>
+				<PasswordInput
+					label="Confirm password"
+					value={confirmation}
+					onChange={setConfirmation}
+					autoComplete="new-password"
+				/>
+				<div className="flex flex-wrap items-center gap-3 sm:col-span-3">
+					<button
+						type="submit"
+						disabled={!canSubmit}
+						className="inline-flex h-10 items-center justify-center rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50"
+					>
+						{isSaving ? 'Updating...' : 'Update password'}
+					</button>
+					{!passwordsMatch && confirmation ? (
+						<p className="text-xs text-red-500">Passwords do not match.</p>
+					) : null}
+					{isOffline ? (
+						<p className="text-xs text-amber-300">Connect to update your password.</p>
+					) : null}
+					{status ? (
+						<p
+							className={cn(
+								'text-xs',
+								status.kind === 'error' ? 'text-red-500' : 'text-emerald-400',
+							)}
+							role={status.kind === 'error' ? 'alert' : 'status'}
+						>
+							{status.message}
+						</p>
+					) : null}
+				</div>
+			</form>
+		</section>
+	);
+}
+
+function PasswordInput({
+	label,
+	value,
+	onChange,
+	autoComplete,
+}: {
+	label: string;
+	value: string;
+	onChange: (value: string) => void;
+	autoComplete: 'current-password' | 'new-password';
+}) {
+	return (
+		<label className="grid gap-1.5 text-xs text-muted-foreground">
+			{label}
+			<input
+				type="password"
+				value={value}
+				onChange={(event) => onChange(event.target.value)}
+				autoComplete={autoComplete}
+				minLength={autoComplete === 'new-password' ? 8 : undefined}
+				className="input-surface h-11 rounded-xl px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary"
+			/>
+		</label>
 	);
 }
 

@@ -24,9 +24,12 @@ A self-hosted, Feedly-like RSS reader built with **Bun**, **Hono**, **React**, *
 - **Keyboard navigation** — `j`/`k` to move, `m` to toggle read, `v` to open original
 - **Full-text search** — search across all articles or within a category
 - **Read tracking** — auto-mark-read on open, mark-all-read per category or globally
+- **Saved articles** — durable per-user saves with a dedicated collection and retention protection
 - **User preferences** — font family, text size, display density, theme (light/dark/system)
 - **Stats dashboard** — unread counts, daily read metrics, per-feed breakdowns
 - **Multi-user** — JWT auth with admin-controlled registration lock
+- **Account security** — self-service password rotation revokes every previous session
+- **Installable web app** — production PWA shell with a seven-day cache of previously viewed reader data
 - **Bootstrap admin** — on a fresh deployment, the first registered account becomes the admin
 - **Security hardened** — CSP, CORS, rate limiting, input validation with Zod
 - **Mobile-ready API** — JSON REST endpoints plus generated `packages/api/openapi.json`
@@ -36,15 +39,20 @@ A self-hosted, Feedly-like RSS reader built with **Bun**, **Hono**, **React**, *
 Follow these steps to set up and run the application locally in development mode.
 
 ### 1. Prerequisites
-- **Runtime:** [Bun](https://bun.sh) 1.3.14
+- **Toolchain:** [mise](https://mise.jdx.dev/) with the repository's trusted `mise.toml`, or [Bun](https://bun.sh) 1.3.14 installed directly
 - **Container Engine:** [Podman](https://podman.io) or **Docker** (with Docker Compose plugin) to run Redis locally.
 
 ### 2. Installation
 Clone the repository and install dependencies using Bun:
 ```bash
 git clone <repo-url> && cd SelfFeed
-bun install
+mise trust
+mise install
+mise exec -- bun install --frozen-lockfile
 ```
+
+Review `mise.toml` before trusting it. If Bun 1.3.14 is already installed directly,
+`bun install --frozen-lockfile` is equivalent.
 
 ### 3. Environment Configuration
 Copy the development environment template to the API directory:
@@ -109,7 +117,8 @@ Tests are split into unit, integration, and E2E tiers. Make sure dependencies ar
 - **Run Integration Tests:** `bun run test:integration` (Spins up an isolated Redis container, creates a temporary SQLite file, and runs API integration tests).
 - **Run End-to-End Tests:** `bun run test:e2e` (Installs Playwright dependencies, seeds the database, and runs full visual flow tests against headless Chromium).
 - **Run All Suites:** Run unit, integration, and E2E tests together with `bun run test:all`.
-- **Run the production gate:** Install the pinned toolchain with `mise install`, then run
+- **Run the production gate:** Trust and install the pinned toolchain with
+  `mise trust && mise install`, then run
   `mise exec -- bun run check:all`. This longer command adds builds, OpenAPI drift
   detection, Android unit/lint/release checks, and a high-severity dependency audit.
   It requires a working Podman or Docker engine plus an installed Android SDK/JDK.
@@ -175,6 +184,7 @@ All API endpoints are prefixed with `/api/v1`.
 | POST   | /auth/register                | —        | Register new user            |
 | POST   | /auth/login                   | —        | Login, receive JWT tokens    |
 | POST   | /auth/refresh                 | —        | Refresh access token         |
+| POST   | /auth/change-password         | ✓        | Rotate password and sessions |
 | GET    | /categories                   | ✓        | List user categories         |
 | POST   | /categories                   | ✓        | Create category              |
 | PATCH  | /categories/:id               | ✓        | Update category              |
@@ -190,7 +200,8 @@ All API endpoints are prefixed with `/api/v1`.
 | GET    | /articles/:id                 | ✓        | Get article content/readiness|
 | POST   | /articles/:id/enrich          | ✓        | Queue source enrichment      |
 | PATCH  | /articles/:id/read            | ✓        | Mark article read/unread     |
-| POST   | /articles/mark-all-read       | ✓        | Mark all read (by category)  |
+| PATCH  | /articles/:id/saved           | ✓        | Save or unsave an article    |
+| PATCH  | /articles/mark-all-read       | ✓        | Mark all read (by category)  |
 | GET    | /search                       | ✓        | Full-text article search     |
 | GET    | /preferences                  | ✓        | Get user preferences         |
 | PATCH  | /preferences                  | ✓        | Update preferences           |

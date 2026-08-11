@@ -1,20 +1,13 @@
 import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
-import {
-	ArrowLeft,
-	ArrowRight,
-	BookOpen,
-	ExternalLink,
-	Eye,
-	EyeOff,
-	RefreshCw,
-	Sparkles,
-} from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, RefreshCw, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useArticle, useMarkRead, usePreferences } from '@/hooks/queries';
+import { useArticle, useMarkRead, usePreferences, useSetArticleSaved } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
+import { useAuth } from '@/providers/auth';
+import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
 import {
 	useReaderScrollProgress,
 	useSelectedArticleEnrichment,
@@ -39,6 +32,7 @@ export interface ReaderArticleSummary {
 	heroImageUrl: string | null;
 	publishedAt: string | null;
 	isRead: boolean;
+	isSaved: boolean;
 }
 
 function prepareReaderHtml(html: string) {
@@ -52,6 +46,8 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const { data: article, isLoading, isError, isFetching, refetch } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
+	const setArticleSaved = useSetArticleSaved();
+	const { isOffline } = useAuth();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
 	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(articleId);
@@ -188,7 +184,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 						disabled={isFetching}
 						className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
 					>
-						<RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+						<RefreshCw className="h-4 w-4" />
 						Retry
 					</button>
 				</div>
@@ -209,6 +205,11 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 			return;
 		}
 		markRead.mutate({ articleId, read: !article?.isRead });
+	}
+
+	function toggleSaved() {
+		if (!articleId || isOffline) return;
+		setArticleSaved.mutate({ articleId, saved: !article?.isSaved });
 	}
 
 	return (
@@ -282,36 +283,14 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							<p className="mt-2 text-sm text-muted-foreground">by {article.author}</p>
 						) : null}
 
-						<div className="mt-4 flex flex-wrap items-center gap-2">
-							<button
-								type="button"
-								onClick={toggleRead}
-								className="inline-flex h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-accent"
-							>
-								{article.isRead ? (
-									<>
-										<EyeOff className="h-3.5 w-3.5" />
-										Mark unread
-									</>
-								) : (
-									<>
-										<Eye className="h-3.5 w-3.5" />
-										Mark read
-									</>
-								)}
-							</button>
-							{article.canonicalUrl ? (
-								<a
-									href={article.canonicalUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="inline-flex h-9 items-center gap-2 rounded-full border border-border px-3 text-xs font-medium hover:bg-accent"
-								>
-									<ExternalLink className="h-3.5 w-3.5" />
-									Original
-								</a>
-							) : null}
-						</div>
+						<ReaderPrimaryActions
+							canonicalUrl={article.canonicalUrl}
+							isRead={article.isRead}
+							isSaved={article.isSaved}
+							saveDisabled={isOffline || setArticleSaved.isPending}
+							onToggleRead={toggleRead}
+							onToggleSaved={toggleSaved}
+						/>
 					</header>
 
 					{hasContent ? (
@@ -351,40 +330,14 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 								{article.author ? <MetadataLine label="Author" value={article.author} /> : null}
 								{publishedAt ? <MetadataLine label="Published" value={publishedAt} /> : null}
 							</div>
-							<div className="mt-4 grid grid-cols-2 gap-2">
-								<button
-									type="button"
-									onClick={toggleRead}
-									className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border text-xs font-medium hover:bg-accent"
-								>
-									{article.isRead ? (
-										<>
-											<EyeOff className="h-3.5 w-3.5" />
-											Unread
-										</>
-									) : (
-										<>
-											<Eye className="h-3.5 w-3.5" />
-											Read
-										</>
-									)}
-								</button>
-								{article.canonicalUrl ? (
-									<a
-										href={article.canonicalUrl}
-										target="_blank"
-										rel="noopener noreferrer"
-										className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border text-xs font-medium hover:bg-accent"
-									>
-										<ExternalLink className="h-3.5 w-3.5" />
-										Open
-									</a>
-								) : (
-									<span className="inline-flex h-9 items-center justify-center rounded-lg border border-border text-xs text-muted-foreground">
-										No link
-									</span>
-								)}
-							</div>
+							<ReaderCompactActions
+								canonicalUrl={article.canonicalUrl}
+								isRead={article.isRead}
+								isSaved={article.isSaved}
+								saveDisabled={isOffline || setArticleSaved.isPending}
+								onToggleRead={toggleRead}
+								onToggleSaved={toggleSaved}
+							/>
 						</div>
 
 						{onSelectArticle && (previousArticle || nextArticle) ? (

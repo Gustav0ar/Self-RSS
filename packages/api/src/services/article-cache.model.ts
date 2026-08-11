@@ -26,6 +26,7 @@ export interface CachedArticle {
 	publishedAt: string | null;
 	displayedAt: string;
 	isRead: boolean;
+	isSaved: boolean;
 	contentStatus: string;
 	contentVersion: number;
 }
@@ -73,7 +74,8 @@ export function cacheableArticleRows(
 			heroImageUrl: article.heroImageUrl,
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			displayedAt: (article.publishedAt ?? article.fetchedAt).toISOString(),
-			isRead: article.isRead,
+			isRead: Boolean(article.isRead),
+			isSaved: Boolean(article.isSaved),
 			contentStatus: article.contentStatus,
 			contentVersion: article.contentVersion,
 		})),

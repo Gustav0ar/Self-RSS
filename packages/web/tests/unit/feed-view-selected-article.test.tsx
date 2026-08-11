@@ -62,6 +62,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	usePrefetchArticle: () => vi.fn(),
 	useWarmNextArticles: () => vi.fn(),
 	useWarmVisibleArticles: () => vi.fn(),
+	useSetArticleSaved: () => ({ mutate: vi.fn() }),
 }));
 
 vi.mock('../../src/components/articles/reader-pane', () => ({
@@ -104,7 +105,7 @@ vi.mock('@/providers/app-state', () => ({
 }));
 
 vi.mock('@/providers/auth', () => ({
-	useAuth: () => ({}),
+	useAuth: () => ({ isOffline: false }),
 }));
 
 vi.mock('@/hooks/use-read-state-sync', () => ({

@@ -3,6 +3,7 @@ export type SearchScope = 'all' | 'category';
 export interface ArticleRouteSearch {
 	feedId?: string;
 	categoryId?: string;
+	savedOnly?: boolean;
 	q?: string;
 	searchScope?: SearchScope;
 }
@@ -19,14 +20,17 @@ export function validateArticleRouteSearch(search: Record<string, unknown>): Art
 			? search.q.slice(0, MAX_SEARCH_QUERY_LENGTH)
 			: undefined;
 	const searchScope = search.searchScope === 'category' ? 'category' : undefined;
+	const savedOnly = search.savedOnly === true || search.savedOnly === 'true' ? true : undefined;
 
-	return buildArticleRouteSearch({ feedId, categoryId, q, searchScope });
+	return buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope });
 }
 
 export function buildArticleRouteSearch(search: ArticleRouteSearch = {}): ArticleRouteSearch {
 	const next: ArticleRouteSearch = {};
 
-	if (search.feedId) {
+	if (search.savedOnly) {
+		next.savedOnly = true;
+	} else if (search.feedId) {
 		next.feedId = search.feedId;
 	} else if (search.categoryId) {
 		next.categoryId = search.categoryId;

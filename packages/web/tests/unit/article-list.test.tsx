@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ArticleList } from '../../src/components/articles/article-list';
 
@@ -35,6 +35,7 @@ describe('ArticleList', () => {
 						heroImageUrl: 'https://example.com/poster.jpg',
 						publishedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
 						isRead: false,
+						isSaved: false,
 					},
 				]}
 				selectedId="article-1"
@@ -56,8 +57,9 @@ describe('ArticleList', () => {
 			'img[src="https://example.com/favicon.ico"]',
 		);
 		expect(favicon?.getAttribute('referrerpolicy')).toBe('no-referrer');
-		expect(row.classList.contains('overflow-hidden')).toBe(true);
-		expect(row.style.height).toBe('82px');
+		const rowContainer = row.parentElement;
+		expect(rowContainer?.classList.contains('overflow-hidden')).toBe(true);
+		expect(rowContainer?.style.height).toBe('82px');
 	});
 
 	it('renders an empty-state action when provided', () => {
@@ -76,6 +78,35 @@ describe('ArticleList', () => {
 		expect(screen.getByRole('button', { name: 'Show all articles' })).toBeTruthy();
 	});
 
+	it('exposes a visible save control for each article', () => {
+		const onToggleSaved = vi.fn();
+		render(
+			<ArticleList
+				articles={[
+					{
+						id: 'article-saved',
+						feedId: 'feed-1',
+						feedTitle: 'Feed',
+						feedFaviconUrl: null,
+						title: 'Keep this article',
+						author: null,
+						excerpt: null,
+						heroImageUrl: null,
+						publishedAt: null,
+						isRead: false,
+						isSaved: false,
+					},
+				]}
+				selectedId={null}
+				onSelect={() => {}}
+				onToggleSaved={onToggleSaved}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Save article' }));
+		expect(onToggleSaved).toHaveBeenCalledWith('article-saved', true);
+	});
+
 	it('requests the next page before the user reaches the final row', async () => {
 		const onLoadMore = vi.fn();
 		render(
@@ -91,6 +122,7 @@ describe('ArticleList', () => {
 					heroImageUrl: null,
 					publishedAt: new Date().toISOString(),
 					isRead: false,
+					isSaved: false,
 				}))}
 				selectedId={null}
 				onSelect={() => {}}

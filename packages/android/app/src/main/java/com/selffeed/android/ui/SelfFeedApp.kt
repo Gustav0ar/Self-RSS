@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.MarkEmailRead
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -147,11 +149,16 @@ data class SelfFeedAppActions(
     val onLoadFeedSyncHistory: (String) -> Unit = {},
     val onRefreshArticles: () -> Unit,
     val onOpenArticle: (String) -> Unit,
-    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
+    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ ->
+        onOpenArticle(
+            id
+        )
+    },
     val onReaderPageChanged: (String) -> Unit = {},
     val onArticleDisplayed: (String) -> Unit,
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
+    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
     val onMarkAllRead: () -> Unit,
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
     val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
@@ -171,6 +178,7 @@ data class SelfFeedAppActions(
     val onCreateAdminUser: (String, String, String) -> Unit = { _, _, _ -> },
     val onUpdateAdminUser: (String, String?, Boolean?) -> Unit = { _, _, _ -> },
     val onResetAdminPassword: (String, String) -> Unit = { _, _ -> },
+    val onChangePassword: (String, String) -> Unit = { _, _ -> },
     val onRetryPreferences: () -> Unit = {},
     val onClearMessages: () -> Unit,
 )
@@ -184,7 +192,8 @@ fun SelfFeedApp(
     articlePagingData: Flow<PagingData<ArticleListItem>>,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
-    val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val drawerState =
+        androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeTab = state.chrome.activeTab
@@ -208,7 +217,11 @@ fun SelfFeedApp(
         { articleId, previousRead, read ->
             scope.launch {
                 val message = if (read) markedReadMessage else markedUnreadMessage
-                if (snackbarHostState.showSnackbar(message = message, actionLabel = undoLabel) == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                if (snackbarHostState.showSnackbar(
+                        message = message,
+                        actionLabel = undoLabel
+                    ) == androidx.compose.material3.SnackbarResult.ActionPerformed
+                ) {
                     actions.onToggleRead(articleId, previousRead)
                 }
             }
@@ -360,6 +373,7 @@ fun SelfFeedApp(
         state.settings.preferences?.density,
         selectedFeedId,
         state.feeds.feeds,
+        state.articles.savedOnly,
     ) {
         val selectedLifecycle = state.feeds.feeds
             .firstOrNull { it.id == selectedFeedId }
@@ -375,6 +389,7 @@ fun SelfFeedApp(
             isOffline = !state.isOnline,
             feedCount = state.feeds.feeds.size,
             refreshBlockedGuidance = selectedLifecycle?.takeIf { it.refreshBlocked }?.refreshGuidance,
+            savedOnly = state.articles.savedOnly,
         )
     }
     val searchTabState = remember(
@@ -387,6 +402,7 @@ fun SelfFeedApp(
         state.search.selectedCategoryId,
         state.search.currentCategoryOnly,
         state.search.resultLimitReached,
+        state.isOnline,
     ) {
         SearchTabState(
             query = state.search.query,
@@ -398,6 +414,7 @@ fun SelfFeedApp(
             currentCategoryAvailable = state.search.selectedCategoryId != null,
             currentCategoryOnly = state.search.currentCategoryOnly,
             resultLimitReached = state.search.resultLimitReached,
+            isOffline = !state.isOnline,
         )
     }
     val settingsTabState = remember(
@@ -408,6 +425,9 @@ fun SelfFeedApp(
         state.settings.authSessions,
         state.settings.adminRegistrationLocked,
         state.settings.adminUsers,
+        state.isOnline,
+        state.auth.passwordChangePending,
+        state.auth.passwordChangeGeneration,
     ) {
         SettingsTabState(
             preferences = state.settings.preferences,
@@ -417,6 +437,9 @@ fun SelfFeedApp(
             authSessions = state.settings.authSessions,
             adminRegistrationLocked = state.settings.adminRegistrationLocked,
             adminUsers = state.settings.adminUsers,
+            isOnline = state.isOnline,
+            passwordChangePending = state.auth.passwordChangePending,
+            passwordChangeGeneration = state.auth.passwordChangeGeneration,
         )
     }
     val feedActions = remember(actions) {
@@ -446,6 +469,7 @@ fun SelfFeedApp(
             onOpenArticle = actions.onOpenArticle,
             onOpenArticleFromQueue = actions.onOpenArticleFromQueue,
             onToggleRead = actions.onToggleRead,
+            onToggleSaved = actions.onToggleSaved,
             onReadStateChanged = { articleId, previousRead ->
                 offerReadUndo(articleId, previousRead, !previousRead)
             },
@@ -460,6 +484,7 @@ fun SelfFeedApp(
             onOpenArticle = actions.onOpenArticle,
             onLoadMore = actions.onLoadMoreSearch,
             onCurrentCategoryOnlyChanged = actions.onSearchCurrentCategoryOnlyChanged,
+            onToggleSaved = actions.onToggleSaved,
         )
     }
     val settingsActions = remember(actions) {
@@ -477,45 +502,48 @@ fun SelfFeedApp(
             onCreateAdminUser = actions.onCreateAdminUser,
             onUpdateAdminUser = actions.onUpdateAdminUser,
             onResetAdminPassword = actions.onResetAdminPassword,
+            onChangePassword = actions.onChangePassword,
             onLogout = actions.onLogout,
             onRetryPreferences = actions.onRetryPreferences,
         )
     }
-    val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit = { preferHtml, onPreferHtmlChanged ->
-        selectedArticle?.let { article ->
-            ArticleReaderPane(
-                articles = articleQueue,
-                selectedArticle = article,
-                prefetchedArticles = state.articles.readerDetails,
-                onOpenOriginal = { openedArticle ->
-                    openedArticle.canonicalUrl?.let { url ->
-                        openExternalUrl(context, url)
-                    }
-                },
-                onBackToList = actions.onCloseArticle,
-                onArticleSelected = actions.onOpenArticle,
-                onVisibleArticleChanged = { articleId ->
-                    actions.onReaderPageChanged(articleId)
-                    if (
-                        activeTab == HomeTab.ARTICLES &&
-                        shouldPrefetchNextReaderPage(articleId, articleQueue)
-                    ) {
-                        // Unlike LazyColumn, the full-screen reader does not
-                        // access LazyPagingItems as the user swipes. Reading
-                        // the last presented item emits the Paging access hint
-                        // that loads the next API cursor before the queue ends.
-                        articlePagingItems.lastIndexOrNull()?.let { lastIndex ->
-                            articlePagingItems[lastIndex]
+    val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit =
+        { preferHtml, onPreferHtmlChanged ->
+            selectedArticle?.let { article ->
+                ArticleReaderPane(
+                    articles = articleQueue,
+                    selectedArticle = article,
+                    prefetchedArticles = state.articles.readerDetails,
+                    onOpenOriginal = { openedArticle ->
+                        openedArticle.canonicalUrl?.let { url ->
+                            openExternalUrl(context, url)
                         }
-                    }
-                },
-                onArticleDisplayed = actions.onArticleDisplayed,
-                appearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance(),
-                preferHtml = preferHtml,
-                onPreferHtmlChanged = onPreferHtmlChanged,
-            )
+                    },
+                    onBackToList = actions.onCloseArticle,
+                    onArticleSelected = actions.onOpenArticle,
+                    onVisibleArticleChanged = { articleId ->
+                        actions.onReaderPageChanged(articleId)
+                        if (
+                            activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED) &&
+                            shouldPrefetchNextReaderPage(articleId, articleQueue)
+                        ) {
+                            // Unlike LazyColumn, the full-screen reader does not
+                            // access LazyPagingItems as the user swipes. Reading
+                            // the last presented item emits the Paging access hint
+                            // that loads the next API cursor before the queue ends.
+                            articlePagingItems.lastIndexOrNull()?.let { lastIndex ->
+                                articlePagingItems[lastIndex]
+                            }
+                        }
+                    },
+                    onArticleDisplayed = actions.onArticleDisplayed,
+                    appearance = state.settings.preferences?.toReaderAppearance()
+                        ?: ReaderAppearance(),
+                    preferHtml = preferHtml,
+                    onPreferHtmlChanged = onPreferHtmlChanged,
+                )
+            }
         }
-    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -525,7 +553,10 @@ fun SelfFeedApp(
                 drawerContentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.width(320.dp),
             ) {
-                FeedsTab(feedTabState, feedActions, onSelect = { scope.launch { drawerState.close() } })
+                FeedsTab(
+                    feedTabState,
+                    feedActions,
+                    onSelect = { scope.launch { drawerState.close() } })
             }
         },
     ) {
@@ -539,8 +570,8 @@ fun SelfFeedApp(
                     selectedArticle = selectedArticle,
                     currentLabel = topBarText,
                     showMarkAllRead = activeTab == HomeTab.ARTICLES &&
-                        selectedArticle == null &&
-                        articleQueue.isNotEmpty(),
+                            selectedArticle == null &&
+                            articleQueue.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = { confirmMarkAllRead = true },
@@ -548,6 +579,11 @@ fun SelfFeedApp(
                     onToggleRead = {
                         selectedArticle?.let { article ->
                             toggleReadWithUndo(article.id, !article.isRead)
+                        }
+                    },
+                    onToggleSaved = {
+                        selectedArticle?.let { article ->
+                            actions.onToggleSaved(article.id, !article.isSaved)
                         }
                     },
                     onShare = {
@@ -578,23 +614,27 @@ fun SelfFeedApp(
                     label = "android-main-tabs",
                 ) { tab ->
                     when (tab) {
-                        HomeTab.ARTICLES -> {
+                        HomeTab.ARTICLES, HomeTab.SAVED -> {
                             ArticleListDetailNavigation(
                                 selectedArticleId = selectedArticle?.id,
                                 onCloseArticle = actions.onCloseArticle,
                                 listContent = { openReaderImmediately ->
-                                    val immediateArticleActions = remember(articleActions, openReaderImmediately) {
-                                        articleActions.copy(
-                                            onOpenArticle = { articleId ->
-                                                openReaderImmediately()
-                                                articleActions.onOpenArticle(articleId)
-                                            },
-                                            onOpenArticleFromQueue = { articleId, queue ->
-                                                openReaderImmediately()
-                                                articleActions.onOpenArticleFromQueue(articleId, queue)
-                                            },
-                                        )
-                                    }
+                                    val immediateArticleActions =
+                                        remember(articleActions, openReaderImmediately) {
+                                            articleActions.copy(
+                                                onOpenArticle = { articleId ->
+                                                    openReaderImmediately()
+                                                    articleActions.onOpenArticle(articleId)
+                                                },
+                                                onOpenArticleFromQueue = { articleId, queue ->
+                                                    openReaderImmediately()
+                                                    articleActions.onOpenArticleFromQueue(
+                                                        articleId,
+                                                        queue
+                                                    )
+                                                },
+                                            )
+                                        }
                                     ArticlesTab(
                                         state = articleTabState,
                                         actions = immediateArticleActions,
@@ -606,10 +646,14 @@ fun SelfFeedApp(
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
+
                         HomeTab.SEARCH -> SearchTab(searchTabState, searchActions)
                         HomeTab.SETTINGS -> SettingsTab(settingsTabState, settingsActions)
                         HomeTab.STATS -> StatsTab(settingsTabState, settingsActions)
-                        HomeTab.FEEDS -> FeedsTab(feedTabState, feedActions, onSelect = { actions.onTabSelected(HomeTab.ARTICLES) })
+                        HomeTab.FEEDS -> FeedsTab(
+                            feedTabState,
+                            feedActions,
+                            onSelect = { actions.onTabSelected(HomeTab.ARTICLES) })
                     }
                 }
             }
@@ -705,9 +749,11 @@ private fun AppTopBar(
     onMarkAllRead: () -> Unit,
     onBack: () -> Unit,
     onToggleRead: () -> Unit,
+    onToggleSaved: () -> Unit,
     onShare: () -> Unit,
 ) {
-    val isArticleSelected = activeTab == HomeTab.ARTICLES && selectedArticle != null
+    val isArticleSelected =
+        activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED) && selectedArticle != null
     // The Navigation 3 list-detail scene keeps the list visible at this
     // width, so a Back button would be redundant and could incorrectly send
     // a search-origin reader away from its visible context. System Back still
@@ -740,14 +786,30 @@ private fun AppTopBar(
                 }
             } else {
                 IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.cd_open_feeds))
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = stringResource(R.string.cd_open_feeds)
+                    )
                 }
             }
         },
         actions = {
             if (isArticleSelected) {
+                IconButton(onClick = onToggleSaved, enabled = isOnline) {
+                    val isSaved = selectedArticle?.isSaved == true
+                    Icon(
+                        imageVector = if (isSaved) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
+                        contentDescription = stringResource(
+                            if (isSaved) R.string.article_remove_saved else R.string.article_save,
+                        ),
+                        tint = if (isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 IconButton(onClick = onShare) {
-                    Icon(Icons.Default.Share, contentDescription = stringResource(R.string.cd_share_article))
+                    Icon(
+                        Icons.Default.Share,
+                        contentDescription = stringResource(R.string.cd_share_article)
+                    )
                 }
                 IconButton(onClick = onToggleRead) {
                     val isRead = selectedArticle?.isRead == true
@@ -796,15 +858,32 @@ private fun AppBottomBar(
             selected = activeTab == HomeTab.ARTICLES,
             onClick = { onTabSelected(HomeTab.ARTICLES) },
             icon = {
-                Icon(Icons.Default.GridView, contentDescription = stringResource(R.string.cd_articles_tab))
+                Icon(
+                    Icons.Default.GridView,
+                    contentDescription = stringResource(R.string.cd_articles_tab)
+                )
             },
             label = { Text(stringResource(R.string.nav_articles)) },
+        )
+        NavigationBarItem(
+            selected = activeTab == HomeTab.SAVED,
+            onClick = { onTabSelected(HomeTab.SAVED) },
+            icon = {
+                Icon(
+                    if (activeTab == HomeTab.SAVED) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
+                    contentDescription = stringResource(R.string.cd_saved_tab),
+                )
+            },
+            label = { Text(stringResource(R.string.nav_saved)) },
         )
         NavigationBarItem(
             selected = activeTab == HomeTab.SEARCH,
             onClick = { onTabSelected(HomeTab.SEARCH) },
             icon = {
-                Icon(Icons.Default.Search, contentDescription = stringResource(R.string.cd_search_tab))
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = stringResource(R.string.cd_search_tab)
+                )
             },
             label = { Text(stringResource(R.string.nav_search)) },
         )
@@ -812,7 +891,10 @@ private fun AppBottomBar(
             selected = activeTab == HomeTab.FEEDS,
             onClick = { onTabSelected(HomeTab.FEEDS) },
             icon = {
-                Icon(Icons.Default.RssFeed, contentDescription = stringResource(R.string.cd_feeds_tab))
+                Icon(
+                    Icons.Default.RssFeed,
+                    contentDescription = stringResource(R.string.cd_feeds_tab)
+                )
             },
             label = { Text(stringResource(R.string.nav_feeds)) },
         )
@@ -820,7 +902,10 @@ private fun AppBottomBar(
             selected = activeTab == HomeTab.SETTINGS,
             onClick = { onTabSelected(HomeTab.SETTINGS) },
             icon = {
-                Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.cd_settings_tab))
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.cd_settings_tab)
+                )
             },
             label = { Text(stringResource(R.string.nav_settings)) },
         )
@@ -837,15 +922,27 @@ private fun topBarLabel(
     categories: List<CategoryWithCounts>,
 ): PresentationText = when (activeTab) {
     HomeTab.ARTICLES -> when {
-        selectedArticle != null -> PresentationText.dynamic(readerFeedTitle ?: selectedArticle.feedTitle)
+        selectedArticle != null -> PresentationText.dynamic(
+            readerFeedTitle ?: selectedArticle.feedTitle
+        )
+
         selectedFeedId != null -> feeds.find { it.id == selectedFeedId }?.title
             ?.let(PresentationText::dynamic)
             ?: PresentationText.resource(R.string.title_feed_fallback)
+
         selectedCategoryId != null -> categories.find { it.id == selectedCategoryId }?.name
             ?.let(PresentationText::dynamic)
             ?: PresentationText.resource(R.string.title_category_fallback)
+
         else -> PresentationText.resource(R.string.title_all_feeds)
     }
+
+    HomeTab.SAVED -> if (selectedArticle != null) {
+        PresentationText.dynamic(readerFeedTitle ?: selectedArticle.feedTitle)
+    } else {
+        PresentationText.resource(R.string.title_saved)
+    }
+
     HomeTab.SEARCH -> PresentationText.resource(R.string.nav_search)
     HomeTab.FEEDS -> PresentationText.resource(R.string.title_manage_feeds)
     HomeTab.SETTINGS -> PresentationText.resource(R.string.nav_settings)
@@ -909,7 +1006,10 @@ internal fun AuthScreen(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(32.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+            ),
         ) {
             Column(
                 modifier = Modifier
@@ -970,7 +1070,10 @@ internal fun AuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Next
+                    ),
                 )
                 OutlinedTextField(
                     value = email,
@@ -985,7 +1088,10 @@ internal fun AuthScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(20.dp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Next
+                    ),
                 )
                 OutlinedTextField(
                     value = password,
@@ -1001,7 +1107,10 @@ internal fun AuthScreen(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     shape = RoundedCornerShape(20.dp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
                 Button(

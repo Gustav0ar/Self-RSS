@@ -107,7 +107,11 @@ fun SelfFeedAppRoute(
                 articlesViewModel.clearSessionReadStateMemory()
             }
 
-            override fun applyArticlePreferences(defaultSort: String, hideRead: Boolean, autoMarkReadMode: String) {
+            override fun applyArticlePreferences(
+                defaultSort: String,
+                hideRead: Boolean,
+                autoMarkReadMode: String
+            ) {
                 articlesViewModel.setFilter(sort = defaultSort, hideRead = hideRead)
                 articlesViewModel.setAutoMarkReadMode(autoMarkReadMode)
             }
@@ -173,6 +177,12 @@ fun SelfFeedAppRoute(
             workflowCoordinator.onAuthenticationChanged(authState.isAuthenticated, workflowSink)
         }
 
+        LaunchedEffect(authState.passwordChangeGeneration) {
+            if (authState.passwordChangeGeneration > 0) {
+                settingsViewModel.loadAuthSessions()
+            }
+        }
+
         LaunchedEffect(authState.isAuthenticated, chromeState.pendingExternalAction?.key) {
             if (!authState.isAuthenticated) return@LaunchedEffect
             when (val action = appViewModel.consumeExternalAction()) {
@@ -180,10 +190,12 @@ fun SelfFeedAppRoute(
                     articlesViewModel.openArticle(action.articleId)
                     appViewModel.openReaderFrom(HomeTab.ARTICLES)
                 }
+
                 is ExternalAction.AddFeed -> {
                     feedsViewModel.offerExternalFeed(action.feedUrl)
                     appViewModel.setTab(HomeTab.FEEDS)
                 }
+
                 null -> Unit
             }
         }
@@ -269,7 +281,14 @@ fun SelfFeedAppRoute(
                     articlesViewModel.stopReadStateSync()
                     authViewModel.logout()
                 },
-                onTabSelected = appViewModel::setTab,
+                onTabSelected = { tab ->
+                    when (tab) {
+                        HomeTab.SAVED -> articlesViewModel.setSavedOnly(true)
+                        HomeTab.ARTICLES -> articlesViewModel.setSavedOnly(false)
+                        else -> Unit
+                    }
+                    appViewModel.setTab(tab)
+                },
                 onRefreshVisibleData = {
                     feedsViewModel.loadCategories()
                     feedsViewModel.loadFeeds()
@@ -293,7 +312,13 @@ fun SelfFeedAppRoute(
                 onDeleteCategory = feedsViewModel::deleteCategory,
                 onCreateFeed = feedsViewModel::createFeed,
                 onUpdateFeed = { id, feedUrl, title, categoryId, pollingIntervalMinutes ->
-                    feedsViewModel.updateFeed(id, feedUrl, title, categoryId, pollingIntervalMinutes)
+                    feedsViewModel.updateFeed(
+                        id,
+                        feedUrl,
+                        title,
+                        categoryId,
+                        pollingIntervalMinutes
+                    )
                 },
                 onDeleteFeed = feedsViewModel::deleteFeed,
                 onImportOpml = feedsViewModel::importOpml,
@@ -307,13 +332,19 @@ fun SelfFeedAppRoute(
                     // Refresh the API/Room list immediately. Publisher fetches
                     // continue independently and publish revisions as they land.
                     articlesViewModel.refreshArticles()
-                    feedsViewModel.syncAllFeeds(
-                        feedId = articlesState.selectedFeedId,
-                        categoryId = articlesState.selectedCategoryId,
-                    )
+                    if (!articlesState.savedOnly) {
+                        feedsViewModel.syncAllFeeds(
+                            feedId = articlesState.selectedFeedId,
+                            categoryId = articlesState.selectedCategoryId,
+                        )
+                    }
                 },
                 onOpenArticle = {
-                    val origin = if (chromeState.activeTab == HomeTab.SEARCH) HomeTab.SEARCH else HomeTab.ARTICLES
+                    val origin = when (chromeState.activeTab) {
+                        HomeTab.SEARCH -> HomeTab.SEARCH
+                        HomeTab.SAVED -> HomeTab.SAVED
+                        else -> HomeTab.ARTICLES
+                    }
                     if (origin == HomeTab.SEARCH) {
                         articlesViewModel.openArticleFromQueue(it, searchState.results)
                     } else {
@@ -327,7 +358,9 @@ fun SelfFeedAppRoute(
                         queue = queue,
                         tracksPaging = true,
                     )
-                    appViewModel.openReaderFrom(HomeTab.ARTICLES)
+                    appViewModel.openReaderFrom(
+                        if (chromeState.activeTab == HomeTab.SAVED) HomeTab.SAVED else HomeTab.ARTICLES,
+                    )
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
                 onReaderPageChanged = articlesViewModel::onReaderPageChanged,
@@ -336,6 +369,12 @@ fun SelfFeedAppRoute(
                     appViewModel.closeReader()
                 },
                 onToggleRead = articlesViewModel::markRead,
+                onToggleSaved = { articleId, saved ->
+                    articlesViewModel.setSaved(articleId, saved) {
+                        searchViewModel.updateSavedState(articleId, !saved)
+                    }
+                    searchViewModel.updateSavedState(articleId, saved)
+                },
                 onMarkAllRead = articlesViewModel::markAllRead,
                 onArticleSnapshot = articlesViewModel::updateArticleQueueSnapshot,
                 onVisibleArticles = articlesViewModel::warmVisibleArticles,
@@ -364,6 +403,7 @@ fun SelfFeedAppRoute(
                 onCreateAdminUser = settingsViewModel::createAdminUser,
                 onUpdateAdminUser = settingsViewModel::updateAdminUser,
                 onResetAdminPassword = settingsViewModel::resetAdminPassword,
+                onChangePassword = authViewModel::changePassword,
                 onRetryPreferences = settingsViewModel::loadPreferences,
                 onClearMessages = {
                     authViewModel.clearMessages()

@@ -8,6 +8,7 @@ const resetMock = vi.fn();
 const setThemeMock = vi.fn();
 const refetchPreferencesMock = vi.fn();
 const refetchSessionsMock = vi.fn();
+const changePasswordMock = vi.fn();
 
 const defaultPreferences = {
 	theme: 'dark',
@@ -77,6 +78,10 @@ vi.mock('../../src/providers/theme', () => ({
 	useTheme: () => ({ setTheme: setThemeMock }),
 }));
 
+vi.mock('../../src/providers/auth', () => ({
+	useAuth: () => ({ changePassword: changePasswordMock, isOffline: false }),
+}));
+
 describe('PreferencesPanel', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -90,6 +95,8 @@ describe('PreferencesPanel', () => {
 		setThemeMock.mockClear();
 		refetchPreferencesMock.mockClear();
 		refetchSessionsMock.mockClear();
+		changePasswordMock.mockReset();
+		changePasswordMock.mockResolvedValue(undefined);
 		preferencesMock = { ...defaultPreferences };
 		preferencesError = null;
 		preferencesFailed = false;
@@ -196,6 +203,28 @@ describe('PreferencesPanel', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
 
 		expect(revokeSessionMock).toHaveBeenCalledWith('session-1');
+	});
+
+	it('changes the password and confirms that other sessions are signed out', async () => {
+		render(<PreferencesPanel />);
+		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		fireEvent.change(screen.getByLabelText('Current password'), {
+			target: { value: 'password123' },
+		});
+		fireEvent.change(screen.getByLabelText('New password'), {
+			target: { value: 'new-password-123' },
+		});
+		fireEvent.change(screen.getByLabelText('Confirm password'), {
+			target: { value: 'new-password-123' },
+		});
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+			await Promise.resolve();
+		});
+
+		expect(changePasswordMock).toHaveBeenCalledWith('password123', 'new-password-123');
+		expect(screen.getByText('Password updated. Other sessions were signed out.')).toBeTruthy();
 	});
 
 	it('shows an actionable failure when preferences cannot be loaded', () => {

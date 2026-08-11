@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearEnvCache } from '../../src/config/env.js';
 import { AuthService } from '../../src/services/auth.service.js';
+import { hashPassword, verifyPassword } from '../../src/utils/password.js';
 
 const originalEnv = { ...process.env };
 type AuthServiceDeps = ConstructorParameters<typeof AuthService>;
@@ -32,6 +33,7 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 	applyEnv({});
 	const userRepo = {
 		findById: vi.fn(),
+		updatePasswordHash: vi.fn(),
 		registerUser: vi.fn(),
 		...(overrides.userRepo as Record<string, unknown> | undefined),
 	};
@@ -41,6 +43,8 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 		rotate: vi.fn(),
 		revoke: vi.fn(),
 		revokeForUser: vi.fn(),
+		listActiveByUserId: vi.fn(),
+		revokeAllForUser: vi.fn(),
 		...(overrides.sessionRepo as Record<string, unknown> | undefined),
 	};
 	const settingsRepo = {
@@ -70,6 +74,68 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 
 	return { service, userRepo, sessionRepo, settingsRepo, tokenUtils, redis };
 }
+
+describe('AuthService - changePassword', () => {
+	const user = {
+		id: 'user-1',
+		email: 'reader@example.com',
+		role: 'user',
+		isActive: true,
+		createdAt: new Date('2026-01-01T00:00:00.000Z'),
+		updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+	};
+
+	it('verifies the current password before changing credentials', async () => {
+		const passwordHash = await hashPassword('current-password');
+		const { service, userRepo, sessionRepo } = createServiceWithMocks();
+		userRepo.findById.mockResolvedValue({ ...user, passwordHash });
+
+		await expect(
+			service.changePassword(user.id, 'wrong-password', 'new-password-123'),
+		).rejects.toMatchObject({
+			statusCode: 400,
+			message: 'Current password is incorrect',
+		});
+		expect(sessionRepo.listActiveByUserId).not.toHaveBeenCalled();
+		expect(userRepo.updatePasswordHash).not.toHaveBeenCalled();
+	});
+
+	it('revokes old sessions, updates the password, and issues a fresh session', async () => {
+		const passwordHash = await hashPassword('current-password');
+		const updatedUser = { ...user, updatedAt: new Date('2026-02-01T00:00:00.000Z') };
+		const { service, userRepo, sessionRepo, tokenUtils, redis } = createServiceWithMocks();
+		userRepo.findById.mockResolvedValue({ ...user, passwordHash });
+		userRepo.updatePasswordHash.mockResolvedValue(updatedUser);
+		sessionRepo.listActiveByUserId.mockResolvedValue([
+			{ id: '11111111-1111-4111-8111-111111111111' },
+			{ id: '22222222-2222-4222-8222-222222222222' },
+		]);
+
+		const result = await service.changePassword(user.id, 'current-password', 'new-password-123', {
+			clientId: 'web-client',
+			deviceName: 'Firefox',
+		});
+
+		expect(sessionRepo.revokeAllForUser).toHaveBeenCalledWith(user.id);
+		expect(redis.eval).toHaveBeenCalledWith(
+			expect.stringContaining('redis.call("SET", KEYS[1], "1", "EX", ARGV[1])'),
+			2,
+			'auth:session:revoked:11111111-1111-4111-8111-111111111111',
+			'auth:session:active:11111111-1111-4111-8111-111111111111',
+			'900',
+		);
+		const nextPasswordHash = userRepo.updatePasswordHash.mock.calls[0]?.[1] as string;
+		await expect(verifyPassword('new-password-123', nextPasswordHash)).resolves.toBe(true);
+		expect(sessionRepo.create).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: user.id, clientId: 'web-client', deviceName: 'Firefox' }),
+		);
+		expect(tokenUtils.signAccessToken).toHaveBeenCalledWith(user.id, user.role, expect.any(String));
+		expect(result).toMatchObject({
+			user: { id: user.id },
+			tokens: { accessToken: 'new-access-token' },
+		});
+	});
+});
 
 describe('AuthService - getRegistrationStatus', () => {
 	it('returns registrationEnabled: false when ALLOW_REGISTRATION env is false', async () => {

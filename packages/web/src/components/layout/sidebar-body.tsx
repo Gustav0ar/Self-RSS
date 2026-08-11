@@ -11,6 +11,7 @@ interface SidebarBodyProps {
 	hasCategories: boolean;
 	selectedFeedId?: string;
 	selectedCategoryId?: string;
+	savedOnly?: boolean;
 	categories: CategoryWithCounts[];
 	uncategorizedFeeds: FeedWithCounts[];
 	uncategorizedExpanded: boolean;
@@ -18,6 +19,7 @@ interface SidebarBodyProps {
 	categoryFeedMap: Map<string, FeedWithCounts[]>;
 	exportError: string | null;
 	onSelectAll: () => void;
+	onSelectSaved?: () => void;
 	onSelectFeed: (feedId: string) => void;
 	onSelectCategory: (categoryId: string) => void;
 	onToggleCategory: (id: string) => void;
@@ -46,6 +48,7 @@ export function SidebarBody({
 	hasCategories,
 	selectedFeedId,
 	selectedCategoryId,
+	savedOnly,
 	categories,
 	uncategorizedFeeds,
 	uncategorizedExpanded,
@@ -53,6 +56,7 @@ export function SidebarBody({
 	categoryFeedMap,
 	exportError,
 	onSelectAll,
+	onSelectSaved = () => {},
 	onSelectFeed,
 	onSelectCategory,
 	onToggleCategory,
@@ -124,12 +128,14 @@ export function SidebarBody({
 				totalUnread={totalUnread}
 				selectedFeedId={selectedFeedId}
 				selectedCategoryId={selectedCategoryId}
+				savedOnly={savedOnly}
 				categories={categories}
 				uncategorizedFeeds={uncategorizedFeeds}
 				uncategorizedExpanded={uncategorizedExpanded}
 				expandedCategories={expandedCategories}
 				categoryFeedMap={categoryFeedMap}
 				onSelectAll={onSelectAll}
+				onSelectSaved={onSelectSaved}
 				onSelectFeed={onSelectFeed}
 				onSelectCategory={onSelectCategory}
 				onToggleCategory={onToggleCategory}

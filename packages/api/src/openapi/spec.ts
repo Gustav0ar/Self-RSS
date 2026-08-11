@@ -245,6 +245,7 @@ export const openApiSpec = {
 					'canonicalUrl',
 					'title',
 					'isRead',
+					'isSaved',
 					'contentStatus',
 					'contentVersion',
 				],
@@ -261,6 +262,7 @@ export const openApiSpec = {
 					publishedAt: { type: ['string', 'null'], format: 'date-time' },
 					displayedAt: { type: ['string', 'null'], format: 'date-time' },
 					isRead: { type: 'boolean' },
+					isSaved: { type: 'boolean' },
 					contentStatus: {
 						type: 'string',
 						enum: ['feed_ready', 'enrichment_pending', 'full_ready', 'failed'],
@@ -282,6 +284,7 @@ export const openApiSpec = {
 					'contentStatus',
 					'contentVersion',
 					'isRead',
+					'isSaved',
 					'isEnriched',
 				],
 				properties: {
@@ -312,6 +315,7 @@ export const openApiSpec = {
 					enrichedAt: { type: ['string', 'null'], format: 'date-time' },
 					enrichmentError: { type: ['string', 'null'] },
 					isRead: { type: 'boolean' },
+					isSaved: { type: 'boolean' },
 					isEnriched: { type: 'boolean' },
 				},
 			},
@@ -656,6 +660,12 @@ export const openApiSpec = {
 						schema: { type: 'boolean' },
 					},
 					{
+						name: 'savedOnly',
+						in: 'query',
+						required: false,
+						schema: { type: 'boolean' },
+					},
+					{
 						name: 'sort',
 						in: 'query',
 						required: false,
@@ -708,6 +718,19 @@ export const openApiSpec = {
 				security: bearerSecurity,
 				parameters: [{ in: 'path', name: 'articleId', required: true, schema: { type: 'string' } }],
 				requestBody: json({ type: 'object' }),
+				responses: { '200': json({ type: 'object' }) },
+			},
+		},
+		'/articles/{articleId}/saved': {
+			patch: {
+				tags: ['Articles'],
+				security: bearerSecurity,
+				parameters: [{ in: 'path', name: 'articleId', required: true, schema: { type: 'string' } }],
+				requestBody: json({
+					type: 'object',
+					required: ['saved'],
+					properties: { saved: { type: 'boolean' } },
+				}),
 				responses: { '200': json({ type: 'object' }) },
 			},
 		},

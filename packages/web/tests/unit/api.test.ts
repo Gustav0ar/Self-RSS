@@ -4,6 +4,7 @@ import {
 	apiFetch,
 	clearTokens,
 	getAccessToken,
+	getLastRefreshOutcome,
 	loadTokens,
 	refreshAccessToken,
 	setTokens,
@@ -82,6 +83,7 @@ describe('api module', () => {
 			const refreshed = await refreshAccessToken();
 
 			expect(refreshed).toBe(true);
+			expect(getLastRefreshOutcome()).toBe('success');
 			const calls = fetchMock.mock.calls as unknown[][];
 			const requestInit = calls[0]?.[1] as RequestInit | undefined;
 			const headers = (requestInit?.headers ?? {}) as Record<string, string>;
@@ -112,6 +114,7 @@ describe('api module', () => {
 
 			expect(result).toBe(false);
 			expect(getAccessToken()).toBeNull();
+			expect(getLastRefreshOutcome()).toBe('rejected');
 		});
 
 		it('apiFetch retries after token refresh on 401', async () => {
@@ -323,6 +326,7 @@ describe('api module', () => {
 			const result = await refreshAccessToken();
 
 			expect(result).toBe(false);
+			expect(getLastRefreshOutcome()).toBe('unavailable');
 		});
 	});
 

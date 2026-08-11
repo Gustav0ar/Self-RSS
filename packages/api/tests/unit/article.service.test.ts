@@ -24,6 +24,7 @@ describe('ArticleService', () => {
 					publishedAt: new Date('2026-06-01T00:00:00.000Z'),
 					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
 					isRead: false,
+					isSaved: false,
 				},
 			]),
 		};
@@ -44,7 +45,13 @@ describe('ArticleService', () => {
 		expect(feedRepo.findAllByUser).not.toHaveBeenCalled();
 		expect(articleRepo.findByScope).toHaveBeenCalledWith(
 			{ userId: 'user-1', feedId: 'feed-1', categoryId: undefined },
-			{ limit: 20, cursor: undefined, sort: undefined, unreadOnly: undefined },
+			{
+				limit: 20,
+				cursor: undefined,
+				sort: undefined,
+				unreadOnly: undefined,
+				savedOnly: undefined,
+			},
 		);
 		expect(result).toEqual({
 			data: [
@@ -74,6 +81,7 @@ describe('ArticleService', () => {
 					publishedAt: null,
 					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
 					isRead: false,
+					isSaved: false,
 				},
 			]),
 		};
@@ -142,6 +150,7 @@ describe('ArticleService', () => {
 					publishedAt: null,
 					fetchedAt: new Date('2026-06-01T00:01:00.000Z'),
 					isRead: false,
+					isSaved: true,
 				},
 			]),
 		};
@@ -228,6 +237,7 @@ describe('ArticleService', () => {
 				feedFaviconUrl: null,
 				feedSiteUrl: 'https://example.com',
 				isRead: false,
+				isSaved: true,
 				media: [],
 			})),
 		};
@@ -277,6 +287,7 @@ describe('ArticleService', () => {
 			feedFaviconUrl: null,
 			feedSiteUrl: 'https://example.com',
 			isRead: false,
+			isSaved: true,
 			isEnriched: false,
 			media: [],
 		};
@@ -330,6 +341,7 @@ describe('ArticleService', () => {
 				feedFaviconUrl: null,
 				feedSiteUrl: 'https://example.com',
 				isRead: false,
+				isSaved: false,
 				media: [],
 			})),
 		};
@@ -479,6 +491,47 @@ describe('ArticleService', () => {
 			service.markRead('user-1', 'article-1', true, 'manual', 'client-1'),
 		).resolves.toEqual({ success: true });
 		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
+	});
+
+	it('saves an owned article and patches list and detail caches', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			save: vi.fn(async () => true),
+		};
+		const redis = { del: vi.fn(async () => 1) };
+		const articleCache = {
+			updateCachedSavedState: vi.fn(async () => undefined),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{} as never,
+			redis as never,
+			undefined,
+			undefined,
+			articleCache as never,
+		);
+
+		await expect(service.setSaved('user-1', 'article-1', true)).resolves.toEqual({
+			success: true,
+		});
+		expect(articleRepo.save).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(articleCache.updateCachedSavedState).toHaveBeenCalledWith('user-1', 'article-1', true);
+		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
+	});
+
+	it('rejects saving an article outside the user namespace', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => null),
+			save: vi.fn(),
+		};
+		const service = new ArticleService(articleRepo as never, {} as never, {} as never, {} as never);
+
+		await expect(service.setSaved('user-1', 'article-1', true)).rejects.toMatchObject({
+			code: 'NOT_FOUND',
+			statusCode: 404,
+		});
+		expect(articleRepo.save).not.toHaveBeenCalled();
 	});
 
 	it('does not publish or count duplicate markRead requests', async () => {

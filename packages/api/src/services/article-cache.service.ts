@@ -13,34 +13,12 @@ import {
 	cacheMetricType,
 	isArticleListCacheKey,
 } from './article-cache.model.js';
+import { REDIS_SCAN_BATCH, scanKeys } from './redis-scan.js';
 
 const logger = createLogger();
 
 // Warming lock TTL - prevents duplicate warming within this window
 const WARMING_LOCK_TTL = 30; // seconds
-
-// SCAN COUNT hint. Larger batches are faster but increase per-call latency
-// against the event loop. 500 is a reasonable middle ground for the key
-// patterns we use here.
-const SCAN_BATCH = 500;
-
-/**
- * Iterate every key matching `pattern` using SCAN, which is non-blocking
- * even for very large keyspaces. We deliberately avoid the convenience
- * `KEYS` command, which Redis documents as unsafe in production.
- */
-async function scanKeys(redis: Redis, pattern: string): Promise<string[]> {
-	const matched: string[] = [];
-	let cursor = '0';
-	do {
-		const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', SCAN_BATCH);
-		if (batch.length > 0) {
-			matched.push(...batch);
-		}
-		cursor = nextCursor;
-	} while (cursor !== '0');
-	return matched;
-}
 
 export class ArticleCacheService {
 	constructor(
@@ -61,6 +39,7 @@ export class ArticleCacheService {
 			feedId?: string;
 			categoryId?: string;
 			unreadOnly?: boolean;
+			savedOnly?: boolean;
 			sort?: string;
 			limit: number;
 		},
@@ -70,7 +49,7 @@ export class ArticleCacheService {
 		// initial pages because older unread rows may sit outside that bounded
 		// snapshot. Let those views hit SQLite, where the complete scoped set is
 		// available.
-		if (options.unreadOnly || options.sort === 'oldest') {
+		if (options.unreadOnly || options.savedOnly || options.sort === 'oldest') {
 			return null;
 		}
 
@@ -107,10 +86,18 @@ export class ArticleCacheService {
 				return null;
 			}
 
-			const filtered = [...data.articles].sort((a, b) => {
-				const timeDelta = new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime();
-				return timeDelta || b.id.localeCompare(a.id);
-			});
+			// Caches written before saved articles shipped have no isSaved field.
+			// Normalize them during the short rollout window instead of leaking an
+			// invalid shared-contract shape to clients.
+			const filtered = data.articles
+				.map((article) => ({
+					...article,
+					isSaved: Boolean(article.isSaved),
+				}))
+				.sort((a, b) => {
+					const timeDelta = new Date(b.displayedAt).getTime() - new Date(a.displayedAt).getTime();
+					return timeDelta || b.id.localeCompare(a.id);
+				});
 
 			// Apply limit + cursor
 			const cursorIndex = options.limit > 0 ? options.limit : 20;
@@ -424,6 +411,19 @@ export class ArticleCacheService {
 	 * deleting every scoped list on every navigation-driven mark-read event.
 	 */
 	async updateCachedReadState(userId: string, articleId: string, read: boolean): Promise<void> {
+		await this.updateCachedBooleanState(userId, articleId, 'isRead', read);
+	}
+
+	async updateCachedSavedState(userId: string, articleId: string, saved: boolean): Promise<void> {
+		await this.updateCachedBooleanState(userId, articleId, 'isSaved', saved);
+	}
+
+	private async updateCachedBooleanState(
+		userId: string,
+		articleId: string,
+		field: 'isRead' | 'isSaved',
+		value: boolean,
+	): Promise<void> {
 		try {
 			const indexKey = CacheKeys.articleListMembership(userId, articleId);
 			const indexedKeys = await this.redis.smembers(indexKey);
@@ -451,11 +451,11 @@ export class ArticleCacheService {
 
 					let changed = false;
 					const articles = data.articles.map((article) => {
-						if (article.id !== articleId || article.isRead === read) {
+						if (article.id !== articleId || article[field] === value) {
 							return article;
 						}
 						changed = true;
-						return { ...article, isRead: read };
+						return { ...article, [field]: value };
 					});
 
 					if (!changed) {
@@ -470,9 +470,10 @@ export class ArticleCacheService {
 				}),
 			);
 		} catch (err) {
-			logger.warn('Failed to update cached article read state', {
+			logger.warn('Failed to update cached article state', {
 				userId,
 				articleId,
+				field,
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
@@ -531,7 +532,7 @@ export class ArticleCacheService {
 				'MATCH',
 				pattern,
 				'COUNT',
-				SCAN_BATCH,
+				REDIS_SCAN_BATCH,
 			);
 			cursor = nextCursor;
 

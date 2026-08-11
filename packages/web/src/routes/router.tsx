@@ -11,12 +11,14 @@ function RoutedFeedView({
 	articleId,
 	feedId,
 	categoryId,
+	savedOnly,
 	q,
 	searchScope,
 }: {
 	articleId: string | null;
 	feedId?: string;
 	categoryId?: string;
+	savedOnly?: boolean;
 	q?: string;
 	searchScope?: 'all' | 'category';
 }) {
@@ -31,6 +33,7 @@ function RoutedFeedView({
 		<FeedView
 			feedId={feedId}
 			categoryId={categoryId}
+			savedOnly={savedOnly}
 			searchQuery={q}
 			searchScope={searchScope}
 			selectedArticleId={articleId}
@@ -41,14 +44,14 @@ function RoutedFeedView({
 				if (nextArticleId == null) {
 					void router.navigate({
 						to: '/',
-						search: buildArticleRouteSearch({ feedId, categoryId, q, searchScope }),
+						search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
 					});
 					return;
 				}
 				void router.navigate({
 					to: '/articles/$articleId',
 					params: { articleId: nextArticleId },
-					search: buildArticleRouteSearch({ feedId, categoryId, q, searchScope }),
+					search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
 				});
 			}}
 		/>
@@ -64,12 +67,13 @@ const indexRoute = createRoute({
 	path: '/',
 	validateSearch: validateArticleRouteSearch,
 	component: function Index() {
-		const { feedId, categoryId, q, searchScope } = indexRoute.useSearch();
+		const { feedId, categoryId, savedOnly, q, searchScope } = indexRoute.useSearch();
 		return (
 			<RoutedFeedView
 				articleId={null}
 				feedId={feedId}
 				categoryId={categoryId}
+				savedOnly={savedOnly}
 				q={q}
 				searchScope={searchScope}
 			/>
@@ -83,12 +87,13 @@ const articleRoute = createRoute({
 	validateSearch: validateArticleRouteSearch,
 	component: function Article() {
 		const { articleId } = articleRoute.useParams();
-		const { feedId, categoryId, q, searchScope } = articleRoute.useSearch();
+		const { feedId, categoryId, savedOnly, q, searchScope } = articleRoute.useSearch();
 		return (
 			<RoutedFeedView
 				articleId={articleId}
 				feedId={feedId}
 				categoryId={categoryId}
+				savedOnly={savedOnly}
 				q={q}
 				searchScope={searchScope}
 			/>

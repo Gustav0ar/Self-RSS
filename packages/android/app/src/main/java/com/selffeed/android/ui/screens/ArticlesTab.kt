@@ -23,11 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
@@ -90,6 +94,9 @@ fun ArticlesTab(
     var wasRefreshing by remember { mutableStateOf(false) }
     val readStateOverrides = remember(state.articles) {
         state.articles.associate { it.id to it.isRead }
+    }
+    val savedStateOverrides = remember(state.articles) {
+        state.articles.associate { it.id to it.isSaved }
     }
 
     val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
@@ -166,7 +173,8 @@ fun ArticlesTab(
             state.refreshBlockedGuidance?.let { guidance ->
                 item(key = "feed-refresh-guidance") {
                     Surface(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ) {
@@ -208,6 +216,8 @@ fun ArticlesTab(
                                 text = stringResource(
                                     if (state.feedCount == 0) {
                                         R.string.article_empty_no_feeds_title
+                                    } else if (state.savedOnly) {
+                                        R.string.article_empty_saved_title
                                     } else {
                                         R.string.article_empty_queue_title
                                     },
@@ -221,6 +231,8 @@ fun ArticlesTab(
                                 text = stringResource(
                                     if (state.feedCount == 0) {
                                         R.string.article_empty_no_feeds_detail
+                                    } else if (state.savedOnly) {
+                                        R.string.article_empty_saved_detail
                                     } else {
                                         R.string.article_empty_queue_detail
                                     },
@@ -250,8 +262,11 @@ fun ArticlesTab(
                     ArticlePlaceholderRow()
                 } else {
                     val isRead = readStateOverrides[article.id] ?: article.isRead
+                    val displayedArticle = savedStateOverrides[article.id]
+                        ?.let { article.copy(isSaved = it) }
+                        ?: article
                     ArticleListRow(
-                        article = article,
+                        article = displayedArticle,
                         isRead = isRead,
                         selected = state.selectedArticleId == article.id,
                         onClick = {
@@ -268,6 +283,15 @@ fun ArticlesTab(
                             actions.onToggleRead(article.id, read)
                             actions.onReadStateChanged(article.id, !read)
                         },
+                        onToggleSaved = if (state.isOffline) null else {
+                            {
+                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
+                                actions.onToggleSaved(
+                                    displayedArticle.id,
+                                    !displayedArticle.isSaved
+                                )
+                            }
+                        },
                         density = state.density,
                     )
                 }
@@ -283,7 +307,10 @@ fun ArticlesTab(
                         contentAlignment = Alignment.Center,
                     ) {
                         if (appendLoadState is LoadState.Loading) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
                         } else if (appendLoadState is LoadState.Error) {
                             AssistChip(
                                 onClick = pagedArticles::retry,
@@ -396,19 +423,24 @@ internal fun readerQueueForTappedArticle(
 
 @Composable
 private fun OfflineArticlesBanner() {
-    Surface(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
             .semantics { liveRegion = LiveRegionMode.Polite },
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            Icons.Outlined.WifiOff,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(
             text = stringResource(R.string.article_offline_notice),
-            modifier = Modifier.padding(12.dp),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -421,6 +453,7 @@ private fun ArticleListRow(
     selected: Boolean,
     onClick: () -> Unit,
     onToggleRead: (Boolean) -> Unit,
+    onToggleSaved: (() -> Unit)?,
     density: DensityPreference,
 ) {
     val dismissState = rememberSwipeToDismissBoxState()
@@ -447,8 +480,10 @@ private fun ArticleListRow(
         state = dismissState,
         enableDismissFromStartToEnd = false,
         backgroundContent = {
-            val color = if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-            val icon = if (effectiveIsRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
+            val color =
+                if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+            val icon =
+                if (effectiveIsRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
             val label = stringResource(
                 if (effectiveIsRead) R.string.article_mark_unread else R.string.article_mark_read,
             )
@@ -502,6 +537,7 @@ private fun ArticleListRow(
                 article = article,
                 selected = selected,
                 onClick = {}, // click handled by parent Column
+                onToggleSaved = onToggleSaved,
                 isReadOverride = effectiveIsRead,
                 density = density,
             )
@@ -570,6 +606,7 @@ internal fun ArticleCard(
     article: ArticleListItem,
     selected: Boolean,
     onClick: () -> Unit,
+    onToggleSaved: (() -> Unit)? = null,
     isReadOverride: Boolean? = null,
     density: DensityPreference = DensityPreference.COMFORTABLE,
 ) {
@@ -632,7 +669,7 @@ internal fun ArticleCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = if (isRead) FontWeight.Normal else FontWeight.SemiBold,
                     color = if (isRead && !selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                maxLines = if (density == DensityPreference.COMPACT) 2 else 3,
+                    maxLines = if (density == DensityPreference.COMPACT) 2 else 3,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f,
                 )
@@ -671,6 +708,19 @@ internal fun ArticleCard(
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentScale = ContentScale.Crop,
+                )
+            }
+            IconButton(
+                onClick = { onToggleSaved?.invoke() },
+                enabled = onToggleSaved != null,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = if (article.isSaved) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
+                    contentDescription = stringResource(
+                        if (article.isSaved) R.string.article_remove_saved else R.string.article_save,
+                    ),
+                    tint = if (article.isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

@@ -28,9 +28,10 @@ export function useSelectedArticleEnrichment(
 		// prefix, so opening an article must request enrichment independently.
 		requestedArticleId.current = articleId;
 		enrichArticle.mutate(articleId, {
-			onError: () => {
-				requestedArticleId.current = null;
-			},
+			// Keep the attempt latched on failure. Mutation state rerenders immediately,
+			// so resetting here would create an unbounded request loop. Selecting the
+			// article again after navigating away creates an intentional retry boundary.
+			onError: () => undefined,
 		});
 	}, [articleId, article, enrichArticle]);
 }

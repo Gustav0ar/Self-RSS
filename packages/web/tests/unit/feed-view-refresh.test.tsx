@@ -89,6 +89,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	useWarmNextArticles: () => warmNextArticlesMock,
 	useWarmVisibleArticles: () => vi.fn(),
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),
+	useSetArticleSaved: () => ({ mutate: vi.fn() }),
 	useSelectFeedDiscoveryCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCancelFeedReplacement: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -147,6 +148,10 @@ vi.mock('../../src/providers/app-state', () => ({
 	useAppState: () => ({
 		feedSyncError: null,
 	}),
+}));
+
+vi.mock('../../src/providers/auth', () => ({
+	useAuth: () => ({ isOffline: false }),
 }));
 
 describe('FeedView refresh', () => {
@@ -220,6 +225,17 @@ describe('FeedView refresh', () => {
 		});
 		useKeyboardNavMock.mockImplementation(() => undefined);
 		vi.stubGlobal('open', openWindowMock);
+	});
+
+	it('loads the Saved destination without exposing a global mark-all action', () => {
+		render(<FeedView savedOnly selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		expect(useInfiniteArticlesMock).toHaveBeenCalledWith(
+			expect.objectContaining({ savedOnly: true }),
+			expect.any(Object),
+		);
+		expect(screen.getByRole('heading', { name: 'Saved' })).toBeTruthy();
+		expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull();
 	});
 
 	it('allows refreshing when the All Feeds view is selected', () => {
@@ -433,11 +449,11 @@ describe('FeedView refresh', () => {
 		allFeedsRefreshIsTakingLonger = true;
 		allFeedsRefreshShouldShowStatus = true;
 
-		const { container } = render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
 
-		expect(screen.getByText('Still syncing in background')).toBeTruthy();
+		expect(document.querySelector('.motion-safe\\:animate-spin')).toBeNull();
 		expect(screen.getByText('Articles will update as new stories arrive')).toBeTruthy();
-		expect(container.querySelector('.motion-safe\\:animate-spin')).toBeTruthy();
+		expect(screen.getByText('Still syncing in background')).toBeTruthy();
 
 		const refreshButton = screen.getByRole('button', { name: 'Refresh' });
 		expect((refreshButton as HTMLButtonElement).disabled).toBe(false);

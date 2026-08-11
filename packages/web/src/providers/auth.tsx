@@ -5,15 +5,23 @@ import {
 	apiFetch,
 	clearTokens,
 	getAccessToken,
+	getLastRefreshOutcome,
 	loadTokens,
 	refreshAccessToken,
 	setAuthLostHandler,
 	setTokens,
 } from '../lib/api';
+import {
+	clearOfflineQueryCache,
+	clearOfflineState,
+	loadOfflineUser,
+	saveOfflineUser,
+} from '../lib/offline-store';
 
 interface AuthState {
 	isAuthenticated: boolean;
 	isLoading: boolean;
+	isOffline: boolean;
 	username: string | null;
 	user: User | null;
 	authLostMessage: string | null;
@@ -22,6 +30,7 @@ interface AuthState {
 	login: (username: string, password: string) => Promise<void>;
 	register: (username: string, email: string, password: string) => Promise<void>;
 	logout: () => Promise<boolean>;
+	changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 	clearAuthLostMessage: () => void;
 }
 
@@ -31,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const queryClient = useQueryClient();
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 	const [isLoading, setIsLoading] = useState(true);
+	const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
 	const [username, setUsername] = useState<string | null>(null);
 	const [user, setUser] = useState<User | null>(null);
 	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
@@ -41,8 +51,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		setAuthLostHandler((message) => {
 			clearTokens();
 			queryClient.clear();
+			void clearOfflineState();
 			setLogoutError(null);
 			setIsAuthenticated(false);
+			setIsOffline(false);
 			setUsername(null);
 			setUser(null);
 			setAuthLostMessage(message);
@@ -57,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 		const bootstrap = async () => {
 			loadTokens();
+			const offlineUser = await loadOfflineUser();
 
 			if (!getAccessToken()) {
 				await refreshAccessToken();
@@ -64,10 +77,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 			if (!getAccessToken()) {
 				if (!cancelled) {
-					queryClient.clear();
-					setIsAuthenticated(false);
-					setUsername(null);
-					setUser(null);
+					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
+						setIsAuthenticated(true);
+						setIsOffline(true);
+						setUsername(offlineUser.email);
+						setUser(offlineUser);
+					} else {
+						queryClient.clear();
+						void clearOfflineState();
+						setIsAuthenticated(false);
+						setIsOffline(false);
+						setUsername(null);
+						setUser(null);
+					}
 					setIsLoading(false);
 				}
 				return;
@@ -77,16 +99,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				const response = await apiFetch<ApiResponse<User>>('/auth/me');
 				if (!cancelled) {
 					setIsAuthenticated(true);
+					setIsOffline(false);
 					setUsername(response.data.email);
 					setUser(response.data);
+					void saveOfflineUser(response.data);
 				}
 			} catch {
 				clearTokens();
 				if (!cancelled) {
-					queryClient.clear();
-					setIsAuthenticated(false);
-					setUsername(null);
-					setUser(null);
+					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
+						setIsAuthenticated(true);
+						setIsOffline(true);
+						setUsername(offlineUser.email);
+						setUser(offlineUser);
+					} else {
+						queryClient.clear();
+						void clearOfflineState();
+						setIsAuthenticated(false);
+						setIsOffline(false);
+						setUsername(null);
+						setUser(null);
+					}
 				}
 			} finally {
 				if (!cancelled) {
@@ -102,6 +135,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		};
 	}, [queryClient]);
 
+	useEffect(() => {
+		function updateConnectionState() {
+			setIsOffline(!navigator.onLine || !getAccessToken());
+		}
+		window.addEventListener('offline', updateConnectionState);
+		window.addEventListener('online', updateConnectionState);
+		return () => {
+			window.removeEventListener('offline', updateConnectionState);
+			window.removeEventListener('online', updateConnectionState);
+		};
+	}, []);
+
 	const login = useCallback(
 		async (email: string, password: string) => {
 			const res = await apiFetch<ApiResponse<LoginResponse>>('/auth/login', {
@@ -109,11 +154,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
+			await clearOfflineQueryCache();
 			setAuthLostMessage(null);
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setUser(res.data.user);
+			setIsOffline(false);
+			await saveOfflineUser(res.data.user);
 			setIsAuthenticated(true);
 		},
 		[queryClient],
@@ -126,11 +174,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
+			await clearOfflineQueryCache();
 			setAuthLostMessage(null);
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setUser(res.data.user);
+			setIsOffline(false);
+			await saveOfflineUser(res.data.user);
 			setIsAuthenticated(true);
 		},
 		[queryClient],
@@ -148,7 +199,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		}
 		clearTokens();
 		queryClient.clear();
+		await clearOfflineState();
 		setIsAuthenticated(false);
+		setIsOffline(false);
 		setUsername(null);
 		setUser(null);
 		setAuthLostMessage(null);
@@ -156,6 +209,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		setIsLoggingOut(false);
 		return true;
 	}, [queryClient]);
+
+	const changePassword = useCallback(
+		async (currentPassword: string, newPassword: string) => {
+			const res = await apiFetch<ApiResponse<LoginResponse>>('/auth/change-password', {
+				method: 'POST',
+				body: JSON.stringify({ currentPassword, newPassword }),
+			});
+			setTokens(res.data.tokens.accessToken);
+			setUser(res.data.user);
+			setUsername(res.data.user.email);
+			setIsOffline(false);
+			await saveOfflineUser(res.data.user);
+			await queryClient.invalidateQueries({ queryKey: ['auth-sessions'] });
+		},
+		[queryClient],
+	);
 
 	const clearAuthLostMessage = useCallback(() => {
 		setAuthLostMessage(null);
@@ -166,6 +235,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			value={{
 				isAuthenticated,
 				isLoading,
+				isOffline,
 				username,
 				user,
 				authLostMessage,
@@ -174,6 +244,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				login,
 				register,
 				logout,
+				changePassword,
 				clearAuthLostMessage,
 			}}
 		>

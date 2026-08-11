@@ -28,6 +28,7 @@ function article(
 		publishedAt: null,
 		displayedAt,
 		isRead,
+		isSaved: false,
 		contentStatus: 'feed_ready',
 		contentVersion: 1,
 	};

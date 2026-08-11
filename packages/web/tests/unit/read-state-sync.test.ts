@@ -37,6 +37,7 @@ function article(id: string, feedId: string, isRead: boolean): ArticleListItem {
 		publishedAt: null,
 		displayedAt: '2026-06-01T00:00:00.000Z',
 		isRead,
+		isSaved: false,
 		contentStatus: 'feed_ready',
 		contentVersion: 1,
 	};
@@ -66,6 +67,7 @@ function detail(id: string, feedId: string, isRead: boolean): ArticleDetail {
 		feedSiteUrl: null,
 		media: [],
 		isRead,
+		isSaved: false,
 		isEnriched: false,
 		contentStatus: 'feed_ready',
 		contentVersion: 1,

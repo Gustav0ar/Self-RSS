@@ -26,20 +26,21 @@ import { loadExpandedFromStorage, saveExpandedToStorage } from './sidebar-storag
 interface SidebarProps {
 	selectedFeedId?: string;
 	selectedCategoryId?: string;
+	savedOnly?: boolean;
 	onSelectAll: () => void;
+	onSelectSaved?: () => void;
 	onSelectFeed: (feedId: string) => void;
 	onSelectCategory: (categoryId: string) => void;
-	/**
-	 * When true, the sidebar renders full-bleed without the responsive
-	 * `hidden md:block` shell. Used inside the mobile drawer.
-	 */
+	/** Drawer mode omits the responsive pane shell. */
 	variant?: 'pane' | 'drawer';
 }
 
 function SidebarContent({
 	selectedFeedId,
 	selectedCategoryId,
+	savedOnly,
 	onSelectAll,
+	onSelectSaved = () => {},
 	onSelectFeed,
 	onSelectCategory,
 	variant = 'pane',
@@ -219,6 +220,7 @@ function SidebarContent({
 			hasCategories={hasCategories}
 			selectedFeedId={selectedFeedId}
 			selectedCategoryId={selectedCategoryId}
+			savedOnly={savedOnly}
 			categories={categoryTree}
 			uncategorizedFeeds={uncategorizedFeeds}
 			uncategorizedExpanded={uncategorizedExpanded}
@@ -226,6 +228,7 @@ function SidebarContent({
 			categoryFeedMap={categoryFeedMap}
 			exportError={exportError}
 			onSelectAll={onSelectAll}
+			onSelectSaved={onSelectSaved}
 			onSelectFeed={onSelectFeed}
 			onSelectCategory={onSelectCategory}
 			onToggleCategory={toggleCategory}

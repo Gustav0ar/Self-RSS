@@ -50,7 +50,7 @@ export function QueryFailure({
 					compact ? 'mt-2 px-3 py-1.5 text-xs' : 'mt-4 px-4 py-2 text-sm',
 				)}
 			>
-				<RefreshCw className={cn('h-3.5 w-3.5', isRetrying && 'animate-spin')} aria-hidden="true" />
+				<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
 				{isRetrying ? 'Retrying...' : 'Retry'}
 			</button>
 		</div>

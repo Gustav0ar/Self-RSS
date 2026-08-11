@@ -11,6 +11,7 @@ import { ARTICLE_LIMITS, REFRESH_INTERVALS } from '@/lib/constants';
 import {
 	type ArticleQueryParams,
 	applyArticleReadState,
+	applyArticleSavedState,
 	applyStatsDelta,
 	applyUnreadCountDelta,
 	articleQueryKey,
@@ -75,6 +76,7 @@ export function useInfiniteArticles(
 			params.feedId ?? null,
 			params.categoryId ?? null,
 			params.unreadOnly ?? false,
+			params.savedOnly ?? false,
 			params.sort ?? 'latest',
 			limit,
 		],
@@ -297,6 +299,42 @@ export function useMarkRead() {
 			qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
 			qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
 			qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		},
+	});
+}
+
+export function useSetArticleSaved() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ articleId, saved }: { articleId: string; saved: boolean }) =>
+			apiFetch(`/articles/${articleId}/saved`, {
+				method: 'PATCH',
+				body: JSON.stringify({ saved }),
+			}),
+		onMutate: async ({ articleId, saved }) => {
+			await Promise.all([
+				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
+				qc.cancelQueries({ queryKey: ['articles'] }),
+				qc.cancelQueries({ queryKey: ['search'] }),
+			]);
+
+			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
+			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
+			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
+			applyArticleSavedState(qc, articleId, saved);
+			return { previousArticle, previousArticles, previousSearch };
+		},
+		onError: (_error, { articleId }, context) => {
+			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
+			for (const [queryKey, data] of context?.previousArticles ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+			for (const [queryKey, data] of context?.previousSearch ?? []) {
+				qc.setQueryData(queryKey, data);
+			}
+		},
+		onSettled: () => {
+			qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
 		},
 	});
 }

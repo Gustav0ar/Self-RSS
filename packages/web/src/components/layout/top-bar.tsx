@@ -1,5 +1,15 @@
 import { Link } from '@tanstack/react-router';
-import { BarChart3, LogOut, Menu, Monitor, Moon, Rss, ShieldCheck, Sun } from 'lucide-react';
+import {
+	BarChart3,
+	LogOut,
+	Menu,
+	Monitor,
+	Moon,
+	Rss,
+	ShieldCheck,
+	Sun,
+	WifiOff,
+} from 'lucide-react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TopBarErrorFallback } from '@/components/error-fallbacks';
 import { PreferencesPanel } from '@/components/preferences/preferences-panel';
@@ -30,7 +40,8 @@ function TopBarContent({
 }: TopBarProps) {
 	const { resolvedTheme, setTheme, theme } = useTheme();
 	const updatePrefs = useUpdatePreferences();
-	const { isAuthenticated, isLoggingOut, logout, logoutError, user, username } = useAuth();
+	const { isAuthenticated, isLoggingOut, isOffline, logout, logoutError, user, username } =
+		useAuth();
 
 	function cycleTheme() {
 		const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
@@ -42,6 +53,15 @@ function TopBarContent({
 
 	return (
 		<header className="relative z-30 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
+			{isAuthenticated && isOffline ? (
+				<div
+					className="mb-2 flex items-center justify-center gap-2 text-xs font-medium text-amber-300"
+					role="status"
+				>
+					<WifiOff className="h-3.5 w-3.5" />
+					<span>Offline: showing the latest saved cache</span>
+				</div>
+			) : null}
 			<div className="surface-card surface-quiet motion-enter flex h-auto min-h-14 flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4">
 				<div className="flex min-w-0 items-center gap-2 sm:gap-3">
 					{isAuthenticated && onOpenSidebar ? (
@@ -54,7 +74,7 @@ function TopBarContent({
 							<Menu className="h-5 w-5" />
 						</button>
 					) : null}
-					<div className="animate-pulse-glow flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary">
+					<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary">
 						<Rss className="h-5 w-5" />
 					</div>
 					<div className="min-w-0">

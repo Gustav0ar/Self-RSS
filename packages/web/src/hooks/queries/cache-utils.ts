@@ -18,6 +18,7 @@ import {
 } from './unread-count-cache';
 
 export * from './article-cache-updates';
+export * from './article-saved-cache-updates';
 export * from './cache-query-helpers';
 export * from './unread-count-cache';
 

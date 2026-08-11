@@ -48,6 +48,7 @@ class AuthViewModelTest {
         coEvery { repository.register(any(), any()) } returns AppResult.Success(sampleUser())
         coEvery { repository.restoreSession() } returns AppResult.Success(sampleUser())
         coEvery { repository.logout() } returns AppResult.Success(true)
+        coEvery { repository.changePassword(any(), any()) } returns AppResult.Success(sampleUser())
     }
 
     @After
@@ -265,6 +266,22 @@ class AuthViewModelTest {
         val state = viewModel.state.value
         assertFalse(state.isAuthenticated)
         coVerify { repository.logout() }
+    }
+
+    @Test
+    fun `changePassword keeps the rotated session and reports success`() = runTest {
+        val viewModel = AuthViewModel(repository)
+
+        viewModel.changePassword("password123", "new-password-123")
+
+        val state = viewModel.state.value
+        assertFalse(state.passwordChangePending)
+        assertEquals(1L, state.passwordChangeGeneration)
+        assertEquals(
+            PresentationText.resource(R.string.settings_password_updated),
+            state.statusMessage,
+        )
+        coVerify { repository.changePassword("password123", "new-password-123") }
     }
 
     @Test

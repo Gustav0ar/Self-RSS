@@ -3,6 +3,7 @@ import {
 	articleQuerySchema,
 	markAllReadSchema,
 	markReadSchema,
+	saveArticleSchema,
 	searchQuerySchema,
 } from '@self-feed/shared';
 import { type Context, Hono } from 'hono';
@@ -16,11 +17,11 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		const userId = c.get('userId');
 		const article = await articleService.getArticle(userId, articleId);
 
-		// ETag = hash of content + read state. Both change on re-fetch
+		// The representation changes with content, read state, or saved state.
 		// (hash) or mark-read (isRead). Client sends back via
 		// If-None-Match; if unchanged, 304 avoids transferring the full
 		// HTML body — the dominant cost for old, long articles.
-		const etag = `"${article.hash ?? article.id}-v${article.contentVersion}-${article.isRead ? 'r' : 'u'}"`;
+		const etag = `"${article.hash ?? article.id}-v${article.contentVersion}-${article.isRead ? 'r' : 'u'}-${article.isSaved ? 's' : 'n'}"`;
 		if (c.req.header('If-None-Match') === etag) {
 			return c.body(null, 304, { ETag: etag });
 		}
@@ -71,6 +72,15 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 			body.source ?? 'manual',
 			clientId,
 		);
+		return c.json({ data: result });
+	});
+
+	routes.patch('/:articleId/saved', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-mutate', RATE_LIMITS.articlesMutate);
+		const userId = c.get('userId');
+		const articleId = parseUuidParam(c, 'articleId');
+		const body = await parseBody(c, saveArticleSchema);
+		const result = await articleService.setSaved(userId, articleId, body.saved);
 		return c.json({ data: result });
 	});
 
