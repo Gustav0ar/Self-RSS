@@ -9,7 +9,7 @@ export function useSelectedArticleEnrichment(
 	articleId: string | null,
 	article: ArticleDetail | undefined,
 ) {
-	const enrichArticle = useEnrichArticle();
+	const { mutate: enrichArticle } = useEnrichArticle();
 	const requestedArticleId = useRef<string | null>(null);
 
 	useEffect(() => {
@@ -30,7 +30,7 @@ export function useSelectedArticleEnrichment(
 		// that remains active briefly gets the same on-demand enrichment behavior.
 		const timeoutId = window.setTimeout(() => {
 			requestedArticleId.current = articleId;
-			enrichArticle.mutate(articleId, {
+			enrichArticle(articleId, {
 				// Keep the attempt latched on failure. Mutation state rerenders immediately,
 				// so resetting here would create an unbounded request loop. Selecting the
 				// article again after navigating away creates an intentional retry boundary.
@@ -39,7 +39,7 @@ export function useSelectedArticleEnrichment(
 		}, ENRICHMENT_SELECTION_DELAY_MS);
 
 		return () => window.clearTimeout(timeoutId);
-	}, [articleId, article, enrichArticle]);
+	}, [articleId, article?.id, article?.contentStatus, article?.canonicalUrl, enrichArticle]);
 }
 
 export function useReaderScrollProgress(articleId: string | null) {

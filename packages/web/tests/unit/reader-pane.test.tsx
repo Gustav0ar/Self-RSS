@@ -1,5 +1,5 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReaderPane } from '../../src/components/articles/reader-pane';
 
 const articleWithEmbeddedHtml = {
@@ -75,6 +75,10 @@ describe('ReaderPane', () => {
 		autoMarkReadMode = 'on_navigate';
 		currentArticle = articleWithEmbeddedHtml;
 		articleIsError = false;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
@@ -188,7 +192,8 @@ describe('ReaderPane', () => {
 	it.each([
 		'feed_ready',
 		'enrichment_pending',
-	])('requests canonical enrichment for selected %s content', async (contentStatus) => {
+	])('requests canonical enrichment for selected %s content', (contentStatus) => {
+		vi.useFakeTimers();
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
@@ -199,19 +204,20 @@ describe('ReaderPane', () => {
 
 		render(<ReaderPane articleId="article-1" />);
 
-		await waitFor(() => {
-			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
-		});
+		act(() => vi.advanceTimersByTime(300));
+		expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
 	});
 
-	it('does not immediately retry failed enrichment for the same selection', async () => {
+	it('does not immediately retry failed enrichment for the same selection', () => {
+		vi.useFakeTimers();
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
 			contentStatus: 'enrichment_pending',
 		};
 		const { rerender } = render(<ReaderPane articleId="article-1" />);
-		await waitFor(() => expect(enrichMutate).toHaveBeenCalledOnce());
+		act(() => vi.advanceTimersByTime(300));
+		expect(enrichMutate).toHaveBeenCalledOnce();
 		const options = enrichMutate.mock.calls[0]?.[1] as { onError?: () => void } | undefined;
 
 		options?.onError?.();
@@ -220,7 +226,8 @@ describe('ReaderPane', () => {
 		expect(enrichMutate).toHaveBeenCalledOnce();
 	});
 
-	it('enriches only the article that remains selected during rapid navigation', async () => {
+	it('enriches only the article that remains selected during rapid navigation', () => {
+		vi.useFakeTimers();
 		currentArticle = {
 			...articleWithEmbeddedHtml,
 			isEnriched: false,
@@ -235,9 +242,8 @@ describe('ReaderPane', () => {
 		};
 		rerender(<ReaderPane articleId="article-2" />);
 
-		await waitFor(() => {
-			expect(enrichMutate).toHaveBeenCalledWith('article-2', expect.any(Object));
-		});
+		act(() => vi.advanceTimersByTime(300));
+		expect(enrichMutate).toHaveBeenCalledWith('article-2', expect.any(Object));
 		expect(enrichMutate).not.toHaveBeenCalledWith('article-1', expect.any(Object));
 	});
 
