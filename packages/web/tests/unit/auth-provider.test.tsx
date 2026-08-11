@@ -50,6 +50,10 @@ function AuthProbe() {
 	);
 }
 
+function ConnectionProbe() {
+	return <div>{useAuth().isOffline ? 'offline' : 'online'}</div>;
+}
+
 function AuthActionsProbe() {
 	const auth = useAuth();
 	if (auth.isLoading) {
@@ -87,6 +91,7 @@ function renderWithQuery(node: ReactNode, queryClient = new QueryClient()) {
 describe('AuthProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
 		getLastRefreshOutcomeMock.mockReturnValue('rejected');
 		loadOfflineUserMock.mockResolvedValue(null);
 		clearOfflineQueryCacheMock.mockResolvedValue(undefined);
@@ -96,6 +101,19 @@ describe('AuthProvider', () => {
 
 	afterEach(() => {
 		vi.clearAllMocks();
+	});
+
+	it('reports an offline connection on the initial render', () => {
+		Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+		loadOfflineUserMock.mockReturnValue(new Promise(() => {}));
+
+		renderWithQuery(
+			<AuthProvider>
+				<ConnectionProbe />
+			</AuthProvider>,
+		);
+
+		expect(screen.getByText('offline')).toBeTruthy();
 	});
 
 	it('restores the session through refresh and /auth/me when no access token is loaded', async () => {

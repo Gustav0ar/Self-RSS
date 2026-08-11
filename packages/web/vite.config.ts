@@ -16,7 +16,7 @@ function offlineShellPlugin(): Plugin {
 				left.fileName.localeCompare(right.fileName),
 			)) {
 				digest.update(output.fileName);
-				digest.update(output.type === 'asset' ? String(output.source) : output.code);
+				digest.update(output.type === 'asset' ? output.source : output.code);
 			}
 			const version = digest.digest('hex').slice(0, 16);
 			const shellUrls = Array.from(

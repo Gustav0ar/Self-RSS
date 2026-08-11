@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const queryClient = useQueryClient();
 	const [isAuthenticated, setIsAuthenticated] = useState(false);
 	const [isLoading, setIsLoading] = useState(true);
-	const [isOffline, setIsOffline] = useState(false);
+	const [isOffline, setIsOffline] = useState(() => !navigator.onLine);
 	const [username, setUsername] = useState<string | null>(null);
 	const [user, setUser] = useState<User | null>(null);
 	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
