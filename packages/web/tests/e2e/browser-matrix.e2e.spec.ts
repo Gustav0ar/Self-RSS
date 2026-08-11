@@ -63,6 +63,7 @@ const alphaArticle: ArticleListItem = {
 	publishedAt: timestamp,
 	displayedAt: timestamp,
 	isRead: false,
+	isSaved: false,
 	contentStatus: 'full_ready',
 	contentVersion: 1,
 };

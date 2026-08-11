@@ -21,7 +21,7 @@ export function searchArticles(
 	const ftsQuery = toFtsQuery(query);
 	if (!ftsQuery) return [];
 
-	const params: (string | number)[] = [ftsQuery, userId, ...feedIds];
+	const params: (string | number)[] = [ftsQuery, userId, userId, ...feedIds];
 	const cursorCondition = appendSearchCursor(params, cursor);
 	const feedIdPlaceholders = feedIds.map(() => '?').join(', ');
 	const querySql = `${searchSelectSql()} WHERE a.feed_id IN (${feedIdPlaceholders})${cursorCondition}${searchOrderSql()}`;
@@ -39,7 +39,7 @@ export function searchArticlesByScope(
 	const ftsQuery = toFtsQuery(query);
 	if (!ftsQuery) return [];
 
-	const params: (string | number)[] = [ftsQuery, scope.userId, scope.userId];
+	const params: (string | number)[] = [ftsQuery, scope.userId, scope.userId, scope.userId];
 	let scopeFilter = 'f.user_id = ?';
 	if (scope.feedId) {
 		scopeFilter += ' AND f.id = ?';
@@ -71,7 +71,7 @@ function appendSearchCursor(params: (string | number)[], cursor?: string) {
 }
 
 function searchSelectSql() {
-	return 'WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.canonical_url as canonicalUrl, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, a.content_status as contentStatus, a.content_version as contentVersion, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ?';
+	return 'WITH fts AS (SELECT article_id, bm25(articles_fts) AS fts_rank FROM articles_fts WHERE articles_fts MATCH ?) SELECT a.id, a.feed_id as feedId, a.canonical_url as canonicalUrl, a.title, a.author, a.excerpt, a.hero_image_url as heroImageUrl, a.published_at as publishedAt, a.fetched_at as fetchedAt, a.content_status as contentStatus, a.content_version as contentVersion, f.title as feedTitle, f.favicon_url as feedFaviconUrl, ar.user_id IS NOT NULL as isRead, article_saves.user_id IS NOT NULL as isSaved, fts.fts_rank as ftsRank FROM articles a INNER JOIN feeds f ON a.feed_id = f.id INNER JOIN fts ON a.id = fts.article_id LEFT JOIN article_reads ar ON a.id = ar.article_id AND ar.user_id = ? LEFT JOIN article_saves ON a.id = article_saves.article_id AND article_saves.user_id = ?';
 }
 
 function searchOrderSql() {

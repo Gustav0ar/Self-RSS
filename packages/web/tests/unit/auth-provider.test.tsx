@@ -7,20 +7,33 @@ import { AuthProvider, useAuth } from '../../src/providers/auth';
 const apiFetchMock = vi.fn();
 const clearTokensMock = vi.fn();
 const getAccessTokenMock = vi.fn();
+const getLastRefreshOutcomeMock = vi.fn();
 const loadTokensMock = vi.fn();
 const refreshAccessTokenMock = vi.fn();
 const setAuthLostHandlerMock = vi.fn();
 const setTokensMock = vi.fn();
+const clearOfflineQueryCacheMock = vi.fn();
+const clearOfflineStateMock = vi.fn();
+const loadOfflineUserMock = vi.fn();
+const saveOfflineUserMock = vi.fn();
 
 vi.mock('../../src/lib/api', () => ({
 	apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 	clearTokens: () => clearTokensMock(),
 	getAccessToken: () => getAccessTokenMock(),
+	getLastRefreshOutcome: () => getLastRefreshOutcomeMock(),
 	loadTokens: () => loadTokensMock(),
 	refreshAccessToken: () => refreshAccessTokenMock(),
 	setAuthLostHandler: (handler: ((message: string) => void) | null) =>
 		setAuthLostHandlerMock(handler),
 	setTokens: (token: string) => setTokensMock(token),
+}));
+
+vi.mock('../../src/lib/offline-store', () => ({
+	clearOfflineQueryCache: () => clearOfflineQueryCacheMock(),
+	clearOfflineState: () => clearOfflineStateMock(),
+	loadOfflineUser: () => loadOfflineUserMock(),
+	saveOfflineUser: (user: unknown) => saveOfflineUserMock(user),
 }));
 
 function AuthProbe() {
@@ -29,7 +42,12 @@ function AuthProbe() {
 		return <div>loading</div>;
 	}
 
-	return <div>{auth.isAuthenticated ? auth.username : 'logged-out'}</div>;
+	return (
+		<div>
+			<div>{auth.isAuthenticated ? auth.username : 'logged-out'}</div>
+			<div>{auth.isOffline ? 'offline' : 'online'}</div>
+		</div>
+	);
 }
 
 function AuthActionsProbe() {
@@ -69,6 +87,11 @@ function renderWithQuery(node: ReactNode, queryClient = new QueryClient()) {
 describe('AuthProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		getLastRefreshOutcomeMock.mockReturnValue('rejected');
+		loadOfflineUserMock.mockResolvedValue(null);
+		clearOfflineQueryCacheMock.mockResolvedValue(undefined);
+		clearOfflineStateMock.mockResolvedValue(undefined);
+		saveOfflineUserMock.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -112,6 +135,34 @@ describe('AuthProvider', () => {
 		});
 		expect(apiFetchMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(['preferences'])).toBeUndefined();
+	});
+
+	it('restores the last reader and retained queries when the server is unavailable', async () => {
+		getAccessTokenMock.mockReturnValue(null);
+		refreshAccessTokenMock.mockResolvedValue(false);
+		getLastRefreshOutcomeMock.mockReturnValue('unavailable');
+		loadOfflineUserMock.mockResolvedValue({
+			id: 'user-1',
+			email: 'offline@example.com',
+			role: 'user',
+			isActive: true,
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+		});
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(['articles'], { data: [{ id: 'article-1' }] });
+
+		renderWithQuery(
+			<AuthProvider>
+				<AuthProbe />
+			</AuthProvider>,
+			queryClient,
+		);
+
+		await waitFor(() => expect(screen.getByText('offline@example.com')).toBeTruthy());
+		expect(screen.getByText('offline')).toBeTruthy();
+		expect(queryClient.getQueryData(['articles'])).toEqual({ data: [{ id: 'article-1' }] });
+		expect(clearOfflineStateMock).not.toHaveBeenCalled();
 	});
 
 	it('clears cached user data before completing login', async () => {

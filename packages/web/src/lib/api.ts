@@ -24,6 +24,8 @@ export class ApiClientError extends Error {
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
+export type RefreshOutcome = 'idle' | 'success' | 'rejected' | 'unavailable';
+let lastRefreshOutcome: RefreshOutcome = 'idle';
 let authLostHandler: ((message: string) => void) | null = null;
 const clientId = getOrCreateClientId();
 
@@ -44,6 +46,10 @@ export function clearTokens() {
 
 export function getAccessToken() {
 	return accessToken;
+}
+
+export function getLastRefreshOutcome(): RefreshOutcome {
+	return lastRefreshOutcome;
 }
 
 export function getClientId() {
@@ -106,13 +112,18 @@ export async function refreshAccessToken(): Promise<boolean> {
 			if (!res.ok) {
 				if (res.status === 401) {
 					clearTokens();
+					lastRefreshOutcome = 'rejected';
+				} else {
+					lastRefreshOutcome = 'unavailable';
 				}
 				return false;
 			}
 			const { data } = await res.json();
 			setTokens(data.tokens.accessToken);
+			lastRefreshOutcome = 'success';
 			return true;
 		} catch {
+			lastRefreshOutcome = 'unavailable';
 			return false;
 		} finally {
 			refreshPromise = null;

@@ -98,7 +98,7 @@ class AppViewModel @Inject constructor(
      */
     fun openReaderFrom(origin: HomeTab) {
         _chrome.value = _chrome.value.copy(
-            activeTab = HomeTab.ARTICLES,
+            activeTab = if (origin == HomeTab.SAVED) HomeTab.SAVED else HomeTab.ARTICLES,
             readerOrigin = origin,
             globalError = null,
             globalStatus = null,

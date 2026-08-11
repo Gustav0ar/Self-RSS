@@ -1,9 +1,11 @@
 import type { SortOrder } from '@self-feed/shared';
-import { ArrowDownUp, CheckCheck, Filter, RefreshCw, Sparkles } from 'lucide-react';
+import { Filter, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ExternalShortcutStatus } from '@/components/articles/external-shortcut-status';
 import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
+import { FeedListHeader } from '@/components/articles/feed-list-header';
+import { FeedListToolbar } from '@/components/articles/feed-list-toolbar';
 import { FeedQueryState } from '@/components/articles/feed-query-state';
 import { FeedRefreshStatusBanner } from '@/components/articles/feed-refresh-status-banner';
 import { FeedToolbarButton as ToolbarButton } from '@/components/articles/feed-toolbar-button';
@@ -22,6 +24,7 @@ import {
 	usePreferences,
 	usePrefetchArticle,
 	useSearch,
+	useSetArticleSaved,
 	useUpdatePreferences,
 	useWarmNextArticles,
 	useWarmVisibleArticles,
@@ -35,12 +38,13 @@ import {
 	normalizeDensityPreference,
 	normalizeSortPreference,
 } from '@/lib/preferences';
-import { cn } from '@/lib/utils';
 import { useAppState } from '@/providers/app-state';
+import { useAuth } from '@/providers/auth';
 
 interface FeedViewProps {
 	feedId?: string;
 	categoryId?: string;
+	savedOnly?: boolean;
 	selectedArticleId: string | null;
 	fromDeepLink?: boolean;
 	searchQuery?: string;
@@ -51,6 +55,7 @@ const EMPTY_CATEGORY_TREE = [] as const;
 export function FeedView({
 	feedId,
 	categoryId,
+	savedOnly = false,
 	selectedArticleId,
 	fromDeepLink = false,
 	searchQuery = '',
@@ -67,6 +72,8 @@ export function FeedView({
 	const unreadOnly = unreadOnlyOverride ?? prefs?.hideRead ?? false;
 	const sort = sortOverride ?? normalizeSortPreference(prefs?.defaultSort);
 	const updatePrefs = useUpdatePreferences();
+	const setArticleSaved = useSetArticleSaved();
+	const { isOffline } = useAuth();
 	const { feedSyncError } = useAppState();
 	const {
 		allFeedsRefreshActivity,
@@ -89,6 +96,7 @@ export function FeedView({
 			feedId,
 			categoryId,
 			unreadOnly,
+			savedOnly,
 			sort,
 			limit: 30,
 		},
@@ -102,7 +110,7 @@ export function FeedView({
 	);
 
 	useSilentArticleRefresh(
-		{ feedId, categoryId, unreadOnly, sort, limit: 30 },
+		{ feedId, categoryId, unreadOnly, savedOnly, sort, limit: 30 },
 		{ enabled: preferencesReady },
 	);
 
@@ -114,6 +122,13 @@ export function FeedView({
 		() => buildFeedViewModel({ categoryId, categoryTree, feedId, unreadOnly }),
 		[categoryId, categoryTree, feedId, unreadOnly],
 	);
+	const displayedTitle = savedOnly ? 'Saved' : viewTitle;
+	const displayedEmptyState = savedOnly
+		? {
+				title: 'No saved articles yet',
+				description: 'Save articles from the list or reader to keep them here.',
+			}
+		: emptyState;
 	const {
 		error: lifecycleActionError,
 		lifecycle: selectedLifecycle,
@@ -139,12 +154,7 @@ export function FeedView({
 		searchQuery.trim().length >= 2 && searchArticles.length > 0 ? searchArticles : articles;
 	const articleIds = useMemo(() => readingQueue.map((a) => a.id), [readingQueue]);
 	const listArticleIds = useMemo(() => articles.map((a) => a.id), [articles]);
-	// The article URL (`/articles/:articleId`) can be deep-linked or
-	// bookmarked. The asynchronously loaded article id may briefly not be in the list while the
-	// query resolves. Only "clear" the active article once the list
-	// is fully loaded and the id is genuinely missing — never while
-	// we're still loading, otherwise deep links would flash the empty
-	// state during the first paint.
+	// Keep deep-linked article ids while their surrounding list resolves.
 	const articleIdsSet = useMemo(() => new Set(listArticleIds), [listArticleIds]);
 	const articleIsInLoadedList = selectedArticleId ? articleIdsSet.has(selectedArticleId) : false;
 	// On a deep link (`/articles/:id`) we must keep the article id even
@@ -166,6 +176,13 @@ export function FeedView({
 	const handleLoadMore = useCallback(() => {
 		void fetchNextPage();
 	}, [fetchNextPage]);
+	const handleToggleSaved = useCallback(
+		(articleId: string, saved: boolean) => {
+			if (isOffline) return;
+			setArticleSaved.mutate({ articleId, saved });
+		},
+		[isOffline, setArticleSaved],
+	);
 
 	useEffect(() => {
 		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
@@ -288,13 +305,21 @@ export function FeedView({
 		isLoading ||
 		(isFetching && articles.length === 0) ||
 		(isRefreshingCurrentSelection && articles.length === 0);
-	const unreadBadgeCount = Math.max(scopeUnreadCount, loadedUnreadCount);
+	const unreadBadgeCount = savedOnly
+		? loadedUnreadCount
+		: Math.max(scopeUnreadCount, loadedUnreadCount);
 
 	function handleUnreadOnlyToggle() {
 		const nextUnreadOnly = !unreadOnly;
 		resetRetainedReadArticles();
 		setUnreadOnly(nextUnreadOnly);
 		updatePrefs.mutate({ hideRead: nextUnreadOnly });
+	}
+
+	function handleSortToggle() {
+		const nextSort: SortOrder = sort === 'latest' ? 'oldest' : 'latest';
+		setSort(nextSort);
+		updatePrefs.mutate({ defaultSort: nextSort });
 	}
 
 	return (
@@ -310,53 +335,25 @@ export function FeedView({
 				/>
 				<ExternalShortcutStatus message={externalShortcutStatus} />
 				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
-					<div className="flex items-start justify-between gap-3">
-						<div className="min-w-0">
-							<div className="flex min-w-0 items-center gap-2">
-								<p className="truncate text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
-									Reading queue
-								</p>
-								<span className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
-								<span className="shrink-0 text-[11px] text-muted-foreground">
-									{articles.length} loaded
-								</span>
-							</div>
-							<h1 className="mt-1 truncate text-lg font-semibold tracking-tight">{viewTitle}</h1>
-						</div>
-						<div className="surface-muted flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-muted-foreground">
-							<Sparkles className="h-3.5 w-3.5 text-primary" />
-							<span>{unreadBadgeCount > 0 ? `${unreadBadgeCount} unread` : 'Caught up'}</span>
-						</div>
-					</div>
+					<FeedListHeader
+						title={displayedTitle}
+						loadedCount={articles.length}
+						unreadCount={unreadBadgeCount}
+					/>
 
-					<div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-						<ToolbarButton active={unreadOnly} onClick={handleUnreadOnlyToggle} label="Unread">
-							<Filter className="h-3.5 w-3.5" />
-						</ToolbarButton>
-						<ToolbarButton
-							onClick={() => {
-								const nextSort: SortOrder = sort === 'latest' ? 'oldest' : 'latest';
-								setSort(nextSort);
-								updatePrefs.mutate({ defaultSort: nextSort });
-							}}
-							label={sort === 'latest' ? 'Newest' : 'Oldest'}
-						>
-							<ArrowDownUp className="h-3.5 w-3.5" />
-						</ToolbarButton>
-						<ToolbarButton onClick={handleMarkAllRead} label="Mark all read" className="ml-auto">
-							<CheckCheck className="h-3.5 w-3.5" />
-						</ToolbarButton>
-						<ToolbarButton
-							onClick={handleRefresh}
-							label={refreshBlocked ? 'Refresh unavailable' : 'Refresh'}
-							disabled={isRefreshingCurrentSelection || refreshActionBlocked}
-							title={selectedLifecycle?.refreshGuidance ?? undefined}
-						>
-							<RefreshCw
-								className={cn('h-3.5 w-3.5', isRefreshingCurrentSelection && 'animate-spin')}
-							/>
-						</ToolbarButton>
-					</div>
+					<FeedListToolbar
+						unreadOnly={unreadOnly}
+						savedOnly={savedOnly}
+						sort={sort}
+						refreshBlocked={refreshBlocked}
+						refreshing={isRefreshingCurrentSelection}
+						refreshActionBlocked={refreshActionBlocked}
+						refreshGuidance={selectedLifecycle?.refreshGuidance ?? undefined}
+						onUnreadToggle={handleUnreadOnlyToggle}
+						onSortToggle={handleSortToggle}
+						onMarkAllRead={handleMarkAllRead}
+						onRefresh={handleRefresh}
+					/>
 
 					<FeedRefreshStatusBanner
 						feedId={feedId}
@@ -375,6 +372,8 @@ export function FeedView({
 						articles={articles}
 						selectedId={effectiveArticleId}
 						onSelect={handleSelectArticle}
+						onToggleSaved={handleToggleSaved}
+						savedActionsDisabled={isOffline}
 						onPrefetch={prefetchArticle}
 						onVisible={warmVisibleArticles}
 						loading={showListLoader}
@@ -382,10 +381,10 @@ export function FeedView({
 						onLoadMore={handleLoadMore}
 						loadingMore={isFetchingNextPage}
 						density={density}
-						emptyTitle={emptyState.title}
-						emptyDescription={emptyState.description}
+						emptyTitle={displayedEmptyState.title}
+						emptyDescription={displayedEmptyState.description}
 						emptyAction={
-							unreadOnly ? (
+							savedOnly ? null : unreadOnly ? (
 								<ToolbarButton onClick={handleUnreadOnlyToggle} label="Show all articles">
 									<Filter className="h-3.5 w-3.5" />
 								</ToolbarButton>
@@ -417,7 +416,7 @@ export function FeedView({
 					feedId={feedId}
 					categoryId={categoryId}
 					feedTitle={selectedFeed?.title}
-					categoryTitle={categoryId ? viewTitle : undefined}
+					categoryTitle={categoryId ? displayedTitle : undefined}
 					unreadCount={unreadBadgeCount}
 					onSuccess={resetRetainedReadArticles}
 					onClose={() => setMarkAllDialogOpen(false)}

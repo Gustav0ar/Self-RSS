@@ -27,6 +27,7 @@ function article(id: string, overrides: Partial<ArticleListItem> = {}): ArticleL
 		publishedAt: null,
 		displayedAt: '2026-01-01T00:00:00.000Z',
 		isRead: false,
+		isSaved: false,
 		contentStatus: 'feed_ready',
 		contentVersion: 1,
 		...overrides,

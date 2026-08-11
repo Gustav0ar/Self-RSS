@@ -20,6 +20,7 @@ export interface RawSearchRow {
 	feedTitle: string;
 	feedFaviconUrl: string | null;
 	isRead: number | boolean;
+	isSaved: number | boolean;
 	ftsRank: number;
 	contentStatus: string;
 	contentVersion: number;
@@ -38,6 +39,7 @@ export interface SearchRow {
 	feedTitle: string;
 	feedFaviconUrl: string | null;
 	isRead: boolean;
+	isSaved: boolean;
 	ftsRank: number;
 	contentStatus: string;
 	contentVersion: number;
@@ -76,6 +78,7 @@ export function mapSearchRow(row: RawSearchRow): SearchRow {
 		publishedAt: sqliteTimestampToDate(row.publishedAt),
 		fetchedAt,
 		isRead: Boolean(row.isRead),
+		isSaved: Boolean(row.isSaved),
 	};
 }
 

@@ -32,6 +32,7 @@ export function RootLayout() {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const searchQuery = routeSearch.q ?? '';
 	const searchScope = routeSearch.searchScope ?? 'all';
+	const savedOnly = routeSearch.savedOnly ?? false;
 	useReadStateSync(isAuthenticated);
 
 	function navigateToArticle(articleId: string) {
@@ -41,6 +42,7 @@ export function RootLayout() {
 			search: buildArticleRouteSearch({
 				feedId: selectedFeedId,
 				categoryId: selectedCategoryId,
+				savedOnly,
 				q: searchQuery,
 				searchScope,
 			}),
@@ -51,6 +53,7 @@ export function RootLayout() {
 		return buildArticleRouteSearch({
 			feedId: selectedFeedId,
 			categoryId: selectedCategoryId,
+			savedOnly,
 			q: searchQuery,
 			searchScope,
 			...overrides,
@@ -112,9 +115,14 @@ export function RootLayout() {
 					<Sidebar
 						selectedFeedId={selectedFeedId}
 						selectedCategoryId={selectedCategoryId}
+						savedOnly={savedOnly}
 						onSelectAll={() => {
 							setSidebarOpen(false);
 							navigateHome(buildArticleRouteSearch({ q: searchQuery, searchScope }));
+						}}
+						onSelectSaved={() => {
+							setSidebarOpen(false);
+							navigateHome(buildArticleRouteSearch({ savedOnly: true }));
 						}}
 						onSelectFeed={(feedId) => {
 							setSidebarOpen(false);
@@ -145,9 +153,14 @@ export function RootLayout() {
 						variant="drawer"
 						selectedFeedId={selectedFeedId}
 						selectedCategoryId={selectedCategoryId}
+						savedOnly={savedOnly}
 						onSelectAll={() => {
 							setSidebarOpen(false);
 							navigateHome(buildArticleRouteSearch({ q: searchQuery, searchScope }));
+						}}
+						onSelectSaved={() => {
+							setSidebarOpen(false);
+							navigateHome(buildArticleRouteSearch({ savedOnly: true }));
 						}}
 						onSelectFeed={(feedId) => {
 							setSidebarOpen(false);

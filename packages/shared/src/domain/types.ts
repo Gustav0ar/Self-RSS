@@ -139,6 +139,12 @@ export interface ArticleRead {
 	source: ReadSource;
 }
 
+export interface ArticleSave {
+	userId: string;
+	articleId: string;
+	savedAt: string;
+}
+
 export interface SyncRun {
 	id: string;
 	feedId: string;

@@ -83,6 +83,9 @@ JWT_SECRET=<openssl rand -hex 32>
 JWT_REFRESH_SECRET=<openssl rand -hex 32>
 JWT_ACCESS_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
+AUTH_SESSION_ABSOLUTE_TTL_DAYS=400
+AUTH_SESSION_IDLE_TTL_DAYS=30
+AUTH_SESSION_CLEANUP_BATCH_SIZE=250
 REGISTRY=ghcr.io
 IMAGE_OWNER_LOWERCASE=gustav0ar
 IMAGE_TAG=latest
@@ -98,6 +101,13 @@ ALLOW_REGISTRATION=true
 ADMIN_EMAIL=you@example.com
 ADMIN_PASSWORD=<strong-password>
 TRUSTED_PROXY_HOPS=1
+REQUIRE_WORKER_HEARTBEAT=true
+CACHE_WARMER_INTERVAL_MS=60000
+CACHE_WARMER_RECENT_WINDOW_MINUTES=10
+CACHE_WARMER_RECENT_USERS_LIMIT=25
+CACHE_WARMER_CONCURRENCY=5
+CACHE_WARMER_IDLE_USERS_ENABLED=false
+CACHE_WARMER_IDLE_USERS_LIMIT=25
 RETENTION_DELETION_ENABLED=false
 RETENTION_DELETION_DAYS=90
 RETENTION_DRY_RUN=true
@@ -320,14 +330,22 @@ normal feed refresh resumes before considering the rollback complete.
 
 ## Retention Cleanup Configuration
 
-Articles that have not been read by any user are eligible for automatic
-cleanup to manage database size. This feature is **disabled by default**
-for safety.
+The production Compose file forwards the documented session, worker-heartbeat,
+cache-warmer, and retention variables into the services that consume them. Check
+the effective contract before a rollout with:
+
+```bash
+docker compose config | rg 'AUTH_SESSION_|REQUIRE_WORKER_HEARTBEAT|CACHE_WARMER_|RETENTION_'
+```
+
+Articles that have neither been read nor saved by any user are eligible for
+automatic cleanup to manage database size. This feature is **disabled by
+default** for safety.
 
 | Variable                   | Default | Description                                      |
 | -------------------------- | ------- | ------------------------------------------------ |
 | `RETENTION_DELETION_ENABLED` | `false` | Set to `true` to enable actual deletion         |
-| `RETENTION_DELETION_DAYS`    | `90`    | Delete unread articles older than this many days |
+| `RETENTION_DELETION_DAYS`    | `90`    | Delete unprotected articles older than this many days |
 | `RETENTION_DRY_RUN`          | `true`  | Log what would be deleted without deleting       |
 
 ### Safety Features
@@ -339,9 +357,9 @@ for safety.
    many articles would be deleted without actually deleting them. Use
    this to verify the cleanup behavior before enabling live deletion.
 
-3. **Read protection**: Only articles that have **never been read** by
-   any user are eligible for cleanup. An article that has been read
-   even once is protected regardless of age.
+3. **Reader-state protection**: Only articles that have **never been read or
+   saved** by any user are eligible for cleanup. Either action protects the
+   article regardless of age.
 
 ### Enabling Retention Cleanup
 

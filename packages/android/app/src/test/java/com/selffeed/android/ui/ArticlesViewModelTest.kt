@@ -61,6 +61,10 @@ class ArticlesViewModelTest {
             AppResult.Success(secondArg<Boolean>())
         }
         coEvery { repository.updateCachedReadState(any(), any()) } just runs
+        coEvery { repository.updateCachedSavedState(any(), any()) } just runs
+        coEvery { repository.setSaved(any(), any()) } coAnswers {
+            AppResult.Success(secondArg<Boolean>())
+        }
         coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
             MarkAllReadResponse(markedCount = 0),
         )
@@ -97,7 +101,12 @@ class ArticlesViewModelTest {
         readStateManager.setScope(scope)
         enrichmentManager.setScope(scope)
         articleWarmingManager.setScope(scope)
-        return ArticlesViewModel(repository, readStateManager, enrichmentManager, articleWarmingManager)
+        return ArticlesViewModel(
+            repository,
+            readStateManager,
+            enrichmentManager,
+            articleWarmingManager
+        )
     }
 
     @Test
@@ -187,7 +196,7 @@ class ArticlesViewModelTest {
     }
 
     @Test
-	fun `openArticle selects retained row immediately while detail fetch is pending`() = runTest {
+    fun `openArticle selects retained row immediately while detail fetch is pending`() = runTest {
         val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
         coEvery { repository.article("a2", false) } coAnswers { detailResult.await() }
         val viewModel = createViewModel()
@@ -205,76 +214,99 @@ class ArticlesViewModelTest {
         assertEquals("Second Article", viewModel.state.value.selectedArticle?.title)
         coVerify { repository.markRead("a2", true, "auto_open") }
 
-        detailResult.complete(AppResult.Success(sampleDetail("a2", title = "Fetched Second Article")))
+        detailResult.complete(
+            AppResult.Success(
+                sampleDetail(
+                    "a2",
+                    title = "Fetched Second Article"
+                )
+            )
+        )
         runCurrent()
 
         assertEquals("a2", viewModel.state.value.selectedArticle?.id)
         assertEquals("Fetched Second Article", viewModel.state.value.selectedArticle?.title)
         coVerify { repository.markRead("a2", true, "auto_open") }
-	}
-
-    @Test
-    fun `warmed article detail is retained and selected without a loading content swap`() = runTest {
-        val queue = listOf(
-            sampleArticle("a1", title = "First Article"),
-            sampleArticle("a2", title = "Second Article"),
-            sampleArticle("a3", title = "Third Article"),
-        )
-        coEvery { repository.prefetchArticle(any()) } answers {
-            val id = firstArg<String>()
-            AppResult.Success(
-                sampleDetail(
-                    id = id,
-                    title = "Warmed $id",
-                    contentText = "Complete prefetched body for $id",
-                    contentVersion = 2,
-                ),
-            )
-        }
-        val pendingDetail = CompletableDeferred<AppResult<ArticleDetail>>()
-        coEvery { repository.article("a2", false) } coAnswers { pendingDetail.await() }
-        val viewModel = createViewModel()
-        viewModel.updateArticleQueueSnapshot(queue)
-
-        viewModel.warmVisibleArticles(queue)
-        runCurrent()
-        assertEquals("Complete prefetched body for a2", viewModel.state.value.readerDetails["a2"]?.contentText)
-
-        viewModel.openArticle("a2")
-        runCurrent()
-
-        assertEquals("a2", viewModel.state.value.selectedArticle?.id)
-        assertEquals("Complete prefetched body for a2", viewModel.state.value.selectedArticle?.contentText)
-        pendingDetail.complete(AppResult.Success(sampleDetail("a2", title = "Fetched a2")))
     }
 
-	@Test
-	fun `openArticleFromQueue publishes tapped article before canonical detail work starts`() = runTest {
-		val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
-		lateinit var viewModel: ArticlesViewModel
-		var selectedWhenDetailFetchStarted: ArticleDetail? = null
-		coEvery { repository.article("a2", false) } coAnswers {
-			selectedWhenDetailFetchStarted = viewModel.state.value.selectedArticle
-			detailResult.await()
-		}
-		viewModel = createViewModel()
-		val tappedArticle = sampleArticle("a2", title = "Visible during reconciliation")
+    @Test
+    fun `warmed article detail is retained and selected without a loading content swap`() =
+        runTest {
+            val queue = listOf(
+                sampleArticle("a1", title = "First Article"),
+                sampleArticle("a2", title = "Second Article"),
+                sampleArticle("a3", title = "Third Article"),
+            )
+            coEvery { repository.prefetchArticle(any()) } answers {
+                val id = firstArg<String>()
+                AppResult.Success(
+                    sampleDetail(
+                        id = id,
+                        title = "Warmed $id",
+                        contentText = "Complete prefetched body for $id",
+                        contentVersion = 2,
+                    ),
+                )
+            }
+            val pendingDetail = CompletableDeferred<AppResult<ArticleDetail>>()
+            coEvery { repository.article("a2", false) } coAnswers { pendingDetail.await() }
+            val viewModel = createViewModel()
+            viewModel.updateArticleQueueSnapshot(queue)
 
-		viewModel.updateArticleQueueSnapshot(emptyList())
-		viewModel.openArticleFromQueue("a2", listOf(tappedArticle))
+            viewModel.warmVisibleArticles(queue)
+            runCurrent()
+            assertEquals(
+                "Complete prefetched body for a2",
+                viewModel.state.value.readerDetails["a2"]?.contentText
+            )
 
-		assertEquals("a2", viewModel.state.value.selectedArticle?.id)
-		assertEquals("Visible during reconciliation", viewModel.state.value.selectedArticle?.title)
-		assertEquals("a2", selectedWhenDetailFetchStarted?.id)
-		assertEquals("Visible during reconciliation", selectedWhenDetailFetchStarted?.title)
-		detailResult.complete(AppResult.Success(sampleDetail("a2")))
-	}
+            viewModel.openArticle("a2")
+            runCurrent()
+
+            assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+            assertEquals(
+                "Complete prefetched body for a2",
+                viewModel.state.value.selectedArticle?.contentText
+            )
+            pendingDetail.complete(AppResult.Success(sampleDetail("a2", title = "Fetched a2")))
+        }
+
+    @Test
+    fun `openArticleFromQueue publishes tapped article before canonical detail work starts`() =
+        runTest {
+            val detailResult = CompletableDeferred<AppResult<ArticleDetail>>()
+            lateinit var viewModel: ArticlesViewModel
+            var selectedWhenDetailFetchStarted: ArticleDetail? = null
+            coEvery { repository.article("a2", false) } coAnswers {
+                selectedWhenDetailFetchStarted = viewModel.state.value.selectedArticle
+                detailResult.await()
+            }
+            viewModel = createViewModel()
+            val tappedArticle = sampleArticle("a2", title = "Visible during reconciliation")
+
+            viewModel.updateArticleQueueSnapshot(emptyList())
+            viewModel.openArticleFromQueue("a2", listOf(tappedArticle))
+
+            assertEquals("a2", viewModel.state.value.selectedArticle?.id)
+            assertEquals(
+                "Visible during reconciliation",
+                viewModel.state.value.selectedArticle?.title
+            )
+            assertEquals("a2", selectedWhenDetailFetchStarted?.id)
+            assertEquals("Visible during reconciliation", selectedWhenDetailFetchStarted?.title)
+            detailResult.complete(AppResult.Success(sampleDetail("a2")))
+        }
 
     @Test
     fun `openArticle ignores stale detail response from an older tap`() = runTest {
         val firstDetailResult = CompletableDeferred<AppResult<ArticleDetail>>()
         coEvery { repository.article("a1", false) } coAnswers { firstDetailResult.await() }
-        coEvery { repository.article("a2", false) } returns AppResult.Success(sampleDetail("a2", title = "Fetched Second"))
+        coEvery { repository.article("a2", false) } returns AppResult.Success(
+            sampleDetail(
+                "a2",
+                title = "Fetched Second"
+            )
+        )
         val viewModel = createViewModel()
         viewModel.updateArticleQueueSnapshot(
             listOf(
@@ -326,8 +358,18 @@ class ArticlesViewModelTest {
 
     @Test
     fun `openAdjacentArticle uses retained article queue`() = runTest {
-        coEvery { repository.article("a1", false) } returns AppResult.Success(sampleDetail("a1", title = "First Article"))
-        coEvery { repository.article("a2", false) } returns AppResult.Success(sampleDetail("a2", title = "Second Article"))
+        coEvery { repository.article("a1", false) } returns AppResult.Success(
+            sampleDetail(
+                "a1",
+                title = "First Article"
+            )
+        )
+        coEvery { repository.article("a2", false) } returns AppResult.Success(
+            sampleDetail(
+                "a2",
+                title = "Second Article"
+            )
+        )
         val viewModel = createViewModel()
         viewModel.updateArticleQueueSnapshot(
             listOf(
@@ -417,11 +459,18 @@ class ArticlesViewModelTest {
     @Test
     fun `search article opens from its own queue without flashing the previous reader`() = runTest {
         coEvery { repository.article("search-1", false) } returns
-            AppResult.Success(sampleDetail("search-1", title = "Fetched Search One"))
+                AppResult.Success(sampleDetail("search-1", title = "Fetched Search One"))
         coEvery { repository.article("search-2", false) } returns
-            AppResult.Success(sampleDetail("search-2", title = "Fetched Search Two"))
+                AppResult.Success(sampleDetail("search-2", title = "Fetched Search Two"))
         val viewModel = createViewModel()
-        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("feed-article", title = "Feed Article")))
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle(
+                    "feed-article",
+                    title = "Feed Article"
+                )
+            )
+        )
         viewModel.openArticle("feed-article")
         val searchQueue = listOf(
             sampleArticle("search-1", title = "Search One"),
@@ -463,33 +512,34 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `background article availability does not replace the active paging generation`() = runTest {
-        val remoteEvents = MutableSharedFlow<ReadStateSyncEvent>()
-        every { repository.readStateEvents() } returns remoteEvents
-        val viewModel = createViewModel()
-        val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
-        runCurrent()
-        primeArticleQueue(viewModel)
-        viewModel.startReadStateSync()
-        runCurrent()
+    fun `background article availability does not replace the active paging generation`() =
+        runTest {
+            val remoteEvents = MutableSharedFlow<ReadStateSyncEvent>()
+            every { repository.readStateEvents() } returns remoteEvents
+            val viewModel = createViewModel()
+            val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
+            runCurrent()
+            primeArticleQueue(viewModel)
+            viewModel.startReadStateSync()
+            runCurrent()
 
-        remoteEvents.emit(
-            ArticlesNewEvent(
-                eventId = "new-1",
-                feedId = "f-1",
-                articleIds = listOf("a-new"),
-                count = 1,
-                updatedAt = "2026-07-14T00:00:00.000Z",
-            ),
-        )
-        runCurrent()
+            remoteEvents.emit(
+                ArticlesNewEvent(
+                    eventId = "new-1",
+                    feedId = "f-1",
+                    articleIds = listOf("a-new"),
+                    count = 1,
+                    updatedAt = "2026-07-14T00:00:00.000Z",
+                ),
+            )
+            runCurrent()
 
-        assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
-        verify(exactly = 1) { repository.articlePagingData(any(), any()) }
-        coVerify { repository.invalidateArticleContentCaches() }
-        viewModel.stopReadStateSync()
-        collection.cancel()
-    }
+            assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
+            verify(exactly = 1) { repository.articlePagingData(any(), any()) }
+            coVerify { repository.invalidateArticleContentCaches() }
+            viewModel.stopReadStateSync()
+            collection.cancel()
+        }
 
     @Test
     fun `markRead updates the local list optimistically`() = runTest {
@@ -627,23 +677,24 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `markAllRead emits empty feed set for all-feeds scope so consumers clear entire scope`() = runTest {
-        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
-            MarkAllReadResponse(markedCount = 4),
-        )
-        val viewModel = createViewModel()
-        primeArticleQueue(viewModel)
+    fun `markAllRead emits empty feed set for all-feeds scope so consumers clear entire scope`() =
+        runTest {
+            coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
+                MarkAllReadResponse(markedCount = 4),
+            )
+            val viewModel = createViewModel()
+            primeArticleQueue(viewModel)
 
-        val event = backgroundScope.async { viewModel.events.first() }
-        runCurrent()
-        viewModel.markAllRead()
+            val event = backgroundScope.async { viewModel.events.first() }
+            runCurrent()
+            viewModel.markAllRead()
 
-        val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
-        assertNull(marked.feedId)
-        assertNull(marked.categoryId)
-        assertTrue(marked.affectedFeedIds.isEmpty())
-        assertEquals(4, marked.markedCount)
-    }
+            val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
+            assertNull(marked.feedId)
+            assertNull(marked.categoryId)
+            assertTrue(marked.affectedFeedIds.isEmpty())
+            assertEquals(4, marked.markedCount)
+        }
 
     @Test
     fun `markAllRead emits affected feed ids returned by the API`() = runTest {
@@ -673,6 +724,37 @@ class ArticlesViewModelTest {
 
         assertEquals("oldest", viewModel.state.value.sort)
         assertEquals(true, viewModel.state.value.hideRead)
+    }
+
+    @Test
+    fun `saved destination uses an exclusive saved-only paging scope`() = runTest {
+        val viewModel = createViewModel()
+        viewModel.setScope(feedId = "f-1", categoryId = null)
+        viewModel.setSavedOnly(true)
+        val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
+        runCurrent()
+
+        assertTrue(viewModel.state.value.savedOnly)
+        assertNull(viewModel.state.value.selectedFeedId)
+        assertNull(viewModel.state.value.selectedCategoryId)
+        verify { repository.articlePagingData(match { it.savedOnly }, any()) }
+        collection.cancel()
+    }
+
+    @Test
+    fun `setSaved updates the list and reader optimistically`() = runTest {
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        viewModel.openArticle("a1")
+        runCurrent()
+
+        viewModel.setSaved("a1", true)
+        runCurrent()
+
+        assertTrue(viewModel.state.value.items.single().isSaved)
+        assertTrue(viewModel.state.value.selectedArticle?.isSaved == true)
+        coVerify { repository.updateCachedSavedState("a1", true) }
+        coVerify { repository.setSaved("a1", true) }
     }
 
     @Test

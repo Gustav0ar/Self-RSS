@@ -107,7 +107,7 @@ export function TopBarErrorFallback(_error: Error, onReset: () => void): ReactNo
 		<header className="relative z-30 px-2 pb-2 pt-2 sm:px-3 sm:pb-3 sm:pt-3">
 			<div className="surface-card surface-quiet flex h-auto min-h-14 flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4">
 				<div className="flex items-center gap-2">
-					<div className="flex h-10 w-10 animate-pulse-glow items-center justify-center rounded-xl bg-primary/12 text-primary">
+					<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/12 text-primary">
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							width="20"

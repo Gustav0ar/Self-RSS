@@ -15,6 +15,12 @@ data class RegisterRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class ChangePasswordRequest(
+    val currentPassword: String,
+    val newPassword: String,
+)
+
+@JsonClass(generateAdapter = true)
 data class CreateCategoryRequest(
     val name: String,
     val parentCategoryId: String? = null,
@@ -45,6 +51,11 @@ data class UpdateFeedRequest(
 data class MarkReadRequest(
     val read: Boolean,
     val source: String = "manual",
+)
+
+@JsonClass(generateAdapter = true)
+data class SaveArticleRequest(
+    val saved: Boolean,
 )
 
 @JsonClass(generateAdapter = true)

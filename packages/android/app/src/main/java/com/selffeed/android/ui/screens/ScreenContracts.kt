@@ -62,13 +62,19 @@ data class ArticleTabState(
     val isOffline: Boolean = false,
     val feedCount: Int = 0,
     val refreshBlockedGuidance: PresentationText? = null,
+    val savedOnly: Boolean = false,
 )
 
 data class ArticleTabActions(
     val onRefresh: () -> Unit,
     val onOpenArticle: (String) -> Unit,
-    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ -> onOpenArticle(id) },
+    val onOpenArticleFromQueue: (String, List<ArticleListItem>) -> Unit = { id, _ ->
+        onOpenArticle(
+            id
+        )
+    },
     val onToggleRead: (String, Boolean) -> Unit,
+    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
     val onReadStateChanged: (String, Boolean) -> Unit = { _, _ -> },
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
     val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
@@ -84,6 +90,7 @@ data class SearchTabState(
     val currentCategoryAvailable: Boolean,
     val currentCategoryOnly: Boolean,
     val resultLimitReached: Boolean,
+    val isOffline: Boolean = false,
 )
 
 data class SearchTabActions(
@@ -92,6 +99,7 @@ data class SearchTabActions(
     val onOpenArticle: (String) -> Unit,
     val onLoadMore: () -> Unit,
     val onCurrentCategoryOnlyChanged: (Boolean) -> Unit,
+    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
 )
 
 data class SettingsTabState(
@@ -102,6 +110,9 @@ data class SettingsTabState(
     val authSessions: List<AuthSession>,
     val adminRegistrationLocked: Boolean? = null,
     val adminUsers: List<User> = emptyList(),
+    val isOnline: Boolean = true,
+    val passwordChangePending: Boolean = false,
+    val passwordChangeGeneration: Long = 0,
 )
 
 data class SettingsTabActions(
@@ -118,6 +129,7 @@ data class SettingsTabActions(
     val onCreateAdminUser: (String, String, String) -> Unit = { _, _, _ -> },
     val onUpdateAdminUser: (String, String?, Boolean?) -> Unit = { _, _, _ -> },
     val onResetAdminPassword: (String, String) -> Unit = { _, _ -> },
+    val onChangePassword: (String, String) -> Unit = { _, _ -> },
     val onLogout: () -> Unit,
     val onRetryPreferences: () -> Unit = {},
 )

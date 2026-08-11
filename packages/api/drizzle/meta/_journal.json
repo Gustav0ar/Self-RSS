@@ -141,6 +141,13 @@
       "when": 1785259063363,
       "tag": "0020_fixed_feed_refresh_interval",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786483033303,
+      "tag": "0021_saved_articles",
+      "breakpoints": true
     }
   ]
 }

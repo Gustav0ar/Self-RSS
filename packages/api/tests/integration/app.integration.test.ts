@@ -70,6 +70,7 @@ async function resetDatabase() {
 		'auth_sessions',
 		'sync_runs',
 		'article_media',
+		'article_saves',
 		'article_reads',
 		'articles',
 		'feeds',
@@ -594,6 +595,89 @@ describe('API integration', () => {
 		expect(loggedOutAccess.response.status).toBe(401);
 	});
 
+	it('changes a password by rotating credentials and revoking every old session', async () => {
+		const registered = await registerUser('password-change@example.com', 'current-password');
+		const originalToken = registered.body.data.tokens.accessToken as string;
+		const originalCookie = getCookieHeader(registered.response);
+		expect(originalCookie).toBeTruthy();
+
+		const secondLogin = await jsonRequest('/api/v1/auth/login', {
+			method: 'POST',
+			headers: JSON_HEADERS,
+			body: JSON.stringify({
+				email: 'password-change@example.com',
+				password: 'current-password',
+			}),
+		});
+		const secondToken = secondLogin.body.data.tokens.accessToken as string;
+
+		const rejected = await authedRequest('/api/v1/auth/change-password', originalToken, {
+			method: 'POST',
+			headers: { Cookie: originalCookie! },
+			body: JSON.stringify({
+				currentPassword: 'wrong-password',
+				newPassword: 'new-password-123',
+			}),
+		});
+		expect(rejected.response.status).toBe(400);
+		expect((await authedRequest('/api/v1/auth/me', secondToken)).response.status).toBe(200);
+
+		const changed = await authedRequest('/api/v1/auth/change-password', originalToken, {
+			method: 'POST',
+			headers: {
+				Cookie: originalCookie!,
+				'X-Self-Feed-Client-Id': 'rotated-client',
+			},
+			body: JSON.stringify({
+				currentPassword: 'current-password',
+				newPassword: 'new-password-123',
+			}),
+		});
+		expect(changed.response.status).toBe(200);
+		const rotatedToken = changed.body.data.tokens.accessToken as string;
+		const rotatedCookie = getCookieHeader(changed.response);
+		expect(rotatedCookie).toBeTruthy();
+		expect((await authedRequest('/api/v1/auth/me', rotatedToken)).response.status).toBe(200);
+		expect((await authedRequest('/api/v1/auth/me', originalToken)).response.status).toBe(401);
+		expect((await authedRequest('/api/v1/auth/me', secondToken)).response.status).toBe(401);
+
+		const sessions = await authedRequest('/api/v1/auth/sessions', rotatedToken);
+		expect(sessions.body.data.sessions).toHaveLength(1);
+		expect(sessions.body.data.sessions[0]).toMatchObject({
+			clientId: 'rotated-client',
+			current: true,
+		});
+		expect(
+			(
+				await jsonRequest('/api/v1/auth/login', {
+					method: 'POST',
+					headers: JSON_HEADERS,
+					body: JSON.stringify({
+						email: 'password-change@example.com',
+						password: 'current-password',
+					}),
+				})
+			).response.status,
+		).toBe(401);
+		expect(
+			(
+				await jsonRequest('/api/v1/auth/login', {
+					method: 'POST',
+					headers: JSON_HEADERS,
+					body: JSON.stringify({
+						email: 'password-change@example.com',
+						password: 'new-password-123',
+					}),
+				})
+			).response.status,
+		).toBe(200);
+		const refreshed = await jsonRequest('/api/v1/auth/refresh', {
+			method: 'POST',
+			headers: { Cookie: rotatedCookie! },
+		});
+		expect(refreshed.response.status).toBe(200);
+	});
+
 	it('only records session IPs from proxy headers when proxy trust is enabled', async () => {
 		const previousTrustProxy = process.env.TRUST_PROXY;
 		process.env.TRUST_PROXY = 'false';
@@ -1114,6 +1198,7 @@ describe('API integration', () => {
 			expect(articles.body.data[0]).toMatchObject({
 				contentStatus: 'enrichment_pending',
 				contentVersion: 1,
+				isSaved: false,
 			});
 
 			const articleId = articles.body.data[0].id;
@@ -1124,8 +1209,20 @@ describe('API integration', () => {
 			expect(detail.body.data).toMatchObject({
 				contentStatus: 'enrichment_pending',
 				contentVersion: 1,
+				isSaved: false,
 				isEnriched: false,
 			});
+
+			const saved = await authedRequest(`/api/v1/articles/${articleId}/saved`, token, {
+				method: 'PATCH',
+				body: JSON.stringify({ saved: true }),
+			});
+			expect(saved.response.status).toBe(200);
+			const savedOnly = await authedRequest('/api/v1/articles?savedOnly=true&limit=10', token);
+			expect(savedOnly.body.data).toHaveLength(1);
+			expect(savedOnly.body.data[0]).toMatchObject({ id: articleId, isSaved: true });
+			const savedDetail = await authedRequest(`/api/v1/articles/${articleId}`, token);
+			expect(savedDetail.body.data.isSaved).toBe(true);
 
 			const queuedEnrichment = await authedRequest(`/api/v1/articles/${articleId}/enrich`, token, {
 				method: 'POST',
@@ -1136,6 +1233,7 @@ describe('API integration', () => {
 			const search = await authedRequest('/api/v1/search?q=Alpha', token);
 			expect(search.response.status).toBe(200);
 			expect(search.body.data[0].title).toBe('Alpha Integration Story');
+			expect(search.body.data[0].isSaved).toBe(false);
 
 			const eventResponse = await app.request('/api/v1/events/read-state', {
 				headers: {
@@ -1203,6 +1301,14 @@ describe('API integration', () => {
 			expect(feedListAfterMarkAll.response.status).toBe(200);
 			expect(feedListAfterMarkAll.body.data[0].unreadCount).toBe(0);
 
+			const unsaved = await authedRequest(`/api/v1/articles/${articleId}/saved`, token, {
+				method: 'PATCH',
+				body: JSON.stringify({ saved: false }),
+			});
+			expect(unsaved.response.status).toBe(200);
+			const emptySaved = await authedRequest('/api/v1/articles?savedOnly=true&limit=10', token);
+			expect(emptySaved.body.data).toHaveLength(0);
+
 			const updatedPreferences = await authedRequest('/api/v1/preferences', token, {
 				method: 'PATCH',
 				body: JSON.stringify({ theme: 'dark', fontFamily: 'Georgia', hideRead: true }),
@@ -1225,6 +1331,50 @@ describe('API integration', () => {
 			await events?.cancel().catch(() => undefined);
 			await feedServer.stop();
 		}
+	});
+
+	it('protects saved articles from retention cleanup', async () => {
+		const registered = await registerUser('saved-retention@example.com');
+		const userId = registered.body.data.user.id as string;
+		const token = registered.body.data.tokens.accessToken as string;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Saved retention' }),
+		});
+		const [feed] = await db
+			.insert(feeds)
+			.values({
+				userId,
+				categoryId: category.body.data.id,
+				feedUrl: 'https://example.com/saved-retention.xml',
+				title: 'Saved retention feed',
+			})
+			.returning();
+		const [article] = await db
+			.insert(articles)
+			.values({
+				feedId: feed!.id,
+				guid: 'saved-retention-article',
+				title: 'Keep this article',
+				hash: 'saved-retention-hash',
+				fetchedAt: new Date('2020-01-01T00:00:00.000Z'),
+			})
+			.returning();
+
+		const saved = await authedRequest(`/api/v1/articles/${article!.id}/saved`, token, {
+			method: 'PATCH',
+			body: JSON.stringify({ saved: true }),
+		});
+		expect(saved.response.status).toBe(200);
+		expect(await deps.repos.article.deleteOlderThan(90)).toBe(0);
+		expect(await db.select().from(articles).where(eq(articles.id, article!.id))).toHaveLength(1);
+
+		await authedRequest(`/api/v1/articles/${article!.id}/saved`, token, {
+			method: 'PATCH',
+			body: JSON.stringify({ saved: false }),
+		});
+		expect(await deps.repos.article.deleteOlderThan(90)).toBe(1);
+		expect(await db.select().from(articles).where(eq(articles.id, article!.id))).toHaveLength(0);
 	});
 
 	it('normalizes relative publisher and article URLs during feed sync', async () => {

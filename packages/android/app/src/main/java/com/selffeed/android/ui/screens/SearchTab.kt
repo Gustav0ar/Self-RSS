@@ -114,6 +114,9 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
                     article = article,
                     selected = state.selectedArticleId == article.id,
                     onClick = {},
+                    onToggleSaved = if (state.isOffline) null else {
+                        { actions.onToggleSaved(article.id, !article.isSaved) }
+                    },
                 )
             }
         }
@@ -131,9 +134,15 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
 
         if (state.hasMoreResults) {
             item {
-                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     if (state.loadingMoreResults) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
                     } else {
                         AssistChip(
                             onClick = actions.onLoadMore,

@@ -23,6 +23,8 @@ data class AuthUiState(
     val apiBaseUrl: String = "",
     val registrationEnabled: Boolean = false,
     val user: User? = null,
+    val passwordChangePending: Boolean = false,
+    val passwordChangeGeneration: Long = 0,
     val statusMessage: PresentationText? = null,
     val errorMessage: PresentationText? = null,
 )
@@ -66,6 +68,7 @@ class AuthViewModel @Inject constructor(
                         apiBaseUrl = apiBaseUrl,
                         errorMessage = null,
                     )
+
                     is AppResult.Error -> {
                         if (result.message == AUTH_LOST_MESSAGE) {
                             val enabled = loadRegistrationEnabled()
@@ -127,6 +130,7 @@ class AuthViewModel @Inject constructor(
                     apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_welcome_back),
                 )
+
                 is AppResult.Error -> _state.value = _state.value.copy(
                     loading = false,
                     errorMessage = PresentationText.dynamic(result.message),
@@ -159,6 +163,7 @@ class AuthViewModel @Inject constructor(
                     apiBaseUrl = normalizedApiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_account_created),
                 )
+
                 is AppResult.Error -> _state.value = _state.value.copy(
                     loading = false,
                     errorMessage = PresentationText.dynamic(result.message),
@@ -179,6 +184,30 @@ class AuthViewModel @Inject constructor(
         }
     }
 
+    fun changePassword(currentPassword: String, newPassword: String) {
+        if (_state.value.passwordChangePending) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                passwordChangePending = true,
+                errorMessage = null,
+                statusMessage = null,
+            )
+            when (val result = repository.changePassword(currentPassword, newPassword)) {
+                is AppResult.Success -> _state.value = _state.value.copy(
+                    user = result.data,
+                    passwordChangePending = false,
+                    passwordChangeGeneration = _state.value.passwordChangeGeneration + 1,
+                    statusMessage = PresentationText.resource(R.string.settings_password_updated),
+                )
+
+                is AppResult.Error -> _state.value = _state.value.copy(
+                    passwordChangePending = false,
+                    errorMessage = PresentationText.dynamic(result.message),
+                )
+            }
+        }
+    }
+
     fun switchServerForExternalAction(serverOrigin: String) {
         viewModelScope.launch {
             _state.value = _state.value.copy(loading = true, errorMessage = null)
@@ -194,6 +223,7 @@ class AuthViewModel @Inject constructor(
                         registrationEnabled = enabled,
                     )
                 }
+
                 is AppResult.Error -> _state.value = _state.value.copy(
                     loading = false,
                     errorMessage = result.message.toApiBaseUrlPresentationText(),
@@ -217,6 +247,7 @@ class AuthViewModel @Inject constructor(
             is AppResult.Success -> result.data.also { normalized ->
                 _state.value = _state.value.copy(apiBaseUrl = normalized)
             }
+
             is AppResult.Error -> {
                 _state.value = _state.value.copy(
                     loading = false,
@@ -229,8 +260,10 @@ class AuthViewModel @Inject constructor(
     private fun String.toApiBaseUrlPresentationText(): PresentationText = when (this) {
         INVALID_API_BASE_URL_MESSAGE ->
             PresentationText.resource(R.string.auth_invalid_server_url)
+
         INVALID_SERVER_HOST_MESSAGE ->
             PresentationText.resource(R.string.auth_invalid_server_host)
+
         else -> PresentationText.dynamic(this)
     }
 

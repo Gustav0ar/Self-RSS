@@ -4,13 +4,16 @@ Thanks for helping improve SelfFeed.
 
 ## Development Setup
 
-1. Install Bun.
-2. Run `bun install`.
+1. Review `mise.toml`, then run `mise trust && mise install` to install the pinned Bun version.
+2. Run `mise exec -- bun install --frozen-lockfile`.
 3. Copy `.env.example` to `packages/api/.env`.
 4. Start Redis with `bun run dev:infra`.
 5. Run the app with `bun run dev`.
 
 SQLite data is stored locally and is ignored by Git.
+
+If Bun 1.3.14 is installed directly, the same commands can be run without the
+`mise exec --` prefix.
 
 ## Checks
 

@@ -5,9 +5,12 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppStateProvider, AuthProvider, QueryProvider, ThemeProvider, useAuth } from './providers';
 import { router } from './routes/router';
 import './styles/globals.css';
+import { registerServiceWorker } from './lib/service-worker';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element not found');
+
+registerServiceWorker();
 
 createRoot(rootEl).render(
 	<StrictMode>

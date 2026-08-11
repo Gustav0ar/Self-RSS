@@ -166,6 +166,16 @@ class SearchViewModel @Inject constructor(
         _state.update { it.copy(errorMessage = null) }
     }
 
+    fun updateSavedState(articleId: String, saved: Boolean) {
+        _state.update { state ->
+            state.copy(
+                results = state.results.map { article ->
+                    if (article.id == articleId) article.copy(isSaved = saved) else article
+                },
+            )
+        }
+    }
+
     private suspend fun runSearch(
         query: String,
         categoryId: String?,
@@ -178,7 +188,8 @@ class SearchViewModel @Inject constructor(
                 if (cursor == null) {
                     val page = result.data.data
                     val capped = page.take(MAX_RESULTS)
-                    val reachedLimit = capped.size >= MAX_RESULTS && (result.data.hasMore || page.size > MAX_RESULTS)
+                    val reachedLimit =
+                        capped.size >= MAX_RESULTS && (result.data.hasMore || page.size > MAX_RESULTS)
                     _state.update {
                         it.copy(
                             results = capped,
@@ -194,7 +205,7 @@ class SearchViewModel @Inject constructor(
                         val uncapped = it.results + result.data.data
                         val combined = uncapped.take(MAX_RESULTS)
                         val reachedLimit = combined.size >= MAX_RESULTS &&
-                            (result.data.hasMore || uncapped.size > MAX_RESULTS)
+                                (result.data.hasMore || uncapped.size > MAX_RESULTS)
                         it.copy(
                             results = combined,
                             cursor = result.data.cursor,
@@ -205,6 +216,7 @@ class SearchViewModel @Inject constructor(
                     }
                 }
             }
+
             is AppResult.Error -> {
                 if (!isCurrentRequest(query, categoryId, generation)) return
                 _state.update {
@@ -224,8 +236,8 @@ class SearchViewModel @Inject constructor(
     private fun isCurrentRequest(query: String, categoryId: String?, generation: Long): Boolean {
         val current = _state.value
         return generation == requestGeneration &&
-            current.query.trim() == query &&
-            activeCategoryId(current) == categoryId
+                current.query.trim() == query &&
+                activeCategoryId(current) == categoryId
     }
 
     companion object {

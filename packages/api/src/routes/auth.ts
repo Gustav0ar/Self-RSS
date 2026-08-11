@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { loginSchema, registerSchema } from '@self-feed/shared';
+import { changePasswordSchema, loginSchema, registerSchema } from '@self-feed/shared';
 import type { Context, MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -137,6 +137,22 @@ export function createAuthRoutes(
 		const userId = c.get('userId');
 		const user = await authService.getCurrentUser(userId);
 		return c.json({ data: user });
+	});
+
+	auth.post('/change-password', authMiddleware, async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'auth', RATE_LIMITS.auth);
+		const userId = c.get('userId');
+		const body = await parseBody(c, changePasswordSchema);
+		const result = await authService.changePassword(
+			userId,
+			body.currentPassword,
+			body.newPassword,
+			getSessionMetadata(c),
+		);
+		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
+		return c.json({
+			data: { user: result.user, tokens: { accessToken: result.tokens.accessToken } },
+		});
 	});
 
 	auth.get('/sessions', authMiddleware, async (c) => {

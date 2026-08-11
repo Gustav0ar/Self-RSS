@@ -99,6 +99,25 @@ export const authPaths = {
 			},
 		},
 	},
+	'/auth/change-password': {
+		post: {
+			tags: ['Auth'],
+			security: bearerSecurity,
+			requestBody: json({
+				type: 'object',
+				required: ['currentPassword', 'newPassword'],
+				properties: {
+					currentPassword: { type: 'string', minLength: 1, maxLength: 128 },
+					newPassword: { type: 'string', minLength: 8, maxLength: 128 },
+				},
+			}),
+			responses: {
+				'200': json(apiDataRef('#/components/schemas/AuthResponse')),
+				'400': json({ $ref: '#/components/schemas/ApiError' }),
+				'401': json({ $ref: '#/components/schemas/ApiError' }),
+			},
+		},
+	},
 	'/auth/sessions': {
 		get: {
 			tags: ['Auth'],

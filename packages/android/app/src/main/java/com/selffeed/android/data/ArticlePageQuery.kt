@@ -9,9 +9,10 @@ data class ArticlePageQuery(
     val feedId: String? = null,
     val categoryId: String? = null,
     val unreadOnly: Boolean = false,
+    val savedOnly: Boolean = false,
     val sort: String? = null,
     val generation: Long = 0L,
 )
 
 fun ArticlePageQuery.remoteKey(): String =
-    "articles:${feedId.orEmpty()}:${categoryId.orEmpty()}:$unreadOnly:${sort.orEmpty()}"
+    "articles:${feedId.orEmpty()}:${categoryId.orEmpty()}:$unreadOnly:$savedOnly:${sort.orEmpty()}"

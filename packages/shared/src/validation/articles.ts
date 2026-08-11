@@ -5,6 +5,10 @@ export const markReadSchema = z.object({
 	source: z.enum(['manual', 'auto_navigate', 'auto_open']).optional().default('manual'),
 });
 
+export const saveArticleSchema = z.object({
+	saved: z.boolean(),
+});
+
 export const markAllReadSchema = z
 	.object({
 		categoryId: z.string().uuid().optional(),
@@ -19,6 +23,10 @@ export const articleQuerySchema = z.object({
 	categoryId: z.string().uuid().optional(),
 	feedId: z.string().uuid().optional(),
 	unreadOnly: z
+		.string()
+		.transform((v) => v === 'true')
+		.optional(),
+	savedOnly: z
 		.string()
 		.transform((v) => v === 'true')
 		.optional(),
@@ -122,6 +130,7 @@ export const realtimeEventSchema = z.discriminatedUnion('type', [
 export const readStateSyncEventSchema = realtimeEventSchema;
 
 export type MarkReadInput = z.infer<typeof markReadSchema>;
+export type SaveArticleInput = z.infer<typeof saveArticleSchema>;
 export type MarkAllReadInput = z.infer<typeof markAllReadSchema>;
 export type ArticleQueryInput = z.infer<typeof articleQuerySchema>;
 export type ArticleDetailQueryInput = z.infer<typeof articleDetailQuerySchema>;

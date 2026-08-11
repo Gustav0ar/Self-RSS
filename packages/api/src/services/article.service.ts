@@ -53,6 +53,7 @@ export class ArticleService {
 			feedId?: string;
 			categoryId?: string;
 			unreadOnly?: boolean;
+			savedOnly?: boolean;
 			sort?: string;
 			cursor?: string;
 			limit?: number;
@@ -83,6 +84,7 @@ export class ArticleService {
 				feedId: options.feedId,
 				categoryId: options.categoryId,
 				unreadOnly: options.unreadOnly,
+				savedOnly: options.savedOnly,
 				sort: options.sort,
 				limit,
 			});
@@ -106,6 +108,7 @@ export class ArticleService {
 				cursor: options.cursor,
 				sort: options.sort,
 				unreadOnly: options.unreadOnly,
+				savedOnly: options.savedOnly,
 			},
 		);
 		const hasMore = result.length > limit;
@@ -123,7 +126,8 @@ export class ArticleService {
 			heroImageUrl: a.heroImageUrl,
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
-			isRead: a.isRead,
+			isRead: Boolean(a.isRead),
+			isSaved: Boolean(a.isSaved),
 			contentStatus: a.contentStatus,
 			contentVersion: a.contentVersion,
 		}));
@@ -151,7 +155,11 @@ export class ArticleService {
 			try {
 				const parsed = JSON.parse(cached) as ArticleDetailResponse;
 				this.cacheMetrics?.recordCacheHit('article_detail');
-				return parsed;
+				return {
+					...parsed,
+					isRead: Boolean(parsed.isRead),
+					isSaved: Boolean(parsed.isSaved),
+				};
 			} catch {
 				// Corrupt cache entry — fall through to the DB.
 				await this.redis.del(cacheKey);
@@ -166,6 +174,8 @@ export class ArticleService {
 
 		const response: ArticleDetailResponse = {
 			...article,
+			isRead: Boolean(article.isRead),
+			isSaved: Boolean(article.isSaved),
 			publishedAt: article.publishedAt?.toISOString() ?? null,
 			fetchedAt: article.fetchedAt.toISOString(),
 			enrichmentQueuedAt: article.enrichmentQueuedAt?.toISOString() ?? null,
@@ -229,6 +239,21 @@ export class ArticleService {
 		return { success: true };
 	}
 
+	async setSaved(userId: string, articleId: string, saved: boolean) {
+		const article = await this.articleRepo.findRefForUser(userId, articleId);
+		if (!article) throw AppError.notFound('Article not found');
+
+		const changed = saved
+			? await this.articleRepo.save(userId, articleId)
+			: await this.articleRepo.unsave(userId, articleId);
+		if (changed) {
+			this.patchCachedSavedState(userId, articleId, saved);
+			await this.invalidateArticleDetailCache(userId, articleId);
+		}
+
+		return { success: true };
+	}
+
 	/**
 	 * Drop the per-article detail cache. Called whenever a field that
 	 * the response includes (isRead, media, heroImageUrl, etc.) changes
@@ -249,6 +274,16 @@ export class ArticleService {
 				// Best-effort. The client performs an optimistic update and the
 				// cached list rows expire quickly, so this must not slow or fail
 				// the read-state mutation route.
+			});
+		} catch {
+			// Best-effort only.
+		}
+	}
+
+	private patchCachedSavedState(userId: string, articleId: string, saved: boolean): void {
+		try {
+			void this.articleCache?.updateCachedSavedState(userId, articleId, saved).catch(() => {
+				// Best-effort. The client updates optimistically and list caches expire quickly.
 			});
 		} catch {
 			// Best-effort only.
@@ -359,6 +394,7 @@ export class ArticleService {
 			publishedAt: a.publishedAt?.toISOString() ?? null,
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: a.isRead,
+			isSaved: a.isSaved,
 			contentStatus: a.contentStatus,
 			contentVersion: a.contentVersion,
 		}));

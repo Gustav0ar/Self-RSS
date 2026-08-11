@@ -42,6 +42,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private var preferenceFailuresRemaining = 0
     private var articleDetailDelayMs = 0L
     private val articleReadStates = mutableMapOf<String, Boolean>()
+    private val articleSavedStates = mutableMapOf<String, Boolean>()
     private val articleDetailOverrides = mutableMapOf<String, ArticleDetail>()
     var categoryRequests = 0
         private set
@@ -102,6 +103,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         preferenceFailuresRemaining = preferenceFailures
         articleDetailDelayMs = 0L
         articleReadStates.clear()
+        articleSavedStates.clear()
         articleDetailOverrides.clear()
         categoryRequests = 0
         feedRequests = 0
@@ -139,6 +141,12 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         return AppResult.Success(fakeUser)
     }
 
+    override suspend fun changePassword(
+        currentPassword: String,
+        newPassword: String
+    ): AppResult<User> =
+        AppResult.Success(fakeUser)
+
     override suspend fun restoreSession(): AppResult<User> =
         if (authenticated) AppResult.Success(fakeUser) else AppResult.Error("No saved session")
 
@@ -146,25 +154,31 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         authenticated = false
         return AppResult.Success(true)
     }
+
     override suspend fun me(): AppResult<User> = AppResult.Success(fakeUser)
     override fun isLoggedIn(): Boolean = authenticated
     override fun authEvents(): Flow<String> = emptyFlow()
 
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> {
         categoryRequests++
-        return AppResult.Success(listOf(
-            CategoryWithCounts(
-                id = "category-1",
-                name = "Injected Category",
-                slug = "injected-category",
-                sortOrder = 0,
-                feedCount = 1,
-                unreadCount = unreadCount(),
-            ),
-        ))
+        return AppResult.Success(
+            listOf(
+                CategoryWithCounts(
+                    id = "category-1",
+                    name = "Injected Category",
+                    slug = "injected-category",
+                    sortOrder = 0,
+                    feedCount = 1,
+                    unreadCount = unreadCount(),
+                ),
+            )
+        )
     }
 
-    override suspend fun createCategory(name: String, parentCategoryId: String?): AppResult<CategoryWithCounts> =
+    override suspend fun createCategory(
+        name: String,
+        parentCategoryId: String?
+    ): AppResult<CategoryWithCounts> =
         AppResult.Error("Not supported in fake")
 
     override suspend fun updateCategory(
@@ -173,46 +187,63 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         parentCategoryId: String?,
     ): AppResult<CategoryWithCounts> = AppResult.Error("Not supported in fake")
 
-    override suspend fun deleteCategory(id: String): AppResult<Boolean> = AppResult.Error("Not supported in fake")
+    override suspend fun deleteCategory(id: String): AppResult<Boolean> =
+        AppResult.Error("Not supported in fake")
 
     override suspend fun feeds(categoryId: String?): AppResult<List<FeedWithCounts>> {
         feedRequests++
-        return AppResult.Success(listOf(
-            FeedWithCounts(
-                id = "feed-1",
-                categoryId = "category-1",
-                title = "Injected Feed",
-                feedUrl = "https://example.com/feed.xml",
-                pollingIntervalMinutes = 60,
-                syncStatus = "idle",
-                unreadCount = unreadCount(),
-            ),
-        ))
+        return AppResult.Success(
+            listOf(
+                FeedWithCounts(
+                    id = "feed-1",
+                    categoryId = "category-1",
+                    title = "Injected Feed",
+                    feedUrl = "https://example.com/feed.xml",
+                    pollingIntervalMinutes = 60,
+                    syncStatus = "idle",
+                    unreadCount = unreadCount(),
+                ),
+            )
+        )
     }
 
-    override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): AppResult<FeedWithCounts> =
+    override suspend fun createFeed(
+        feedUrl: String,
+        categoryId: String,
+        title: String?
+    ): AppResult<FeedWithCounts> =
         AppResult.Error("Not supported in fake")
 
     override suspend fun updateFeed(
         id: String,
-		feedUrl: String?,
+        feedUrl: String?,
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,
     ): AppResult<FeedWithCounts> = AppResult.Error("Not supported in fake")
 
-    override suspend fun deleteFeed(id: String): AppResult<Boolean> = AppResult.Error("Not supported in fake")
-    override suspend fun syncFeed(id: String): AppResult<SyncResponse> = AppResult.Success(SyncResponse(syncedFeeds = 1))
-    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?): AppResult<SyncResponse> =
+    override suspend fun deleteFeed(id: String): AppResult<Boolean> =
+        AppResult.Error("Not supported in fake")
+
+    override suspend fun syncFeed(id: String): AppResult<SyncResponse> =
         AppResult.Success(SyncResponse(syncedFeeds = 1))
-    override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> = AppResult.Success(
-        FeedSyncAllStatus(
-            queued = false,
-            running = false,
-            active = false,
-            stale = false,
-        ),
-    )
+
+    override suspend fun syncAllFeeds(
+        feedId: String?,
+        categoryId: String?
+    ): AppResult<SyncResponse> =
+        AppResult.Success(SyncResponse(syncedFeeds = 1))
+
+    override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> =
+        AppResult.Success(
+            FeedSyncAllStatus(
+                queued = false,
+                running = false,
+                active = false,
+                stale = false,
+            ),
+        )
+
     override suspend fun feedSyncHistory(feedId: String): AppResult<FeedSyncHistoryResponse> =
         AppResult.Success(FeedSyncHistoryResponse(runs = emptyList()))
 
@@ -233,13 +264,16 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     ): Flow<PagingData<ArticleListItem>> {
         articlePagingRequests++
         val overrides = readStateOverrides()
-        val articles = currentArticles(query.unreadOnly).map { article ->
+        val articles = currentArticles(query.unreadOnly, query.savedOnly).map { article ->
             overrides[article.id]?.let { article.copy(isRead = it) } ?: article
         }
         return flowOf(PagingData.from(articles))
     }
 
-    override suspend fun article(articleId: String, forceRefresh: Boolean): AppResult<ArticleDetail> {
+    override suspend fun article(
+        articleId: String,
+        forceRefresh: Boolean
+    ): AppResult<ArticleDetail> {
         if (articleDetailDelayMs > 0L) {
             delay(articleDetailDelayMs)
         }
@@ -254,27 +288,55 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         AppResult.Success(fakeArticleDetail(articleId))
 
     override fun prefetchHeroImages(imageUrls: Iterable<String?>) = Unit
-    override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean): AppResult<EnrichArticleResponse> =
+    override suspend fun enrichArticle(
+        articleId: String,
+        invalidateCaches: Boolean
+    ): AppResult<EnrichArticleResponse> =
         AppResult.Success(EnrichArticleResponse(success = true))
 
-    override suspend fun markRead(articleId: String, read: Boolean, source: String): AppResult<Boolean> {
+    override suspend fun markRead(
+        articleId: String,
+        read: Boolean,
+        source: String
+    ): AppResult<Boolean> {
         articleReadStates[articleId] = read
         return AppResult.Success(read)
     }
-    override suspend fun markAllRead(feedId: String?, categoryId: String?): AppResult<MarkAllReadResponse> {
+
+    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> {
+        articleSavedStates[articleId] = saved
+        return AppResult.Success(saved)
+    }
+
+    override suspend fun markAllRead(
+        feedId: String?,
+        categoryId: String?
+    ): AppResult<MarkAllReadResponse> {
         val unreadBefore = unreadCount()
         fakeArticles.forEach { articleReadStates[it.id] = true }
-        return AppResult.Success(MarkAllReadResponse(markedCount = unreadBefore, feedIds = listOf("feed-1")))
+        return AppResult.Success(
+            MarkAllReadResponse(
+                markedCount = unreadBefore,
+                feedIds = listOf("feed-1")
+            )
+        )
     }
+
     override fun clientId(): String = "android-test-client"
     override fun readStateEvents(): Flow<ReadStateSyncEvent> = readStateSyncEvents
     override suspend fun invalidateReadStateCaches(articleId: String?) {
         readStateInvalidations++
     }
+
     override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
     override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
         articleReadStates[articleId] = read
     }
+
+    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean) {
+        articleSavedStates[articleId] = saved
+    }
+
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
         fakeArticles
             .filter { feedIds.isEmpty() || it.feedId in feedIds }
@@ -292,6 +354,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         }
         return AppResult.Success(preferences)
     }
+
     override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> {
         preferences = preferences.copy(
             theme = request.theme ?: preferences.theme,
@@ -300,7 +363,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             density = request.density ?: preferences.density,
             defaultSort = request.defaultSort ?: preferences.defaultSort,
             hideRead = request.hideRead ?: preferences.hideRead,
-            keyboardShortcutsEnabled = request.keyboardShortcutsEnabled ?: preferences.keyboardShortcutsEnabled,
+            keyboardShortcutsEnabled = request.keyboardShortcutsEnabled
+                ?: preferences.keyboardShortcutsEnabled,
             autoMarkReadMode = request.autoMarkReadMode ?: preferences.autoMarkReadMode,
         )
         return AppResult.Success(preferences)
@@ -322,7 +386,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     fun emitRealtimeConnected(): Boolean = readStateSyncEvents.tryEmit(RealtimeConnectedEvent())
 
-    override suspend fun authSessions(): AppResult<List<AuthSession>> = AppResult.Success(listOf(fakeSession))
+    override suspend fun authSessions(): AppResult<List<AuthSession>> =
+        AppResult.Success(listOf(fakeSession))
 
     override suspend fun revokeAuthSession(id: String): AppResult<Boolean> = AppResult.Success(true)
 
@@ -334,7 +399,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override suspend fun adminUsers(): AppResult<List<User>> = AppResult.Success(listOf(fakeUser))
 
-    override suspend fun adminCreateUser(email: String, password: String, role: String): AppResult<User> =
+    override suspend fun adminCreateUser(
+        email: String,
+        password: String,
+        role: String
+    ): AppResult<User> =
         AppResult.Success(
             User(
                 id = "created-user",
@@ -344,7 +413,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             ),
         )
 
-    override suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?): AppResult<User> =
+    override suspend fun adminUpdateUser(
+        id: String,
+        role: String?,
+        isActive: Boolean?
+    ): AppResult<User> =
         AppResult.Success(
             fakeUser.copy(
                 id = id,
@@ -362,16 +435,28 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun observeOnline(): Flow<Boolean> = online
     override fun trimMemoryCaches() = Unit
 
-    private fun currentArticles(unreadOnly: Boolean? = null): List<ArticleListItem> =
+    private fun currentArticles(
+        unreadOnly: Boolean? = null,
+        savedOnly: Boolean? = null,
+    ): List<ArticleListItem> =
         fakeArticles
-            .map { article -> article.copy(isRead = articleReadStates[article.id] ?: article.isRead) }
+            .map { article ->
+                article.copy(
+                    isRead = articleReadStates[article.id] ?: article.isRead,
+                    isSaved = articleSavedStates[article.id] ?: article.isSaved,
+                )
+            }
             .filter { article -> unreadOnly != true || !article.isRead }
+            .filter { article -> savedOnly != true || article.isSaved }
 
     private fun unreadCount(): Int = fakeArticles.count { articleReadStates[it.id] != true }
 
     private fun fakeArticleDetail(articleId: String): ArticleDetail {
         articleDetailOverrides[articleId]?.let { detail ->
-            return detail.copy(isRead = articleReadStates[articleId] ?: detail.isRead)
+            return detail.copy(
+                isRead = articleReadStates[articleId] ?: detail.isRead,
+                isSaved = articleSavedStates[articleId] ?: detail.isSaved,
+            )
         }
 
         val article = fakeArticles.firstOrNull { it.id == articleId }
@@ -390,12 +475,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             feedFaviconUrl = article?.feedFaviconUrl,
             media = emptyList(),
             isRead = articleReadStates[articleId] ?: article?.isRead ?: false,
+            isSaved = articleSavedStates[articleId] ?: article?.isSaved ?: false,
             isEnriched = false,
         )
     }
 
     private companion object {
-        val fakeUser = User(id = "user-1", email = "reader@example.com", role = "user", isActive = true)
+        val fakeUser =
+            User(id = "user-1", email = "reader@example.com", role = "user", isActive = true)
         val fakeSession = AuthSession(
             id = "session-1",
             deviceName = "Android test device",

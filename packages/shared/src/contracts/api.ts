@@ -151,6 +151,7 @@ export interface ArticleListItem {
 	publishedAt: string | null;
 	displayedAt: string;
 	isRead: boolean;
+	isSaved: boolean;
 	contentStatus: ArticleContentStatus;
 	contentVersion: number;
 }
@@ -161,6 +162,7 @@ export interface ArticleDetail extends Article {
 	feedSiteUrl: string | null;
 	media: ArticleMedia[];
 	isRead: boolean;
+	isSaved: boolean;
 	isEnriched: boolean;
 }
 

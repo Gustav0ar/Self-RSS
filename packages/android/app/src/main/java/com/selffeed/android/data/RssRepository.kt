@@ -151,6 +151,13 @@ class RssRepository @Inject constructor(
         runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { runtime.withRetry { authRemote.me() } }
     }
 
+    override suspend fun changePassword(currentPassword: String, newPassword: String) = safeCall {
+        val response = authRemote.changePassword(currentPassword, newPassword)
+        sessionStore.setAccessToken(response.tokens.accessToken)
+        runtime.invalidateByPrefix("auth:sessions")
+        response.user
+    }
+
     override suspend fun categories() = safeReadCall {
         flushPendingReadStateMutations()
         runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
@@ -186,11 +193,12 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun updateCategory(id: String, name: String?, parentCategoryId: String?) = safeCall {
-        feedRemote.updateCategory(id, name, parentCategoryId).also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun updateCategory(id: String, name: String?, parentCategoryId: String?) =
+        safeCall {
+            feedRemote.updateCategory(id, name, parentCategoryId).also {
+                invalidateFeedAndArticleCaches()
+            }
         }
-    }
 
     override suspend fun deleteCategory(id: String) = safeCall {
         feedRemote.deleteCategory(id).also {
@@ -237,13 +245,20 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) = safeCall {
-        feedRemote.createFeed(feedUrl, categoryId, title).also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) =
+        safeCall {
+            feedRemote.createFeed(feedUrl, categoryId, title).also {
+                invalidateFeedAndArticleCaches()
+            }
         }
-    }
 
-    override suspend fun updateFeed(id: String, feedUrl: String?, categoryId: String?, title: String?, pollingIntervalMinutes: Int?) = safeCall {
+    override suspend fun updateFeed(
+        id: String,
+        feedUrl: String?,
+        categoryId: String?,
+        title: String?,
+        pollingIntervalMinutes: Int?
+    ) = safeCall {
         feedRemote.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes).also {
             invalidateFeedAndArticleCaches()
         }
@@ -261,26 +276,27 @@ class RssRepository @Inject constructor(
         }
     }
 
-	override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
-		val response = feedRemote.syncAllFeeds(feedId, categoryId)
-		if (response.requestId != null) {
-			sessionStore.setFeedRefreshRequestId(response.requestId)
-		}
-		response
+    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
+        val response = feedRemote.syncAllFeeds(feedId, categoryId)
+        if (response.requestId != null) {
+            sessionStore.setFeedRefreshRequestId(response.requestId)
+        }
+        response
     }
 
     override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall {
-        val trackedRequestId = requestId ?: sessionStore.getFeedRefreshRequestId()?.takeIf(String::isNotBlank)
+        val trackedRequestId =
+            requestId ?: sessionStore.getFeedRefreshRequestId()?.takeIf(String::isNotBlank)
         val trackedStatus = feedRemote.syncAllFeedsStatus(trackedRequestId)
         val status = if (trackedRequestId != null && trackedStatus.requestId != trackedRequestId) {
             sessionStore.setFeedRefreshRequestId(null)
             feedRemote.syncAllFeedsStatus(null)
         } else trackedStatus
-		if (status.active && status.requestId != null) {
-			sessionStore.setFeedRefreshRequestId(status.requestId)
-		}
-		if (!status.active) invalidateFeedAndArticleRuntimeCaches()
-		status
+        if (status.active && status.requestId != null) {
+            sessionStore.setFeedRefreshRequestId(status.requestId)
+        }
+        if (!status.active) invalidateFeedAndArticleRuntimeCaches()
+        status
     }
 
     override suspend fun feedSyncHistory(feedId: String) = safeReadCall {
@@ -345,6 +361,7 @@ class RssRepository @Inject constructor(
                                         feedId = query.feedId,
                                         categoryId = query.categoryId,
                                         unreadOnly = query.unreadOnly,
+                                        savedOnly = query.savedOnly,
                                         sort = query.sort,
                                         limit = limit,
                                         cursor = cursor,
@@ -399,7 +416,8 @@ class RssRepository @Inject constructor(
         }
     }
 
-    suspend fun article(articleId: String): AppResult<ArticleDetail> = article(articleId, forceRefresh = false)
+    suspend fun article(articleId: String): AppResult<ArticleDetail> =
+        article(articleId, forceRefresh = false)
 
     private fun backgroundRefreshArticle(articleId: String) {
         refreshScope.launch {
@@ -436,16 +454,19 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override fun cachedArticleDetail(articleId: String): ArticleDetail? = runtime.getCached("article:$articleId")
+    override fun cachedArticleDetail(articleId: String): ArticleDetail? =
+        runtime.getCached("article:$articleId")
 
-    override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> = article(articleId)
+    override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
+        article(articleId)
 
-    override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> = safeReadCall {
-        runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
-            runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-            offlineReadStore.writeArticleDetail(detail)
+    override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> =
+        safeReadCall {
+            runtime.withRetry { articleRemote.article(articleId) }.also { detail ->
+                runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+                offlineReadStore.writeArticleDetail(detail)
+            }
         }
-    }
 
     override fun prefetchHeroImages(imageUrls: Iterable<String?>) {
         if (!networkMonitor.online.value) return // Skip prefetch on cellular/metered when offline
@@ -526,6 +547,23 @@ class RssRepository @Inject constructor(
         }
     }
 
+    override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall {
+        val key = "article:$articleId"
+        val previous = runtime.getCached<ArticleDetail>(key)
+        if (previous != null) {
+            runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isSaved = saved))
+        }
+        try {
+            articleRemote.setSaved(articleId, saved).let { saved }.also {
+                runtime.invalidateByPrefix("articles")
+                runtime.invalidateByPrefix("search")
+            }
+        } catch (e: Exception) {
+            if (previous != null) runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous)
+            throw e
+        }
+    }
+
     suspend fun markAllRead() = markAllRead(feedId = null, categoryId = null)
 
     override fun clientId(): String = sessionStore.getClientId()
@@ -533,22 +571,38 @@ class RssRepository @Inject constructor(
     override fun readStateEvents(): Flow<ReadStateSyncEvent> =
         readStateStreamClient.events(::isLoggedIn)
 
-    override suspend fun search(query: String, categoryId: String?, cursor: String?) = safeReadCall {
-        if (!cursor.isNullOrBlank()) {
-            return@safeReadCall runtime.withRetry { searchRemote.search(query = query, categoryId = categoryId, cursor = cursor) }
-        }
+    override suspend fun search(query: String, categoryId: String?, cursor: String?) =
+        safeReadCall {
+            if (!cursor.isNullOrBlank()) {
+                return@safeReadCall runtime.withRetry {
+                    searchRemote.search(
+                        query = query,
+                        categoryId = categoryId,
+                        cursor = cursor
+                    )
+                }
+            }
 
-        val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
-        runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) {
-            runtime.withRetry { searchRemote.search(query = query, categoryId = categoryId, cursor = cursor) }
+            val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
+            runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) {
+                runtime.withRetry {
+                    searchRemote.search(
+                        query = query,
+                        categoryId = categoryId,
+                        cursor = cursor
+                    )
+                }
+            }
         }
-    }
 
     suspend fun search(query: String): AppResult<ApiListResponse<ArticleListItem>> =
         search(query = query, categoryId = null, cursor = null)
 
     override suspend fun preferences() = safeReadCall {
-        runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) { runtime.withRetry { settingsRemote.preferences() } }
+        runtime.cachedGet(
+            key = "preferences",
+            ttlMs = PREFERENCES_TTL_MS
+        ) { runtime.withRetry { settingsRemote.preferences() } }
     }
 
     override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall {
@@ -560,7 +614,10 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun stats() = safeReadCall {
-        runtime.cachedGet(key = "stats", ttlMs = STATS_TTL_MS) { runtime.withRetry { settingsRemote.stats() } }
+        runtime.cachedGet(
+            key = "stats",
+            ttlMs = STATS_TTL_MS
+        ) { runtime.withRetry { settingsRemote.stats() } }
     }
 
     override suspend fun authSessions() = safeReadCall {
@@ -576,7 +633,10 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun adminSettings() = safeReadCall {
-        runtime.cachedGet(key = "admin:settings", ttlMs = ADMIN_SETTINGS_TTL_MS) { runtime.withRetry { settingsRemote.adminSettings() } }
+        runtime.cachedGet(
+            key = "admin:settings",
+            ttlMs = ADMIN_SETTINGS_TTL_MS
+        ) { runtime.withRetry { settingsRemote.adminSettings() } }
     }
 
     override suspend fun updateAdminSettings(registrationLocked: Boolean) = safeCall {
@@ -602,7 +662,8 @@ class RssRepository @Inject constructor(
     }
 
     override fun isLoggedIn(): Boolean =
-        !sessionStore.getRefreshCookie().isNullOrBlank() || !sessionStore.getAccessToken().isNullOrBlank()
+        !sessionStore.getRefreshCookie().isNullOrBlank() || !sessionStore.getAccessToken()
+            .isNullOrBlank()
 
     override fun authEvents(): Flow<String> = authLostEvents.asSharedFlow()
 
@@ -647,7 +708,8 @@ class RssRepository @Inject constructor(
     private fun isUnauthorized(result: AppResult.Error): Boolean =
         (result.cause as? HttpException)?.code() == 401
 
-    private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> = runtime.safeCall(block)
+    private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> =
+        runtime.safeCall(block)
 
     private suspend fun handleAuthenticationLost() {
         sessionStore.clear()
@@ -704,6 +766,16 @@ class RssRepository @Inject constructor(
             runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = read))
         }
         localStore.clearAcknowledgedReadStateOverride(articleId)
+    }
+
+    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean) {
+        val key = "article:$articleId"
+        runtime.getCached<ArticleDetail>(key)?.let { cached ->
+            runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+        }
+        localStore.updateArticleSavedState(articleId, saved)
+        runtime.invalidateByPrefix("articles")
+        runtime.invalidateByPrefix("search")
     }
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
@@ -798,6 +870,7 @@ class RssRepository @Inject constructor(
         const val USER_TTL_MS = 30_000L
         const val CATEGORIES_TTL_MS = 60_000L
         const val FEEDS_TTL_MS = 60_000L
+
         // Article details change rarely once published (only on enrichment
         // or read-state flip, both of which invalidate explicitly). Keep
         // them in the in-memory cache for a full day so reopening an old
@@ -815,7 +888,8 @@ class RssRepository @Inject constructor(
         const val ARTICLE_PAGE_SIZE = 30
         const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
-        const val SESSION_REFRESH_UNAVAILABLE_MESSAGE = "Session could not be refreshed. Please try again."
+        const val SESSION_REFRESH_UNAVAILABLE_MESSAGE =
+            "Session could not be refreshed. Please try again."
     }
 }
 

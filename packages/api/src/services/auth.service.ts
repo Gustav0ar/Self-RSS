@@ -182,6 +182,33 @@ export class AuthService {
 		return this.sanitizeUser(user);
 	}
 
+	async changePassword(
+		userId: string,
+		currentPassword: string,
+		newPassword: string,
+		metadata: AuthSessionMetadataInput = {},
+	) {
+		const user = await this.userRepo.findById(userId);
+		if (!user?.isActive) {
+			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
+		}
+		if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+			throw AppError.badRequest('Current password is incorrect');
+		}
+		if (currentPassword === newPassword) {
+			throw AppError.badRequest('New password must be different from the current password');
+		}
+
+		const passwordHash = await hashPassword(newPassword);
+		// Revoke first so a Redis failure cannot leave old sessions active after
+		// the credential changes. A later failure remains recoverable by signing
+		// in with the new password.
+		await this.revokeAllUserSessions(userId);
+		const updatedUser = await this.userRepo.updatePasswordHash(userId, passwordHash);
+		const tokens = await this.issueTokens(updatedUser.id, updatedUser.role, metadata);
+		return { user: this.sanitizeUser(updatedUser), tokens };
+	}
+
 	async listSessions(userId: string, currentSessionId?: string | null) {
 		const sessions = await this.sessionRepo.listActiveByUserId(userId);
 		return sessions.map((session) => ({

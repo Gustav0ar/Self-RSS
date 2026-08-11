@@ -213,7 +213,8 @@ function copyMigrationsBeforeDurableIngestion(baseDir: string) {
 			entry.tag !== '0017_smiling_naoko' &&
 			entry.tag !== '0018_nifty_dragon_man' &&
 			entry.tag !== '0019_tidy_wong' &&
-			entry.tag !== '0020_fixed_feed_refresh_interval',
+			entry.tag !== '0020_fixed_feed_refresh_interval' &&
+			entry.tag !== '0021_saved_articles',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
@@ -229,7 +230,10 @@ function copyMigrationsBeforeAuthSessionExpiry(baseDir: string) {
 		entries: { tag: string }[];
 	};
 	journal.entries = journal.entries.filter(
-		(entry) => entry.tag !== '0019_tidy_wong' && entry.tag !== '0020_fixed_feed_refresh_interval',
+		(entry) =>
+			entry.tag !== '0019_tidy_wong' &&
+			entry.tag !== '0020_fixed_feed_refresh_interval' &&
+			entry.tag !== '0021_saved_articles',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
@@ -245,7 +249,8 @@ function copyMigrationsBeforeFixedFeedRefresh(baseDir: string) {
 		entries: { tag: string }[];
 	};
 	journal.entries = journal.entries.filter(
-		(entry) => entry.tag !== '0020_fixed_feed_refresh_interval',
+		(entry) =>
+			entry.tag !== '0020_fixed_feed_refresh_interval' && entry.tag !== '0021_saved_articles',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;

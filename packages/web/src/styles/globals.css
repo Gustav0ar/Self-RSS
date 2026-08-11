@@ -519,20 +519,6 @@ a:focus-visible {
 	}
 }
 
-@keyframes pulse-glow {
-	0%,
-	100% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 0%, transparent);
-	}
-	50% {
-		box-shadow: 0 0 0 8px color-mix(in srgb, var(--color-primary) 12%, transparent);
-	}
-}
-
-.animate-pulse-glow {
-	animation: pulse-glow 2.4s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
 	html {
 		scroll-behavior: auto;

@@ -2,4 +2,4 @@ package com.selffeed.android.ui
 
 enum class AuthMode { LOGIN, REGISTER }
 
-enum class HomeTab { FEEDS, ARTICLES, SEARCH, SETTINGS, STATS }
+enum class HomeTab { FEEDS, ARTICLES, SAVED, SEARCH, SETTINGS, STATS }

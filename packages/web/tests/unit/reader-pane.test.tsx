@@ -49,6 +49,7 @@ let autoMarkReadMode = 'on_navigate';
 let currentArticle = articleWithEmbeddedHtml;
 let articleIsError = false;
 const refetchArticle = vi.fn();
+const setSavedMutate = vi.fn();
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
@@ -61,6 +62,11 @@ vi.mock('../../src/hooks/queries', () => ({
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	useEnrichArticle: () => ({ mutate: enrichMutate, isPending: false }),
 	usePreferences: () => ({ data: { autoMarkReadMode } }),
+	useSetArticleSaved: () => ({ mutate: setSavedMutate, isPending: false }),
+}));
+
+vi.mock('../../src/providers/auth', () => ({
+	useAuth: () => ({ isOffline: false }),
 }));
 
 describe('ReaderPane', () => {
@@ -158,6 +164,14 @@ describe('ReaderPane', () => {
 		expect(markReadMutate).not.toHaveBeenCalled();
 	});
 
+	it('saves the selected article from the reader toolbar', () => {
+		const { getByRole } = render(<ReaderPane articleId="article-1" />);
+
+		fireEvent.click(getByRole('button', { name: 'Save' }));
+
+		expect(setSavedMutate).toHaveBeenCalledWith({ articleId: 'article-1', saved: true });
+	});
+
 	it('marks articles read on open when auto-mark is on open', async () => {
 		autoMarkReadMode = 'on_open';
 
@@ -186,6 +200,21 @@ describe('ReaderPane', () => {
 		render(<ReaderPane articleId="article-1" />);
 
 		expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
+	});
+
+	it('does not immediately retry failed enrichment for the same selection', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			isEnriched: false,
+			contentStatus: 'enrichment_pending',
+		};
+		const { rerender } = render(<ReaderPane articleId="article-1" />);
+		const options = enrichMutate.mock.calls[0]?.[1] as { onError?: () => void } | undefined;
+
+		options?.onError?.();
+		rerender(<ReaderPane articleId="article-1" />);
+
+		expect(enrichMutate).toHaveBeenCalledOnce();
 	});
 
 	it('shows a retry action for transient article failures', () => {
