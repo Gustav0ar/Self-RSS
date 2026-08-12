@@ -113,7 +113,7 @@ jobs:
       - name: Generate the release Baseline Profile on a managed device
         run: ./packages/android/gradlew -p packages/android :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile
       - name: Upload generated profile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-baseline-profile
           path: packages/android/app/src/release/generated/baselineProfiles/baseline-prof.txt

@@ -39,7 +39,7 @@ A self-hosted, Feedly-like RSS reader built with **Bun**, **Hono**, **React**, *
 Follow these steps to set up and run the application locally in development mode.
 
 ### 1. Prerequisites
-- **Toolchain:** [mise](https://mise.jdx.dev/) with the repository's trusted `mise.toml`, or [Bun](https://bun.sh) 1.3.14 installed directly
+- **Toolchain:** [mise](https://mise.jdx.dev/) with the repository's trusted `mise.toml` installs Bun 1.3.14 and Node.js 26.5.1. Bun remains the application runtime; Node is pinned for compatible web tooling.
 - **Container Engine:** [Podman](https://podman.io) or **Docker** (with Docker Compose plugin) to run Redis locally.
 
 ### 2. Installation
@@ -51,8 +51,8 @@ mise install
 mise exec -- bun install --frozen-lockfile
 ```
 
-Review `mise.toml` before trusting it. If Bun 1.3.14 is already installed directly,
-`bun install --frozen-lockfile` is equivalent.
+Review `mise.toml` before trusting it. If Bun 1.3.14 and Node.js 26.5.1 are
+already installed directly, `bun install --frozen-lockfile` is equivalent.
 
 ### 3. Environment Configuration
 Copy the development environment template to the API directory:
