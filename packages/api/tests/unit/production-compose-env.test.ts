@@ -4,12 +4,17 @@ import { describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(import.meta.dirname, '../../../..');
 const compose = readFileSync(resolve(repositoryRoot, 'docker-compose.yml'), 'utf8');
+const deployScript = readFileSync(resolve(repositoryRoot, 'scripts/deploy-vps.sh'), 'utf8');
 
-function serviceEnvironment(serviceName: 'api' | 'worker') {
+function serviceDefinition(serviceName: 'api' | 'worker') {
 	const lines = compose.split('\n');
 	const serviceStart = lines.indexOf(`  ${serviceName}:`);
 	const serviceEnd = lines.findIndex((line, index) => index > serviceStart && /^ {2}\S/.test(line));
-	const service = lines.slice(serviceStart, serviceEnd === -1 ? undefined : serviceEnd);
+	return lines.slice(serviceStart, serviceEnd === -1 ? undefined : serviceEnd);
+}
+
+function serviceEnvironment(serviceName: 'api' | 'worker') {
+	const service = serviceDefinition(serviceName);
 	const environmentStart = service.indexOf('    environment:');
 	const environmentEnd = service.findIndex(
 		(line, index) => index > environmentStart && /^ {4}\S/.test(line),
@@ -54,5 +59,20 @@ describe('production compose environment contract', () => {
 		]) {
 			expect(environment).toContain(`${name}:`);
 		}
+	});
+
+	it('allows guarded production migrations to finish before API health failures count', () => {
+		expect(serviceDefinition('api').join('\n')).toContain(
+			`start_period: \${API_HEALTH_START_PERIOD:-5m}`,
+		);
+	});
+
+	it('rolls back both application images when compose startup fails', () => {
+		expect(deployScript).toContain('save_current_images');
+		expect(deployScript).toContain('Restoring previous API and web images');
+		expect(deployScript).toMatch(
+			/up -d --remove-orphans \|\| \{\n\techo "\[DEPLOY\] Compose startup failed"\n\trollback_deploy/,
+		);
+		expect(deployScript).not.toMatch(/docker pull "\$\{PREVIOUS_.*_IMAGE\}"/);
 	});
 });

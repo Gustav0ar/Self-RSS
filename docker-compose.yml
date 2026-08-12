@@ -96,7 +96,9 @@ services:
         ]
       interval: 15s
       timeout: 5s
-      start_period: 30s
+      # Startup can include a guarded VACUUM backup before migrations. Large
+      # production databases need a wider grace period than normal restarts.
+      start_period: ${API_HEALTH_START_PERIOD:-5m}
       retries: 3
 
   worker:
