@@ -4,7 +4,7 @@ Thanks for helping improve SelfFeed.
 
 ## Development Setup
 
-1. Review `mise.toml`, then run `mise trust && mise install` to install the pinned Bun version.
+1. Review `mise.toml`, then run `mise trust && mise install` to install the pinned Bun and Node.js versions.
 2. Run `mise exec -- bun install --frozen-lockfile`.
 3. Copy `.env.example` to `packages/api/.env`.
 4. Start Redis with `bun run dev:infra`.
@@ -12,8 +12,8 @@ Thanks for helping improve SelfFeed.
 
 SQLite data is stored locally and is ignored by Git.
 
-If Bun 1.3.14 is installed directly, the same commands can be run without the
-`mise exec --` prefix.
+If Bun 1.3.14 and Node.js 26.5.1 are installed directly, the same commands can
+be run without the `mise exec --` prefix.
 
 ## Checks
 
