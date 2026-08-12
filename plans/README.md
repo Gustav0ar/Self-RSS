@@ -116,6 +116,14 @@ initiatives rather than bounded defects and are intentionally not mixed into
 the implementation batch above. They require separate product decisions,
 schema/API design, and rollout plans.
 
+Roadmap expansion is now evidence-gated. Before starting another product
+initiative, review at least 30 complete days from `GET
+/api/v1/admin/product-analytics`: save demand, offline restores, 90%-plus
+article completions, feed failures, and rolling 7/30-day retention. Record the
+decision and the observed baseline in the new initiative's plan. Do not treat
+partial launch data as a reason to expand scope. With collection launching on
+2026-08-12, the earliest roadmap review is 2026-09-12.
+
 ## 2026-07-24 reliability, administration, and diagnostics batch
 
 This third batch was planned against deployed commit `b34c5b9`. It includes

@@ -247,6 +247,16 @@ export class ArticleService {
 			? await this.articleRepo.save(userId, articleId)
 			: await this.articleRepo.unsave(userId, articleId);
 		if (changed) {
+			if (saved) {
+				await this.metricsRepo
+					.incrementProductCounts?.(userId, { articlesSaved: 1 })
+					.catch((error) => {
+						logger.warn('Failed to record article-save analytics', {
+							userId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					});
+			}
 			this.patchCachedSavedState(userId, articleId, saved);
 			await this.invalidateArticleDetailCache(userId, articleId);
 		}

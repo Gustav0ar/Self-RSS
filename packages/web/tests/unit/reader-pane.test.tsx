@@ -50,6 +50,7 @@ let currentArticle = articleWithEmbeddedHtml;
 let articleIsError = false;
 const refetchArticle = vi.fn();
 const setSavedMutate = vi.fn();
+const trackArticleCompletion = vi.fn();
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
@@ -67,6 +68,10 @@ vi.mock('../../src/hooks/queries', () => ({
 
 vi.mock('../../src/providers/auth', () => ({
 	useAuth: () => ({ isOffline: false }),
+}));
+
+vi.mock('../../src/lib/product-analytics', () => ({
+	trackArticleCompletion: (...args: unknown[]) => trackArticleCompletion(...args),
 }));
 
 describe('ReaderPane', () => {
@@ -290,6 +295,17 @@ describe('ReaderPane', () => {
 		expect(cancelAnimationFrame).not.toHaveBeenCalled();
 		requestAnimationFrame.mockRestore();
 		cancelAnimationFrame.mockRestore();
+	});
+
+	it('records completion after the five-second floor for a fully viewed short article', () => {
+		vi.useFakeTimers();
+		render(<ReaderPane articleId="article-1" />);
+
+		act(() => vi.advanceTimersByTime(4_999));
+		expect(trackArticleCompletion).not.toHaveBeenCalled();
+		act(() => vi.advanceTimersByTime(1));
+		expect(trackArticleCompletion).toHaveBeenCalledOnce();
+		expect(trackArticleCompletion).toHaveBeenCalledWith('article-1');
 	});
 
 	it('resets scroll position and progress when the selected article changes', () => {

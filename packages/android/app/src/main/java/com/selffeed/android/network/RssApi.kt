@@ -152,6 +152,11 @@ interface RssApi {
     @GET("stats")
     suspend fun stats(): ApiEnvelope<StatsResponse>
 
+    @POST("analytics/events")
+    suspend fun recordProductAnalyticsEvents(
+        @Body request: RecordProductAnalyticsEventsRequest,
+    ): ApiEnvelope<RecordProductAnalyticsEventsResponse>
+
     @GET("admin/settings")
     suspend fun adminSettings(): ApiEnvelope<AppSettingsResponse>
 

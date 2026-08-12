@@ -1333,6 +1333,51 @@ describe('API integration', () => {
 		}
 	});
 
+	it('deduplicates client analytics and limits the product report to admins', async () => {
+		const admin = await registerUser('analytics-admin@example.com');
+		const adminToken = admin.body.data.tokens.accessToken as string;
+		const occurredOn = new Date().toISOString().slice(0, 10);
+		const events = [
+			{ id: 'eb7ca44b-9d55-4165-93c2-f2477d9d7d37', type: 'app_opened', occurredOn },
+			{ id: '27e218a0-4943-4c84-870e-b179e67c2eaf', type: 'offline_restore', occurredOn },
+			{ id: '1ff02c6d-a84c-4221-85a2-5ccfebc21e00', type: 'article_completed', occurredOn },
+		];
+
+		const recorded = await authedRequest('/api/v1/analytics/events', adminToken, {
+			method: 'POST',
+			body: JSON.stringify({ events }),
+		});
+		expect(recorded.response.status).toBe(200);
+		expect(recorded.body.data.accepted).toBe(3);
+
+		const retried = await authedRequest('/api/v1/analytics/events', adminToken, {
+			method: 'POST',
+			body: JSON.stringify({ events }),
+		});
+		expect(retried.response.status).toBe(200);
+		expect(retried.body.data.accepted).toBe(0);
+
+		const report = await authedRequest('/api/v1/admin/product-analytics', adminToken);
+		expect(report.response.status).toBe(200);
+		expect(report.body.data).toMatchObject({
+			periodDays: 30,
+			throughDate: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString().slice(0, 10),
+			totals: {
+				activeUsers: expect.any(Number),
+				offlineRestores: 0,
+				articlesCompleted: 0,
+			},
+		});
+		expect(report.body.data.daily).toHaveLength(30);
+
+		const reader = await registerUser('analytics-reader@example.com');
+		const forbidden = await authedRequest(
+			'/api/v1/admin/product-analytics',
+			reader.body.data.tokens.accessToken,
+		);
+		expect(forbidden.response.status).toBe(403);
+	});
+
 	it('protects saved articles from retention cleanup', async () => {
 		const registered = await registerUser('saved-retention@example.com');
 		const userId = registered.body.data.user.id as string;

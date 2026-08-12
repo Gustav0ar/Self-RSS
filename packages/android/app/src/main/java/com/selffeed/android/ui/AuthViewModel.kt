@@ -81,6 +81,7 @@ class AuthViewModel @Inject constructor(
                                 errorMessage = PresentationText.resource(R.string.auth_session_lost),
                             )
                         } else {
+                            repository.recordOfflineRestore()
                             _state.value = _state.value.copy(
                                 loading = false,
                                 isAuthenticated = true,

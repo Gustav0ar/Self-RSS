@@ -52,6 +52,7 @@ class AuthRepositoryImpl @Inject constructor(
 
     override fun isLoggedIn(): Boolean = source.isLoggedIn()
     override fun authEvents(): Flow<String> = source.authEvents()
+    override suspend fun recordOfflineRestore() = source.recordOfflineRestore()
 }
 
 class FeedRepositoryImpl @Inject constructor(
@@ -185,6 +186,9 @@ class ArticleRepositoryImpl @Inject constructor(
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) =
         delegate.markCachedArticlesReadByFeeds(feedIds)
+
+    override suspend fun recordArticleCompletion(articleId: String) =
+        delegate.recordArticleCompletion(articleId)
 }
 
 class SearchRepositoryImpl @Inject constructor(

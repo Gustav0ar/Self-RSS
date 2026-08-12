@@ -46,4 +46,10 @@ describe('openApiSpec route drift guards', () => {
 		);
 		expect(openApiSpec.components.schemas.ArticleListItem.properties).toHaveProperty('displayedAt');
 	});
+
+	it('documents the client analytics batch and admin product report', () => {
+		expect(openApiSpec.paths).toHaveProperty('/analytics/events.post');
+		expect(openApiSpec.paths).toHaveProperty('/admin/product-analytics.get');
+		expect(openApiSpec.components.schemas).toHaveProperty('ProductAnalyticsReport');
+	});
 });

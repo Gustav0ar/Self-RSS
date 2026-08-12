@@ -36,6 +36,7 @@ interface AuthRepository {
     suspend fun changePassword(currentPassword: String, newPassword: String): AppResult<User>
     fun isLoggedIn(): Boolean
     fun authEvents(): Flow<String>
+    suspend fun recordOfflineRestore() = Unit
 }
 
 interface FeedRepository {
@@ -120,6 +121,7 @@ interface ArticleRepository {
     suspend fun updateCachedReadState(articleId: String, read: Boolean)
     suspend fun updateCachedSavedState(articleId: String, saved: Boolean)
     suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>)
+    suspend fun recordArticleCompletion(articleId: String) = Unit
 }
 
 interface SearchRepository {

@@ -307,12 +307,15 @@ class ArticlesViewModel @Inject constructor(
             _state.value.autoMarkReadMode == AutoMarkReadPreference.ON_OPEN && !article.isRead -> {
                 markReadAutomatically(articleId)
             }
-
             article.isRead -> {
                 readStateManager.readStateStore.remember(articleId, true)
                 publishReadStateOverrides(articleId to true)
             }
         }
+    }
+
+    fun onArticleCompleted(articleId: String) {
+        viewModelScope.launch { repository.recordArticleCompletion(articleId) }
     }
 
     fun onReaderPageChanged(articleId: String) {

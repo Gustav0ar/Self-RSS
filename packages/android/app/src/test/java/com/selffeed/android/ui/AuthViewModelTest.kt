@@ -49,6 +49,7 @@ class AuthViewModelTest {
         coEvery { repository.restoreSession() } returns AppResult.Success(sampleUser())
         coEvery { repository.logout() } returns AppResult.Success(true)
         coEvery { repository.changePassword(any(), any()) } returns AppResult.Success(sampleUser())
+        coEvery { repository.recordOfflineRestore() } returns Unit
     }
 
     @After
@@ -109,6 +110,7 @@ class AuthViewModelTest {
         assertTrue(state.isAuthenticated)
         assertNull(state.errorMessage)
         assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
+        coVerify { repository.recordOfflineRestore() }
     }
 
     @Test

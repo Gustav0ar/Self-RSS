@@ -163,6 +163,10 @@ export interface UserMetricsDaily {
 	articlesReadCount: number;
 	feedsSyncedCount: number;
 	searchCount: number;
+	articlesSavedCount: number;
+	offlineRestoresCount: number;
+	articlesCompletedCount: number;
+	feedFailuresCount: number;
 }
 
 export interface AppSettings {

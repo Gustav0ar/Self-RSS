@@ -42,7 +42,10 @@ export function useSelectedArticleEnrichment(
 	}, [articleId, article?.id, article?.contentStatus, article?.canonicalUrl, enrichArticle]);
 }
 
-export function useReaderScrollProgress(articleId: string | null) {
+export function useReaderScrollProgress(
+	articleId: string | null,
+	onCompleted?: (articleId: string) => void,
+) {
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	const scrollProgressRef = useRef<HTMLDivElement | null>(null);
 	const scrollProgressFrame = useRef<number | null>(null);
@@ -65,16 +68,31 @@ export function useReaderScrollProgress(articleId: string | null) {
 	}, [articleId]);
 
 	useEffect(() => {
+		if (!articleId) return;
 		const node = scrollerRef.current;
 		if (!node) return;
+		let minimumReadTimeReached = false;
+		let completionRecorded = false;
+		let completionRatio = 0;
+		const recordCompletion = () => {
+			if (completionRecorded || !minimumReadTimeReached || completionRatio < 0.9) return;
+			completionRecorded = true;
+			onCompleted?.(articleId);
+		};
+		const minimumReadTimer = window.setTimeout(() => {
+			minimumReadTimeReached = true;
+			recordCompletion();
+		}, 5_000);
 
 		const updateProgress = () => {
 			scrollProgressFrame.current = null;
 			const max = node.scrollHeight - node.clientHeight;
 			const ratio = max <= 0 ? 0 : Math.min(1, Math.max(0, node.scrollTop / max));
+			completionRatio = max <= 0 ? 1 : ratio;
 			if (scrollProgressRef.current) {
 				scrollProgressRef.current.style.transform = `scaleX(${ratio})`;
 			}
+			recordCompletion();
 		};
 
 		const scheduleProgressUpdate = () => {
@@ -94,6 +112,7 @@ export function useReaderScrollProgress(articleId: string | null) {
 			typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleProgressUpdate) : null;
 		observer?.observe(node);
 		return () => {
+			window.clearTimeout(minimumReadTimer);
 			node.removeEventListener('scroll', scheduleProgressUpdate);
 			if (scrollProgressFrame.current != null) {
 				if (typeof window.cancelAnimationFrame === 'function') {
@@ -103,7 +122,7 @@ export function useReaderScrollProgress(articleId: string | null) {
 			}
 			observer?.disconnect();
 		};
-	}, []);
+	}, [articleId, onCompleted]);
 
 	return { scrollerRef, scrollProgressRef };
 }

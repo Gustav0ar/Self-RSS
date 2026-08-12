@@ -861,6 +861,10 @@ export const userMetricsDaily = sqliteTable(
 		articlesReadCount: integer('articles_read_count').notNull().default(0),
 		feedsSyncedCount: integer('feeds_synced_count').notNull().default(0),
 		searchCount: integer('search_count').notNull().default(0),
+		articlesSavedCount: integer('articles_saved_count').notNull().default(0),
+		offlineRestoresCount: integer('offline_restores_count').notNull().default(0),
+		articlesCompletedCount: integer('articles_completed_count').notNull().default(0),
+		feedFailuresCount: integer('feed_failures_count').notNull().default(0),
 	},
 	(t) => [uniqueIndex('user_metrics_daily_pk').on(t.userId, t.date)],
 );

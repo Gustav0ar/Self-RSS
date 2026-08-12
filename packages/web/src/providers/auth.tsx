@@ -17,6 +17,12 @@ import {
 	loadOfflineUser,
 	saveOfflineUser,
 } from '../lib/offline-store';
+import {
+	flushProductAnalyticsEvents,
+	queueProductAnalyticsEvent,
+	setProductAnalyticsUser,
+	trackProductAnalyticsAppOpen,
+} from '../lib/product-analytics';
 
 interface AuthState {
 	isAuthenticated: boolean;
@@ -57,6 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setIsOffline(false);
 			setUsername(null);
 			setUser(null);
+			setProductAnalyticsUser(null);
 			setAuthLostMessage(message);
 			setIsLoading(false);
 		});
@@ -78,6 +85,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			if (!getAccessToken()) {
 				if (!cancelled) {
 					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
+						setProductAnalyticsUser(offlineUser.id);
+						trackProductAnalyticsAppOpen(offlineUser.id);
+						queueProductAnalyticsEvent('offline_restore', offlineUser.id);
 						setIsAuthenticated(true);
 						setIsOffline(true);
 						setUsername(offlineUser.email);
@@ -89,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 						setIsOffline(false);
 						setUsername(null);
 						setUser(null);
+						setProductAnalyticsUser(null);
 					}
 					setIsLoading(false);
 				}
@@ -98,16 +109,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			try {
 				const response = await apiFetch<ApiResponse<User>>('/auth/me');
 				if (!cancelled) {
+					setProductAnalyticsUser(response.data.id);
+					trackProductAnalyticsAppOpen(response.data.id);
 					setIsAuthenticated(true);
 					setIsOffline(false);
 					setUsername(response.data.email);
 					setUser(response.data);
 					void saveOfflineUser(response.data);
+					void flushProductAnalyticsEvents();
 				}
 			} catch {
 				clearTokens();
 				if (!cancelled) {
 					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
+						setProductAnalyticsUser(offlineUser.id);
+						trackProductAnalyticsAppOpen(offlineUser.id);
+						queueProductAnalyticsEvent('offline_restore', offlineUser.id);
 						setIsAuthenticated(true);
 						setIsOffline(true);
 						setUsername(offlineUser.email);
@@ -119,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 						setIsOffline(false);
 						setUsername(null);
 						setUser(null);
+						setProductAnalyticsUser(null);
 					}
 				}
 			} finally {
@@ -138,12 +156,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	useEffect(() => {
 		function updateConnectionState() {
 			setIsOffline(!navigator.onLine || !getAccessToken());
+			if (navigator.onLine) void flushProductAnalyticsEvents();
+		}
+		function recordVisibleAppOpen() {
+			if (document.visibilityState === 'visible') trackProductAnalyticsAppOpen();
 		}
 		window.addEventListener('offline', updateConnectionState);
 		window.addEventListener('online', updateConnectionState);
+		document.addEventListener('visibilitychange', recordVisibleAppOpen);
 		return () => {
 			window.removeEventListener('offline', updateConnectionState);
 			window.removeEventListener('online', updateConnectionState);
+			document.removeEventListener('visibilitychange', recordVisibleAppOpen);
 		};
 	}, []);
 
@@ -160,9 +184,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setUser(res.data.user);
+			setProductAnalyticsUser(res.data.user.id);
+			trackProductAnalyticsAppOpen(res.data.user.id);
 			setIsOffline(false);
 			await saveOfflineUser(res.data.user);
 			setIsAuthenticated(true);
+			void flushProductAnalyticsEvents();
 		},
 		[queryClient],
 	);
@@ -180,9 +207,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			setTokens(res.data.tokens.accessToken);
 			setUsername(res.data.user.email);
 			setUser(res.data.user);
+			setProductAnalyticsUser(res.data.user.id);
+			trackProductAnalyticsAppOpen(res.data.user.id);
 			setIsOffline(false);
 			await saveOfflineUser(res.data.user);
 			setIsAuthenticated(true);
+			void flushProductAnalyticsEvents();
 		},
 		[queryClient],
 	);
@@ -204,6 +234,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		setIsOffline(false);
 		setUsername(null);
 		setUser(null);
+		setProductAnalyticsUser(null);
 		setAuthLostMessage(null);
 		setLogoutError(null);
 		setIsLoggingOut(false);
@@ -218,6 +249,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			});
 			setTokens(res.data.tokens.accessToken);
 			setUser(res.data.user);
+			setProductAnalyticsUser(res.data.user.id);
+			trackProductAnalyticsAppOpen(res.data.user.id);
 			setUsername(res.data.user.email);
 			setIsOffline(false);
 			await saveOfflineUser(res.data.user);

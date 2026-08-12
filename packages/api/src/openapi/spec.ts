@@ -4,6 +4,7 @@ import { durableFeedPaths, durableFeedSchemas } from './durable-feeds.spec';
 import { feedHistoryPaths } from './feed-history.spec';
 import { apiDataArrayRef, apiDataRef, bearerSecurity, json, listResponse } from './helpers';
 import { preferencesAndStatsSchemas } from './preferences-stats.spec';
+import { productAnalyticsPaths, productAnalyticsSchemas } from './product-analytics.spec';
 import { realtimePaths, realtimeSchemas } from './realtime.spec';
 
 export const openApiSpec = {
@@ -75,6 +76,7 @@ export const openApiSpec = {
 			...authSchemas,
 			...adminSchemas,
 			...durableFeedSchemas,
+			...productAnalyticsSchemas,
 			AppSettings: {
 				type: 'object',
 				required: ['registrationLocked'],
@@ -759,6 +761,7 @@ export const openApiSpec = {
 			},
 		},
 		...realtimePaths,
+		...productAnalyticsPaths,
 		'/search': {
 			get: {
 				tags: ['Search'],

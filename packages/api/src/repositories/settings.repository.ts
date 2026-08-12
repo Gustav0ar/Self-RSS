@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { appSettings, auditLogs, feeds, syncRuns, userMetricsDaily } from '../db/schema.js';
 
@@ -131,6 +131,41 @@ export class MetricsRepository {
 			});
 	}
 
+	async incrementProductCounts(
+		userId: string,
+		counts: {
+			articlesSaved?: number;
+			offlineRestores?: number;
+			articlesCompleted?: number;
+			feedFailures?: number;
+		},
+		date = new Date().toISOString().split('T')[0]!,
+	) {
+		const articlesSaved = counts.articlesSaved ?? 0;
+		const offlineRestores = counts.offlineRestores ?? 0;
+		const articlesCompleted = counts.articlesCompleted ?? 0;
+		const feedFailures = counts.feedFailures ?? 0;
+		await this.db
+			.insert(userMetricsDaily)
+			.values({
+				userId,
+				date,
+				articlesSavedCount: articlesSaved,
+				offlineRestoresCount: offlineRestores,
+				articlesCompletedCount: articlesCompleted,
+				feedFailuresCount: feedFailures,
+			})
+			.onConflictDoUpdate({
+				target: [userMetricsDaily.userId, userMetricsDaily.date],
+				set: {
+					articlesSavedCount: sql`${userMetricsDaily.articlesSavedCount} + ${articlesSaved}`,
+					offlineRestoresCount: sql`${userMetricsDaily.offlineRestoresCount} + ${offlineRestores}`,
+					articlesCompletedCount: sql`${userMetricsDaily.articlesCompletedCount} + ${articlesCompleted}`,
+					feedFailuresCount: sql`${userMetricsDaily.feedFailuresCount} + ${feedFailures}`,
+				},
+			});
+	}
+
 	async getDailyMetrics(userId: string, days: number) {
 		return this.db.query.userMetricsDaily.findMany({
 			where: and(
@@ -139,6 +174,21 @@ export class MetricsRepository {
 			),
 			orderBy: [userMetricsDaily.date],
 		});
+	}
+
+	async getProductMetricsSince(date: string) {
+		return this.db
+			.select({
+				userId: userMetricsDaily.userId,
+				date: userMetricsDaily.date,
+				articlesSavedCount: userMetricsDaily.articlesSavedCount,
+				offlineRestoresCount: userMetricsDaily.offlineRestoresCount,
+				articlesCompletedCount: userMetricsDaily.articlesCompletedCount,
+				feedFailuresCount: userMetricsDaily.feedFailuresCount,
+			})
+			.from(userMetricsDaily)
+			.where(gte(userMetricsDaily.date, date))
+			.orderBy(userMetricsDaily.date);
 	}
 }
 

@@ -411,6 +411,27 @@ data class DailyMetric(
     val articlesReadCount: Int,
     val feedsSyncedCount: Int,
     val searchCount: Int,
+    val articlesSavedCount: Int = 0,
+    val offlineRestoresCount: Int = 0,
+    val articlesCompletedCount: Int = 0,
+    val feedFailuresCount: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class ProductAnalyticsEvent(
+    val id: String,
+    val type: String,
+    val occurredOn: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordProductAnalyticsEventsRequest(
+    val events: List<ProductAnalyticsEvent>,
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordProductAnalyticsEventsResponse(
+    val accepted: Int,
 )
 
 @JsonClass(generateAdapter = true)

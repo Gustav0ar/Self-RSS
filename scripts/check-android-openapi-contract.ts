@@ -44,6 +44,7 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 	// These product/admin operations are deliberately not exposed by the Android UI yet.
 	intentionallyUnsupported: new Set([
 		operationKey('PATCH', '/categories/reorder'),
+		operationKey('GET', '/admin/product-analytics'),
 		operationKey('POST', '/admin/users'),
 		// Android remains on the backward-compatible read-state stream until it
 		// adopts the web-only feed progress and health event handling.
