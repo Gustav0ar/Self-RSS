@@ -12,6 +12,12 @@ GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 APP_UID="${APP_UID:-$(id -u)}"
 APP_GID="${APP_GID:-$(id -g)}"
+API_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}"
+WEB_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-web:${IMAGE_TAG}"
+PREVIOUS_API_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
+PREVIOUS_WEB_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-web:previous"
+ROLLBACK_AVAILABLE=false
+CONTAINER_HEALTH_ATTEMPTS="${CONTAINER_HEALTH_ATTEMPTS:-180}"
 
 read -r -a COMPOSE_ARGS <<< "${COMPOSE_CMD}"
 if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
@@ -30,7 +36,7 @@ fi
 echo "::group::Deploy self-feed"
 echo "Target path : ${DEPLOY_PATH}"
 echo "Compose     : ${COMPOSE_CMD}"
-echo "Image       : ${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}"
+echo "Image       : ${API_IMAGE}"
 echo "::endgroup::"
 
 mkdir -p "${DEPLOY_PATH}"
@@ -53,18 +59,22 @@ rollback_deploy() {
 	echo "ROLLBACK: Initiating rollback to previous image"
 	echo "=========================================="
 
-	PREV_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
-	echo "[ROLLBACK] Pulling previous image: ${PREV_IMAGE}"
-	if ! docker pull "${PREV_IMAGE}" 2>&1 | tee /dev/stderr; then
-		echo "[ROLLBACK] ERROR: Failed to pull previous image"
+	if [ "${ROLLBACK_AVAILABLE}" != "true" ] || \
+		! "${CONTAINER_CLI}" image inspect "${PREVIOUS_API_IMAGE}" >/dev/null 2>&1 || \
+		! "${CONTAINER_CLI}" image inspect "${PREVIOUS_WEB_IMAGE}" >/dev/null 2>&1; then
+		echo "[ROLLBACK] ERROR: A complete local rollback image set is unavailable"
 		fail_with_diagnostics
 	fi
 
-	echo "[ROLLBACK] Tagging image for deployment"
-	docker tag "${PREV_IMAGE}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}" || true
+	echo "[ROLLBACK] Restoring previous API and web images"
+	if ! "${CONTAINER_CLI}" tag "${PREVIOUS_API_IMAGE}" "${API_IMAGE}" || \
+		! "${CONTAINER_CLI}" tag "${PREVIOUS_WEB_IMAGE}" "${WEB_IMAGE}"; then
+		echo "[ROLLBACK] ERROR: Failed to restore one or more previous image tags"
+		fail_with_diagnostics
+	fi
 
 	echo "[ROLLBACK] Restarting containers with previous image"
-	"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || {
+	"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans --force-recreate api worker web || {
 		echo "[ROLLBACK] ERROR: Failed to restart containers"
 		fail_with_diagnostics
 	}
@@ -88,23 +98,35 @@ rollback_deploy() {
 	fail_with_diagnostics
 }
 
-save_current_image() {
-	echo "Saving current API image as :previous for potential rollback"
-	current_api_image="$("${CONTAINER_CLI}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "${IMAGE_OWNER}/self-feed-api" | grep -v ":previous" | grep -v ":${IMAGE_TAG}" | head -n 1 || true)"
-	if [ -n "${current_api_image}" ]; then
-		echo "[PRE-DEPLOY] Found current image: ${current_api_image}"
-		docker tag "${current_api_image}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
-		echo "[PRE-DEPLOY] Tagged as :previous for rollback capability"
+save_current_images() {
+	echo "Saving current API and web images as the local rollback set"
+	current_api_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-api 2>/dev/null || true)"
+	current_web_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-web 2>/dev/null || true)"
+	target_api_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${API_IMAGE}" 2>/dev/null || true)"
+	target_web_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${WEB_IMAGE}" 2>/dev/null || true)"
+
+	# A retry after a partial rollout sees the target image ID on a container.
+	# Preserve the rollback set captured by the original attempt in that case.
+	if [ "${current_api_image}" != "${target_api_image}" ] && \
+		[ "${current_web_image}" != "${target_web_image}" ] && \
+		[ -n "${current_api_image}" ] && [ -n "${current_web_image}" ]; then
+		"${CONTAINER_CLI}" tag "${current_api_image}" "${PREVIOUS_API_IMAGE}"
+		"${CONTAINER_CLI}" tag "${current_web_image}" "${PREVIOUS_WEB_IMAGE}"
+	fi
+
+	if "${CONTAINER_CLI}" image inspect "${PREVIOUS_API_IMAGE}" >/dev/null 2>&1 && \
+		"${CONTAINER_CLI}" image inspect "${PREVIOUS_WEB_IMAGE}" >/dev/null 2>&1; then
+		ROLLBACK_AVAILABLE=true
+		echo "[PRE-DEPLOY] Complete local rollback image set is available"
 	else
-		echo "[PRE-DEPLOY] No existing self-feed-api image found; creating placeholder"
-		docker tag "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:${IMAGE_TAG}" "${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous" 2>/dev/null || true
+		echo "[PRE-DEPLOY] No complete prior deployment is available for rollback"
 	fi
 }
 
 wait_for_container_health() {
 	container="$1"
 	label="$2"
-	for _ in $(seq 1 30); do
+	for _ in $(seq 1 "${CONTAINER_HEALTH_ATTEMPTS}"); do
 		status="$("${CONTAINER_CLI}" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing-healthcheck:{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
 		if [ "${status}" = "healthy" ]; then
 			echo "${label} healthy"
@@ -376,18 +398,21 @@ export REGISTRY
 ensure_data_permissions
 backup_existing_database
 
-# Save current image before deploying for rollback capability
-save_current_image
+# Save current images before deploying for rollback capability.
+save_current_images
 
 # Pull images, restart services, prune.
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull || fail_with_diagnostics
 ensure_data_permissions
-"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || fail_with_diagnostics
+"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans || {
+	echo "[DEPLOY] Compose startup failed"
+	rollback_deploy
+}
 
 wait_for_container_health selffeed-redis Redis || { echo "[DEPLOY] Redis health check failed"; rollback_deploy; }
 wait_for_container_health selffeed-api API || { echo "[DEPLOY] API health check failed"; rollback_deploy; }
 wait_for_container_health selffeed-web Web || { echo "[DEPLOY] Web health check failed"; rollback_deploy; }
 wait_for_container_health selffeed-worker Worker || { echo "[DEPLOY] Worker health check failed"; rollback_deploy; }
-verify_public_routes || { echo "[DEPLOY] Public route smoke check failed"; fail_with_diagnostics; }
+verify_public_routes || { echo "[DEPLOY] Public route smoke check failed"; rollback_deploy; }
 
 "${CONTAINER_CLI}" image prune -f
