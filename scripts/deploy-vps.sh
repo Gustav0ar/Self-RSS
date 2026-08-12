@@ -17,6 +17,7 @@ WEB_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-web:${IMAGE_TAG}"
 PREVIOUS_API_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-api:previous"
 PREVIOUS_WEB_IMAGE="${REGISTRY}/${IMAGE_OWNER}/self-feed-web:previous"
 ROLLBACK_AVAILABLE=false
+CONTAINER_HEALTH_ATTEMPTS="${CONTAINER_HEALTH_ATTEMPTS:-180}"
 
 read -r -a COMPOSE_ARGS <<< "${COMPOSE_CMD}"
 if [ "${#COMPOSE_ARGS[@]}" -eq 0 ]; then
@@ -66,8 +67,11 @@ rollback_deploy() {
 	fi
 
 	echo "[ROLLBACK] Restoring previous API and web images"
-	"${CONTAINER_CLI}" tag "${PREVIOUS_API_IMAGE}" "${API_IMAGE}"
-	"${CONTAINER_CLI}" tag "${PREVIOUS_WEB_IMAGE}" "${WEB_IMAGE}"
+	if ! "${CONTAINER_CLI}" tag "${PREVIOUS_API_IMAGE}" "${API_IMAGE}" || \
+		! "${CONTAINER_CLI}" tag "${PREVIOUS_WEB_IMAGE}" "${WEB_IMAGE}"; then
+		echo "[ROLLBACK] ERROR: Failed to restore one or more previous image tags"
+		fail_with_diagnostics
+	fi
 
 	echo "[ROLLBACK] Restarting containers with previous image"
 	"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans --force-recreate api worker web || {
@@ -96,12 +100,15 @@ rollback_deploy() {
 
 save_current_images() {
 	echo "Saving current API and web images as the local rollback set"
-	current_api_image="$("${CONTAINER_CLI}" inspect -f '{{.Config.Image}}' selffeed-api 2>/dev/null || true)"
-	current_web_image="$("${CONTAINER_CLI}" inspect -f '{{.Config.Image}}' selffeed-web 2>/dev/null || true)"
+	current_api_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-api 2>/dev/null || true)"
+	current_web_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-web 2>/dev/null || true)"
+	target_api_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${API_IMAGE}" 2>/dev/null || true)"
+	target_web_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${WEB_IMAGE}" 2>/dev/null || true)"
 
-	# A retry after a partial rollout sees the target tag on the containers.
+	# A retry after a partial rollout sees the target image ID on a container.
 	# Preserve the rollback set captured by the original attempt in that case.
-	if [ "${current_api_image}" != "${API_IMAGE}" ] && [ "${current_web_image}" != "${WEB_IMAGE}" ] && \
+	if [ "${current_api_image}" != "${target_api_image}" ] && \
+		[ "${current_web_image}" != "${target_web_image}" ] && \
 		[ -n "${current_api_image}" ] && [ -n "${current_web_image}" ]; then
 		"${CONTAINER_CLI}" tag "${current_api_image}" "${PREVIOUS_API_IMAGE}"
 		"${CONTAINER_CLI}" tag "${current_web_image}" "${PREVIOUS_WEB_IMAGE}"
@@ -119,7 +126,7 @@ save_current_images() {
 wait_for_container_health() {
 	container="$1"
 	label="$2"
-	for _ in $(seq 1 30); do
+	for _ in $(seq 1 "${CONTAINER_HEALTH_ATTEMPTS}"); do
 		status="$("${CONTAINER_CLI}" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing-healthcheck:{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
 		if [ "${status}" = "healthy" ]; then
 			echo "${label} healthy"

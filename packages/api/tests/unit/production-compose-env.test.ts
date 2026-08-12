@@ -69,7 +69,12 @@ describe('production compose environment contract', () => {
 
 	it('rolls back both application images when compose startup fails', () => {
 		expect(deployScript).toContain('save_current_images');
+		expect(deployScript).toContain(
+			`CONTAINER_HEALTH_ATTEMPTS="\${CONTAINER_HEALTH_ATTEMPTS:-180}"`,
+		);
+		expect(deployScript).toContain("inspect -f '{{.Image}}' selffeed-api");
 		expect(deployScript).toContain('Restoring previous API and web images');
+		expect(deployScript).toContain('Failed to restore one or more previous image tags');
 		expect(deployScript).toMatch(
 			/up -d --remove-orphans \|\| \{\n\techo "\[DEPLOY\] Compose startup failed"\n\trollback_deploy/,
 		);
