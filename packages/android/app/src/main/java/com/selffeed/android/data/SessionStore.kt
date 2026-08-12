@@ -16,11 +16,14 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.network.ProductAnalyticsEvent
 import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -166,14 +169,49 @@ class SessionStore internal constructor(
     fun getFeedRefreshRequestId(): String? = cachedFeedRefreshRequestId
 
     suspend fun setFeedRefreshRequestId(requestId: String?) = withContext(ioDispatcher) {
-            dataStore.edit { prefs ->
-                if (requestId.isNullOrBlank()) {
-                    prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
-                } else {
-                    prefs[KEY_FEED_REFRESH_REQUEST_ID] = requestId
-                }
+        dataStore.edit { prefs ->
+            if (requestId.isNullOrBlank()) {
+                prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
+            } else {
+                prefs[KEY_FEED_REFRESH_REQUEST_ID] = requestId
             }
+        }
         cachedFeedRefreshRequestId = requestId?.takeIf(String::isNotBlank)
+    }
+
+    suspend fun enqueueProductAnalyticsEvent(type: String): ProductAnalyticsEvent =
+        withContext(ioDispatcher) {
+            val event = ProductAnalyticsEvent(
+                id = UUID.randomUUID().toString(),
+                type = type,
+                occurredOn = LocalDate.now(ZoneOffset.UTC).toString(),
+            )
+            dataStore.edit { prefs ->
+                val pending = decodeProductAnalyticsEvents(prefs[KEY_PRODUCT_ANALYTICS_EVENTS])
+                prefs[KEY_PRODUCT_ANALYTICS_EVENTS] =
+                    encodeProductAnalyticsEvents(
+                        (pending + event).takeLast(MAX_PENDING_ANALYTICS_EVENTS),
+                    )
+            }
+            event
+        }
+
+    suspend fun pendingProductAnalyticsEvents(): List<ProductAnalyticsEvent> =
+        withContext(ioDispatcher) {
+            decodeProductAnalyticsEvents(dataStore.data.first()[KEY_PRODUCT_ANALYTICS_EVENTS])
+        }
+
+    suspend fun removeProductAnalyticsEvents(ids: Set<String>) = withContext(ioDispatcher) {
+        if (ids.isEmpty()) return@withContext
+        dataStore.edit { prefs ->
+            val remaining = decodeProductAnalyticsEvents(prefs[KEY_PRODUCT_ANALYTICS_EVENTS])
+                .filterNot { it.id in ids }
+            if (remaining.isEmpty()) {
+                prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
+            } else {
+                prefs[KEY_PRODUCT_ANALYTICS_EVENTS] = encodeProductAnalyticsEvents(remaining)
+            }
+        }
     }
 
     suspend fun setApiBaseUrl(rawBaseUrl: String): String = withContext(ioDispatcher) {
@@ -186,6 +224,7 @@ class SessionStore internal constructor(
                 prefs.remove(KEY_ACCESS_TOKEN)
                 prefs.remove(KEY_REFRESH_COOKIE)
                 prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
+                prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
             }
         }
         synchronized(cacheLock) {
@@ -363,6 +402,18 @@ class SessionStore internal constructor(
 
     private fun defaultApiBaseUrl(): String = normalizeApiServerHost(BuildConfig.API_BASE_URL)
 
+    private fun decodeProductAnalyticsEvents(value: String?): List<ProductAnalyticsEvent> =
+        value.orEmpty().lineSequence().mapNotNull { line ->
+            val parts = line.split(':', limit = 3)
+            if (parts.size != 3) return@mapNotNull null
+            val (id, type, occurredOn) = parts
+            if (type !in PRODUCT_ANALYTICS_EVENT_TYPES) return@mapNotNull null
+            ProductAnalyticsEvent(id, type, occurredOn)
+        }.toList()
+
+    private fun encodeProductAnalyticsEvents(events: List<ProductAnalyticsEvent>): String =
+        events.joinToString("\n") { "${it.id}:${it.type}:${it.occurredOn}" }
+
     companion object {
         private const val TAG = "SessionStore"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -370,12 +421,16 @@ class SessionStore internal constructor(
         private const val GCM_IV_LENGTH = 12
         private const val GCM_TAG_LENGTH = 128
         private const val MASTER_KEY_ALIAS = "_androidx_security_master_key_"
+        private const val MAX_PENDING_ANALYTICS_EVENTS = 50
+        private val PRODUCT_ANALYTICS_EVENT_TYPES =
+            setOf("app_opened", "offline_restore", "article_completed")
 
         private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         private val KEY_REFRESH_COOKIE = stringPreferencesKey("refresh_cookie")
         private val KEY_CLIENT_ID = stringPreferencesKey("client_id")
         private val KEY_API_BASE_URL = stringPreferencesKey("api_base_url")
         private val KEY_FEED_REFRESH_REQUEST_ID = stringPreferencesKey("feed_refresh_request_id")
+        private val KEY_PRODUCT_ANALYTICS_EVENTS = stringPreferencesKey("product_analytics_events")
         private val KEY_LEGACY_SESSION_MIGRATED = stringPreferencesKey("legacy_session_migrated")
     }
 }

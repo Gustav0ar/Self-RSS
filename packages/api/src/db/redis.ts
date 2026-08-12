@@ -76,6 +76,8 @@ export const CacheKeys = {
 	articleEnrichmentLock: (articleId: string) => `articles:enriching:${articleId}`,
 	// User activity tracking
 	userLastSeen: (userId: string) => `user:lastseen:${userId}`,
+	productAnalyticsEvent: (userId: string, eventId: string) =>
+		`analytics:event:${userId}:${eventId}`,
 	workerHeartbeat: (name: string) => `worker:heartbeat:${name}`,
 	durableIngestionCounters: () => 'feed:ingestion:metrics:counters',
 } as const;

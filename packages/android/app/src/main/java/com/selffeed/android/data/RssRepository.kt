@@ -24,6 +24,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.ReadStateSyncEvent
+import com.selffeed.android.network.RecordProductAnalyticsEventsRequest
 import com.selffeed.android.network.SessionRefreshCoordinator
 import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.UpdatePreferencesRequest
@@ -90,6 +91,17 @@ class RssRepository @Inject constructor(
     // individual failures and is cleaned up when the process dies.
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val authLostEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val analyticsSessionLock = Any()
+    private val completedArticleIds = mutableSetOf<String>()
+    private var appOpenRecordedOn: String? = null
+
+    init {
+        refreshScope.launch {
+            networkMonitor.online.collect { online ->
+                if (online) flushProductAnalyticsEvents()
+            }
+        }
+    }
 
     override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
 
@@ -110,6 +122,8 @@ class RssRepository @Inject constructor(
         val response = authRemote.login(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
+        recordAppOpen()
+        flushProductAnalyticsEvents()
         response.user
     }
 
@@ -117,6 +131,8 @@ class RssRepository @Inject constructor(
         val response = authRemote.register(email, password)
         sessionStore.setAccessToken(response.tokens.accessToken)
         clearCacheAndDatabase()
+        recordAppOpen()
+        flushProductAnalyticsEvents()
         response.user
     }
 
@@ -137,7 +153,10 @@ class RssRepository @Inject constructor(
             }
         }
 
-        runtime.withRetry { authRemote.me() }
+        val user = runtime.withRetry { authRemote.me() }
+        recordAppOpen()
+        flushProductAnalyticsEvents()
+        user
     }
 
     override suspend fun logout() = safeCall {
@@ -667,6 +686,19 @@ class RssRepository @Inject constructor(
 
     override fun authEvents(): Flow<String> = authLostEvents.asSharedFlow()
 
+    override suspend fun recordOfflineRestore() {
+        recordAppOpen()
+        runCatching { sessionStore.enqueueProductAnalyticsEvent("offline_restore") }
+        flushProductAnalyticsEvents()
+    }
+
+    override suspend fun recordArticleCompletion(articleId: String) {
+        val isNewCompletion = synchronized(analyticsSessionLock) { completedArticleIds.add(articleId) }
+        if (!isNewCompletion) return
+        runCatching { sessionStore.enqueueProductAnalyticsEvent("article_completed") }
+        flushProductAnalyticsEvents()
+    }
+
     override fun isOnline(): Boolean = networkMonitor.online.value
 
     override fun observeOnline(): Flow<Boolean> = networkMonitor.online
@@ -715,6 +747,32 @@ class RssRepository @Inject constructor(
         sessionStore.clear()
         clearCacheAndDatabase()
         authLostEvents.tryEmit(AUTH_LOST_MESSAGE)
+    }
+
+    private suspend fun flushProductAnalyticsEvents() {
+        if (!networkMonitor.online.value || !isLoggedIn()) return
+        val pending = runCatching { sessionStore.pendingProductAnalyticsEvents() }.getOrNull() ?: return
+        if (pending.isEmpty()) return
+        runCatching {
+            settingsRemote.recordProductAnalyticsEvents(RecordProductAnalyticsEventsRequest(pending))
+            sessionStore.removeProductAnalyticsEvents(pending.mapTo(mutableSetOf()) { it.id })
+        }
+    }
+
+    private suspend fun recordAppOpen() {
+        val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
+        val shouldRecord = synchronized(analyticsSessionLock) {
+            if (appOpenRecordedOn == today) {
+                false
+            } else {
+                appOpenRecordedOn = today
+                true
+            }
+        }
+        if (!shouldRecord) return
+        if (runCatching { sessionStore.enqueueProductAnalyticsEvent("app_opened") }.isFailure) {
+            synchronized(analyticsSessionLock) { appOpenRecordedOn = null }
+        }
     }
 
     suspend fun invalidateArticleCaches(articleId: String) {
@@ -784,6 +842,10 @@ class RssRepository @Inject constructor(
     }
 
     private suspend fun clearCacheAndDatabase() {
+        synchronized(analyticsSessionLock) {
+            completedArticleIds.clear()
+            appOpenRecordedOn = null
+        }
         runtime.clearCache()
         offlineReadStore.clearAll()
     }

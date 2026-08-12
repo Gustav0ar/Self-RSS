@@ -24,6 +24,7 @@ import { getMetricsService, type MetricsService } from '../services/metrics.serv
 import { OpmlExportService } from '../services/opml-export.service.js';
 import { OpmlImportService } from '../services/opml-import.service.js';
 import { PreferencesService } from '../services/preferences.service.js';
+import { ProductAnalyticsService } from '../services/product-analytics.service.js';
 import { RealtimeService } from '../services/realtime.service.js';
 import { StatsService } from '../services/stats.service.js';
 import { RateLimiter } from '../utils/rate-limiter.js';
@@ -60,6 +61,7 @@ export interface AppDeps {
 		preferences: PreferencesService;
 		realtime: RealtimeService;
 		stats: StatsService;
+		productAnalytics: ProductAnalyticsService;
 	};
 	rateLimiter: RateLimiter;
 }
@@ -161,6 +163,7 @@ export function createDeps(
 			repos.syncRun,
 			repos.metrics,
 		),
+		productAnalytics: new ProductAnalyticsService(repos.metrics, redis),
 		articleCache,
 		feedSync,
 		article: new ArticleService(

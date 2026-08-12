@@ -19,6 +19,10 @@ import { createEventRoutes } from './routes/events.js';
 import { createFeedRoutes } from './routes/feeds.js';
 import { createHealthRoutes, createMetricsRoutes } from './routes/index.js';
 import { createPreferencesRoutes } from './routes/preferences.js';
+import {
+	createProductAnalyticsReportRoutes,
+	createProductAnalyticsRoutes,
+} from './routes/product-analytics.js';
 import { createStatsRoutes } from './routes/stats.js';
 import type { FeedPipelineMode } from './services/durable-ingestion-ops.types.js';
 import type { TokenUtils } from './utils/tokens.js';
@@ -127,11 +131,20 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 		v1.route('/preferences', createPreferencesRoutes(deps.services.preferences, deps.rateLimiter));
 		v1.use('/stats/*', authMiddleware);
 		v1.route('/stats', createStatsRoutes(deps.services.stats, deps.rateLimiter));
+		v1.use('/analytics/*', authMiddleware);
+		v1.route(
+			'/analytics',
+			createProductAnalyticsRoutes(deps.services.productAnalytics, deps.rateLimiter),
+		);
 
 		v1.use('/events/*', authMiddleware);
 		v1.route('/events', createEventRoutes(deps.services.realtime));
 
 		v1.use('/admin/*', authMiddleware, requireAdmin);
+		v1.route(
+			'/admin/product-analytics',
+			createProductAnalyticsReportRoutes(deps.services.productAnalytics, deps.rateLimiter),
+		);
 		v1.route(
 			'/admin',
 			createAdminRoutes(

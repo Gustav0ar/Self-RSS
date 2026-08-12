@@ -270,6 +270,37 @@ export interface StatsResponse {
 	dailyMetrics: UserMetricsDaily[];
 }
 
+export interface RecordProductAnalyticsEventsResponse {
+	accepted: number;
+}
+
+export interface ProductAnalyticsDaily {
+	date: string;
+	activeUsers: number;
+	articlesSaved: number;
+	offlineRestores: number;
+	articlesCompleted: number;
+	feedFailures: number;
+}
+
+export interface ProductRetentionMetric {
+	windowDays: 7 | 30;
+	eligibleUsers: number;
+	returningUsers: number;
+	rate: number | null;
+}
+
+export interface ProductAnalyticsReportResponse {
+	periodDays: number;
+	throughDate: string;
+	totals: Omit<ProductAnalyticsDaily, 'date'>;
+	daily: ProductAnalyticsDaily[];
+	retention: {
+		sevenDay: ProductRetentionMetric;
+		thirtyDay: ProductRetentionMetric;
+	};
+}
+
 export interface FeedSyncHistoryResponse {
 	runs: SyncRun[];
 	cursor: string | null;

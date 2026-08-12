@@ -51,7 +51,6 @@ import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
 
 const logger = createLogger();
-
 interface SyncConfig extends FeedFetchRelayConfig {
 	timeoutMs: number;
 	maxContentLength: number;
@@ -527,6 +526,9 @@ export class FeedSyncService {
 				itemCount: 0,
 				errorMessage: errorDetails.error,
 			});
+			await this.metricsRepo
+				.incrementProductCounts?.(userId, { feedFailures: 1 })
+				.catch(() => undefined);
 			await publishRealtimeEvent(this.realtimeService, userId, {
 				type: 'feed.health.updated',
 				eventId: crypto.randomUUID(),

@@ -169,6 +169,9 @@ export const RATE_LIMITS = {
 	get statsRead() {
 		return getReadRateLimit();
 	},
+	get analyticsEvents() {
+		return { windowMs: 60_000, maxRequests: 30, failureMode: 'closed' as const };
+	},
 	get feedsRead() {
 		return getReadRateLimit();
 	},

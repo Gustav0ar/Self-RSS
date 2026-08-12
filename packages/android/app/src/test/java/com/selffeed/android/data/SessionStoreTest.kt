@@ -85,6 +85,16 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `product analytics queue is bounded and removable`() = runBlocking {
+        repeat(55) { store.enqueueProductAnalyticsEvent("article_completed") }
+        val pending = store.pendingProductAnalyticsEvents()
+
+        assertEquals(50, pending.size)
+        store.removeProductAnalyticsEvents(pending.take(20).mapTo(mutableSetOf()) { it.id })
+        assertEquals(30, store.pendingProductAnalyticsEvents().size)
+    }
+
+    @Test
     fun `changing api base url clears tokens from the previous server`() = runBlocking {
         store.setApiBaseUrl("https://old.example.com")
         val ok = runCatching {

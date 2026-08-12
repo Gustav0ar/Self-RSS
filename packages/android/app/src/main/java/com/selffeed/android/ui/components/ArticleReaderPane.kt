@@ -69,7 +69,9 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.formatPublishedAt
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +84,7 @@ fun ArticleReaderPane(
     onArticleSelected: (String) -> Unit,
     onVisibleArticleChanged: (String) -> Unit = {},
     onArticleDisplayed: (String) -> Unit = {},
+    onArticleCompleted: (String) -> Unit = {},
     appearance: ReaderAppearance = ReaderAppearance(),
     preferHtml: Boolean = true,
     onPreferHtmlChanged: (Boolean) -> Unit = {},
@@ -101,6 +104,7 @@ fun ArticleReaderPane(
             isActive = true,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
+            onCompleted = { onArticleCompleted(selectedArticle.id) },
             preferHtml = preferHtml,
             onPreferHtmlChanged = onPreferHtmlChanged,
             appearance = appearance,
@@ -174,6 +178,7 @@ fun ArticleReaderPane(
                 isActive = articleItem.id == selectedArticle.id,
                 onOpenOriginal = { onOpenOriginal(article) },
                 onDisplayed = { onArticleDisplayed(article.id) },
+                onCompleted = { onArticleCompleted(article.id) },
                 preferHtml = preferHtml,
                 onPreferHtmlChanged = onPreferHtmlChanged,
                 appearance = appearance,
@@ -192,6 +197,7 @@ private fun ArticleDetailView(
     isActive: Boolean,
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
+    onCompleted: () -> Unit = {},
     preferHtml: Boolean,
     onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
@@ -211,6 +217,16 @@ private fun ArticleDetailView(
 
     LaunchedEffect(article.id, isActive) {
         if (isActive) onDisplayed()
+    }
+
+    LaunchedEffect(article.id, isActive, scrollState) {
+        if (!isActive) return@LaunchedEffect
+        delay(5_000)
+        snapshotFlow {
+            if (scrollState.maxValue <= 0) 1f
+            else scrollState.value.toFloat() / scrollState.maxValue.toFloat()
+        }.first { it >= 0.9f }
+        onCompleted()
     }
 
     val backgroundColor = MaterialTheme.colorScheme.background

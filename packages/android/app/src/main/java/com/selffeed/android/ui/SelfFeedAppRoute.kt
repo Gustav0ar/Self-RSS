@@ -363,6 +363,7 @@ fun SelfFeedAppRoute(
                     )
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
+                onArticleCompleted = articlesViewModel::onArticleCompleted,
                 onReaderPageChanged = articlesViewModel::onReaderPageChanged,
                 onCloseArticle = {
                     articlesViewModel.closeArticle()

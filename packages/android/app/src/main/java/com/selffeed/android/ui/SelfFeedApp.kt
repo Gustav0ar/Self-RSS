@@ -156,6 +156,7 @@ data class SelfFeedAppActions(
     },
     val onReaderPageChanged: (String) -> Unit = {},
     val onArticleDisplayed: (String) -> Unit,
+    val onArticleCompleted: (String) -> Unit = {},
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
     val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
@@ -537,6 +538,7 @@ fun SelfFeedApp(
                         }
                     },
                     onArticleDisplayed = actions.onArticleDisplayed,
+                    onArticleCompleted = actions.onArticleCompleted,
                     appearance = state.settings.preferences?.toReaderAppearance()
                         ?: ReaderAppearance(),
                     preferHtml = preferHtml,

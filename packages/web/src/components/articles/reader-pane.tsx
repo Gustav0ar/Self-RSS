@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useArticle, useMarkRead, usePreferences, useSetArticleSaved } from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
+import { trackArticleCompletion } from '@/lib/product-analytics';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
 import { useAuth } from '@/providers/auth';
 import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
@@ -50,7 +51,11 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const { isOffline } = useAuth();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
-	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(articleId);
+	const readerArticleId = article?.id === articleId ? articleId : null;
+	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(
+		readerArticleId,
+		trackArticleCompletion,
+	);
 	useTwitterEmbedResize(scrollerRef);
 	useSelectedArticleEnrichment(articleId, article);
 

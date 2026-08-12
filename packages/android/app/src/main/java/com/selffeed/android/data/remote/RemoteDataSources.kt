@@ -23,6 +23,7 @@ import com.selffeed.android.network.MarkAllReadRequest
 import com.selffeed.android.network.MarkReadRequest
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.RegisterRequest
+import com.selffeed.android.network.RecordProductAnalyticsEventsRequest
 import com.selffeed.android.network.RegistrationStatusResponse
 import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.SaveArticleRequest
@@ -163,6 +164,8 @@ class SettingsRemoteDataSource @Inject constructor(
         api.updatePreferences(request).data
 
     suspend fun stats(): StatsResponse = api.stats().data
+    suspend fun recordProductAnalyticsEvents(request: RecordProductAnalyticsEventsRequest): Int =
+        api.recordProductAnalyticsEvents(request).data.accepted
     suspend fun authSessions(): List<AuthSession> = api.authSessions().data.sessions
     suspend fun revokeAuthSession(id: String): Boolean = api.revokeAuthSession(id).data.success
     suspend fun adminSettings(): AppSettingsResponse = api.adminSettings().data
