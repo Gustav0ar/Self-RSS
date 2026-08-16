@@ -573,7 +573,8 @@ fun SelfFeedApp(
                     currentLabel = topBarText,
                     showMarkAllRead = activeTab == HomeTab.ARTICLES &&
                             selectedArticle == null &&
-                            articleQueue.isNotEmpty(),
+                            articleQueue.isNotEmpty() &&
+                            state.isOnline,
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = { confirmMarkAllRead = true },
@@ -797,7 +798,7 @@ private fun AppTopBar(
         },
         actions = {
             if (isArticleSelected) {
-                IconButton(onClick = onToggleSaved, enabled = isOnline) {
+                IconButton(onClick = onToggleSaved) {
                     val isSaved = selectedArticle?.isSaved == true
                     Icon(
                         imageVector = if (isSaved) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,

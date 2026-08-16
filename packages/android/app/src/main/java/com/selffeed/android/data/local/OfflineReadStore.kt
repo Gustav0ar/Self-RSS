@@ -100,6 +100,5 @@ class CompositeOfflineReadStore(
         clearFeeds()
         clearCategories()
         clearArticleLists()
-        clearArticleDetails()
     }
 }

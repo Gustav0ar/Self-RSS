@@ -6,6 +6,7 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -24,7 +25,10 @@ interface RssApi {
     suspend fun register(@Body request: RegisterRequest): ApiEnvelope<AuthResponse>
 
     @POST("auth/logout")
-    suspend fun logout(): ApiEnvelope<SuccessResponse>
+    suspend fun logout(
+        @Header("Authorization") authorization: String? = null,
+        @Header("Cookie") cookie: String? = null,
+    ): ApiEnvelope<SuccessResponse>
 
     @GET("auth/me")
     suspend fun me(): ApiEnvelope<User>
@@ -69,7 +73,10 @@ interface RssApi {
     suspend fun deleteFeed(@Path("id") id: String): ApiEnvelope<SuccessResponse>
 
     @POST("feeds/{id}/sync")
-    suspend fun syncFeed(@Path("id") id: String): ApiEnvelope<SyncResponse>
+    suspend fun syncFeed(
+        @Path("id") id: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): ApiEnvelope<SyncResponse>
 
     @GET("feeds/{id}/sync-runs")
     suspend fun feedSyncRuns(
@@ -80,6 +87,7 @@ interface RssApi {
 
     @POST("feeds/sync")
     suspend fun syncAllFeeds(
+        @Header("Idempotency-Key") idempotencyKey: String,
         @Query("feedId") feedId: String? = null,
         @Query("categoryId") categoryId: String? = null,
     ): ApiEnvelope<SyncResponse>

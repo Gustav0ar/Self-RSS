@@ -1,10 +1,18 @@
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
 const apiProxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:3000';
+
+function publicFiles(directory: string, prefix = ''): string[] {
+	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+		return entry.isDirectory() ? publicFiles(resolve(directory, entry.name), relative) : [relative];
+	});
+}
 
 function offlineShellPlugin(): Plugin {
 	return {
@@ -17,6 +25,11 @@ function offlineShellPlugin(): Plugin {
 			)) {
 				digest.update(output.fileName);
 				digest.update(output.type === 'asset' ? output.source : output.code);
+			}
+			const publicDirectory = resolve(__dirname, 'public');
+			for (const fileName of publicFiles(publicDirectory).sort()) {
+				digest.update(fileName);
+				digest.update(readFileSync(resolve(publicDirectory, fileName)));
 			}
 			const version = digest.digest('hex').slice(0, 16);
 			const shellUrls = Array.from(
@@ -42,52 +55,99 @@ function offlineShellPlugin(): Plugin {
 
 function createServiceWorkerSource(version: string, shellUrls: string[]) {
 	return `const CACHE_NAME = 'self-feed-shell-${version}';
+const MEDIA_CACHE_NAME = 'self-feed-article-media-v1';
+const MAX_MEDIA_ENTRIES = 200;
 const SHELL_URLS = ${JSON.stringify(shellUrls)};
 
 self.addEventListener('install', (event) => {
 	event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)));
-	self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
 	event.waitUntil(
-		caches.keys().then((keys) => Promise.all(
-			keys.filter((key) => key.startsWith('self-feed-shell-') && key !== CACHE_NAME)
-				.map((key) => caches.delete(key)),
-		)),
+		Promise.all([
+			caches.keys().then((keys) => Promise.all(
+				keys.filter((key) => key.startsWith('self-feed-shell-') && key !== CACHE_NAME)
+					.map((key) => caches.delete(key)),
+			)),
+			self.clients.claim(),
+		]),
 	);
-	self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
 	const request = event.request;
 	if (request.method !== 'GET') return;
 	const url = new URL(request.url);
+	if (request.destination === 'image' && url.origin !== self.location.origin) {
+		event.respondWith(
+			(async () => {
+				const cache = await caches.open(MEDIA_CACHE_NAME);
+				const cached = await cache.match(request);
+				if (cached) return cached;
+				const response = await fetch(request);
+				if (response.ok || response.type === 'opaque') {
+					try {
+						await cache.put(request, response.clone());
+						const keys = await cache.keys();
+						await Promise.all(
+							keys
+								.slice(0, Math.max(0, keys.length - MAX_MEDIA_ENTRIES))
+								.map((key) => cache.delete(key)),
+						);
+					} catch {
+						// Storage pressure must never turn a successful image response into a failure.
+					}
+				}
+				return response;
+			})(),
+		);
+		return;
+	}
 	if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
 	if (request.mode === 'navigate') {
 		event.respondWith(
-			fetch(request)
-				.then((response) => {
+			(async () => {
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), 5000);
+				try {
+					const response = await fetch(request, { signal: controller.signal });
+					if (!response.ok && response.status >= 500) {
+						return (await caches.match('/index.html')) ?? response;
+					}
 					if (response.ok) {
-						const copy = response.clone();
-						void caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
+						try {
+							await (await caches.open(CACHE_NAME)).put('/index.html', response.clone());
+						} catch {
+							// The network response remains usable when storage quota is exhausted.
+						}
 					}
 					return response;
-				})
-				.catch(async () => (await caches.match('/index.html')) ?? Response.error()),
+				} catch {
+					return (await caches.match('/index.html')) ?? Response.error();
+				} finally {
+					clearTimeout(timeout);
+				}
+			})(),
 		);
 		return;
 	}
 
 	event.respondWith(
-		caches.match(request).then((cached) => cached ?? fetch(request).then((response) => {
+		(async () => {
+			const cached = await caches.match(request);
+			if (cached) return cached;
+			const response = await fetch(request);
 			if (response.ok) {
-				const copy = response.clone();
-				void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+				try {
+					await (await caches.open(CACHE_NAME)).put(request, response.clone());
+				} catch {
+					// The network response remains usable when storage quota is exhausted.
+				}
 			}
 			return response;
-		})),
+		})(),
 	);
 });
 `;

@@ -95,6 +95,23 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `offline access lease survives analytics delivery and expires predictably`() = runBlocking {
+        store.clear()
+        val authenticatedAt = 1_700_000_000_000L
+        store.recordAuthenticated(authenticatedAt)
+        val event = store.enqueueProductAnalyticsEvent("offline_restore")
+        store.removeProductAnalyticsEvents(setOf(event.id))
+
+        assertTrue(store.hasValidOfflineAccessLease(authenticatedAt + 6L * 24 * 60 * 60 * 1000))
+        assertFalse(store.hasValidOfflineAccessLease(authenticatedAt + 8L * 24 * 60 * 60 * 1000))
+        assertFalse(store.hasValidOfflineAccessLease(authenticatedAt - 6L * 60 * 1000))
+
+        val reloaded = SessionStore(ApplicationProvider.getApplicationContext())
+        reloaded.preload()
+        assertTrue(reloaded.hasValidOfflineAccessLease(authenticatedAt + 1_000))
+    }
+
+    @Test
     fun `changing api base url clears tokens from the previous server`() = runBlocking {
         store.setApiBaseUrl("https://old.example.com")
         val ok = runCatching {

@@ -13,6 +13,7 @@ export {
 } from './admin-hooks';
 // Re-export article hooks
 export {
+	buildSavedArticlesFallback,
 	useArticle,
 	useArticles,
 	useEnrichArticle,

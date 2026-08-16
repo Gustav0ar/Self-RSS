@@ -8,6 +8,7 @@ import {
 	updateFeedArticlesReadStateInCachedQuery,
 	updateOpenArticleByFeed,
 } from './article-cache-updates';
+import { applyArticleSavedState } from './article-saved-cache-updates';
 import { applyFeedRealtimeEvent } from './feed-realtime-cache';
 import {
 	applyStatsDelta,
@@ -62,6 +63,12 @@ export function applyReadStateSyncEvent(
 		qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
 		qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
 		qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
+		return;
+	}
+	if (event.type === 'article.saved_state_changed') {
+		applyArticleSavedState(qc, event.articleId, event.isSaved);
+		qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
+		qc.invalidateQueries({ queryKey: ['search'], refetchType: 'none' });
 		return;
 	}
 

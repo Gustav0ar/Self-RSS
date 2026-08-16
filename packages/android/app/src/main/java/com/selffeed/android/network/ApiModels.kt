@@ -227,6 +227,17 @@ data class ArticleReadStateChangedEvent(
     val feedId: String,
     val isRead: Boolean,
     val source: String,
+    val revision: Int? = null,
+    override val clientId: String?,
+    override val updatedAt: String,
+) : ReadStateSyncEvent
+
+data class ArticleSavedStateChangedEvent(
+    override val eventId: String,
+    val articleId: String,
+    val feedId: String,
+    val isSaved: Boolean,
+    val revision: Int? = null,
     override val clientId: String?,
     override val updatedAt: String,
 ) : ReadStateSyncEvent
@@ -278,6 +289,8 @@ data class ReadStateEventPayload(
     val articleId: String? = null,
     val feedId: String? = null,
     val isRead: Boolean? = null,
+    val isSaved: Boolean? = null,
+    val revision: Int? = null,
     val source: String? = null,
     val clientId: String? = null,
     val updatedAt: String? = null,
@@ -303,6 +316,24 @@ data class ReadStateEventPayload(
                 feedId = validFeedId,
                 isRead = validIsRead,
                 source = validSource,
+                revision = revision,
+                clientId = clientId,
+                updatedAt = validUpdatedAt,
+            )
+        }
+
+        "article.saved_state_changed" -> {
+            val validEventId = eventId ?: return null
+            val validArticleId = articleId ?: return null
+            val validFeedId = feedId ?: return null
+            val validIsSaved = isSaved ?: return null
+            val validUpdatedAt = updatedAt ?: return null
+            ArticleSavedStateChangedEvent(
+                eventId = validEventId,
+                articleId = validArticleId,
+                feedId = validFeedId,
+                isSaved = validIsSaved,
+                revision = revision,
                 clientId = clientId,
                 updatedAt = validUpdatedAt,
             )
@@ -470,6 +501,12 @@ data class SuccessResponse(
 @JsonClass(generateAdapter = true)
 data class MarkReadResponse(
     val success: Boolean,
+    val applied: Boolean = true,
+    val conflict: Boolean = false,
+    val duplicate: Boolean = false,
+    val read: Boolean? = null,
+    val saved: Boolean? = null,
+    val revision: Int = 0,
 )
 
 @JsonClass(generateAdapter = true)

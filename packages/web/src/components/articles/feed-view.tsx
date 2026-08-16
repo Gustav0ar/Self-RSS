@@ -178,10 +178,9 @@ export function FeedView({
 	}, [fetchNextPage]);
 	const handleToggleSaved = useCallback(
 		(articleId: string, saved: boolean) => {
-			if (isOffline) return;
 			setArticleSaved.mutate({ articleId, saved });
 		},
-		[isOffline, setArticleSaved],
+		[setArticleSaved],
 	);
 
 	useEffect(() => {
@@ -348,6 +347,7 @@ export function FeedView({
 						refreshBlocked={refreshBlocked}
 						refreshing={isRefreshingCurrentSelection}
 						refreshActionBlocked={refreshActionBlocked}
+						markAllReadBlocked={isOffline}
 						refreshGuidance={selectedLifecycle?.refreshGuidance ?? undefined}
 						onUnreadToggle={handleUnreadOnlyToggle}
 						onSortToggle={handleSortToggle}
@@ -373,7 +373,7 @@ export function FeedView({
 						selectedId={effectiveArticleId}
 						onSelect={handleSelectArticle}
 						onToggleSaved={handleToggleSaved}
-						savedActionsDisabled={isOffline}
+						savedActionsDisabled={false}
 						onPrefetch={prefetchArticle}
 						onVisible={warmVisibleArticles}
 						loading={showListLoader}

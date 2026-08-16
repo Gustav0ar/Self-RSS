@@ -329,11 +329,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     }
 
     override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean) {
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?) {
         articleReadStates[articleId] = read
     }
 
-    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean) {
+    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) {
         articleSavedStates[articleId] = saved
     }
 

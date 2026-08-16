@@ -3,7 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-const val LOCAL_DATABASE_VERSION = 6
+const val LOCAL_DATABASE_VERSION = 7
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -49,5 +49,55 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+/** Adds revision-aware durable outboxes and the remaining offline read models. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN mutationId TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN baseRevision INTEGER")
+        db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN previousState INTEGER")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS pending_saved_state_mutations (
+                articleId TEXT NOT NULL,
+                saved INTEGER NOT NULL,
+                mutationId TEXT NOT NULL,
+                baseRevision INTEGER,
+                previousState INTEGER,
+                updatedAt INTEGER NOT NULL,
+                PRIMARY KEY(articleId)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS article_state_revisions (
+                articleId TEXT NOT NULL,
+                readRevision INTEGER,
+                savedRevision INTEGER,
+                PRIMARY KEY(articleId)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS preferences (
+                `key` TEXT NOT NULL,
+                payloadJson TEXT NOT NULL,
+                writtenAt INTEGER NOT NULL,
+                PRIMARY KEY(`key`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
-    arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+    arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+    )

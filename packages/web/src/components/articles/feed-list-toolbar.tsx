@@ -9,6 +9,7 @@ interface FeedListToolbarProps {
 	refreshBlocked: boolean;
 	refreshing: boolean;
 	refreshActionBlocked: boolean;
+	markAllReadBlocked: boolean;
 	refreshGuidance?: string;
 	onUnreadToggle: () => void;
 	onSortToggle: () => void;
@@ -23,6 +24,7 @@ export function FeedListToolbar({
 	refreshBlocked,
 	refreshing,
 	refreshActionBlocked,
+	markAllReadBlocked,
 	refreshGuidance,
 	onUnreadToggle,
 	onSortToggle,
@@ -40,7 +42,13 @@ export function FeedListToolbar({
 			{savedOnly ? (
 				<span className="ml-auto" />
 			) : (
-				<ToolbarButton onClick={onMarkAllRead} label="Mark all read" className="ml-auto">
+				<ToolbarButton
+					onClick={onMarkAllRead}
+					label="Mark all read"
+					className="ml-auto"
+					disabled={markAllReadBlocked}
+					title={markAllReadBlocked ? 'Reconnect to mark all articles as read' : undefined}
+				>
 					<CheckCheck className="h-3.5 w-3.5" />
 				</ToolbarButton>
 			)}

@@ -3,10 +3,14 @@ import { z } from 'zod';
 export const markReadSchema = z.object({
 	read: z.boolean(),
 	source: z.enum(['manual', 'auto_navigate', 'auto_open']).optional().default('manual'),
+	mutationId: z.string().uuid().optional(),
+	baseRevision: z.number().int().nonnegative().optional(),
 });
 
 export const saveArticleSchema = z.object({
 	saved: z.boolean(),
+	mutationId: z.string().uuid().optional(),
+	baseRevision: z.number().int().nonnegative().optional(),
 });
 
 export const markAllReadSchema = z
@@ -50,7 +54,16 @@ export const articleReadStateChangedEventSchema = readStateEventMetadataSchema.e
 	articleId: z.string().min(1),
 	feedId: z.string().min(1),
 	isRead: z.boolean(),
+	revision: z.number().int().nonnegative().optional(),
 	source: z.string().min(1),
+});
+
+export const articleSavedStateChangedEventSchema = readStateEventMetadataSchema.extend({
+	type: z.literal('article.saved_state_changed'),
+	articleId: z.string().min(1),
+	feedId: z.string().min(1),
+	isSaved: z.boolean(),
+	revision: z.number().int().nonnegative().optional(),
 });
 
 export const articlesMarkedReadEventSchema = readStateEventMetadataSchema.extend({
@@ -119,6 +132,7 @@ export const feedHealthUpdatedEventSchema = z.object({
 
 export const realtimeEventSchema = z.discriminatedUnion('type', [
 	articleReadStateChangedEventSchema,
+	articleSavedStateChangedEventSchema,
 	articlesMarkedReadEventSchema,
 	articlesNewEventSchema,
 	articleUpdatedEventSchema,

@@ -1,4 +1,5 @@
 import { adminPaths, adminSchemas } from './admin.spec';
+import { articleStateSchemas } from './article-state.spec';
 import { authPaths, authSchemas } from './auth.spec';
 import { durableFeedPaths, durableFeedSchemas } from './durable-feeds.spec';
 import { feedHistoryPaths } from './feed-history.spec';
@@ -24,6 +25,7 @@ export const openApiSpec = {
 			},
 		},
 		schemas: {
+			...articleStateSchemas,
 			ApiError: {
 				type: 'object',
 				required: ['error'],
@@ -319,29 +321,6 @@ export const openApiSpec = {
 					isRead: { type: 'boolean' },
 					isSaved: { type: 'boolean' },
 					isEnriched: { type: 'boolean' },
-				},
-			},
-			ArticleReadStateChangedEvent: {
-				type: 'object',
-				required: [
-					'type',
-					'eventId',
-					'articleId',
-					'feedId',
-					'isRead',
-					'source',
-					'clientId',
-					'updatedAt',
-				],
-				properties: {
-					type: { type: 'string', const: 'article.read_state_changed' },
-					eventId: { type: 'string' },
-					articleId: { type: 'string', format: 'uuid' },
-					feedId: { type: 'string', format: 'uuid' },
-					isRead: { type: 'boolean' },
-					source: { type: 'string' },
-					clientId: { type: ['string', 'null'] },
-					updatedAt: { type: 'string', format: 'date-time' },
 				},
 			},
 			ArticlesMarkedReadEvent: {
@@ -719,8 +698,17 @@ export const openApiSpec = {
 				tags: ['Articles'],
 				security: bearerSecurity,
 				parameters: [{ in: 'path', name: 'articleId', required: true, schema: { type: 'string' } }],
-				requestBody: json({ type: 'object' }),
-				responses: { '200': json({ type: 'object' }) },
+				requestBody: json({
+					type: 'object',
+					required: ['read'],
+					properties: {
+						read: { type: 'boolean' },
+						source: { type: 'string', enum: ['manual', 'auto_navigate', 'auto_open'] },
+						mutationId: { type: 'string', format: 'uuid' },
+						baseRevision: { type: 'integer', minimum: 0 },
+					},
+				}),
+				responses: { '200': json(apiDataRef('#/components/schemas/ArticleStateMutation')) },
 			},
 		},
 		'/articles/{articleId}/saved': {
@@ -731,9 +719,13 @@ export const openApiSpec = {
 				requestBody: json({
 					type: 'object',
 					required: ['saved'],
-					properties: { saved: { type: 'boolean' } },
+					properties: {
+						saved: { type: 'boolean' },
+						mutationId: { type: 'string', format: 'uuid' },
+						baseRevision: { type: 'integer', minimum: 0 },
+					},
 				}),
-				responses: { '200': json({ type: 'object' }) },
+				responses: { '200': json(apiDataRef('#/components/schemas/ArticleStateMutation')) },
 			},
 		},
 		'/articles/mark-all-read': {

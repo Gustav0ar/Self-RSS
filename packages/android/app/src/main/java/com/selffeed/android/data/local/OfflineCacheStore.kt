@@ -2,6 +2,7 @@ package com.selffeed.android.data.local
 
 import android.content.Context
 import android.util.Log
+import android.util.AtomicFile
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.CategoryWithCounts
@@ -18,13 +19,13 @@ import java.io.IOException
  * Persists read responses to a per-app cache directory so the app can show
  * something useful while offline. Hardening notes:
  *
- * - **Atomic writes**: every payload is written to a `*.tmp` file and then
- *   renamed into place. A crash mid-write leaves the previous file intact.
+ * - **Atomic writes**: [AtomicFile] keeps a backup while a payload is replaced.
+ *   A crash mid-write leaves the previous file intact.
  * - **TTL**: cached files are checked against [DEFAULT_MAX_AGE_MS] on read;
  *   stale entries are treated as misses (the caller falls back to network).
  * - **Size cap**: total cache bytes are bounded; oldest files are evicted LRU.
- * - **Persistent root**: the root dir is re-created lazily so we survive the
- *   system clearing cacheDir.
+ * - **Rebuildable root**: the OS may evict cacheDir, so the root is recreated
+ *   lazily and callers continue with Room or network data.
  */
 class OfflineCacheStore(
     context: Context,
@@ -92,17 +93,14 @@ class OfflineCacheStore(
     private fun atomicWrite(fileName: String, content: String) {
         ensureRoot()
         val target = File(root, fileName)
-        val tmp = File(root, "$fileName.tmp")
+        val atomicFile = AtomicFile(target)
+        var output: java.io.FileOutputStream? = null
         try {
-            tmp.writeText(content, Charsets.UTF_8)
-            if (target.exists()) target.delete()
-            if (!tmp.renameTo(target)) {
-                // renameTo can fail across mount points; fall back to copy+delete.
-                tmp.copyTo(target, overwrite = true)
-                tmp.delete()
-            }
+            output = atomicFile.startWrite()
+            output.write(content.toByteArray(Charsets.UTF_8))
+            atomicFile.finishWrite(output)
         } catch (e: IOException) {
-            tmp.delete()
+            output?.let(atomicFile::failWrite)
             debugLog("Failed to write cache file $fileName: ${e.message}")
         }
     }

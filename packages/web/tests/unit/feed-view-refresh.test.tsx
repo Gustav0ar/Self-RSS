@@ -23,6 +23,7 @@ let defaultSortPreference = 'latest';
 let keyboardShortcutsEnabled = true;
 let autoMarkReadMode = 'on_navigate';
 let preferencesLoaded = true;
+let authOffline = false;
 const categories: CategoryWithCounts[] = [
 	{
 		id: 'category-1',
@@ -151,7 +152,7 @@ vi.mock('../../src/providers/app-state', () => ({
 }));
 
 vi.mock('../../src/providers/auth', () => ({
-	useAuth: () => ({ isOffline: false }),
+	useAuth: () => ({ isOffline: authOffline }),
 }));
 
 describe('FeedView refresh', () => {
@@ -167,6 +168,7 @@ describe('FeedView refresh', () => {
 		keyboardShortcutsEnabled = true;
 		autoMarkReadMode = 'on_navigate';
 		preferencesLoaded = true;
+		authOffline = false;
 		reviewFeed().syncStatus = 'idle';
 		reviewFeed().lastSyncError = null;
 		reviewFeed().lastSyncErrorAt = null;
@@ -246,6 +248,15 @@ describe('FeedView refresh', () => {
 
 		fireEvent.click(refreshButton);
 		expect(refreshFeed).toHaveBeenCalledWith(undefined, { force: true, categoryId: undefined });
+	});
+
+	it('disables the server-scoped mark-all action while offline', () => {
+		authOffline = true;
+		render(<FeedView selectedArticleId={null} onSelectArticle={() => {}} />);
+
+		const markAllButton = screen.getByRole('button', { name: 'Mark all read' });
+		expect(markAllButton).toHaveProperty('disabled', true);
+		expect(markAllButton).toHaveProperty('title', 'Reconnect to mark all articles as read');
 	});
 
 	it.each([

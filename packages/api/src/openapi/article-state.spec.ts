@@ -1,0 +1,53 @@
+export const articleStateSchemas = {
+	ArticleStateMutation: {
+		type: 'object',
+		required: ['success', 'applied', 'conflict', 'duplicate', 'revision'],
+		properties: {
+			success: { type: 'boolean', const: true },
+			applied: { type: 'boolean' },
+			conflict: { type: 'boolean' },
+			duplicate: { type: 'boolean' },
+			read: { type: 'boolean' },
+			saved: { type: 'boolean' },
+			revision: { type: 'integer', minimum: 0 },
+		},
+	},
+	ArticleReadStateChangedEvent: {
+		type: 'object',
+		required: [
+			'type',
+			'eventId',
+			'articleId',
+			'feedId',
+			'isRead',
+			'source',
+			'clientId',
+			'updatedAt',
+		],
+		properties: {
+			type: { type: 'string', const: 'article.read_state_changed' },
+			eventId: { type: 'string' },
+			articleId: { type: 'string', format: 'uuid' },
+			feedId: { type: 'string', format: 'uuid' },
+			isRead: { type: 'boolean' },
+			revision: { type: 'integer', minimum: 0 },
+			source: { type: 'string' },
+			clientId: { type: ['string', 'null'] },
+			updatedAt: { type: 'string', format: 'date-time' },
+		},
+	},
+	ArticleSavedStateChangedEvent: {
+		type: 'object',
+		required: ['type', 'eventId', 'articleId', 'feedId', 'isSaved', 'clientId', 'updatedAt'],
+		properties: {
+			type: { type: 'string', const: 'article.saved_state_changed' },
+			eventId: { type: 'string' },
+			articleId: { type: 'string', format: 'uuid' },
+			feedId: { type: 'string', format: 'uuid' },
+			isSaved: { type: 'boolean' },
+			revision: { type: 'integer', minimum: 0 },
+			clientId: { type: ['string', 'null'] },
+			updatedAt: { type: 'string', format: 'date-time' },
+		},
+	},
+} as const;

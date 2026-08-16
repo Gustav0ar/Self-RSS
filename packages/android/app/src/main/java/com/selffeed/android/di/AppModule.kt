@@ -7,9 +7,7 @@ import coil3.disk.DiskCache
 import coil3.disk.directory
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
-import com.selffeed.android.data.local.CompositeOfflineReadStore
 import com.selffeed.android.data.local.LocalStore
-import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.repository.AppStatusRepository
 import com.selffeed.android.data.repository.AppStatusRepositoryImpl
@@ -78,13 +76,6 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideOfflineCacheStore(
-        @ApplicationContext context: Context,
-        moshi: Moshi,
-    ): OfflineCacheStore = OfflineCacheStore(context, moshi)
-
-    @Provides
-    @Singleton
     fun provideLocalStore(
         @ApplicationContext context: Context,
         moshi: Moshi,
@@ -94,8 +85,7 @@ object AppModule {
     @Singleton
     fun provideOfflineReadStore(
         localStore: LocalStore,
-        offlineCacheStore: OfflineCacheStore,
-    ): OfflineReadStore = CompositeOfflineReadStore(localStore, offlineCacheStore)
+    ): OfflineReadStore = localStore
 
     @Provides
     @Singleton
@@ -111,7 +101,9 @@ object AppModule {
     fun provideImageRequestContext(@ApplicationContext context: Context): Context = context
 
     fun createImageLoader(context: PlatformContext): ImageLoader {
-        val diskCacheDir = File(context.cacheDir, "image_cache").toOkioPath()
+        // Saved articles promise offline media across ordinary OS cache
+        // eviction, so keep Coil's bounded cache in app-owned persistent data.
+        val diskCacheDir = File(context.filesDir, "image_cache").toOkioPath()
         return ImageLoader.Builder(context)
             .diskCache {
                 DiskCache.Builder()

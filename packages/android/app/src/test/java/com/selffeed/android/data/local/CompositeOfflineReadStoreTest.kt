@@ -71,12 +71,14 @@ class CompositeOfflineReadStoreTest {
     }
 
     @Test
-    fun `feed and article invalidation preserves pending read state mutations`() = runBlocking {
+    fun `feed invalidation preserves pending mutations and saved details`() = runBlocking {
         localStore.queueReadStateMutation("a-1", read = true)
+        store.writeArticleDetail(sampleArticleDetail("a-saved").copy(isSaved = true))
 
         store.clearFeedAndArticleData()
 
         assertTrue(localStore.readPendingReadStateMutations().isNotEmpty())
+        assertEquals(true, store.readArticleDetail("a-saved")?.isSaved)
     }
 
     @Test

@@ -72,6 +72,7 @@ export const realtimeSchemas = {
 	ReadStateSyncEvent: {
 		oneOf: [
 			{ $ref: '#/components/schemas/ArticleReadStateChangedEvent' },
+			{ $ref: '#/components/schemas/ArticleSavedStateChangedEvent' },
 			{ $ref: '#/components/schemas/ArticlesMarkedReadEvent' },
 			{ $ref: '#/components/schemas/ArticlesNewEvent' },
 			{ $ref: '#/components/schemas/ArticleUpdatedEvent' },

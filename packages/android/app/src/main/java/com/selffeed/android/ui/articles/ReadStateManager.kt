@@ -6,6 +6,7 @@ import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
+import com.selffeed.android.network.ArticleSavedStateChangedEvent
 import com.selffeed.android.network.ArticlesMarkedReadEvent
 import com.selffeed.android.network.ArticlesNewEvent
 import com.selffeed.android.network.ArticleUpdatedEvent
@@ -192,6 +193,10 @@ class ReadStateManager @Inject constructor(
     private suspend fun applyReadStateSyncEvent(event: ReadStateSyncEvent) {
         when (event) {
             is ArticleReadStateChangedEvent -> applyArticleReadStateChanged(event)
+            is ArticleSavedStateChangedEvent -> {
+                repository.updateCachedSavedState(event.articleId, event.isSaved, event.revision)
+                _events.emit(ArticleFeatureEvent.ArticlesChanged(event.articleId))
+            }
             is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
             is ArticlesNewEvent -> {
                 repository.invalidateArticleContentCaches()
@@ -211,7 +216,7 @@ class ReadStateManager @Inject constructor(
 
     private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
         val previous = currentArticleReadState(event.articleId)
-        repository.updateCachedReadState(event.articleId, event.isRead)
+        repository.updateCachedReadState(event.articleId, event.isRead, event.revision)
         repository.invalidateReadStateCaches(event.articleId)
         rememberArticleReadState(event.articleId, event.isRead)
         items = items.withReadState(event.articleId, event.isRead)

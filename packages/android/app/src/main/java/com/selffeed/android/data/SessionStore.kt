@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -80,6 +81,7 @@ class SessionStore internal constructor(
     @Volatile private var cachedClientId: String? = null
     @Volatile private var cachedApiBaseUrl: String? = null
     @Volatile private var cachedFeedRefreshRequestId: String? = null
+    @Volatile private var cachedLastAuthenticatedAt: Long? = null
     @Volatile private var accessTokenLoaded = false
     @Volatile private var refreshCookieLoaded = false
     @Volatile private var apiBaseUrlLoaded = false
@@ -129,6 +131,7 @@ class SessionStore internal constructor(
                 apiBaseUrlLoaded = true
             }
             cachedFeedRefreshRequestId = prefs[KEY_FEED_REFRESH_REQUEST_ID]
+            cachedLastAuthenticatedAt = prefs[KEY_LAST_AUTHENTICATED_AT]
             preloaded = true
         }
     }
@@ -167,6 +170,17 @@ class SessionStore internal constructor(
     fun getApiBaseUrl(): String = cachedApiBaseUrl ?: defaultApiBaseUrl()
 
     fun getFeedRefreshRequestId(): String? = cachedFeedRefreshRequestId
+
+    fun hasValidOfflineAccessLease(now: Long = System.currentTimeMillis()): Boolean =
+        cachedLastAuthenticatedAt?.let { authenticatedAt ->
+            authenticatedAt <= now + OFFLINE_CLOCK_SKEW_MS &&
+                now - authenticatedAt <= OFFLINE_ACCESS_LEASE_MS
+        } == true
+
+    suspend fun recordAuthenticated(now: Long = System.currentTimeMillis()) = withContext(ioDispatcher) {
+        dataStore.edit { it[KEY_LAST_AUTHENTICATED_AT] = now }
+        cachedLastAuthenticatedAt = now
+    }
 
     suspend fun setFeedRefreshRequestId(requestId: String?) = withContext(ioDispatcher) {
         dataStore.edit { prefs ->
@@ -225,6 +239,7 @@ class SessionStore internal constructor(
                 prefs.remove(KEY_REFRESH_COOKIE)
                 prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
                 prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
+                prefs.remove(KEY_LAST_AUTHENTICATED_AT)
             }
         }
         synchronized(cacheLock) {
@@ -234,6 +249,7 @@ class SessionStore internal constructor(
                 cachedAccessToken = null
                 cachedRefreshCookie = null
                 cachedFeedRefreshRequestId = null
+                cachedLastAuthenticatedAt = null
                 accessTokenLoaded = true
                 refreshCookieLoaded = true
             }
@@ -259,6 +275,7 @@ class SessionStore internal constructor(
             cachedClientId = clientId
             cachedApiBaseUrl = apiBaseUrl
             cachedFeedRefreshRequestId = null
+            cachedLastAuthenticatedAt = null
             accessTokenLoaded = true
             refreshCookieLoaded = true
             apiBaseUrlLoaded = true
@@ -422,6 +439,8 @@ class SessionStore internal constructor(
         private const val GCM_TAG_LENGTH = 128
         private const val MASTER_KEY_ALIAS = "_androidx_security_master_key_"
         private const val MAX_PENDING_ANALYTICS_EVENTS = 50
+        private const val OFFLINE_ACCESS_LEASE_MS = 7L * 24 * 60 * 60 * 1000
+        private const val OFFLINE_CLOCK_SKEW_MS = 5L * 60 * 1000
         private val PRODUCT_ANALYTICS_EVENT_TYPES =
             setOf("app_opened", "offline_restore", "article_completed")
 
@@ -431,6 +450,7 @@ class SessionStore internal constructor(
         private val KEY_API_BASE_URL = stringPreferencesKey("api_base_url")
         private val KEY_FEED_REFRESH_REQUEST_ID = stringPreferencesKey("feed_refresh_request_id")
         private val KEY_PRODUCT_ANALYTICS_EVENTS = stringPreferencesKey("product_analytics_events")
+        private val KEY_LAST_AUTHENTICATED_AT = longPreferencesKey("last_authenticated_at")
         private val KEY_LEGACY_SESSION_MIGRATED = stringPreferencesKey("legacy_session_migrated")
     }
 }

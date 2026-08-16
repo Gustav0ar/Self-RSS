@@ -86,6 +86,92 @@ function seedArticleGraph(sqlite: Database) {
 }
 
 describe('Bun SQLite repository transaction atomicity', () => {
+	it('orders and deduplicates offline article-state mutations', async () => {
+		const { sqlite, db } = await setupDatabase();
+		seedArticleGraph(sqlite);
+		const repository = new ArticleRepository(db);
+		const firstId = '550e8400-e29b-41d4-a716-446655440001';
+		const secondId = '550e8400-e29b-41d4-a716-446655440002';
+
+		const first = repository.setReadState('user-1', 'article-1', true, 'manual', {
+			mutationId: firstId,
+			baseRevision: 0,
+		});
+		const second = repository.setReadState('user-1', 'article-1', false, 'manual', {
+			mutationId: secondId,
+			baseRevision: 1,
+		});
+		const delayedRetry = repository.setReadState('user-1', 'article-1', true, 'manual', {
+			mutationId: firstId,
+			baseRevision: 0,
+		});
+		const stale = repository.setReadState('user-1', 'article-1', true, 'manual', {
+			mutationId: '550e8400-e29b-41d4-a716-446655440003',
+			baseRevision: 1,
+		});
+		const reusedWithDifferentPayload = repository.setReadState(
+			'user-1',
+			'article-1',
+			false,
+			'manual',
+			{ mutationId: firstId, baseRevision: 2 },
+		);
+
+		expect(first).toMatchObject({ state: true, revision: 1, applied: true });
+		expect(second).toMatchObject({ state: false, revision: 2, applied: true });
+		expect(delayedRetry).toMatchObject({
+			state: true,
+			revision: 1,
+			duplicate: true,
+			applied: true,
+		});
+		expect(stale).toMatchObject({ state: false, revision: 2, conflict: true, applied: false });
+		expect(reusedWithDifferentPayload).toMatchObject({
+			state: false,
+			revision: 2,
+			conflict: true,
+			duplicate: true,
+		});
+		expect(
+			sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM article_reads').get()
+				?.count,
+		).toBe(0);
+		sqlite.exec('UPDATE article_state_mutations SET created_at = 1');
+		expect(repository.cleanupStateMutationHistory(new Date(), 2)).toBe(2);
+		expect(
+			sqlite
+				.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM article_state_mutations')
+				.get()?.count,
+		).toBe(1);
+	});
+
+	it('rolls back article state when its idempotency ledger cannot commit', async () => {
+		const { sqlite, db } = await setupDatabase();
+		seedArticleGraph(sqlite);
+		sqlite.exec(`
+			CREATE TRIGGER reject_article_state_ledger
+			BEFORE INSERT ON article_state_mutations
+			BEGIN
+				SELECT RAISE(ABORT, 'ledger rejected');
+			END;
+		`);
+		const repository = new ArticleRepository(db);
+
+		expect(() =>
+			repository.setReadState('user-1', 'article-1', true, 'manual', {
+				mutationId: '550e8400-e29b-41d4-a716-446655440004',
+				baseRevision: 0,
+			}),
+		).toThrow('ledger rejected');
+		expect(
+			sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM article_reads').get()
+				?.count,
+		).toBe(0);
+		expect(
+			sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM article_user_states').get()
+				?.count,
+		).toBe(0);
+	});
 	it('rolls back the user insert when default preference creation fails', async () => {
 		const { sqlite, db } = await setupDatabase();
 		sqlite.exec(`

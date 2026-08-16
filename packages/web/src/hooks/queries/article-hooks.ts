@@ -4,10 +4,18 @@ import type {
 	ArticleDetail,
 	ArticleListItem,
 } from '@self-feed/shared';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useRef } from 'react';
+import {
+	type InfiniteData,
+	type QueryClient,
+	useInfiniteQuery,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { ARTICLE_LIMITS, REFRESH_INTERVALS } from '@/lib/constants';
+import { flushOfflineArticleMutations, queueArticleStateMutation } from '@/lib/offline-store';
 import {
 	type ArticleQueryParams,
 	applyArticleReadState,
@@ -50,6 +58,73 @@ function preloadImages(urls: readonly (string | null | undefined)[]) {
 
 export type { ArticleQueryParams };
 
+function articleItemsFromCachedValue(value: unknown): ArticleListItem[] {
+	if (!value || typeof value !== 'object') return [];
+	if ('pages' in value && Array.isArray(value.pages)) {
+		return value.pages.flatMap(articleItemsFromCachedValue);
+	}
+	if ('data' in value && Array.isArray(value.data)) {
+		return value.data.filter(
+			(item): item is ArticleListItem =>
+				!!item &&
+				typeof item === 'object' &&
+				'id' in item &&
+				typeof item.id === 'string' &&
+				'isSaved' in item &&
+				item.isSaved === true,
+		);
+	}
+	return [];
+}
+
+export function buildSavedArticlesFallback(
+	qc: QueryClient,
+	params: ArticleQueryParams,
+	limit: number,
+): InfiniteData<ApiListResponse<ArticleListItem>, string | null> | undefined {
+	if (!params.savedOnly || params.categoryId) return undefined;
+	const byId = new Map<string, ArticleListItem>();
+	for (const [, value] of qc.getQueriesData({ queryKey: ['articles'] })) {
+		for (const article of articleItemsFromCachedValue(value)) byId.set(article.id, article);
+	}
+	for (const [, value] of qc.getQueriesData<ArticleDetail>({ queryKey: ['article'] })) {
+		if (!value?.isSaved) continue;
+		byId.set(value.id, {
+			id: value.id,
+			feedId: value.feedId,
+			feedTitle: value.feedTitle,
+			feedFaviconUrl: value.feedFaviconUrl,
+			canonicalUrl: value.canonicalUrl,
+			title: value.title,
+			author: value.author,
+			excerpt: value.excerpt,
+			heroImageUrl: value.heroImageUrl,
+			publishedAt: value.publishedAt,
+			displayedAt: value.publishedAt ?? value.fetchedAt,
+			isRead: value.isRead,
+			isSaved: true,
+			contentStatus: value.contentStatus,
+			contentVersion: value.contentVersion,
+		});
+	}
+	const direction = params.sort === 'oldest' ? 1 : -1;
+	const data = [...byId.values()]
+		.filter((article) => !params.feedId || article.feedId === params.feedId)
+		.sort(
+			(left, right) =>
+				direction *
+				(left.displayedAt ?? left.publishedAt ?? '').localeCompare(
+					right.displayedAt ?? right.publishedAt ?? '',
+				),
+		)
+		.slice(0, limit);
+	if (data.length === 0) return undefined;
+	return {
+		pages: [{ data, cursor: null, hasMore: false }],
+		pageParams: [null],
+	};
+}
+
 export function useArticles(params: ArticleQueryParams = {}) {
 	const qs = buildArticleSearchParams(params, params.cursor);
 	return useQuery({
@@ -69,17 +144,25 @@ export function useInfiniteArticles(
 	params: ArticleQueryParams = {},
 	options: { enabled?: boolean } = {},
 ) {
+	const qc = useQueryClient();
+	const handledCursorError = useRef<unknown>(null);
 	const limit = params.limit ?? 30;
-	return useInfiniteQuery({
-		queryKey: [
-			'articles',
-			params.feedId ?? null,
-			params.categoryId ?? null,
-			params.unreadOnly ?? false,
-			params.savedOnly ?? false,
-			params.sort ?? 'latest',
-			limit,
-		],
+	const queryKey = useMemo(
+		() =>
+			[
+				'articles',
+				params.feedId ?? null,
+				params.categoryId ?? null,
+				params.unreadOnly ?? false,
+				params.savedOnly ?? false,
+				params.sort ?? 'latest',
+				limit,
+			] as const,
+		[params.feedId, params.categoryId, params.unreadOnly, params.savedOnly, params.sort, limit],
+	);
+	const savedFallback = buildSavedArticlesFallback(qc, params, limit);
+	const query = useInfiniteQuery({
+		queryKey,
 		initialPageParam: null as string | null,
 		enabled: options.enabled ?? true,
 		queryFn: ({ pageParam, signal }) => {
@@ -95,7 +178,23 @@ export function useInfiniteArticles(
 			});
 		},
 		getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.cursor : undefined),
+		initialData: savedFallback,
+		initialDataUpdatedAt: savedFallback ? 0 : undefined,
 	});
+	useEffect(() => {
+		const error = query.error;
+		if (
+			error &&
+			error !== handledCursorError.current &&
+			typeof error === 'object' &&
+			'code' in error &&
+			error.code === 'CURSOR_RESET_REQUIRED'
+		) {
+			handledCursorError.current = error;
+			void qc.resetQueries({ queryKey, exact: true });
+		}
+	}, [qc, query.error, queryKey]);
+	return query;
 }
 
 export function useArticle(articleId: string | null) {
@@ -222,11 +321,10 @@ export function useWarmVisibleArticles() {
 export function useMarkRead() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ articleId, read }: { articleId: string; read: boolean }) =>
-			apiFetch(`/articles/${articleId}/read`, {
-				method: 'PATCH',
-				body: JSON.stringify({ read }),
-			}),
+		mutationFn: async ({ articleId, read }: { articleId: string; read: boolean }) => {
+			await queueArticleStateMutation('read', articleId, read, 'manual');
+			return flushOfflineArticleMutations();
+		},
 		onMutate: async ({ articleId, read }) => {
 			// Capture the active article-list query key (if any) so we only
 			// cancel in-flight fetches that would race with this optimistic
@@ -295,6 +393,30 @@ export function useMarkRead() {
 			}
 			qc.setQueryData(['stats'], context?.previousStats);
 		},
+		onSuccess: (results, { articleId }, context) => {
+			const relevant = results.filter((result) => result.mutation.articleId === articleId);
+			const terminal = relevant.at(-1);
+			if (terminal?.status === 'discarded') {
+				qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
+				for (const [queryKey, data] of context?.previousArticles ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				for (const [queryKey, data] of context?.previousSearch ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				for (const [queryKey, data] of context?.previousFeeds ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				for (const [queryKey, data] of context?.previousCategories ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				qc.setQueryData(['stats'], context?.previousStats);
+				return;
+			}
+			if (terminal?.authoritativeState !== undefined) {
+				applyArticleReadState(qc, articleId, terminal.authoritativeState);
+			}
+		},
 		onSettled: () => {
 			qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
 			qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
@@ -306,11 +428,10 @@ export function useMarkRead() {
 export function useSetArticleSaved() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ articleId, saved }: { articleId: string; saved: boolean }) =>
-			apiFetch(`/articles/${articleId}/saved`, {
-				method: 'PATCH',
-				body: JSON.stringify({ saved }),
-			}),
+		mutationFn: async ({ articleId, saved }: { articleId: string; saved: boolean }) => {
+			await queueArticleStateMutation('saved', articleId, saved);
+			return flushOfflineArticleMutations();
+		},
 		onMutate: async ({ articleId, saved }) => {
 			await Promise.all([
 				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
@@ -319,6 +440,12 @@ export function useSetArticleSaved() {
 			]);
 
 			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
+			if (saved && previousArticle) {
+				preloadImages([
+					previousArticle.heroImageUrl,
+					...previousArticle.media.filter((item) => item.type === 'image').map((item) => item.url),
+				]);
+			}
 			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
 			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
 			applyArticleSavedState(qc, articleId, saved);
@@ -331,6 +458,22 @@ export function useSetArticleSaved() {
 			}
 			for (const [queryKey, data] of context?.previousSearch ?? []) {
 				qc.setQueryData(queryKey, data);
+			}
+		},
+		onSuccess: (results, { articleId }, context) => {
+			const terminal = results.filter((result) => result.mutation.articleId === articleId).at(-1);
+			if (terminal?.status === 'discarded') {
+				qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
+				for (const [queryKey, data] of context?.previousArticles ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				for (const [queryKey, data] of context?.previousSearch ?? []) {
+					qc.setQueryData(queryKey, data);
+				}
+				return;
+			}
+			if (terminal?.authoritativeState !== undefined) {
+				applyArticleSavedState(qc, articleId, terminal.authoritativeState);
 			}
 		},
 		onSettled: () => {

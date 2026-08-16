@@ -117,7 +117,7 @@ class LocalStoreTest {
     }
 
     @Test
-    fun `queued read state persists without invalidating the visible article page`() = runBlocking {
+    fun `queued read state persists and updates the canonical article row`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),
             cursor = null,
@@ -130,6 +130,13 @@ class LocalStoreTest {
         )
 
         val pagingSource = store.articlePagingSource("query-read-state")
+        pagingSource.load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
         store.queueReadStateMutation("a-1", read = true)
 
         val pending = store.readPendingReadStateMutations()
@@ -138,9 +145,9 @@ class LocalStoreTest {
         assertTrue(pending.first().read)
 
         assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
-        assertEquals(false, pagingSource.invalid)
+        assertEquals(true, pagingSource.invalid)
 
-        val result = pagingSource.load(
+        val result = store.articlePagingSource("query-read-state").load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -148,7 +155,7 @@ class LocalStoreTest {
             ),
         )
         val page = result as PagingSource.LoadResult.Page
-        assertEquals(false, page.data.first().isRead)
+        assertEquals(true, page.data.first().isRead)
 
         store.deletePendingReadStateMutation("a-1")
         assertTrue(store.readPendingReadStateMutations().isEmpty())
@@ -162,6 +169,84 @@ class LocalStoreTest {
 
         assertTrue(store.readPendingReadStateMutations().isEmpty())
         assertTrue(store.readArticleReadOverrides().isEmpty())
+    }
+
+    @Test
+    fun `rapid read toggles keep the newest intent when an older response arrives`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = "query-toggle",
+            payload = ApiListResponse(data = listOf(sampleArticle("a-toggle")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        val first = store.queueReadStateMutation("a-toggle", read = true)
+        val newest = store.queueReadStateMutation("a-toggle", read = false)
+
+        store.acknowledgeReadStateMutation(first, read = true, revision = 1)
+
+        val pending = store.readPendingReadStateMutations().single()
+        assertEquals(newest.mutationId, pending.mutationId)
+        assertEquals(false, pending.read)
+        val page = store.articlePagingSource("query-toggle").load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(false, page.data.single().isRead)
+    }
+
+    @Test
+    fun `saved intent survives offline and acknowledgement stores its revision`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = "query-save",
+            payload = ApiListResponse(data = listOf(sampleArticle("a-save")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        val mutation = store.queueSavedStateMutation("a-save", saved = true)
+
+        assertEquals(true, store.readPendingSavedStateMutations().single().saved)
+        store.acknowledgeSavedStateMutation(mutation, saved = true, revision = 7)
+
+        assertTrue(store.readPendingSavedStateMutations().isEmpty())
+        val page = store.articlePagingSource("query-save").load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(true, page.data.single().isSaved)
+        val savedPage = store.savedArticlePagingSource().load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(listOf("a-save"), savedPage.data.map { it.id })
+    }
+
+    @Test
+    fun `saving a detail-only article adds it to the offline saved collection`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("a-detail-save"))
+
+        store.queueSavedStateMutation("a-detail-save", saved = true)
+
+        val page = store.savedArticlePagingSource().load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(listOf("a-detail-save"), page.data.map { it.id })
+    }
+
+    @Test
+    fun `permanently rejected saved intent restores its pre mutation state`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = "query-save-rollback",
+            payload = ApiListResponse(data = listOf(sampleArticle("a-save")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        store.writeArticleDetail(sampleDetail("a-save"))
+        val mutation = store.queueSavedStateMutation("a-save", saved = true)
+
+        assertEquals(false, mutation.previousState)
+        assertEquals(true, store.readArticleDetail("a-save")?.isSaved)
+        store.discardSavedStateMutation(mutation)
+
+        assertTrue(store.readPendingSavedStateMutations().isEmpty())
+        assertEquals(false, store.readArticleDetail("a-save")?.isSaved)
+        val page = store.articlePagingSource("query-save-rollback").load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(false, page.data.single().isSaved)
     }
 
     @Test
@@ -186,7 +271,7 @@ class LocalStoreTest {
     }
 
     @Test
-    fun `read state update uses a non paging overlay`() = runBlocking {
+    fun `remote read state updates the canonical row without leaving an overlay`() = runBlocking {
         val payload = ApiListResponse(
             data = listOf(sampleArticle("a-1")),
             cursor = null,
@@ -199,11 +284,17 @@ class LocalStoreTest {
         )
 
         val pagingSource = store.articlePagingSource("query-retained-read")
+        pagingSource.load(
+            PagingSource.LoadParams.Refresh<Int>(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        )
         store.updateArticleReadState("a-1", read = true)
 
-        assertEquals(false, pagingSource.invalid)
-        assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
-        val result = pagingSource.load(
+        assertTrue(store.readArticleReadOverrides().isEmpty())
+        val result = store.articlePagingSource("query-retained-read").load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -212,7 +303,64 @@ class LocalStoreTest {
         )
         val page = result as PagingSource.LoadResult.Page
         assertEquals(listOf("a-1"), page.data.map { it.id })
-        assertEquals(false, page.data.first().isRead)
+        assertEquals(true, page.data.first().isRead)
+    }
+
+    @Test
+    fun `foreign state events preserve newer local read and saved intents`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = "query-concurrent",
+            payload = ApiListResponse(data = listOf(sampleArticle("a-1")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        store.queueReadStateMutation("a-1", read = true)
+        store.queueSavedStateMutation("a-1", saved = true)
+
+        val visibleRead = store.updateArticleReadState("a-1", read = false, revision = 3)
+        val visibleSaved = store.updateArticleSavedState("a-1", saved = false, revision = 4)
+
+        assertEquals(true, visibleRead)
+        assertEquals(true, visibleSaved)
+        assertEquals(true, store.readPendingReadStateMutations().single().read)
+        assertEquals(false, store.readPendingReadStateMutations().single().previousState)
+        assertEquals(true, store.readPendingSavedStateMutations().single().saved)
+        assertEquals(false, store.readPendingSavedStateMutations().single().previousState)
+        val page = store.articlePagingSource("query-concurrent").load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(true, page.data.single().isRead)
+        assertEquals(true, page.data.single().isSaved)
+
+        store.writeArticleRemotePage(
+            queryKey = "query-concurrent",
+            payload = ApiListResponse(data = listOf(sampleArticle("a-1")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        val refreshedPage = store.articlePagingSource("query-concurrent").load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(true, refreshedPage.data.single().isRead)
+        assertEquals(true, refreshedPage.data.single().isSaved)
+    }
+
+    @Test
+    fun `network detail writes preserve queued local state`() = runBlocking {
+        store.queueReadStateMutation("a-detail", read = true)
+        store.queueSavedStateMutation("a-detail", saved = true)
+
+        store.writeArticleDetail(sampleDetail("a-detail"))
+
+        assertEquals(true, store.readArticleDetail("a-detail")?.isRead)
+        assertEquals(true, store.readArticleDetail("a-detail")?.isSaved)
+    }
+
+    @Test
+    fun `feed cache invalidation preserves saved article detail`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("a-saved").copy(isSaved = true))
+
+        store.clearFeedAndArticleData()
+
+        assertEquals(true, store.readArticleDetail("a-saved")?.isSaved)
     }
 
     @Test

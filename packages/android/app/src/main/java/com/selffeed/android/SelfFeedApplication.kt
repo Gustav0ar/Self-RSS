@@ -9,12 +9,17 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import com.selffeed.android.data.FeedSyncWorker
+import com.selffeed.android.data.ArticleStateSyncWorker
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.di.AppModule
 import com.selffeed.android.network.NetworkMonitor
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkConfiguration.Provider {
@@ -43,8 +48,12 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
         com.selffeed.android.ui.components.reapStaleOpmlExports(this)
 
         FeedSyncWorker.schedule(this)
-        if (repository.isLoggedIn()) {
-            FeedSyncWorker.kickOnce(this)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            repository.prepareSession()
+            if (repository.isLoggedIn()) {
+                FeedSyncWorker.kickOnce(this@SelfFeedApplication)
+                ArticleStateSyncWorker.kickOnce(this@SelfFeedApplication)
+            }
         }
     }
 

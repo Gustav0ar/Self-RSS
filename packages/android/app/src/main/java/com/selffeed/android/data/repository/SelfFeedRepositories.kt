@@ -35,6 +35,7 @@ interface AuthRepository {
     suspend fun me(): AppResult<User>
     suspend fun changePassword(currentPassword: String, newPassword: String): AppResult<User>
     fun isLoggedIn(): Boolean
+    fun canUseOfflineSession(): Boolean = isLoggedIn()
     fun authEvents(): Flow<String>
     suspend fun recordOfflineRestore() = Unit
 }
@@ -118,8 +119,8 @@ interface ArticleRepository {
     fun readStateEvents(): Flow<ReadStateSyncEvent>
     suspend fun invalidateReadStateCaches(articleId: String? = null)
     suspend fun invalidateArticleContentCaches(articleId: String? = null)
-    suspend fun updateCachedReadState(articleId: String, read: Boolean)
-    suspend fun updateCachedSavedState(articleId: String, saved: Boolean)
+    suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int? = null)
+    suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int? = null)
     suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>)
     suspend fun recordArticleCompletion(articleId: String) = Unit
 }

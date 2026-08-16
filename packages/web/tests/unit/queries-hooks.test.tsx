@@ -14,6 +14,7 @@ vi.mock('../../src/lib/api', () => ({
 import {
 	applyReadStateSyncEvent,
 	buildArticleSearchParams,
+	buildSavedArticlesFallback,
 	invalidateReaderQueries,
 	useArticle,
 	useArticles,
@@ -245,6 +246,94 @@ describe('buildArticleSearchParams', () => {
 	it('respects the explicit limit when given', () => {
 		const params = buildArticleSearchParams({ limit: 50 });
 		expect(params).toBe('limit=50');
+	});
+});
+
+describe('infinite article cursor recovery', () => {
+	it('resets to page one when the server rejects a persisted cursor', async () => {
+		let firstPageRequests = 0;
+		apiFetchMock.mockImplementation(async (path: string) => {
+			if (path.includes('cursor=')) {
+				throw Object.assign(new Error('Restart pagination'), {
+					code: 'CURSOR_RESET_REQUIRED',
+				});
+			}
+			firstPageRequests += 1;
+			return {
+				data: [{ id: firstPageRequests === 1 ? 'cached-generation' : 'fresh-generation' }],
+				cursor: 'obsolete-cursor',
+				hasMore: true,
+			};
+		});
+		const queryClient = new RealQueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useInfiniteArticles(), { wrapper });
+
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		await act(async () => {
+			await result.current.fetchNextPage();
+		});
+
+		await waitFor(() => expect(firstPageRequests).toBe(2));
+		expect(result.current.data?.pages[0]?.data[0]?.id).toBe('fresh-generation');
+	});
+});
+
+describe('saved article offline fallback', () => {
+	it('builds the Saved collection from cached lists and article details', () => {
+		const queryClient = new RealQueryClient();
+		queryClient.setQueryData(['articles', 'feed-1'], {
+			data: [
+				{
+					id: 'list-saved',
+					feedId: 'feed-1',
+					feedTitle: 'Feed',
+					feedFaviconUrl: null,
+					canonicalUrl: 'https://example.com/list',
+					title: 'List saved',
+					author: null,
+					excerpt: null,
+					heroImageUrl: null,
+					publishedAt: '2026-01-01T00:00:00.000Z',
+					displayedAt: '2026-01-01T00:00:00.000Z',
+					isRead: false,
+					isSaved: true,
+					contentStatus: 'feed_ready',
+					contentVersion: 1,
+				},
+				{ id: 'not-saved', isSaved: false },
+			],
+			cursor: null,
+			hasMore: false,
+		});
+		queryClient.setQueryData(['article', 'detail-saved'], {
+			id: 'detail-saved',
+			feedId: 'feed-2',
+			feedTitle: 'Other feed',
+			feedFaviconUrl: null,
+			canonicalUrl: 'https://example.com/detail',
+			title: 'Detail saved',
+			author: null,
+			excerpt: null,
+			heroImageUrl: null,
+			publishedAt: '2026-02-01T00:00:00.000Z',
+			fetchedAt: '2026-02-01T00:00:00.000Z',
+			isRead: true,
+			isSaved: true,
+			contentStatus: 'full_ready',
+			contentVersion: 2,
+		});
+
+		const fallback = buildSavedArticlesFallback(queryClient, { savedOnly: true }, 30);
+
+		expect(fallback?.pages[0]?.data.map((article) => article.id)).toEqual([
+			'detail-saved',
+			'list-saved',
+		]);
 	});
 });
 
