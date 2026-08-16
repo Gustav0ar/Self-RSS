@@ -7,11 +7,13 @@ import {
 	getLastRefreshOutcome,
 	loadTokens,
 	refreshAccessToken,
+	setAuthLostHandler,
 	setTokens,
 } from '../../src/lib/api';
 
 describe('api module', () => {
 	afterEach(() => {
+		setAuthLostHandler(null);
 		clearTokens();
 		vi.useRealTimers();
 		vi.restoreAllMocks();
@@ -149,6 +151,23 @@ describe('api module', () => {
 
 			await expect(apiFetch('/test')).rejects.toThrow();
 			expect(fetchMock).toHaveBeenCalledTimes(2); // 1st attempt + failed refresh
+		});
+
+		it('keeps the local session when refresh is temporarily unavailable', async () => {
+			setTokens('expired-token');
+			const onAuthLost = vi.fn();
+			setAuthLostHandler(onAuthLost);
+			const fetchMock = vi
+				.fn()
+				.mockResolvedValueOnce(new Response('', { status: 401 }))
+				.mockResolvedValueOnce(new Response('', { status: 503 }));
+			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+
+			await expect(apiFetch('/test')).rejects.toThrow();
+
+			expect(getLastRefreshOutcome()).toBe('unavailable');
+			expect(getAccessToken()).toBe('expired-token');
+			expect(onAuthLost).not.toHaveBeenCalled();
 		});
 	});
 

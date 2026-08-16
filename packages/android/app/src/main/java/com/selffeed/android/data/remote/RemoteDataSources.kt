@@ -39,6 +39,7 @@ import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import javax.inject.Inject
+import java.util.UUID
 
 class AuthRemoteDataSource @Inject constructor(
     private val api: RssApi,
@@ -50,7 +51,13 @@ class AuthRemoteDataSource @Inject constructor(
     suspend fun register(email: String, password: String): AuthResponse =
         api.register(RegisterRequest(email, password)).data
 
-    suspend fun logout(): Boolean = api.logout().data.success
+    suspend fun logout(accessToken: String?, refreshCookie: String?): Boolean = api.logout(
+        authorization = accessToken?.takeIf(String::isNotBlank)?.let { "Bearer $it" },
+        cookie = refreshCookie
+            ?.substringBefore(';')
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && '=' in it },
+    ).data.success
     suspend fun me(): User = api.me().data
     suspend fun changePassword(currentPassword: String, newPassword: String): AuthResponse =
         api.changePassword(ChangePasswordRequest(currentPassword, newPassword)).data
@@ -98,9 +105,9 @@ class FeedRemoteDataSource @Inject constructor(
     ).data
 
     suspend fun deleteFeed(id: String): Boolean = api.deleteFeed(id).data.success
-    suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id).data
+    suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id, UUID.randomUUID().toString()).data
     suspend fun syncAllFeeds(feedId: String?, categoryId: String?): SyncResponse =
-        api.syncAllFeeds(feedId, categoryId).data
+        api.syncAllFeeds(UUID.randomUUID().toString(), feedId, categoryId).data
 
     suspend fun syncAllFeedsStatus(requestId: String?): FeedSyncAllStatus =
         api.syncAllFeedsStatus(requestId).data
@@ -135,11 +142,26 @@ class ArticleRemoteDataSource @Inject constructor(
     suspend fun enrichArticle(articleId: String): EnrichArticleResponse =
         api.enrichArticle(articleId).data
 
-    suspend fun markRead(articleId: String, read: Boolean, source: String = "manual"): Boolean =
-        api.markRead(articleId, MarkReadRequest(read = read, source = source)).data.success
+    suspend fun markRead(
+        articleId: String,
+        read: Boolean,
+        source: String = "manual",
+        mutationId: String? = null,
+        baseRevision: Int? = null,
+    ) = api.markRead(
+        articleId,
+        MarkReadRequest(read, source, mutationId, baseRevision),
+    ).data
 
-    suspend fun setSaved(articleId: String, saved: Boolean): Boolean =
-        api.setSaved(articleId, SaveArticleRequest(saved)).data.success
+    suspend fun setSaved(
+        articleId: String,
+        saved: Boolean,
+        mutationId: String? = null,
+        baseRevision: Int? = null,
+    ) = api.setSaved(
+        articleId,
+        SaveArticleRequest(saved, mutationId, baseRevision),
+    ).data
 
     suspend fun markAllRead(feedId: String?, categoryId: String?) =
         api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data

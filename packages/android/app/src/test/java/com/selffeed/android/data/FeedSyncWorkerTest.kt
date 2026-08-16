@@ -119,6 +119,7 @@ class FeedSyncWorkerTest {
         syncResult: AppResult<SyncResponse>?,
     ): FeedSyncWorker {
         val repo = mockk<RssRepository>()
+        coEvery { repo.prepareSession() } returns Unit
         coEvery { repo.isLoggedIn() } returns loggedIn
         if (syncResult != null) {
             coEvery { repo.syncAllFeeds() } returns syncResult

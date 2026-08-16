@@ -37,6 +37,7 @@ class AuthViewModelTest {
         repository = mockk()
         every { repository.getApiBaseUrl() } returns DEFAULT_API_BASE_URL
         every { repository.isLoggedIn() } returns false
+        every { repository.canUseOfflineSession() } returns false
         every { repository.authEvents() } returns emptyFlow()
         coEvery { repository.setApiBaseUrl(any()) } answers {
             AppResult.Success(normalizeApiServerHost(firstArg()))
@@ -100,6 +101,7 @@ class AuthViewModelTest {
     @Test
     fun `bootstrap with transient saved session restore failure keeps authenticated`() = runTest {
         every { repository.isLoggedIn() } returns true
+        every { repository.canUseOfflineSession() } returns true
         coEvery { repository.restoreSession() } returns AppResult.Error(
             "Unable to refresh session. Please check your connection.",
         )

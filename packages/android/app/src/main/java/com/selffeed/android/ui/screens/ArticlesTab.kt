@@ -283,14 +283,12 @@ fun ArticlesTab(
                             actions.onToggleRead(article.id, read)
                             actions.onReadStateChanged(article.id, !read)
                         },
-                        onToggleSaved = if (state.isOffline) null else {
-                            {
-                                actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
-                                actions.onToggleSaved(
-                                    displayedArticle.id,
-                                    !displayedArticle.isSaved
-                                )
-                            }
+                        onToggleSaved = {
+                            actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
+                            actions.onToggleSaved(
+                                displayedArticle.id,
+                                !displayedArticle.isSaved,
+                            )
                         },
                         density = state.density,
                     )

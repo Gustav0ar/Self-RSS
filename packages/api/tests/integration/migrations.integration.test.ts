@@ -215,7 +215,8 @@ function copyMigrationsBeforeDurableIngestion(baseDir: string) {
 			entry.tag !== '0019_tidy_wong' &&
 			entry.tag !== '0020_fixed_feed_refresh_interval' &&
 			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics',
+			entry.tag !== '0022_product_analytics' &&
+			entry.tag !== '0022_offline_article_state',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
@@ -235,7 +236,8 @@ function copyMigrationsBeforeAuthSessionExpiry(baseDir: string) {
 			entry.tag !== '0019_tidy_wong' &&
 			entry.tag !== '0020_fixed_feed_refresh_interval' &&
 			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics',
+			entry.tag !== '0022_product_analytics' &&
+			entry.tag !== '0022_offline_article_state',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
@@ -254,7 +256,8 @@ function copyMigrationsBeforeFixedFeedRefresh(baseDir: string) {
 		(entry) =>
 			entry.tag !== '0020_fixed_feed_refresh_interval' &&
 			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics',
+			entry.tag !== '0022_product_analytics' &&
+			entry.tag !== '0022_offline_article_state',
 	);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;

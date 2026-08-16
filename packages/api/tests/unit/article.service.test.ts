@@ -410,7 +410,14 @@ describe('ArticleService', () => {
 	it('invalidates only affected unread cache keys on markRead', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			markRead: vi.fn(async () => true),
+			setReadState: vi.fn(async () => ({
+				state: true,
+				revision: 1,
+				applied: true,
+				changed: true,
+				conflict: false,
+				duplicate: false,
+			})),
 		};
 		const feedRepo = {};
 		const metricsRepo = {
@@ -440,7 +447,13 @@ describe('ArticleService', () => {
 		const result = await service.markRead('user-1', 'article-1', true, 'manual', 'client-1');
 
 		expect(articleRepo.findRefForUser).toHaveBeenCalledWith('user-1', 'article-1');
-		expect(articleRepo.markRead).toHaveBeenCalledWith('user-1', 'article-1', 'manual');
+		expect(articleRepo.setReadState).toHaveBeenCalledWith(
+			'user-1',
+			'article-1',
+			true,
+			'manual',
+			{},
+		);
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 1);
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
 		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
@@ -457,13 +470,27 @@ describe('ArticleService', () => {
 				clientId: 'client-1',
 			}),
 		);
-		expect(result).toEqual({ success: true });
+		expect(result).toEqual({
+			success: true,
+			applied: true,
+			conflict: false,
+			duplicate: false,
+			read: true,
+			revision: 1,
+		});
 	});
 
 	it('does not wait for scoped list cache patching on markRead', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			markRead: vi.fn(async () => true),
+			setReadState: vi.fn(async () => ({
+				state: true,
+				revision: 1,
+				applied: true,
+				changed: true,
+				conflict: false,
+				duplicate: false,
+			})),
 		};
 		const metricsRepo = {
 			incrementReadCount: vi.fn(async () => undefined),
@@ -489,14 +516,49 @@ describe('ArticleService', () => {
 
 		await expect(
 			service.markRead('user-1', 'article-1', true, 'manual', 'client-1'),
-		).resolves.toEqual({ success: true });
+		).resolves.toMatchObject({ success: true, read: true, revision: 1 });
 		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
+	});
+
+	it('returns the committed mutation when Redis and realtime fan-out fail', async () => {
+		const articleRepo = {
+			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
+			setReadState: vi.fn(async () => ({
+				state: true,
+				revision: 4,
+				applied: true,
+				changed: true,
+				conflict: false,
+				duplicate: false,
+			})),
+		};
+		const service = new ArticleService(
+			articleRepo as never,
+			{} as never,
+			{ incrementReadCount: vi.fn(async () => Promise.reject(new Error('metrics down'))) } as never,
+			{ del: vi.fn(async () => Promise.reject(new Error('redis down'))) } as never,
+			undefined,
+			{
+				publishReadStateEvent: vi.fn(async () => Promise.reject(new Error('pubsub down'))),
+			} as never,
+		);
+
+		await expect(
+			service.markRead('user-1', 'article-1', true, 'manual', 'client-1'),
+		).resolves.toMatchObject({ success: true, read: true, revision: 4 });
 	});
 
 	it('saves an owned article and patches list and detail caches', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			save: vi.fn(async () => true),
+			setSavedState: vi.fn(async () => ({
+				state: true,
+				revision: 1,
+				applied: true,
+				changed: true,
+				conflict: false,
+				duplicate: false,
+			})),
 		};
 		const redis = { del: vi.fn(async () => 1) };
 		const articleCache = {
@@ -512,10 +574,12 @@ describe('ArticleService', () => {
 			articleCache as never,
 		);
 
-		await expect(service.setSaved('user-1', 'article-1', true)).resolves.toEqual({
+		await expect(service.setSaved('user-1', 'article-1', true)).resolves.toMatchObject({
 			success: true,
+			saved: true,
+			revision: 1,
 		});
-		expect(articleRepo.save).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(articleRepo.setSavedState).toHaveBeenCalledWith('user-1', 'article-1', true, {});
 		expect(articleCache.updateCachedSavedState).toHaveBeenCalledWith('user-1', 'article-1', true);
 		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
 	});
@@ -537,7 +601,14 @@ describe('ArticleService', () => {
 	it('does not publish or count duplicate markRead requests', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			markRead: vi.fn(async () => false),
+			setReadState: vi.fn(async () => ({
+				state: true,
+				revision: 1,
+				applied: false,
+				changed: false,
+				conflict: false,
+				duplicate: true,
+			})),
 		};
 		const metricsRepo = {
 			incrementReadCount: vi.fn(async () => undefined),
@@ -567,7 +638,14 @@ describe('ArticleService', () => {
 	it('publishes unread changes without incrementing read metrics', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			markUnread: vi.fn(async () => true),
+			setReadState: vi.fn(async () => ({
+				state: false,
+				revision: 2,
+				applied: true,
+				changed: true,
+				conflict: false,
+				duplicate: false,
+			})),
 		};
 		const metricsRepo = {
 			incrementReadCount: vi.fn(async () => undefined),
@@ -589,7 +667,13 @@ describe('ArticleService', () => {
 
 		await service.markRead('user-1', 'article-1', false, 'manual', 'client-1');
 
-		expect(articleRepo.markUnread).toHaveBeenCalledWith('user-1', 'article-1');
+		expect(articleRepo.setReadState).toHaveBeenCalledWith(
+			'user-1',
+			'article-1',
+			false,
+			'manual',
+			{},
+		);
 		expect(metricsRepo.incrementReadCount).not.toHaveBeenCalled();
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
 		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(

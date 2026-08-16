@@ -51,11 +51,15 @@ data class UpdateFeedRequest(
 data class MarkReadRequest(
     val read: Boolean,
     val source: String = "manual",
+    val mutationId: String? = null,
+    val baseRevision: Int? = null,
 )
 
 @JsonClass(generateAdapter = true)
 data class SaveArticleRequest(
     val saved: Boolean,
+    val mutationId: String? = null,
+    val baseRevision: Int? = null,
 )
 
 @JsonClass(generateAdapter = true)

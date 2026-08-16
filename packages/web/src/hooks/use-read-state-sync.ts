@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { applyReadStateSyncEvent } from '@/hooks/queries';
 import { getClientId } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
+import { hasPendingArticleStateMutation } from '@/lib/offline-store';
 import { streamRealtimeEvents } from '@/lib/read-state-events';
 
 export function getReadStateReconnectDelay(attempt: number) {
@@ -80,7 +81,21 @@ export function useReadStateSync(enabled: boolean) {
 				},
 				onEvent: (event) => {
 					reconnectAttempt = 0;
-					applyReadStateSyncEvent(qc, event, { clientId });
+					if (
+						event.type === 'article.read_state_changed' ||
+						event.type === 'article.saved_state_changed'
+					) {
+						const articleStateEvent = event;
+						const mutationKind =
+							articleStateEvent.type === 'article.read_state_changed' ? 'read' : 'saved';
+						void hasPendingArticleStateMutation(articleStateEvent.articleId, mutationKind).then(
+							(pending) => {
+								if (!pending) applyReadStateSyncEvent(qc, articleStateEvent, { clientId });
+							},
+						);
+					} else {
+						applyReadStateSyncEvent(qc, event, { clientId });
+					}
 				},
 			})
 				.catch(() => {

@@ -8,6 +8,7 @@ import {
 	text,
 	uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+import { createArticleStateTables } from './article-state.schema.js';
 
 // Helper for generating UUIDs
 const uuid = (name: string) => text(name);
@@ -495,6 +496,11 @@ export const articleSavesRelations = relations(articleSaves, ({ one }) => ({
 	user: one(users, { fields: [articleSaves.userId], references: [users.id] }),
 	article: one(articles, { fields: [articleSaves.articleId], references: [articles.id] }),
 }));
+
+export const { articleStateMutations, articleUserStates } = createArticleStateTables(
+	users,
+	articles,
+);
 
 // ─── Sync Runs ───
 

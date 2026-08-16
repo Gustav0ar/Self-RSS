@@ -71,6 +71,7 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 			body.read,
 			body.source ?? 'manual',
 			clientId,
+			{ mutationId: body.mutationId, baseRevision: body.baseRevision },
 		);
 		return c.json({ data: result });
 	});
@@ -80,7 +81,11 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		const userId = c.get('userId');
 		const articleId = parseUuidParam(c, 'articleId');
 		const body = await parseBody(c, saveArticleSchema);
-		const result = await articleService.setSaved(userId, articleId, body.saved);
+		const clientId = c.req.header('X-Self-Feed-Client-Id') ?? null;
+		const result = await articleService.setSaved(userId, articleId, body.saved, clientId, {
+			mutationId: body.mutationId,
+			baseRevision: body.baseRevision,
+		});
 		return c.json({ data: result });
 	});
 

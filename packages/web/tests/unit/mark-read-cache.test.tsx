@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useMarkRead } from '../../src/hooks/queries';
+import { setOfflineSessionUser } from '../../src/lib/offline-store';
 
 function createQueryClient() {
 	return new QueryClient({
@@ -50,15 +51,32 @@ function stats(totalUnread: number, totalRead: number): StatsResponse {
 
 describe('useMarkRead cache updates', () => {
 	afterEach(() => {
+		setOfflineSessionUser(null);
 		vi.unstubAllGlobals();
 	});
 
 	it('keeps read articles in unread-only lists until the list is refreshed', async () => {
+		setOfflineSessionUser('user-1');
 		const qc = createQueryClient();
 		let markRead: ReturnType<typeof useMarkRead> | null = null;
 		vi.stubGlobal(
 			'fetch',
-			vi.fn(async () => new Response('{}', { status: 200 })),
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({
+							data: {
+								success: true,
+								applied: true,
+								conflict: false,
+								duplicate: false,
+								read: true,
+								revision: 1,
+							},
+						}),
+						{ status: 200, headers: { 'Content-Type': 'application/json' } },
+					),
+			),
 		);
 
 		qc.setQueryData(['feeds'], [{ id: 'feed-1', categoryId: 'category-1', unreadCount: 1 }]);
@@ -119,7 +137,8 @@ describe('useMarkRead cache updates', () => {
 		});
 	});
 
-	it('rolls back optimistic stats when marking an article read fails', async () => {
+	it('keeps the optimistic state queued when delivery fails transiently', async () => {
+		setOfflineSessionUser('user-1');
 		const qc = createQueryClient();
 		let markRead: ReturnType<typeof useMarkRead> | null = null;
 		vi.stubGlobal(
@@ -174,11 +193,11 @@ describe('useMarkRead cache updates', () => {
 				'latest',
 				30,
 			])?.pages[0]?.data,
-		).toEqual([article('article-1', 'feed-1', false)]);
-		expect(qc.getQueryData<Array<{ unreadCount: number }>>(['feeds'])?.[0]?.unreadCount).toBe(1);
+		).toEqual([article('article-1', 'feed-1', true)]);
+		expect(qc.getQueryData<Array<{ unreadCount: number }>>(['feeds'])?.[0]?.unreadCount).toBe(0);
 		expect(qc.getQueryData<StatsResponse>(['stats'])).toMatchObject({
-			totalUnread: 1,
-			totalRead: 4,
+			totalUnread: 0,
+			totalRead: 5,
 		});
 	});
 });

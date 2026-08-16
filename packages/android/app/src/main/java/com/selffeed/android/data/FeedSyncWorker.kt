@@ -27,6 +27,7 @@ class FeedSyncWorker @AssistedInject constructor(
     private val repository: RssRepository,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
+        repository.prepareSession()
         if (!repository.isLoggedIn()) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Skipping sync — user is not logged in")
             return Result.success()
@@ -38,7 +39,7 @@ class FeedSyncWorker @AssistedInject constructor(
                 when {
                     cause is HttpException -> {
                         // 4xx is a permanent failure (auth/config) — don't retry.
-                        if (cause.code() in 400..499) {
+                        if (cause.code() in 400..499 && cause.code() !in RETRIABLE_CLIENT_STATUSES) {
                             Log.w(TAG, "Sync failed with HTTP ${cause.code()}, will not retry: ${result.message}")
                             Result.failure()
                         } else {
@@ -76,6 +77,7 @@ class FeedSyncWorker @AssistedInject constructor(
         private const val SYNC_INTERVAL_MINUTES = 30L
         private const val SYNC_STATUS_POLL_MS = 1_000L
         private const val SYNC_STATUS_MAX_POLLS = 600
+        private val RETRIABLE_CLIENT_STATUSES = setOf(408, 425, 429)
 
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<FeedSyncWorker>(

@@ -352,7 +352,7 @@ object NetworkModule {
                 val accessToken = sessionStore.getAccessToken()
                 val requestBuilder = request.newBuilder()
 
-                if (!accessToken.isNullOrBlank()) {
+                if (!accessToken.isNullOrBlank() && request.header("Authorization") == null) {
                     requestBuilder.header("Authorization", "Bearer $accessToken")
                 }
 

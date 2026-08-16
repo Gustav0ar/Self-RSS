@@ -177,7 +177,19 @@ export interface ArticleReadStateChangedEvent {
 	articleId: string;
 	feedId: string;
 	isRead: boolean;
+	revision?: number;
 	source: string;
+	clientId: string | null;
+	updatedAt: string;
+}
+
+export interface ArticleSavedStateChangedEvent {
+	type: 'article.saved_state_changed';
+	eventId: string;
+	articleId: string;
+	feedId: string;
+	isSaved: boolean;
+	revision?: number;
 	clientId: string | null;
 	updatedAt: string;
 }
@@ -251,6 +263,7 @@ export interface FeedHealthUpdatedEvent {
 
 export type RealtimeEvent =
 	| ArticleReadStateChangedEvent
+	| ArticleSavedStateChangedEvent
 	| ArticlesMarkedReadEvent
 	| ArticlesNewEvent
 	| ArticleUpdatedEvent

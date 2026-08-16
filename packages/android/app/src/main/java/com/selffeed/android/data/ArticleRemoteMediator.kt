@@ -7,6 +7,7 @@ import androidx.paging.RemoteMediator
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleListItem
+import retrofit2.HttpException
 
 @OptIn(ExperimentalPagingApi::class)
 class ArticleRemoteMediator(
@@ -44,9 +45,33 @@ class ArticleRemoteMediator(
                 )
             }
 
-            is AppResult.Error -> MediatorResult.Error(
-                result.cause ?: IllegalStateException(result.message),
-            )
+            is AppResult.Error -> {
+                // Cursor formats can legitimately change across server
+                // deployments while a Room page remains cached. Restart once
+                // from page one and only replace the visible queue after that
+                // request succeeds, preserving the stale list if it does not.
+                if (loadType == LoadType.APPEND && (result.cause as? HttpException)?.code() == 409) {
+                    when (val restarted = loadPage(pageSize, null)) {
+                        is AppResult.Success -> {
+                            localStore.writeArticleRemotePage(
+                                queryKey = queryKey,
+                                payload = restarted.data,
+                                clearExisting = true,
+                            )
+                            MediatorResult.Success(
+                                endOfPaginationReached =
+                                    !restarted.data.hasMore || restarted.data.cursor.isNullOrBlank(),
+                            )
+                        }
+
+                        is AppResult.Error -> MediatorResult.Error(
+                            restarted.cause ?: IllegalStateException(restarted.message),
+                        )
+                    }
+                } else {
+                    MediatorResult.Error(result.cause ?: IllegalStateException(result.message))
+                }
+            }
         }
     }
 

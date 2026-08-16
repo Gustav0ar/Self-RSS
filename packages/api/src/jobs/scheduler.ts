@@ -37,6 +37,33 @@ export function startAuthSessionCleanup(
 	return () => clearInterval(interval);
 }
 
+export function startArticleStateMutationCleanup(
+	articleRepo: ArticleRepository,
+	retentionDays = 30,
+	batchSize = 1_000,
+	intervalMs: number = 6 * 60 * 60 * 1000,
+) {
+	let running = false;
+	const cleanup = async () => {
+		if (running) return;
+		running = true;
+		try {
+			const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1_000);
+			const deleted = await articleRepo.cleanupStateMutationHistory(cutoff, batchSize);
+			if (deleted > 0) logger.info('Article mutation history cleanup complete', { deleted });
+		} catch (error) {
+			logger.error('Article mutation history cleanup failed', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			running = false;
+		}
+	};
+	void cleanup();
+	const interval = setInterval(() => void cleanup(), intervalMs);
+	return () => clearInterval(interval);
+}
+
 export function startSyncScheduler(
 	syncService: FeedSyncService,
 	intervalMs: number = 30 * 1000,

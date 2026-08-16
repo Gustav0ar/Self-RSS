@@ -2,6 +2,7 @@ package com.selffeed.android.data.local
 
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.Insert
@@ -19,8 +20,11 @@ object LocalTables {
     const val ARTICLE_QUERY_ENTRIES = "article_query_entries"
     const val ARTICLE_REMOTE_KEYS = "article_remote_keys"
     const val PENDING_READ_STATE_MUTATIONS = "pending_read_state_mutations"
+    const val PENDING_SAVED_STATE_MUTATIONS = "pending_saved_state_mutations"
+    const val ARTICLE_STATE_REVISIONS = "article_state_revisions"
     const val ARTICLE_READ_OVERRIDES = "article_read_overrides"
     const val ARTICLE_DETAILS = "article_details"
+    const val PREFERENCES = "preferences"
 }
 
 @Entity(
@@ -110,7 +114,35 @@ data class ArticleRemoteKeyEntity(
 data class PendingReadStateMutationEntity(
     @PrimaryKey val articleId: String,
     val read: Boolean,
+    @ColumnInfo(defaultValue = "''") val mutationId: String,
+    @ColumnInfo(defaultValue = "'manual'") val source: String,
+    val baseRevision: Int?,
+    val previousState: Boolean?,
     val updatedAt: Long,
+)
+
+@Entity(tableName = LocalTables.PENDING_SAVED_STATE_MUTATIONS)
+data class PendingSavedStateMutationEntity(
+    @PrimaryKey val articleId: String,
+    val saved: Boolean,
+    val mutationId: String,
+    val baseRevision: Int?,
+    val previousState: Boolean?,
+    val updatedAt: Long,
+)
+
+@Entity(tableName = LocalTables.ARTICLE_STATE_REVISIONS)
+data class ArticleStateRevisionEntity(
+    @PrimaryKey val articleId: String,
+    val readRevision: Int?,
+    val savedRevision: Int?,
+)
+
+@Entity(tableName = LocalTables.PREFERENCES)
+data class PreferencesEntity(
+    @PrimaryKey val key: String = "current",
+    val payloadJson: String,
+    val writtenAt: Long,
 )
 
 /** A durable presentation overlay that does not invalidate article paging rows. */
@@ -149,8 +181,27 @@ interface LocalStoreDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticles(articles: List<ArticleEntity>)
 
+    @Query("SELECT * FROM articles WHERE id = :articleId LIMIT 1")
+    suspend fun readArticle(articleId: String): ArticleEntity?
+
     @Query("UPDATE articles SET isSaved = :saved WHERE id = :articleId")
     suspend fun updateArticleSavedState(articleId: String, saved: Boolean)
+
+    @Query("UPDATE articles SET isRead = :read WHERE id = :articleId")
+    suspend fun updateArticleReadState(articleId: String, read: Boolean)
+
+    @Query(
+        """
+        SELECT articles.* FROM articles
+        LEFT JOIN feeds ON feeds.id = articles.feedId
+        WHERE (:categoryId IS NULL OR feeds.categoryId = :categoryId)
+          AND (articles.title LIKE '%' || :query || '%' COLLATE NOCASE
+               OR COALESCE(articles.excerpt, '') LIKE '%' || :query || '%' COLLATE NOCASE)
+        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun searchArticles(query: String, categoryId: String?, limit: Int): List<ArticleEntity>
 
     @Query(
         """
@@ -161,6 +212,15 @@ interface LocalStoreDao {
         """,
     )
     fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem>
+
+    @Query(
+        """
+        SELECT * FROM articles
+        WHERE isSaved = 1
+        ORDER BY COALESCE(displayedAt, publishedAt) DESC, id DESC
+        """,
+    )
+    fun savedArticlePagingSource(): PagingSource<Int, ArticleListItem>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleQueryEntries(entries: List<ArticleQueryEntryEntity>)
@@ -186,8 +246,29 @@ interface LocalStoreDao {
     @Query("SELECT * FROM pending_read_state_mutations ORDER BY updatedAt ASC")
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity>
 
-    @Query("DELETE FROM pending_read_state_mutations WHERE articleId = :articleId")
-    suspend fun deletePendingReadStateMutation(articleId: String)
+    @Query("SELECT * FROM pending_read_state_mutations WHERE articleId = :articleId LIMIT 1")
+    suspend fun readPendingReadStateMutation(articleId: String): PendingReadStateMutationEntity?
+
+    @Query("DELETE FROM pending_read_state_mutations WHERE articleId = :articleId AND mutationId = :mutationId")
+    suspend fun deletePendingReadStateMutation(articleId: String, mutationId: String): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPendingSavedStateMutation(mutation: PendingSavedStateMutationEntity)
+
+    @Query("SELECT * FROM pending_saved_state_mutations ORDER BY updatedAt ASC")
+    suspend fun readPendingSavedStateMutations(): List<PendingSavedStateMutationEntity>
+
+    @Query("SELECT * FROM pending_saved_state_mutations WHERE articleId = :articleId LIMIT 1")
+    suspend fun readPendingSavedStateMutation(articleId: String): PendingSavedStateMutationEntity?
+
+    @Query("DELETE FROM pending_saved_state_mutations WHERE articleId = :articleId AND mutationId = :mutationId")
+    suspend fun deletePendingSavedStateMutation(articleId: String, mutationId: String): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleStateRevision(revision: ArticleStateRevisionEntity)
+
+    @Query("SELECT * FROM article_state_revisions WHERE articleId = :articleId LIMIT 1")
+    suspend fun readArticleStateRevision(articleId: String): ArticleStateRevisionEntity?
 
     @Query("DELETE FROM article_read_overrides WHERE articleId = :articleId")
     suspend fun deleteArticleReadOverride(articleId: String)
@@ -235,6 +316,43 @@ interface LocalStoreDao {
     @Query("DELETE FROM article_details WHERE id = :articleId")
     suspend fun clearArticleDetail(articleId: String)
 
+    @Query("SELECT * FROM article_details WHERE writtenAt < :cutoff")
+    suspend fun readExpiredArticleDetails(cutoff: Long): List<ArticleDetailEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPreferences(preferences: PreferencesEntity)
+
+    @Query("SELECT * FROM preferences WHERE `key` = 'current' LIMIT 1")
+    suspend fun readPreferences(): PreferencesEntity?
+
+    @Query("DELETE FROM preferences")
+    suspend fun clearPreferences()
+
+    @Query(
+        """
+        DELETE FROM article_remote_keys
+        WHERE queryKey NOT IN (
+            SELECT queryKey FROM article_remote_keys ORDER BY updatedAt DESC LIMIT :maxQueries
+        )
+        """,
+    )
+    suspend fun pruneArticleRemoteKeys(maxQueries: Int)
+
+    @Query("DELETE FROM article_query_entries WHERE queryKey NOT IN (SELECT queryKey FROM article_remote_keys)")
+    suspend fun pruneArticleQueryEntries()
+
+    @Query(
+        """
+        DELETE FROM articles
+        WHERE id NOT IN (SELECT articleId FROM article_query_entries)
+          AND id NOT IN (SELECT id FROM article_details)
+          AND id NOT IN (SELECT articleId FROM pending_read_state_mutations)
+          AND id NOT IN (SELECT articleId FROM pending_saved_state_mutations)
+          AND isSaved = 0
+        """,
+    )
+    suspend fun pruneOrphanArticles()
+
     @Query("DELETE FROM categories")
     suspend fun clearCategories()
 
@@ -253,6 +371,12 @@ interface LocalStoreDao {
     @Query("DELETE FROM pending_read_state_mutations")
     suspend fun clearPendingReadStateMutations()
 
+    @Query("DELETE FROM pending_saved_state_mutations")
+    suspend fun clearPendingSavedStateMutations()
+
+    @Query("DELETE FROM article_state_revisions")
+    suspend fun clearArticleStateRevisions()
+
     @Query("DELETE FROM article_read_overrides")
     suspend fun clearArticleReadOverrides()
 
@@ -268,8 +392,11 @@ interface LocalStoreDao {
         ArticleQueryEntryEntity::class,
         ArticleRemoteKeyEntity::class,
         PendingReadStateMutationEntity::class,
+        PendingSavedStateMutationEntity::class,
+        ArticleStateRevisionEntity::class,
         ArticleReadOverrideEntity::class,
         ArticleDetailEntity::class,
+        PreferencesEntity::class,
     ],
     version = LOCAL_DATABASE_VERSION,
     exportSchema = true,

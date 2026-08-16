@@ -51,6 +51,7 @@ class AuthRepositoryImpl @Inject constructor(
         source.changePassword(currentPassword, newPassword)
 
     override fun isLoggedIn(): Boolean = source.isLoggedIn()
+    override fun canUseOfflineSession(): Boolean = source.canUseOfflineSession()
     override fun authEvents(): Flow<String> = source.authEvents()
     override suspend fun recordOfflineRestore() = source.recordOfflineRestore()
 }
@@ -178,11 +179,11 @@ class ArticleRepositoryImpl @Inject constructor(
     override suspend fun invalidateArticleContentCaches(articleId: String?) =
         delegate.invalidateArticleContentCaches(articleId)
 
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean) =
-        delegate.updateCachedReadState(articleId, read)
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?) =
+        delegate.updateCachedReadState(articleId, read, revision)
 
-    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean) =
-        delegate.updateCachedSavedState(articleId, saved)
+    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) =
+        delegate.updateCachedSavedState(articleId, saved, revision)
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) =
         delegate.markCachedArticlesReadByFeeds(feedIds)

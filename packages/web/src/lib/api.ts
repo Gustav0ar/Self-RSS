@@ -180,13 +180,14 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 		if (refreshed) {
 			headers.Authorization = `Bearer ${accessToken}`;
 			res = await doFetch();
-		} else {
+		}
+		// A network or server failure while refreshing is not proof that the
+		// session was revoked. Keep the offline identity and cached data until
+		// the refresh endpoint explicitly rejects it. If refresh succeeded but
+		// the retried request is still unauthorized, the session is invalid.
+		if (res.status === 401 && (refreshed || lastRefreshOutcome === 'rejected')) {
 			notifyAuthLost(path);
 		}
-	}
-
-	if (res.status === 401) {
-		notifyAuthLost(path);
 	}
 
 	return res;

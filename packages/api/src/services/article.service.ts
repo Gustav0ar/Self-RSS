@@ -5,7 +5,7 @@ import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { MetricsRepository } from '../repositories/settings.repository.js';
-import { encodeArticleCursor } from '../utils/article-cursor.js';
+import { decodeArticleCursor, encodeArticleCursor } from '../utils/article-cursor.js';
 import { createLogger } from '../utils/logger.js';
 import type { ArticleCacheService } from './article-cache.service.js';
 import type { FeedSyncService } from './feed-sync.service.js';
@@ -60,6 +60,14 @@ export class ArticleService {
 		},
 	) {
 		const limit = options.limit ?? 20;
+		if (options.cursor && !decodeArticleCursor(options.cursor, options.sort)) {
+			throw new AppError(
+				'CURSOR_RESET_REQUIRED',
+				'This article cursor is no longer valid. Restart pagination from the first page.',
+				409,
+				{ reset: true },
+			);
+		}
 
 		// Track user activity for priority warming (fire-and-forget)
 		void this.articleCache?.trackUserActivity(userId).catch((error) => {
@@ -200,68 +208,99 @@ export class ArticleService {
 		read: boolean,
 		source: string,
 		clientId: string | null = null,
+		options: { mutationId?: string; baseRevision?: number } = {},
 	) {
 		const article = await this.articleRepo.findRefForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
 
-		let changed = false;
-		if (read) {
-			changed = await this.articleRepo.markRead(userId, articleId, source);
-			if (changed) {
-				await this.metricsRepo.incrementReadCount(userId, 1);
-			}
-		} else {
-			changed = await this.articleRepo.markUnread(userId, articleId);
-		}
+		const mutation = await this.articleRepo.setReadState(userId, articleId, read, source, options);
 
-		if (changed) {
+		if (mutation.changed) {
 			// The list-cache patch can scan every scoped cache key for this
 			// user, so run it as best-effort background work. The small
-			// invalidations and realtime publish still complete before the
-			// route returns.
-			this.patchCachedReadState(userId, articleId, read);
-			await Promise.all([
+			// invalidations and event fan-out are settled before the route
+			// returns, but failures after the SQLite commit are never exposed as
+			// mutation failures.
+			this.patchCachedReadState(userId, articleId, mutation.state);
+			await this.settlePostCommit('article read state', [
 				this.invalidateUnreadCache(userId, [article.feedId]),
 				this.invalidateArticleDetailCache(userId, articleId),
+				mutation.state ? this.metricsRepo.incrementReadCount(userId, 1) : Promise.resolve(),
 				this.realtimeService?.publishReadStateEvent(userId, {
 					type: 'article.read_state_changed',
 					eventId: crypto.randomUUID(),
 					articleId,
 					feedId: article.feedId,
-					isRead: read,
+					isRead: mutation.state,
+					revision: mutation.revision,
 					source,
 					clientId,
 					updatedAt: new Date().toISOString(),
-				}),
+				}) ?? Promise.resolve(),
 			]);
 		}
 
-		return { success: true };
+		return {
+			success: true,
+			applied: mutation.applied,
+			conflict: mutation.conflict,
+			duplicate: mutation.duplicate,
+			read: mutation.state,
+			revision: mutation.revision,
+		};
 	}
 
-	async setSaved(userId: string, articleId: string, saved: boolean) {
+	async setSaved(
+		userId: string,
+		articleId: string,
+		saved: boolean,
+		clientId: string | null = null,
+		options: { mutationId?: string; baseRevision?: number } = {},
+	) {
 		const article = await this.articleRepo.findRefForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
 
-		const changed = saved
-			? await this.articleRepo.save(userId, articleId)
-			: await this.articleRepo.unsave(userId, articleId);
-		if (changed) {
-			if (saved) {
-				await this.metricsRepo
-					.incrementProductCounts?.(userId, { articlesSaved: 1 })
-					.catch((error) => {
-						logger.warn('Failed to record article-save analytics', {
-							userId,
-							error: error instanceof Error ? error.message : String(error),
-						});
-					});
-			}
-			this.patchCachedSavedState(userId, articleId, saved);
-			await this.invalidateArticleDetailCache(userId, articleId);
+		const mutation = await this.articleRepo.setSavedState(userId, articleId, saved, options);
+		if (mutation.changed) {
+			this.patchCachedSavedState(userId, articleId, mutation.state);
+			await this.settlePostCommit('article saved state', [
+				this.invalidateArticleDetailCache(userId, articleId),
+				mutation.state
+					? (this.metricsRepo.incrementProductCounts?.(userId, { articlesSaved: 1 }) ??
+						Promise.resolve())
+					: Promise.resolve(),
+				this.realtimeService?.publishReadStateEvent(userId, {
+					type: 'article.saved_state_changed',
+					eventId: crypto.randomUUID(),
+					articleId,
+					feedId: article.feedId,
+					isSaved: mutation.state,
+					revision: mutation.revision,
+					clientId,
+					updatedAt: new Date().toISOString(),
+				}) ?? Promise.resolve(),
+			]);
 		}
 
-		return { success: true };
+		return {
+			success: true,
+			applied: mutation.applied,
+			conflict: mutation.conflict,
+			duplicate: mutation.duplicate,
+			saved: mutation.state,
+			revision: mutation.revision,
+		};
+	}
+
+	private async settlePostCommit(label: string, operations: Promise<unknown>[]): Promise<void> {
+		const outcomes = await Promise.allSettled(operations);
+		for (const outcome of outcomes) {
+			if (outcome.status === 'rejected') {
+				logger.warn(`Failed post-commit ${label} fan-out`, {
+					error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+				});
+			}
+		}
 	}
 
 	/**
@@ -343,7 +382,7 @@ export class ArticleService {
 				}) ?? Promise.resolve(),
 			);
 		}
-		await Promise.all(fanOut);
+		await this.settlePostCommit('bulk read state', fanOut);
 		return { markedCount: count, feedIds };
 	}
 
@@ -377,6 +416,14 @@ export class ArticleService {
 	}
 
 	async search(userId: string, query: string, categoryId?: string, limit = 20, cursor?: string) {
+		if (cursor && !decodeArticleCursor(cursor, 'latest')) {
+			throw new AppError(
+				'CURSOR_RESET_REQUIRED',
+				'This search cursor is no longer valid. Restart pagination from the first page.',
+				409,
+				{ reset: true },
+			);
+		}
 		if (categoryId) {
 			await this.assertCategoryExists(userId, categoryId);
 		}

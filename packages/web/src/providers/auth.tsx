@@ -1,7 +1,8 @@
 import type { ApiResponse, LoginResponse, RegisterResponse, User } from '@self-feed/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
+	ApiClientError,
 	apiFetch,
 	clearTokens,
 	getAccessToken,
@@ -14,8 +15,14 @@ import {
 import {
 	clearOfflineQueryCache,
 	clearOfflineState,
+	flushOfflineArticleMutations,
+	isSignedOutLocally,
 	loadOfflineUser,
+	persistQueryClient,
+	restoreQueryClient,
 	saveOfflineUser,
+	setOfflineSessionUser,
+	setSignedOutLocally,
 } from '../lib/offline-store';
 import {
 	flushProductAnalyticsEvents,
@@ -41,6 +48,23 @@ interface AuthState {
 }
 
 const AuthContext = createContext<AuthState | null>(null);
+const AUTH_EVENT_STORAGE_KEY = 'self-feed-auth-event';
+
+interface AuthSessionEvent {
+	type: 'signed-out';
+	userId: string;
+	nonce: string;
+}
+
+function isUnavailable(error: unknown) {
+	return (
+		!(error instanceof ApiClientError) ||
+		error.status === 408 ||
+		error.status === 425 ||
+		error.status === 429 ||
+		error.status >= 500
+	);
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const queryClient = useQueryClient();
@@ -52,111 +76,196 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const [authLostMessage, setAuthLostMessage] = useState<string | null>(null);
 	const [logoutError, setLogoutError] = useState<string | null>(null);
 	const [isLoggingOut, setIsLoggingOut] = useState(false);
+	const authChannel = useRef<BroadcastChannel | null>(null);
 
-	useEffect(() => {
-		setAuthLostHandler((message) => {
+	const activateSession = useCallback(
+		async (nextUser: User, offline: boolean) => {
+			setOfflineSessionUser(nextUser.id);
+			await restoreQueryClient(queryClient, nextUser.id);
+			setProductAnalyticsUser(nextUser.id);
+			trackProductAnalyticsAppOpen(nextUser.id);
+			setIsAuthenticated(true);
+			setIsOffline(offline);
+			setUsername(nextUser.email);
+			setUser(nextUser);
+			if (offline) queueProductAnalyticsEvent('offline_restore', nextUser.id);
+		},
+		[queryClient],
+	);
+
+	const clearLocalSession = useCallback(
+		async (userId?: string | null) => {
 			clearTokens();
+			setOfflineSessionUser(null);
 			queryClient.clear();
-			void clearOfflineState();
+			await clearOfflineState(userId ?? null);
 			setLogoutError(null);
 			setIsAuthenticated(false);
 			setIsOffline(false);
 			setUsername(null);
 			setUser(null);
 			setProductAnalyticsUser(null);
-			setAuthLostMessage(message);
-			setIsLoading(false);
+		},
+		[queryClient],
+	);
+
+	useEffect(() => {
+		setAuthLostHandler((message) => {
+			void clearLocalSession(user?.id).finally(() => {
+				setAuthLostMessage(message);
+				setIsLoading(false);
+			});
 		});
 
 		return () => setAuthLostHandler(null);
-	}, [queryClient]);
+	}, [clearLocalSession, user?.id]);
+
+	useEffect(() => {
+		const handleSessionEvent = (event: AuthSessionEvent) => {
+			if (event.type !== 'signed-out' || event.userId !== user?.id) return;
+			void setSignedOutLocally(true)
+				.then(() => clearLocalSession(event.userId))
+				.finally(() => setAuthLostMessage('Signed out in another tab.'));
+		};
+		const channel =
+			typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('self-feed-auth');
+		authChannel.current = channel;
+		if (channel) {
+			channel.onmessage = (message: MessageEvent<unknown>) => {
+				const event = message.data as Partial<AuthSessionEvent> | null;
+				if (
+					event?.type === 'signed-out' &&
+					typeof event.userId === 'string' &&
+					typeof event.nonce === 'string'
+				) {
+					handleSessionEvent(event as AuthSessionEvent);
+				}
+			};
+		}
+		const handleStorage = (storageEvent: StorageEvent) => {
+			if (storageEvent.key !== AUTH_EVENT_STORAGE_KEY || !storageEvent.newValue) return;
+			try {
+				const event = JSON.parse(storageEvent.newValue) as Partial<AuthSessionEvent>;
+				if (
+					event.type === 'signed-out' &&
+					typeof event.userId === 'string' &&
+					typeof event.nonce === 'string'
+				) {
+					handleSessionEvent(event as AuthSessionEvent);
+				}
+			} catch {
+				// Ignore malformed or unrelated storage messages.
+			}
+		};
+		window.addEventListener('storage', handleStorage);
+		return () => {
+			window.removeEventListener('storage', handleStorage);
+			channel?.close();
+			if (authChannel.current === channel) authChannel.current = null;
+		};
+	}, [clearLocalSession, user?.id]);
 
 	useEffect(() => {
 		let cancelled = false;
 
 		const bootstrap = async () => {
 			loadTokens();
-			const offlineUser = await loadOfflineUser();
-
-			if (!getAccessToken()) {
-				await refreshAccessToken();
+			if (await isSignedOutLocally()) {
+				queryClient.clear();
+				clearTokens();
+				if (!cancelled) setIsLoading(false);
+				return;
 			}
 
+			const offlineUser = await loadOfflineUser();
+			if (!getAccessToken()) await refreshAccessToken();
+
 			if (!getAccessToken()) {
-				if (!cancelled) {
-					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
-						setProductAnalyticsUser(offlineUser.id);
-						trackProductAnalyticsAppOpen(offlineUser.id);
-						queueProductAnalyticsEvent('offline_restore', offlineUser.id);
-						setIsAuthenticated(true);
-						setIsOffline(true);
-						setUsername(offlineUser.email);
-						setUser(offlineUser);
-					} else {
-						queryClient.clear();
-						void clearOfflineState();
-						setIsAuthenticated(false);
-						setIsOffline(false);
-						setUsername(null);
-						setUser(null);
-						setProductAnalyticsUser(null);
-					}
-					setIsLoading(false);
+				if (!cancelled && getLastRefreshOutcome() === 'unavailable' && offlineUser) {
+					await activateSession(offlineUser, true);
+				} else if (!cancelled) {
+					await clearLocalSession(offlineUser?.id);
 				}
+				if (!cancelled) setIsLoading(false);
 				return;
 			}
 
 			try {
 				const response = await apiFetch<ApiResponse<User>>('/auth/me');
-				if (!cancelled) {
-					setProductAnalyticsUser(response.data.id);
-					trackProductAnalyticsAppOpen(response.data.id);
-					setIsAuthenticated(true);
-					setIsOffline(false);
-					setUsername(response.data.email);
-					setUser(response.data);
-					void saveOfflineUser(response.data);
-					void flushProductAnalyticsEvents();
+				if (cancelled) return;
+				if (offlineUser && offlineUser.id !== response.data.id) {
+					queryClient.clear();
+					await clearOfflineState(offlineUser.id);
 				}
-			} catch {
-				clearTokens();
-				if (!cancelled) {
-					if (getLastRefreshOutcome() === 'unavailable' && offlineUser) {
-						setProductAnalyticsUser(offlineUser.id);
-						trackProductAnalyticsAppOpen(offlineUser.id);
-						queueProductAnalyticsEvent('offline_restore', offlineUser.id);
-						setIsAuthenticated(true);
-						setIsOffline(true);
-						setUsername(offlineUser.email);
-						setUser(offlineUser);
-					} else {
-						queryClient.clear();
-						void clearOfflineState();
-						setIsAuthenticated(false);
-						setIsOffline(false);
-						setUsername(null);
-						setUser(null);
-						setProductAnalyticsUser(null);
-					}
+				await activateSession(response.data, false);
+				await saveOfflineUser(response.data);
+				void flushOfflineArticleMutations().then(() => {
+					void queryClient.invalidateQueries();
+				});
+				void flushProductAnalyticsEvents();
+			} catch (error) {
+				if (cancelled) return;
+				if (offlineUser && isUnavailable(error)) {
+					await activateSession(offlineUser, true);
+				} else {
+					await clearLocalSession(offlineUser?.id);
 				}
 			} finally {
-				if (!cancelled) {
-					setIsLoading(false);
-				}
+				if (!cancelled) setIsLoading(false);
 			}
 		};
 
 		void bootstrap();
-
 		return () => {
 			cancelled = true;
 		};
-	}, [queryClient]);
+	}, [activateSession, clearLocalSession, queryClient]);
 
 	useEffect(() => {
-		function updateConnectionState() {
-			setIsOffline(!navigator.onLine || !getAccessToken());
-			if (navigator.onLine) void flushProductAnalyticsEvents();
+		if (!user) return;
+		let persistTimer: ReturnType<typeof setTimeout> | null = null;
+		const persist = () => void persistQueryClient(queryClient, user.id);
+		const schedulePersist = () => {
+			if (persistTimer) clearTimeout(persistTimer);
+			persistTimer = setTimeout(persist, 2_000);
+		};
+		const unsubscribe = queryClient.getQueryCache().subscribe(schedulePersist);
+		window.addEventListener('pagehide', persist);
+		return () => {
+			unsubscribe();
+			window.removeEventListener('pagehide', persist);
+			if (persistTimer) clearTimeout(persistTimer);
+			persist();
+		};
+	}, [queryClient, user]);
+
+	useEffect(() => {
+		let reconnecting = false;
+		async function updateConnectionState() {
+			if (!navigator.onLine) {
+				setIsOffline(true);
+				return;
+			}
+			if (!user || reconnecting) return;
+			reconnecting = true;
+			try {
+				if (!getAccessToken() && !(await refreshAccessToken())) return;
+				const response = await apiFetch<ApiResponse<User>>('/auth/me');
+				if (response.data.id !== user.id) {
+					await clearLocalSession(user.id);
+					setAuthLostMessage('The signed-in account changed. Please sign in again.');
+					return;
+				}
+				await saveOfflineUser(response.data);
+				setUser(response.data);
+				setUsername(response.data.email);
+				setIsOffline(false);
+				await flushOfflineArticleMutations();
+				await queryClient.invalidateQueries();
+				void flushProductAnalyticsEvents();
+			} finally {
+				reconnecting = false;
+			}
 		}
 		function recordVisibleAppOpen() {
 			if (document.visibilityState === 'visible') trackProductAnalyticsAppOpen();
@@ -169,7 +278,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			window.removeEventListener('online', updateConnectionState);
 			document.removeEventListener('visibilitychange', recordVisibleAppOpen);
 		};
-	}, []);
+	}, [clearLocalSession, queryClient, user]);
 
 	const login = useCallback(
 		async (email: string, password: string) => {
@@ -178,20 +287,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
-			await clearOfflineQueryCache();
+			await clearOfflineQueryCache(user?.id);
+			await setSignedOutLocally(false);
 			setAuthLostMessage(null);
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
-			setUsername(res.data.user.email);
-			setUser(res.data.user);
-			setProductAnalyticsUser(res.data.user.id);
-			trackProductAnalyticsAppOpen(res.data.user.id);
-			setIsOffline(false);
 			await saveOfflineUser(res.data.user);
-			setIsAuthenticated(true);
+			await activateSession(res.data.user, false);
 			void flushProductAnalyticsEvents();
 		},
-		[queryClient],
+		[activateSession, queryClient, user?.id],
 	);
 
 	const register = useCallback(
@@ -201,45 +306,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				body: JSON.stringify({ email, password }),
 			});
 			queryClient.clear();
-			await clearOfflineQueryCache();
+			await clearOfflineQueryCache(user?.id);
+			await setSignedOutLocally(false);
 			setAuthLostMessage(null);
 			setLogoutError(null);
 			setTokens(res.data.tokens.accessToken);
-			setUsername(res.data.user.email);
-			setUser(res.data.user);
-			setProductAnalyticsUser(res.data.user.id);
-			trackProductAnalyticsAppOpen(res.data.user.id);
-			setIsOffline(false);
 			await saveOfflineUser(res.data.user);
-			setIsAuthenticated(true);
+			await activateSession(res.data.user, false);
 			void flushProductAnalyticsEvents();
 		},
-		[queryClient],
+		[activateSession, queryClient, user?.id],
 	);
 
 	const logout = useCallback(async () => {
 		setIsLoggingOut(true);
 		setLogoutError(null);
-		try {
-			await apiFetch('/auth/logout', { method: 'POST' });
-		} catch {
-			setLogoutError('Sign out failed. Your session is still active; please try again.');
-			setIsLoggingOut(false);
-			return false;
+		const userId = user?.id;
+		const remoteLogout = apiFetch('/auth/logout', { method: 'POST' })
+			.then(() => true)
+			.catch(() => false);
+		await setSignedOutLocally(true);
+		if (userId) {
+			const event: AuthSessionEvent = {
+				type: 'signed-out',
+				userId,
+				nonce: crypto.randomUUID(),
+			};
+			authChannel.current?.postMessage(event);
+			try {
+				localStorage.setItem(AUTH_EVENT_STORAGE_KEY, JSON.stringify(event));
+			} catch {
+				// BroadcastChannel remains the primary path when localStorage is unavailable.
+			}
 		}
-		clearTokens();
-		queryClient.clear();
-		await clearOfflineState();
-		setIsAuthenticated(false);
-		setIsOffline(false);
-		setUsername(null);
-		setUser(null);
-		setProductAnalyticsUser(null);
+		await clearLocalSession(userId);
 		setAuthLostMessage(null);
-		setLogoutError(null);
 		setIsLoggingOut(false);
+		void remoteLogout.then((revoked) => {
+			if (revoked) void setSignedOutLocally(false);
+		});
 		return true;
-	}, [queryClient]);
+	}, [clearLocalSession, user?.id]);
 
 	const changePassword = useCallback(
 		async (currentPassword: string, newPassword: string) => {
@@ -259,9 +366,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		[queryClient],
 	);
 
-	const clearAuthLostMessage = useCallback(() => {
-		setAuthLostMessage(null);
-	}, []);
+	const clearAuthLostMessage = useCallback(() => setAuthLostMessage(null), []);
 
 	return (
 		<AuthContext.Provider

@@ -7,7 +7,6 @@ import { useArticle, useMarkRead, usePreferences, useSetArticleSaved } from '@/h
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { trackArticleCompletion } from '@/lib/product-analytics';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
-import { useAuth } from '@/providers/auth';
 import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
 import {
 	useReaderScrollProgress,
@@ -48,7 +47,6 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const { data: prefs } = usePreferences();
 	const markRead = useMarkRead();
 	const setArticleSaved = useSetArticleSaved();
-	const { isOffline } = useAuth();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
 	const readerArticleId = article?.id === articleId ? articleId : null;
@@ -213,7 +211,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	}
 
 	function toggleSaved() {
-		if (!articleId || isOffline) return;
+		if (!articleId) return;
 		setArticleSaved.mutate({ articleId, saved: !article?.isSaved });
 	}
 
@@ -292,7 +290,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							canonicalUrl={article.canonicalUrl}
 							isRead={article.isRead}
 							isSaved={article.isSaved}
-							saveDisabled={isOffline || setArticleSaved.isPending}
+							saveDisabled={setArticleSaved.isPending}
 							onToggleRead={toggleRead}
 							onToggleSaved={toggleSaved}
 						/>
@@ -339,7 +337,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 								canonicalUrl={article.canonicalUrl}
 								isRead={article.isRead}
 								isSaved={article.isSaved}
-								saveDisabled={isOffline || setArticleSaved.isPending}
+								saveDisabled={setArticleSaved.isPending}
 								onToggleRead={toggleRead}
 								onToggleSaved={toggleSaved}
 							/>

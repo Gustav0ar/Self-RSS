@@ -135,7 +135,7 @@ async function seed() {
 		]);
 	}
 	if (betaArticle) {
-		await articleRepo.markRead(reader.id, betaArticle.id, 'manual');
+		articleRepo.setReadState(reader.id, betaArticle.id, true, 'manual');
 	}
 }
 

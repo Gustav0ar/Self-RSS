@@ -13,8 +13,14 @@ import {
 	replaceArticleEnrichedContent,
 } from './article-enrichment.persistence.js';
 import { type ArticleScope, type SearchRow, scopeConditions } from './article-query.helpers.js';
-import { saveArticle, unsaveArticle } from './article-save.persistence.js';
 import { searchArticles, searchArticlesByScope } from './article-search.js';
+import {
+	type ArticleStateMutationResult,
+	cleanupArticleStateMutations,
+	markArticlesRead,
+	setArticleReadState,
+	setArticleSavedState,
+} from './article-state.persistence.js';
 
 export type { ArticleScope } from './article-query.helpers.js';
 
@@ -313,56 +319,31 @@ export class ArticleRepository {
 		// No-op for SQLite (searchVector index removed)
 	}
 
-	async markRead(userId: string, articleId: string, source: string) {
-		const inserted = await this.db
-			.insert(articleReads)
-			.values({ userId, articleId, source })
-			.onConflictDoNothing()
-			.returning({ articleId: articleReads.articleId });
-		return inserted.length > 0;
+	setReadState(
+		userId: string,
+		articleId: string,
+		read: boolean,
+		source: string,
+		options: { mutationId?: string; baseRevision?: number } = {},
+	): ArticleStateMutationResult {
+		return setArticleReadState(this.db, userId, articleId, read, source, options);
 	}
 
-	async markUnread(userId: string, articleId: string) {
-		const deleted = await this.db
-			.delete(articleReads)
-			.where(and(eq(articleReads.userId, userId), eq(articleReads.articleId, articleId)))
-			.returning({ articleId: articleReads.articleId });
-		return deleted.length > 0;
-	}
-
-	async save(userId: string, articleId: string) {
-		return saveArticle(this.db, userId, articleId);
-	}
-
-	async unsave(userId: string, articleId: string) {
-		return unsaveArticle(this.db, userId, articleId);
+	setSavedState(
+		userId: string,
+		articleId: string,
+		saved: boolean,
+		options: { mutationId?: string; baseRevision?: number } = {},
+	): ArticleStateMutationResult {
+		return setArticleSavedState(this.db, userId, articleId, saved, options);
 	}
 
 	async markAllRead(userId: string, feedIds: string[]) {
-		if (feedIds.length === 0) return 0;
-		// Single round-trip: insert into article_reads every article that
-		// belongs to the given feeds and is not already marked read by this
-		// user. The SELECT is the only place that touches the articles
-		// table; the inserted rows are materialized in the same statement.
-		// `INSERT ... SELECT` is atomic on SQLite and avoids the previous
-		// shape that read the unread ids in one query and then chunked
-		// 100-row inserts in a loop. The RETURNING clause gives us the
-		// affected row count without a second query.
-		const inserted = await this.db.all<{ article_id: string }>(sql`
-			INSERT INTO article_reads (user_id, article_id, source, read_at)
-			SELECT ${userId}, articles.id, 'mark_all', unixepoch()
-			FROM articles
-			LEFT JOIN article_reads
-				ON article_reads.article_id = articles.id
-				AND article_reads.user_id = ${userId}
-			WHERE articles.feed_id IN (${sql.join(
-				feedIds.map((id) => sql`${id}`),
-				sql`, `,
-			)})
-				AND article_reads.user_id IS NULL
-			RETURNING article_id
-		`);
-		return inserted.length;
+		return markArticlesRead(this.db, userId, feedIds);
+	}
+
+	cleanupStateMutationHistory(cutoff: Date, batchSize: number) {
+		return cleanupArticleStateMutations(this.db, cutoff, batchSize);
 	}
 
 	async isRead(userId: string, articleId: string): Promise<boolean> {

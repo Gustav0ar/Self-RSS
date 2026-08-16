@@ -750,20 +750,18 @@ test('user can sign out and the session is cleared', async ({ page }) => {
 	await expect(page.getByText('Sign in to your account')).toBeVisible();
 });
 
-test('failed server logout keeps the user signed in and offers a retry', async ({ page }) => {
+test('failed server logout still clears the local offline session', async ({ page }) => {
 	await loginThroughUi(page, 'reader@example.com', 'password123');
 	await page.route('**/api/v1/auth/logout', async (route) => {
 		await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"down"}' });
 	});
 
 	await page.getByRole('button', { name: 'Sign out' }).click();
-	await expect(page.getByRole('alert')).toContainText('Your session is still active');
-	await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
-	await expect(page.getByText('reader@example.com')).toBeVisible();
-	await expect(page.getByText('Sign in to your account')).toHaveCount(0);
+	await expect(page.getByText('Sign in to your account')).toBeVisible();
 
-	await page.unroute('**/api/v1/auth/logout');
-	await page.getByRole('button', { name: 'Sign out' }).click();
+	// The signed-out tombstone prevents a stale refresh cookie from restoring
+	// the cached identity when logout revocation is temporarily unavailable.
+	await page.reload();
 	await expect(page.getByText('Sign in to your account')).toBeVisible();
 });
 

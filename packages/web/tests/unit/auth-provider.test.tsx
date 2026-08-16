@@ -16,8 +16,15 @@ const clearOfflineQueryCacheMock = vi.fn();
 const clearOfflineStateMock = vi.fn();
 const loadOfflineUserMock = vi.fn();
 const saveOfflineUserMock = vi.fn();
+const restoreQueryClientMock = vi.fn();
+const setSignedOutLocallyMock = vi.fn();
 
 vi.mock('../../src/lib/api', () => ({
+	ApiClientError: class extends Error {
+		constructor(readonly status: number) {
+			super('API error');
+		}
+	},
 	apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 	clearTokens: () => clearTokensMock(),
 	getAccessToken: () => getAccessTokenMock(),
@@ -32,9 +39,26 @@ vi.mock('../../src/lib/api', () => ({
 vi.mock('../../src/lib/offline-store', () => ({
 	clearOfflineQueryCache: () => clearOfflineQueryCacheMock(),
 	clearOfflineState: () => clearOfflineStateMock(),
+	flushOfflineArticleMutations: vi.fn(async () => []),
+	isSignedOutLocally: vi.fn(async () => false),
 	loadOfflineUser: () => loadOfflineUserMock(),
+	persistQueryClient: vi.fn(async () => undefined),
+	restoreQueryClient: (...args: unknown[]) => restoreQueryClientMock(...args),
 	saveOfflineUser: (user: unknown) => saveOfflineUserMock(user),
+	setOfflineSessionUser: vi.fn(),
+	setSignedOutLocally: (value: boolean) => setSignedOutLocallyMock(value),
 }));
+
+function user(email: string, id = 'user-1') {
+	return {
+		id,
+		email,
+		role: 'user',
+		isActive: true,
+		createdAt: '2026-01-01T00:00:00.000Z',
+		updatedAt: '2026-01-01T00:00:00.000Z',
+	};
+}
 
 function AuthProbe() {
 	const auth = useAuth();
@@ -63,6 +87,7 @@ function AuthActionsProbe() {
 	return (
 		<div>
 			<div>{auth.isAuthenticated ? auth.username : 'logged-out'}</div>
+			<div>{auth.authLostMessage ?? 'no-auth-lost-message'}</div>
 			<div>{auth.logoutError ?? 'no-logout-error'}</div>
 			<div>{auth.isLoggingOut ? 'logging-out' : 'logout-idle'}</div>
 			<button type="button" onClick={() => void auth.login('next@example.com', 'password123')}>
@@ -97,6 +122,8 @@ describe('AuthProvider', () => {
 		clearOfflineQueryCacheMock.mockResolvedValue(undefined);
 		clearOfflineStateMock.mockResolvedValue(undefined);
 		saveOfflineUserMock.mockResolvedValue(undefined);
+		restoreQueryClientMock.mockResolvedValue(false);
+		setSignedOutLocallyMock.mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
@@ -119,7 +146,7 @@ describe('AuthProvider', () => {
 	it('restores the session through refresh and /auth/me when no access token is loaded', async () => {
 		getAccessTokenMock.mockReturnValueOnce(null).mockReturnValue('restored-token');
 		refreshAccessTokenMock.mockResolvedValue(true);
-		apiFetchMock.mockResolvedValue({ data: { email: 'user@example.com' } });
+		apiFetchMock.mockResolvedValue({ data: user('user@example.com') });
 
 		renderWithQuery(
 			<AuthProvider>
@@ -159,14 +186,7 @@ describe('AuthProvider', () => {
 		getAccessTokenMock.mockReturnValue(null);
 		refreshAccessTokenMock.mockResolvedValue(false);
 		getLastRefreshOutcomeMock.mockReturnValue('unavailable');
-		loadOfflineUserMock.mockResolvedValue({
-			id: 'user-1',
-			email: 'offline@example.com',
-			role: 'user',
-			isActive: true,
-			createdAt: '2026-01-01T00:00:00.000Z',
-			updatedAt: '2026-01-01T00:00:00.000Z',
-		});
+		loadOfflineUserMock.mockResolvedValue(user('offline@example.com'));
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(['articles'], { data: [{ id: 'article-1' }] });
 
@@ -187,7 +207,7 @@ describe('AuthProvider', () => {
 		getAccessTokenMock.mockReturnValue(null);
 		refreshAccessTokenMock.mockResolvedValue(false);
 		apiFetchMock.mockResolvedValue({
-			data: { tokens: { accessToken: 'next-token' }, user: { email: 'next@example.com' } },
+			data: { tokens: { accessToken: 'next-token' }, user: user('next@example.com', 'user-2') },
 		});
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(['preferences'], { hideRead: true });
@@ -217,7 +237,7 @@ describe('AuthProvider', () => {
 		apiFetchMock.mockResolvedValue({
 			data: {
 				tokens: { accessToken: 'registered-token' },
-				user: { email: 'registered@example.com' },
+				user: user('registered@example.com', 'user-3'),
 			},
 		});
 		const queryClient = new QueryClient();
@@ -245,7 +265,7 @@ describe('AuthProvider', () => {
 	it('clears cached user data on logout even when the API call succeeds', async () => {
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock.mockImplementation(async (path: string) => {
-			if (path === '/auth/me') return { data: { email: 'current@example.com' } };
+			if (path === '/auth/me') return { data: user('current@example.com') };
 			return { data: { success: true } };
 		});
 		const queryClient = new QueryClient();
@@ -270,11 +290,11 @@ describe('AuthProvider', () => {
 		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
 	});
 
-	it('keeps the session active while server logout is still in flight', async () => {
+	it('logs out locally without waiting for server revocation', async () => {
 		let finishLogout: (() => void) | null = null;
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock.mockImplementation((path: string) => {
-			if (path === '/auth/me') return Promise.resolve({ data: { email: 'current@example.com' } });
+			if (path === '/auth/me') return Promise.resolve({ data: user('current@example.com') });
 			return new Promise((resolve) => {
 				finishLogout = () => resolve({ data: { success: true } });
 			});
@@ -289,19 +309,18 @@ describe('AuthProvider', () => {
 
 		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
 
-		await waitFor(() => expect(screen.getByText('logging-out')).toBeTruthy());
-		expect(screen.getByText('current@example.com')).toBeTruthy();
-		expect(clearTokensMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByText('logged-out')).toBeTruthy());
+		expect(clearTokensMock).toHaveBeenCalled();
 
 		act(() => finishLogout?.());
 		await waitFor(() => expect(screen.getByText('logged-out')).toBeTruthy());
 		expect(screen.getByText('logout-idle')).toBeTruthy();
 	});
 
-	it('keeps the authenticated session and cached data when server logout fails', async () => {
+	it('keeps the user logged out when server revocation fails', async () => {
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock.mockImplementation(async (path: string) => {
-			if (path === '/auth/me') return { data: { email: 'current@example.com' } };
+			if (path === '/auth/me') return { data: user('current@example.com') };
 			throw new Error('Service unavailable');
 		});
 		const queryClient = new QueryClient();
@@ -319,14 +338,39 @@ describe('AuthProvider', () => {
 
 		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
 
-		await waitFor(() => {
-			expect(
-				screen.getByText('Sign out failed. Your session is still active; please try again.'),
-			).toBeTruthy();
-		});
-		expect(screen.getByText('current@example.com')).toBeTruthy();
-		expect(clearTokensMock).not.toHaveBeenCalled();
-		expect(queryClient.getQueryData(['stats'])).toEqual({ totalUnread: 10 });
+		await waitFor(() => expect(screen.getByText('logged-out')).toBeTruthy());
+		expect(clearTokensMock).toHaveBeenCalled();
+		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
+	});
+
+	it('clears the session when another tab signs out the same account', async () => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock.mockResolvedValue({ data: user('current@example.com') });
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(['stats'], { totalUnread: 10 });
+
+		renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+			queryClient,
+		);
+		await waitFor(() => expect(screen.getByText('current@example.com')).toBeTruthy());
+
+		window.dispatchEvent(
+			new StorageEvent('storage', {
+				key: 'self-feed-auth-event',
+				newValue: JSON.stringify({
+					type: 'signed-out',
+					userId: 'user-1',
+					nonce: 'other-tab',
+				}),
+			}),
+		);
+
+		await waitFor(() => expect(screen.getByText('logged-out')).toBeTruthy());
+		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
+		expect(screen.getByText('Signed out in another tab.')).toBeTruthy();
 	});
 
 	it('clears cached user data when the API reports authentication was lost', async () => {
@@ -335,7 +379,7 @@ describe('AuthProvider', () => {
 			authLostHandler = handler;
 		});
 		getAccessTokenMock.mockReturnValue('current-token');
-		apiFetchMock.mockResolvedValue({ data: { email: 'current@example.com' } });
+		apiFetchMock.mockResolvedValue({ data: user('current@example.com') });
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(['stats'], { totalUnread: 10 });
 

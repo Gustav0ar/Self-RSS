@@ -18,6 +18,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import io.mockk.every
+import io.mockk.mockk
+import retrofit2.HttpException
 
 @OptIn(ExperimentalPagingApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -123,6 +126,45 @@ class ArticleRemoteMediatorTest {
             ),
         ) as androidx.paging.PagingSource.LoadResult.Page
         assertEquals(listOf("cached"), page.data.map(ArticleListItem::id))
+    }
+
+    @Test
+    fun `rejected append cursor restarts from page one without exposing an error`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = QUERY_KEY,
+            payload = ApiListResponse(data = listOf(article("stale")), cursor = "old-cursor", hasMore = true),
+            clearExisting = true,
+        )
+        val requestedCursors = mutableListOf<String?>()
+        val cursorError = mockk<HttpException>().also { every { it.code() } returns 409 }
+        val mediator = ArticleRemoteMediator(
+            queryKey = QUERY_KEY,
+            forceInitialRefresh = false,
+            localStore = store,
+            loadPage = { _, cursor ->
+                requestedCursors += cursor
+                if (cursor != null) {
+                    AppResult.Error("Restart pagination", cursorError)
+                } else {
+                    AppResult.Success(
+                        ApiListResponse(data = listOf(article("fresh")), cursor = null, hasMore = false),
+                    )
+                }
+            },
+        )
+
+        val result = mediator.load(LoadType.APPEND, pagingState())
+
+        assertTrue(result is androidx.paging.RemoteMediator.MediatorResult.Success)
+        assertEquals(listOf("old-cursor", null), requestedCursors)
+        val page = store.articlePagingSource(QUERY_KEY).load(
+            androidx.paging.PagingSource.LoadParams.Refresh(
+                key = null,
+                loadSize = 30,
+                placeholdersEnabled = false,
+            ),
+        ) as androidx.paging.PagingSource.LoadResult.Page
+        assertEquals(listOf("fresh"), page.data.map(ArticleListItem::id))
     }
 
     private fun pagingState(): PagingState<Int, ArticleListItem> = PagingState(

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	startArticleEnrichmentWorker,
+	startArticleStateMutationCleanup,
 	startAuthSessionCleanup,
 	startCacheWarmer,
 	startQueuedSyncWorker,
@@ -143,6 +144,25 @@ describe('scheduler error handling', () => {
 			await vi.runAllTicks();
 			await vi.advanceTimersByTimeAsync(100);
 			expect(sessionRepo.cleanupExpired).toHaveBeenCalledTimes(2);
+			stop();
+			vi.useRealTimers();
+		});
+	});
+
+	describe('startArticleStateMutationCleanup', () => {
+		it('runs bounded retention immediately and on schedule', async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-08-16T00:00:00.000Z'));
+			const articleRepo = { cleanupStateMutationHistory: vi.fn().mockResolvedValue(2) };
+			const stop = startArticleStateMutationCleanup(articleRepo as never, 30, 500, 100);
+
+			await vi.runAllTicks();
+			expect(articleRepo.cleanupStateMutationHistory).toHaveBeenCalledWith(
+				new Date('2026-07-17T00:00:00.000Z'),
+				500,
+			);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(articleRepo.cleanupStateMutationHistory).toHaveBeenCalledTimes(2);
 			stop();
 			vi.useRealTimers();
 		});

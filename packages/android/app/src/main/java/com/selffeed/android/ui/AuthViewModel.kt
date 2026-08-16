@@ -80,13 +80,23 @@ class AuthViewModel @Inject constructor(
                                 registrationEnabled = enabled,
                                 errorMessage = PresentationText.resource(R.string.auth_session_lost),
                             )
-                        } else {
+                        } else if (repository.canUseOfflineSession()) {
                             repository.recordOfflineRestore()
                             _state.value = _state.value.copy(
                                 loading = false,
                                 isAuthenticated = true,
                                 apiBaseUrl = apiBaseUrl,
                                 errorMessage = null,
+                            )
+                        } else {
+                            val enabled = loadRegistrationEnabled()
+                            _state.value = _state.value.copy(
+                                loading = false,
+                                isAuthenticated = false,
+                                authMode = AuthMode.LOGIN,
+                                apiBaseUrl = apiBaseUrl,
+                                registrationEnabled = enabled,
+                                errorMessage = PresentationText.resource(R.string.auth_session_lost),
                             )
                         }
                     }

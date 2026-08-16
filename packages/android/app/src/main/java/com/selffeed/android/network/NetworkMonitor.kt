@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -27,6 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 interface NetworkMonitor {
     val online: StateFlow<Boolean>
+    val unmetered: StateFlow<Boolean>
+        get() = online
 
     /** True once at least one validated network has been observed. */
     val hasBeenOnline: Boolean
@@ -39,6 +42,9 @@ class AndroidNetworkMonitor(
 
     private val _online = MutableStateFlow(false)
     override val online: StateFlow<Boolean> = _online.asStateFlow()
+    private val _unmetered = MutableStateFlow(false)
+    override val unmetered: StateFlow<Boolean> = _unmetered.asStateFlow()
+    private val validatedNetworks = mutableMapOf<Network, NetworkCapabilities>()
 
     private val hasBeenOnlineFlag = AtomicBoolean(false)
     override val hasBeenOnline: Boolean
@@ -58,23 +64,36 @@ class AndroidNetworkMonitor(
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            val isOnline = hasInternet && validated
-            if (isOnline) hasBeenOnlineFlag.set(true)
-            _online.value = isOnline
+            synchronized(validatedNetworks) {
+                if (hasInternet && validated) validatedNetworks[network] = capabilities
+                else validatedNetworks.remove(network)
+                recalculateConnectivity()
+            }
         }
 
         override fun onLost(network: Network) {
             log("onLost: $network")
-            // Re-evaluate in case no other validated network is active.
-            _online.value = currentValidated()
+            synchronized(validatedNetworks) {
+                validatedNetworks.remove(network)
+                recalculateConnectivity()
+            }
         }
     }
 
     init {
         // Seed from current state so we don't emit a false→true transition on
         // launch when the device is already online.
-        _online.value = currentValidated()
-        if (_online.value) hasBeenOnlineFlag.set(true)
+        cm.activeNetwork?.let { network ->
+            cm.getNetworkCapabilities(network)?.let { capabilities ->
+                if (
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                ) {
+                    validatedNetworks[network] = capabilities
+                }
+            }
+        }
+        recalculateConnectivity()
 
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -92,11 +111,16 @@ class AndroidNetworkMonitor(
         runCatching { cm.unregisterNetworkCallback(callback) }
     }
 
-    private fun currentValidated(): Boolean {
-        val active = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(active) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    private fun recalculateConnectivity() {
+        val capabilities = validatedNetworks.values.toList()
+        val online = capabilities.isNotEmpty()
+        _online.value = online
+        _unmetered.value = capabilities.any {
+            it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
+                (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                    it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING))
+        }
+        if (online) hasBeenOnlineFlag.set(true)
     }
 
     private fun log(message: String) {
