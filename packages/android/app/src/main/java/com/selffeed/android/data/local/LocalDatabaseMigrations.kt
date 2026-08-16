@@ -49,9 +49,28 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
-/** Adds revision-aware durable outboxes and the remaining offline read models. */
+/**
+ * Adds revision-aware durable outboxes and the remaining offline read models.
+ *
+ * An early version-6 build stored saved article ids in `saved_articles`. A later
+ * version-6 build moved that state to `articles.isSaved`, so devices that ran the
+ * early build have a different Room identity hash despite sharing the same
+ * database version. Repair that historical schema while migrating to version 7
+ * so upgrades preserve both cached articles and saved state.
+ */
 val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        val hasLegacySavedArticles = db.hasTable("saved_articles")
+        if (!db.hasColumn("articles", "isSaved")) {
+            db.execSQL("ALTER TABLE articles ADD COLUMN isSaved INTEGER NOT NULL DEFAULT 0")
+        }
+        if (hasLegacySavedArticles) {
+            db.execSQL(
+                "UPDATE articles SET isSaved = 1 " +
+                    "WHERE id IN (SELECT articleId FROM saved_articles)",
+            )
+            db.execSQL("DROP TABLE saved_articles")
+        }
         db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN mutationId TEXT NOT NULL DEFAULT ''")
         db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
         db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN baseRevision INTEGER")
@@ -91,6 +110,21 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         )
     }
 }
+
+private fun SupportSQLiteDatabase.hasTable(tableName: String): Boolean =
+    query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        arrayOf(tableName),
+    ).use { cursor -> cursor.moveToFirst() }
+
+private fun SupportSQLiteDatabase.hasColumn(tableName: String, columnName: String): Boolean =
+    query("PRAGMA table_info(`$tableName`)").use { cursor ->
+        val nameColumn = cursor.getColumnIndexOrThrow("name")
+        while (cursor.moveToNext()) {
+            if (cursor.getString(nameColumn) == columnName) return@use true
+        }
+        false
+    }
 
 val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
     arrayOf(
