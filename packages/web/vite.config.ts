@@ -53,7 +53,7 @@ function offlineShellPlugin(): Plugin {
 	};
 }
 
-function createServiceWorkerSource(version: string, shellUrls: string[]) {
+export function createServiceWorkerSource(version: string, shellUrls: string[]) {
 	return `const CACHE_NAME = 'self-feed-shell-${version}';
 const MEDIA_CACHE_NAME = 'self-feed-article-media-v1';
 const MAX_MEDIA_ENTRIES = 200;
@@ -70,6 +70,9 @@ self.addEventListener('activate', (event) => {
 				keys.filter((key) => key.startsWith('self-feed-shell-') && key !== CACHE_NAME)
 					.map((key) => caches.delete(key)),
 			)),
+			'navigationPreload' in self.registration
+				? self.registration.navigationPreload.enable().catch(() => undefined)
+				: Promise.resolve(),
 			self.clients.claim(),
 		]),
 	);
@@ -110,9 +113,19 @@ self.addEventListener('fetch', (event) => {
 		event.respondWith(
 			(async () => {
 				const controller = new AbortController();
-				const timeout = setTimeout(() => controller.abort(), 5000);
+				let timeout;
+				const timeoutResponse = new Promise((resolve) => {
+					timeout = setTimeout(() => {
+						controller.abort();
+						resolve(undefined);
+					}, 5000);
+				});
 				try {
-					const response = await fetch(request, { signal: controller.signal });
+					const preloaded = await Promise.race([
+						Promise.resolve(event.preloadResponse).catch(() => undefined),
+						timeoutResponse,
+					]);
+					const response = preloaded ?? await fetch(request, { signal: controller.signal });
 					if (!response.ok && response.status >= 500) {
 						return (await caches.match('/index.html')) ?? response;
 					}
