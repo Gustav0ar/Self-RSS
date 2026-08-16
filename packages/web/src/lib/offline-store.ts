@@ -75,6 +75,7 @@ export interface OfflineMutationFlushResult {
 let activeUserId: string | null = null;
 const flushPromises = new Map<string, Promise<OfflineMutationFlushResult[]>>();
 const memoryFallbackStore = new Map<string, unknown>();
+type WriteDurability = 'relaxed' | 'strict';
 
 function namespace() {
 	return globalThis.location?.origin ?? 'self-feed';
@@ -127,14 +128,28 @@ async function readValue<T>(key: string): Promise<T | null> {
 	});
 }
 
-async function writeValue(key: string, value: unknown): Promise<boolean> {
+function writeTransaction(database: IDBDatabase, durability: WriteDurability) {
+	try {
+		return database.transaction(STORE_NAME, 'readwrite', { durability });
+	} catch {
+		// Older engines ignore or reject transaction options. The atomic
+		// read/write transaction remains the compatibility fallback.
+		return database.transaction(STORE_NAME, 'readwrite');
+	}
+}
+
+async function writeValue(
+	key: string,
+	value: unknown,
+	durability: WriteDurability = 'relaxed',
+): Promise<boolean> {
 	const database = await openDatabase();
 	if (!database) {
 		memoryFallbackStore.set(key, value);
 		return true;
 	}
 	return new Promise((resolve) => {
-		const transaction = database.transaction(STORE_NAME, 'readwrite');
+		const transaction = writeTransaction(database, durability);
 		transaction.objectStore(STORE_NAME).put(value, key);
 		transaction.oncomplete = () => {
 			database.close();
@@ -158,6 +173,7 @@ async function writeValue(key: string, value: unknown): Promise<boolean> {
 async function updateValue<T>(
 	key: string,
 	update: (current: T | null) => T | null,
+	durability: WriteDurability = 'relaxed',
 ): Promise<{ persisted: boolean; value: T | null }> {
 	const database = await openDatabase();
 	if (!database) {
@@ -167,7 +183,7 @@ async function updateValue<T>(
 		return { persisted: true, value };
 	}
 	return new Promise((resolve, reject) => {
-		const transaction = database.transaction(STORE_NAME, 'readwrite');
+		const transaction = writeTransaction(database, durability);
 		const store = transaction.objectStore(STORE_NAME);
 		const request = store.get(key);
 		let value: T | null = null;
@@ -199,14 +215,14 @@ async function updateValue<T>(
 	});
 }
 
-async function deleteValue(key: string): Promise<void> {
+async function deleteValue(key: string, durability: WriteDurability = 'relaxed'): Promise<void> {
 	const database = await openDatabase();
 	if (!database) {
 		memoryFallbackStore.delete(key);
 		return;
 	}
 	await new Promise<void>((resolve) => {
-		const transaction = database.transaction(STORE_NAME, 'readwrite');
+		const transaction = writeTransaction(database, durability);
 		transaction.objectStore(STORE_NAME).delete(key);
 		transaction.oncomplete = () => {
 			database.close();
@@ -329,13 +345,17 @@ export async function restoreQueryClient(
 
 export async function saveOfflineUser(user: User): Promise<void> {
 	const cachedAt = Date.now();
-	await writeValue(userKey(), {
-		schemaVersion: SCHEMA_VERSION,
-		namespace: namespace(),
-		cachedAt,
-		offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
-		user,
-	} satisfies PersistedOfflineUser);
+	await writeValue(
+		userKey(),
+		{
+			schemaVersion: SCHEMA_VERSION,
+			namespace: namespace(),
+			cachedAt,
+			offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
+			user,
+		} satisfies PersistedOfflineUser,
+		'strict',
+	);
 }
 
 export async function loadOfflineUser(): Promise<User | null> {
@@ -356,15 +376,15 @@ export async function loadOfflineUser(): Promise<User | null> {
 			OFFLINE_ACCESS_LEASE_MS + OFFLINE_CLOCK_SKEW_MS ||
 		!isUser(candidate.user)
 	) {
-		await deleteValue(userKey());
+		await deleteValue(userKey(), 'strict');
 		return null;
 	}
 	return candidate.user;
 }
 
 export async function setSignedOutLocally(value: boolean): Promise<void> {
-	if (value) await writeValue(signedOutKey(), { at: Date.now() });
-	else await deleteValue(signedOutKey());
+	if (value) await writeValue(signedOutKey(), { at: Date.now() }, 'strict');
+	else await deleteValue(signedOutKey(), 'strict');
 }
 
 export async function isSignedOutLocally(): Promise<boolean> {
@@ -376,11 +396,11 @@ export async function clearOfflineQueryCache(userId = activeUserId): Promise<voi
 }
 
 export async function clearOfflineState(userId = activeUserId): Promise<void> {
-	const keys = [deleteValue(userKey())];
+	const keys = [deleteValue(userKey(), 'strict')];
 	if (userId) {
 		keys.push(deleteValue(cacheKey(userId)));
-		keys.push(deleteValue(outboxKey(userId)));
-		keys.push(deleteValue(revisionsKey(userId)));
+		keys.push(deleteValue(outboxKey(userId), 'strict'));
+		keys.push(deleteValue(revisionsKey(userId), 'strict'));
 	}
 	await Promise.all(keys);
 }
@@ -397,29 +417,35 @@ export async function queueArticleStateMutation(
 		const revisions =
 			(await readValue<Record<string, ArticleRevisionState>>(revisionsKey(userId))) ?? {};
 		let mutation: OfflineArticleMutation | null = null;
-		const result = await updateValue<OfflineArticleMutation[]>(outboxKey(userId), (entries) => {
-			const current = entries ?? [];
-			const previous = current.find(
-				(entry) => entry.articleId === articleId && entry.kind === kind,
-			);
-			mutation = {
-				mutationId: crypto.randomUUID(),
-				articleId,
-				kind,
-				desiredState,
-				baseRevision: previous?.baseRevision ?? revisions[articleId]?.[kind],
-				...(source ? { source } : {}),
-				createdAt: Date.now(),
-			};
-			const next = current
-				.filter((entry) => !(entry.articleId === articleId && entry.kind === kind))
-				.concat(mutation)
-				.sort((left, right) => left.createdAt - right.createdAt);
-			if (next.length > MAX_OUTBOX_ENTRIES) {
-				throw new Error('Offline mutation storage is full. Reconnect before making more changes.');
-			}
-			return next;
-		});
+		const result = await updateValue<OfflineArticleMutation[]>(
+			outboxKey(userId),
+			(entries) => {
+				const current = entries ?? [];
+				const previous = current.find(
+					(entry) => entry.articleId === articleId && entry.kind === kind,
+				);
+				mutation = {
+					mutationId: crypto.randomUUID(),
+					articleId,
+					kind,
+					desiredState,
+					baseRevision: previous?.baseRevision ?? revisions[articleId]?.[kind],
+					...(source ? { source } : {}),
+					createdAt: Date.now(),
+				};
+				const next = current
+					.filter((entry) => !(entry.articleId === articleId && entry.kind === kind))
+					.concat(mutation)
+					.sort((left, right) => left.createdAt - right.createdAt);
+				if (next.length > MAX_OUTBOX_ENTRIES) {
+					throw new Error(
+						'Offline mutation storage is full. Reconnect before making more changes.',
+					);
+				}
+				return next;
+			},
+			'strict',
+		);
 		if (!result.persisted && 'indexedDB' in globalThis) {
 			throw new Error('Offline storage is unavailable or full');
 		}
@@ -494,6 +520,7 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 							[mutation.kind]: response.data.revision,
 						},
 					}),
+					'strict',
 				);
 				if (response.data.conflict) {
 					await rebaseMutation(userId, mutation, response.data.revision);
@@ -525,27 +552,33 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 
 async function removeMutationIfCurrent(userId: string, mutation: OfflineArticleMutation) {
 	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(outboxKey(userId), (entries) =>
-			(entries ?? []).filter((entry) => entry.mutationId !== mutation.mutationId),
+		await updateValue<OfflineArticleMutation[]>(
+			outboxKey(userId),
+			(entries) => (entries ?? []).filter((entry) => entry.mutationId !== mutation.mutationId),
+			'strict',
 		);
 	});
 }
 
 async function rebaseMutation(userId: string, mutation: OfflineArticleMutation, revision: number) {
 	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(outboxKey(userId), (entries) => {
-			const current = (entries ?? []).find(
-				(entry) => entry.articleId === mutation.articleId && entry.kind === mutation.kind,
-			);
-			if (!current) return entries ?? [];
-			const rebased: OfflineArticleMutation = {
-				...current,
-				mutationId: crypto.randomUUID(),
-				baseRevision: revision,
-			};
-			return (entries ?? []).map((entry) =>
-				entry.mutationId === current.mutationId ? rebased : entry,
-			);
-		});
+		await updateValue<OfflineArticleMutation[]>(
+			outboxKey(userId),
+			(entries) => {
+				const current = (entries ?? []).find(
+					(entry) => entry.articleId === mutation.articleId && entry.kind === mutation.kind,
+				);
+				if (!current) return entries ?? [];
+				const rebased: OfflineArticleMutation = {
+					...current,
+					mutationId: crypto.randomUUID(),
+					baseRevision: revision,
+				};
+				return (entries ?? []).map((entry) =>
+					entry.mutationId === current.mutationId ? rebased : entry,
+				);
+			},
+			'strict',
+		);
 	});
 }

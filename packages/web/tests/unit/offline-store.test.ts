@@ -65,6 +65,19 @@ afterEach(async () => {
 });
 
 describe('offline article mutation outbox', () => {
+	it('requests strict IndexedDB durability for critical queued writes', async () => {
+		const transactionSpy = vi.spyOn(IDBDatabase.prototype, 'transaction');
+		setOfflineSessionUser('user-1');
+
+		await queueArticleStateMutation('read', 'article-1', true, 'manual');
+
+		expect(
+			transactionSpy.mock.calls.some(
+				([, mode, options]) => mode === 'readwrite' && options?.durability === 'strict',
+			),
+		).toBe(true);
+	});
+
 	it('retains the same durable mutation after a transient delivery failure', async () => {
 		setOfflineSessionUser('user-1');
 		const mutation = await queueArticleStateMutation('read', 'article-1', true, 'manual');
