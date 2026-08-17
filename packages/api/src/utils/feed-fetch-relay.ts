@@ -1,4 +1,5 @@
 import { cancelResponseBody, raceWithAbort } from './bounded-response.js';
+import { resolveFeedFetchUrl } from './feed-source-url.js';
 import { fetchWithValidatedRedirects, type RemoteFetchSecurityOptions } from './safe-fetch.js';
 
 export interface FeedFetchRelayConfig {
@@ -53,8 +54,9 @@ export async function fetchFeedWithRelayFallback(
 	deps: FeedFetchRelayDeps = {},
 ) {
 	const directFetch = deps.directFetch ?? fetchWithValidatedRedirects;
+	const targetUrl = resolveFeedFetchUrl(input);
 	const directResponse = await raceWithAbort(
-		directFetch(input, init, securityOptions),
+		directFetch(targetUrl, init, securityOptions),
 		init.signal ?? undefined,
 	);
 	if (!RELAY_HTTP_STATUSES.has(directResponse.status) || !canUseRelay(config)) {
@@ -66,7 +68,7 @@ export async function fetchFeedWithRelayFallback(
 		const relayResponse = await raceWithAbort(
 			(deps.fetchImpl ?? fetch)(config.relayUrl!, {
 				method: 'GET',
-				headers: relayHeaders(init, config.relayToken!, input),
+				headers: relayHeaders(init, config.relayToken!, targetUrl),
 				redirect: 'error',
 				signal: init.signal,
 			}),
@@ -74,13 +76,13 @@ export async function fetchFeedWithRelayFallback(
 		);
 		if (
 			relayResponse.ok &&
-			new URL(input).toString() !== LEGACY_VIDEOCARDZ_FEED_URL &&
+			new URL(targetUrl).toString() !== LEGACY_VIDEOCARDZ_FEED_URL &&
 			relayResponse.headers.get('x-self-feed-relay') !== 'generic'
 		) {
 			cancelResponseBody(relayResponse);
 			throw new Error('configured relay does not support generic feed targets');
 		}
-		relayPublisherTargets.set(relayResponse, input);
+		relayPublisherTargets.set(relayResponse, targetUrl);
 		return relayResponse;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

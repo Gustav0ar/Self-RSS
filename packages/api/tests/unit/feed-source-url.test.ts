@@ -2,7 +2,28 @@ import { describe, expect, it } from 'vitest';
 import {
 	type FeedSourceUrlError,
 	normalizeFeedSourceUrl,
+	resolveFeedFetchUrl,
 } from '../../src/utils/feed-source-url.js';
+
+describe('resolveFeedFetchUrl', () => {
+	it.each([
+		['https://www.melhoresdestinos.com.br/feed', 'https://www.melhoresdestinos.com.br/feed/atom'],
+		[
+			'https://melhoresdestinos.com.br/feed/?cache=stale',
+			'https://melhoresdestinos.com.br/feed/atom',
+		],
+	])('uses the promptly updated Atom endpoint for %s', (input, expected) => {
+		expect(resolveFeedFetchUrl(input)).toBe(expected);
+	});
+
+	it.each([
+		'https://www.melhoresdestinos.com.br/article/feed',
+		'https://publisher.example/feed',
+		'not a URL',
+	])('leaves unrelated sources unchanged for %s', (input) => {
+		expect(resolveFeedFetchUrl(input)).toBe(input);
+	});
+});
 
 describe('normalizeFeedSourceUrl', () => {
 	it.each([
