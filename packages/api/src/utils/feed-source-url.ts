@@ -5,6 +5,8 @@ export interface FeedSourceUrlIdentity {
 	port: number;
 }
 
+const MELHORES_DESTINOS_HOSTS = new Set(['melhoresdestinos.com.br', 'www.melhoresdestinos.com.br']);
+
 export class FeedSourceUrlError extends Error {
 	constructor(
 		message: string,
@@ -13,6 +15,29 @@ export class FeedSourceUrlError extends Error {
 		super(message);
 		this.name = 'FeedSourceUrlError';
 	}
+}
+
+/**
+ * Routes known stale publisher endpoints to an equivalent feed that is updated
+ * promptly. Melhores Destinos' GoCache-backed RSS endpoint can lag for hours
+ * while its Atom endpoint already contains the latest articles.
+ */
+export function resolveFeedFetchUrl(input: string) {
+	try {
+		const url = new URL(input);
+		if (
+			MELHORES_DESTINOS_HOSTS.has(url.hostname.toLowerCase()) &&
+			/^\/feed\/?$/.test(url.pathname)
+		) {
+			url.pathname = '/feed/atom';
+			url.search = '';
+			url.hash = '';
+			return url.toString();
+		}
+	} catch {
+		// URL validation owns malformed-input errors; fetch resolution is best effort.
+	}
+	return input;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
 } from '../utils/bounded-response.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { publisherTargetForRelayResponse } from '../utils/feed-fetch-relay.js';
+import { resolveFeedFetchUrl } from '../utils/feed-source-url.js';
 import { createDurableFeedFetcher } from './durable-feed-fetcher.js';
 import type { DurablePublisherOutcome } from './durable-ingestion-ops.types.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
@@ -201,7 +202,9 @@ export class DurableFeedWorker {
 			} catch {
 				// Telemetry must never alter publisher work.
 			}
-			const publisherRequestUrl = claim.source.resolvedUrl ?? claim.source.requestedUrl;
+			const publisherRequestUrl = resolveFeedFetchUrl(
+				claim.source.resolvedUrl ?? claim.source.requestedUrl,
+			);
 			const response = await raceWithAbort(
 				this.fetchSource(
 					publisherRequestUrl,

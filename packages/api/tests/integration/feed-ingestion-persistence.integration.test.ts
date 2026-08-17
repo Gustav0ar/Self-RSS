@@ -2136,6 +2136,48 @@ describe('durable feed ingestion persistence', () => {
 		expect(requestedUrls).toEqual([proxyUrl, canonicalUrl]);
 	});
 
+	it('fetches Melhores Destinos from its promptly updated Atom endpoint', async () => {
+		const { db, repository } = await setupDatabase();
+		const clock = new Date('2026-08-17T16:47:00Z');
+		const rssUrl = 'https://www.melhoresdestinos.com.br/feed';
+		const atomUrl = 'https://www.melhoresdestinos.com.br/feed/atom';
+		const origin = await repository.upsertOrigin({
+			id: 'melhores-destinos-origin',
+			scheme: 'https',
+			host: 'www.melhoresdestinos.com.br',
+			port: 443,
+		});
+		const source = await repository.upsertSource({
+			id: 'melhores-destinos-source',
+			normalizedUrl: rssUrl,
+			requestedUrl: rssUrl,
+			originId: origin.id,
+			nextFetchAt: clock,
+		});
+		const requestedUrls: string[] = [];
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'melhores-destinos-worker',
+			originStartGapSeconds: 0,
+			now: () => clock,
+			fetch: async (url) => {
+				requestedUrls.push(url);
+				return new Response(
+					`<feed xmlns="http://www.w3.org/2005/Atom"><title>Melhores Destinos</title><link href="${atomUrl}" rel="self"/><entry><id>latest</id><title>Latest article</title><published>2026-08-17T16:47:00Z</published></entry></feed>`,
+					{ headers: { 'content-type': 'application/atom+xml' } },
+				);
+			},
+		});
+
+		await new DurableFeedScheduler(repository).tick(clock);
+		expect(await worker.drainOnce()).toBe(1);
+		expect(requestedUrls).toEqual([atomUrl]);
+		expect(
+			await db.query.feedSources.findFirst({
+				where: (row, { eq }) => eq(row.id, source.id),
+			}),
+		).toMatchObject({ normalizedUrl: rssUrl, requestedUrl: rssUrl, resolvedUrl: atomUrl });
+	});
+
 	it('reuses a retained parsed snapshot when a user resubscribes without refetching', async () => {
 		const { db, repository } = await setupDatabase();
 		const facade = new DurableFeedFacadeService(

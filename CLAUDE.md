@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Shared agent instructions
+
+Read and follow `AGENTS.md`. It contains repository-wide rules for every coding agent, including the canonical database migration safety policy.
+
 ## Development commands
 
 ### Workspace setup
@@ -26,9 +30,9 @@ Detached local browser-testing setup:
 - Do not rely on plain `nohup bun run dev ... &` for a persistent background setup; the dev orchestrator inherits child stdio and can exit when the launching shell exits.
 - Start detached services individually with `setsid` when the browser preview needs to keep working after the command returns:
   ```bash
-  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/api && exec env API_HOST=0.0.0.0 bun --env-file=.env --env-file=../../.env.example --watch src/index.ts' > /tmp/self-feed-api.log 2>&1 & echo $! > /tmp/self-feed-api.pid
-  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/api && exec bun --env-file=.env --env-file=../../.env.example --watch src/worker.ts' > /tmp/self-feed-worker.log 2>&1 & echo $! > /tmp/self-feed-worker.pid
-  setsid sh -c 'cd /home/gustavo/Code/RSS-app/packages/web && exec bun run dev' > /tmp/self-feed-web.log 2>&1 & echo $! > /tmp/self-feed-web.pid
+  setsid sh -c 'cd /home/gustavo/Code/personal/apps/rss-app/packages/api && exec env API_HOST=0.0.0.0 bun --env-file=.env --env-file=../../.env.example --watch src/index.ts' > /tmp/self-feed-api.log 2>&1 & echo $! > /tmp/self-feed-api.pid
+  setsid sh -c 'cd /home/gustavo/Code/personal/apps/rss-app/packages/api && exec bun --env-file=.env --env-file=../../.env.example --watch src/worker.ts' > /tmp/self-feed-worker.log 2>&1 & echo $! > /tmp/self-feed-worker.pid
+  setsid sh -c 'cd /home/gustavo/Code/personal/apps/rss-app/packages/web && exec bun run dev' > /tmp/self-feed-web.log 2>&1 & echo $! > /tmp/self-feed-web.pid
   ```
 - Verify detached services with `curl -fsS http://127.0.0.1:3000/health` and `ss -ltnp | rg ':3000|:5173|:6379'`.
 - Stop detached services with `kill $(cat /tmp/self-feed-api.pid /tmp/self-feed-worker.pid /tmp/self-feed-web.pid)`. Run `bun run dev:down` afterward if Redis or compose-managed containers should also be stopped.

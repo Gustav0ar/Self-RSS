@@ -10,6 +10,24 @@ const relayConfig = {
 const securityOptions = { allowPrivateHosts: false, maxRedirects: 3 };
 
 describe('fetchFeedWithRelayFallback', () => {
+	it('routes the delayed Melhores Destinos RSS endpoint to its current Atom feed', async () => {
+		const directFetch = vi.fn(async () => new Response('<feed />', { status: 200 }));
+
+		await fetchFeedWithRelayFallback(
+			'https://www.melhoresdestinos.com.br/feed',
+			{},
+			securityOptions,
+			{},
+			{ directFetch: directFetch as never },
+		);
+
+		expect(directFetch).toHaveBeenCalledWith(
+			'https://www.melhoresdestinos.com.br/feed/atom',
+			{},
+			securityOptions,
+		);
+	});
+
 	it('settles when an injected direct fetch ignores the caller abort', async () => {
 		const controller = new AbortController();
 		const reason = new Error('publisher deadline reached');
