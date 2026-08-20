@@ -63,9 +63,13 @@ describe('Security headers', () => {
 		expect(cspHeaders).toHaveLength(2);
 		for (const header of cspHeaders) {
 			expect(header).toContain("media-src 'self' https:");
+			expect(header).toContain('connect-src $self_feed_connect_sources');
 			expect(header).toContain('frame-src https://www.youtube.com');
 			expect(header).toContain('https://platform.twitter.com');
 		}
+		expect(nginx).toMatch(
+			/map \$uri \$self_feed_connect_sources \{\s+default "'self'";\s+\/sw\.js "'self' https:";\s+\}/,
+		);
 	});
 
 	it('keeps legitimate first-party API traffic out of generic CrowdSec probing heuristics', () => {
