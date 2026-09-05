@@ -208,7 +208,7 @@ export class UserRepository {
 					.get();
 				if (!updated) {
 					if (verifiedPasswordHash !== undefined)
-						throw AppError.unauthorized('Account credentials changed. Please sign in again.');
+						throw AppError.unauthorized('Authentication was lost. Please sign in again.');
 					throw AppError.notFound('User not found');
 				}
 				return { user: updated, revokedSessions: this.revokeSessions(tx, userId) };

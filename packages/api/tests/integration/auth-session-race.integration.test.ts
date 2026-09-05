@@ -1,11 +1,14 @@
 import { Database } from 'bun:sqlite';
 import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { Hono } from 'hono';
 import Redis from 'ioredis';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../src/db/migrations.js';
 import { CacheKeys } from '../../src/db/redis.js';
 import * as schema from '../../src/db/schema.js';
+import { createAuthMiddleware, requireAdmin } from '../../src/middleware/auth.js';
+import { AppError } from '../../src/middleware/errors.js';
 import { AuthSessionRepository } from '../../src/repositories/auth-session.repository.js';
 import { AppSettingsRepository } from '../../src/repositories/settings.repository.js';
 import { UserRepository } from '../../src/repositories/user.repository.js';
@@ -164,5 +167,52 @@ describe('account changes and concurrent session creation', () => {
 			context.target.passwordHash,
 		);
 		expect(await context.sessions.listActiveByUserId(context.target.id)).toHaveLength(1);
+	});
+
+	it.each(securityChanges)('denies stale cached sessions when $name invalidation fails', async ({
+		apply,
+	}) => {
+		const context = await setup();
+		const reached = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const list = context.sessions.listActiveByUserId.bind(context.sessions);
+		vi.spyOn(context.sessions, 'listActiveByUserId').mockImplementationOnce(async (...args) => {
+			const initialSessions = await list(...args);
+			reached.resolve();
+			await resume.promise;
+			return initialSessions;
+		});
+		const change = apply(context).then(
+			() => null,
+			(error: unknown) => error,
+		);
+		await reached.promise;
+		const result = await context.auth.login(context.target.email, 'original-password');
+		const payload = await context.tokens.verifyAccessToken(result.tokens.accessToken);
+		if (!payload.sid) throw new Error('Login did not issue a session-bound access token');
+		// Simulate a positive entry left by a server running the previous version.
+		await redis.set(CacheKeys.authSessionActive(payload.sid), context.target.id, 'EX', 60);
+		expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
+		const failedWrite = vi
+			.spyOn(redis, 'eval')
+			.mockRejectedValueOnce(new Error('Redis write failed'));
+		resume.resolve();
+		expect(await change).toMatchObject({ statusCode: 500 });
+		failedWrite.mockRestore();
+		expect(await context.sessions.findActiveById(payload.sid)).toBeUndefined();
+		expect(await redis.get(CacheKeys.authSessionRevoked(payload.sid))).toBeNull();
+		expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
+
+		const app = new Hono();
+		app.onError(
+			(error) => new Response(null, { status: error instanceof AppError ? error.statusCode : 500 }),
+		);
+		app.get('/admin', createAuthMiddleware(context.tokens, context.auth), requireAdmin, (c) =>
+			c.json({ allowed: true }),
+		);
+		const response = await app.request('/admin', {
+			headers: { Authorization: `Bearer ${result.tokens.accessToken}` },
+		});
+		expect(response.status).toBe(401);
 	});
 });

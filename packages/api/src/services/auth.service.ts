@@ -21,14 +21,6 @@ redis.call("DEL", KEYS[2])
 return 1
 `;
 
-const CACHE_ACTIVE_AUTH_SESSION_SCRIPT = `
-if redis.call("GET", KEYS[1]) then
-	return 0
-end
-redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
-return 1
-`;
-
 function getRevocationTtlSeconds(payload: TokenPayload) {
 	if (!payload.exp) {
 		return 0;
@@ -246,43 +238,25 @@ export class AuthService {
 			if (revoked !== null) {
 				return false;
 			}
-			const activeOwner = await this.redis.get(CacheKeys.authSessionActive(sessionId));
-			if (activeOwner !== null) {
-				return activeOwner === userId;
-			}
 		} catch (error) {
 			this.logSessionCacheFailure('read', sessionId, error);
 		}
 
+		// SQLite remains authoritative when a security update commits but its
+		// Redis invalidation fails. Positive cache entries cannot grant access.
 		const session = await this.sessionRepo.findActiveById(sessionId);
 		if (session?.userId !== userId) {
 			return false;
 		}
 
 		try {
-			const cached = await this.redis.eval(
-				CACHE_ACTIVE_AUTH_SESSION_SCRIPT,
-				2,
-				CacheKeys.authSessionRevoked(sessionId),
-				CacheKeys.authSessionActive(sessionId),
-				userId,
-				String(CacheTTL.authSessionActive),
-			);
-			const cacheResult =
-				typeof cached === 'number' || typeof cached === 'string' ? Number(cached) : Number.NaN;
-			if (cacheResult !== 0 && cacheResult !== 1) {
-				throw new Error('Invalid Redis auth session cache response');
-			}
-			if (cacheResult === 0) {
-				return false;
-			}
+			// A revocation may have started while the database read was in flight.
+			return (await this.redis.get(CacheKeys.authSessionRevoked(sessionId))) === null;
 		} catch (error) {
-			this.logSessionCacheFailure('populate', sessionId, error);
+			this.logSessionCacheFailure('read', sessionId, error);
 			const currentSession = await this.sessionRepo.findActiveById(sessionId);
 			return currentSession?.userId === userId;
 		}
-
-		return true;
 	}
 
 	async adminCreateUser(email: string, password: string, role: string) {
@@ -358,7 +332,6 @@ export class AuthService {
 			user,
 		);
 		if (!session) throw AppError.unauthorized(AUTH_LOST_MESSAGE);
-		await this.cacheNewSession(user.id, sessionId);
 		const accessToken = await this.tokenUtils.signAccessToken(user.id, user.role, sessionId);
 		return {
 			accessToken,
@@ -429,21 +402,6 @@ export class AuthService {
 			}
 		} catch {
 			return;
-		}
-	}
-
-	private async cacheNewSession(userId: string, sessionId: string) {
-		try {
-			await this.redis.eval(
-				CACHE_ACTIVE_AUTH_SESSION_SCRIPT,
-				2,
-				CacheKeys.authSessionRevoked(sessionId),
-				CacheKeys.authSessionActive(sessionId),
-				userId,
-				String(CacheTTL.authSessionActive),
-			);
-		} catch (error) {
-			this.logSessionCacheFailure('create', sessionId, error);
 		}
 	}
 
