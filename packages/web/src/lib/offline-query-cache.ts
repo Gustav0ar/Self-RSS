@@ -4,7 +4,7 @@ const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_QUERIES = 600;
 const MAX_PERSISTED_BYTES = 10 * 1024 * 1024;
 
-const PERSISTED_QUERY_ROOTS = new Set([
+export const PERSISTED_QUERY_ROOTS = new Set([
 	'article',
 	'articles',
 	'categories',
