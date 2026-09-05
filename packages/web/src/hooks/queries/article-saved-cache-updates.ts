@@ -21,7 +21,10 @@ function articleListItemFromValue(value: unknown, articleId: string): ArticleLis
 	return null;
 }
 
-function findCachedArticleListItem(qc: QueryClient, articleId: string): ArticleListItem | null {
+export function findCachedArticleListItem(
+	qc: QueryClient,
+	articleId: string,
+): ArticleListItem | null {
 	const detail = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
 	if (detail) {
 		return {
@@ -148,8 +151,13 @@ export function isSavedOnlyArticlesQuery(queryKey: QueryKey) {
 	return queryKey[4] === true;
 }
 
-export function applyArticleSavedState(qc: QueryClient, articleId: string, saved: boolean) {
-	const snapshot = saved ? findCachedArticleListItem(qc, articleId) : null;
+export function applyArticleSavedState(
+	qc: QueryClient,
+	articleId: string,
+	saved: boolean,
+	fallback?: ArticleListItem | null,
+) {
+	const snapshot = saved ? (findCachedArticleListItem(qc, articleId) ?? fallback) : null;
 	qc.setQueryData<ArticleDetail>(articleQueryKey(articleId), (article) =>
 		article ? { ...article, isSaved: saved } : article,
 	);
