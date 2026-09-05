@@ -247,6 +247,27 @@ async function selectBunFeed(page: Page) {
 }
 
 test.describe('bounded browser matrix', () => {
+	test('mobile reader returns to the feed list after an article fails to load', async ({
+		page,
+	}) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await installStableReaderFixture(page);
+		await page.route('**/api/v1/articles/detail?*', async (route) => {
+			await route.fulfill({ status: 503, json: { error: { message: 'Temporarily unavailable' } } });
+		});
+		await loginThroughUi(page);
+		await selectBunFeed(page);
+		const feedListUrl = page.url();
+		await page.getByRole('button', { name: /Alpha Launch/ }).click();
+
+		await expect(page.getByText('Could not load this article')).toBeVisible();
+		await expect(page.getByRole('button', { name: /Alpha Launch/ })).toBeHidden();
+		await page.getByRole('button', { name: 'Back to article list' }).click();
+
+		await expect(page).toHaveURL(feedListUrl);
+		await expect(page.getByRole('button', { name: /Alpha Launch/ })).toBeVisible();
+	});
+
 	test('offline text and pending changes remain distinct, and Retry delivers the queue', async ({
 		page,
 		context,
