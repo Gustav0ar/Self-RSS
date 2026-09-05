@@ -12,6 +12,18 @@ export interface ArticleQueryParams {
 	cursor?: string;
 }
 
+export function infiniteArticleQueryKey(params: ArticleQueryParams) {
+	return [
+		'articles',
+		params.feedId ?? null,
+		params.categoryId ?? null,
+		params.unreadOnly ?? false,
+		params.savedOnly ?? false,
+		params.sort ?? 'latest',
+		params.limit ?? 30,
+	] as const;
+}
+
 export function invalidateReaderQueries(qc: QueryClient) {
 	qc.invalidateQueries({ queryKey: ['articles'] });
 	qc.invalidateQueries({ queryKey: ['article'] });

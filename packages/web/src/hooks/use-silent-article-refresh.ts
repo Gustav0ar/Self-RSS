@@ -4,18 +4,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
 import { type ArticleQueryParams, buildArticleSearchParams } from './queries';
-
-function buildInfiniteKey(params: ArticleQueryParams) {
-	const limit = params.limit ?? 30;
-	return [
-		'articles',
-		params.feedId ?? null,
-		params.categoryId ?? null,
-		params.unreadOnly ?? false,
-		params.sort ?? 'latest',
-		limit,
-	] as const;
-}
+import { infiniteArticleQueryKey } from './queries/cache-query-helpers';
 
 type Page = ApiListResponse<ArticleListItem>;
 type ArticleList = InfiniteData<Page, string | null>;
@@ -26,13 +15,17 @@ function articleListItemsEqual(a: ArticleListItem, b: ArticleListItem) {
 		a.feedId === b.feedId &&
 		a.feedTitle === b.feedTitle &&
 		a.feedFaviconUrl === b.feedFaviconUrl &&
+		a.canonicalUrl === b.canonicalUrl &&
 		a.title === b.title &&
 		a.author === b.author &&
 		a.excerpt === b.excerpt &&
 		a.heroImageUrl === b.heroImageUrl &&
 		a.publishedAt === b.publishedAt &&
 		a.displayedAt === b.displayedAt &&
-		a.isRead === b.isRead
+		a.isRead === b.isRead &&
+		a.isSaved === b.isSaved &&
+		a.contentStatus === b.contentStatus &&
+		a.contentVersion === b.contentVersion
 	);
 }
 
@@ -78,11 +71,12 @@ export function useSilentArticleRefresh(
 	const feedId = params.feedId;
 	const categoryId = params.categoryId;
 	const unreadOnly = params.unreadOnly;
+	const savedOnly = params.savedOnly;
 	const sort = params.sort;
 	const limit = params.limit ?? 30;
 	const queryKey = useMemo(
-		() => buildInfiniteKey({ feedId, categoryId, unreadOnly, sort, limit }),
-		[feedId, categoryId, unreadOnly, sort, limit],
+		() => infiniteArticleQueryKey({ feedId, categoryId, unreadOnly, savedOnly, sort, limit }),
+		[feedId, categoryId, unreadOnly, savedOnly, sort, limit],
 	);
 	const inFlightRef = useRef(false);
 	const inFlightControllerRef = useRef<AbortController | null>(null);
@@ -109,7 +103,10 @@ export function useSilentArticleRefresh(
 		inFlightRef.current = true;
 		inFlightControllerRef.current = controller;
 		try {
-			const qs = buildArticleSearchParams({ feedId, categoryId, unreadOnly, sort, limit }, null);
+			const qs = buildArticleSearchParams(
+				{ feedId, categoryId, unreadOnly, savedOnly, sort, limit },
+				null,
+			);
 			const fresh = await apiFetch<Page>(`/articles${qs ? `?${qs}` : ''}`, {
 				signal: controller.signal,
 			});
@@ -126,7 +123,7 @@ export function useSilentArticleRefresh(
 				lastFetchedAtRef.current = Date.now();
 			}
 		}
-	}, [enabled, qc, queryKey, feedId, categoryId, unreadOnly, sort, limit]);
+	}, [enabled, qc, queryKey, feedId, categoryId, unreadOnly, savedOnly, sort, limit]);
 
 	useEffect(() => {
 		if (!qc || !enabled) return;

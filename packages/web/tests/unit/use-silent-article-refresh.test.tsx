@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useInfiniteArticles } from '../../src/hooks/queries/article-hooks';
+import { infiniteArticleQueryKey } from '../../src/hooks/queries/cache-query-helpers';
 import { useSilentArticleRefresh } from '../../src/hooks/use-silent-article-refresh';
 
 const apiFetchMock = vi.fn();
@@ -11,7 +13,7 @@ vi.mock('../../src/lib/api', () => ({
 	apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
-const queryKey = ['articles', null, null, false, 'latest', 30] as const;
+const queryKey = infiniteArticleQueryKey({});
 
 function article(id: string, overrides: Partial<ArticleListItem> = {}): ArticleListItem {
 	return {
@@ -41,7 +43,7 @@ function page(items: ArticleListItem[]): ApiListResponse<ArticleListItem> {
 function makeQueryClient() {
 	return new QueryClient({
 		defaultOptions: {
-			queries: { retry: false },
+			queries: { retry: false, refetchOnWindowFocus: false },
 		},
 	});
 }
@@ -124,17 +126,21 @@ describe('useSilentArticleRefresh', () => {
 		expect(queryClient.getQueryData(queryKey)).toEqual(cached);
 	});
 
-	it('invalidates when an existing first-page article changes metadata', async () => {
+	it.each([
+		{ title: 'Updated title' },
+		{ canonicalUrl: 'https://example.com/updated' },
+		{ isSaved: true },
+		{ contentStatus: 'enrichment_pending' },
+		{ contentVersion: 2 },
+	] satisfies Partial<ArticleListItem>[])('invalidates when first-page metadata changes: %j', async (changed) => {
 		const queryClient = makeQueryClient();
 		const cached = {
-			pages: [page([article('a-2', { title: 'Original title' }), article('a-1')])],
+			pages: [page([article('a-2'), article('a-1')])],
 			pageParams: [null],
 		};
 		queryClient.setQueryData(queryKey, cached);
 		const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue();
-		apiFetchMock.mockResolvedValue(
-			page([article('a-2', { title: 'Updated title' }), article('a-1')]),
-		);
+		apiFetchMock.mockResolvedValue(page([article('a-2', changed), article('a-1')]));
 
 		renderHook(() => useSilentArticleRefresh({ limit: 30 }), {
 			wrapper: wrapperFor(queryClient),
@@ -147,6 +153,36 @@ describe('useSilentArticleRefresh', () => {
 			expect(invalidateSpy).toHaveBeenCalledWith({ queryKey, exact: true });
 		});
 		expect(queryClient.getQueryData(queryKey)).toEqual(cached);
+	});
+
+	it.each([false, true])('refreshes a real article query with savedOnly=%s', async (savedOnly) => {
+		const queryClient = makeQueryClient();
+		const params = { savedOnly, limit: 30 };
+		const original = page([article('a-1', { isSaved: savedOnly })]);
+		const updated = page([article('a-2', { isSaved: savedOnly })]);
+		apiFetchMock.mockResolvedValueOnce(original).mockResolvedValue(updated);
+		const { result, unmount } = renderHook(
+			() => {
+				const articles = useInfiniteArticles(params);
+				useSilentArticleRefresh(params);
+				return articles;
+			},
+			{ wrapper: wrapperFor(queryClient) },
+		);
+		await waitFor(() => expect(result.current.data?.pages[0]).toEqual(original));
+		expect(apiFetchMock).toHaveBeenCalledTimes(1);
+
+		act(() => window.dispatchEvent(new Event('focus')));
+
+		await waitFor(() => expect(result.current.data?.pages[0]).toEqual(updated));
+		expect(apiFetchMock).toHaveBeenCalledTimes(3);
+		for (const [path] of apiFetchMock.mock.calls) {
+			expect(new URL(String(path), 'https://example.com').searchParams.get('savedOnly')).toBe(
+				savedOnly ? 'true' : null,
+			);
+		}
+		unmount();
+		queryClient.clear();
 	});
 
 	it('invalidates when the fresh first page removes cached articles', async () => {
