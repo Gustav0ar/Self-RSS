@@ -246,6 +246,10 @@ class SettingsRepositoryImpl @Inject constructor(
 class AppStatusRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AppStatusRepository {
+    override fun observePendingArticleChanges(): Flow<Int> = source.observePendingArticleChanges()
+    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        source.observeArticleTextAvailability(articleId)
+    override fun retryPendingArticleChanges() = source.retryPendingArticleChanges()
     override fun isOnline(): Boolean = source.isOnline()
     override fun observeOnline(): Flow<Boolean> = source.observeOnline()
 }

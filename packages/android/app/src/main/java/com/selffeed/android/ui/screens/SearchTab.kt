@@ -30,10 +30,16 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import com.selffeed.android.R
 
 @Composable
-fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
+fun SearchTab(
+    state: SearchTabState,
+    actions: SearchTabActions,
+    observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -111,6 +117,7 @@ fun SearchTab(state: SearchTabState, actions: SearchTabActions) {
         ) { article ->
             Column(modifier = Modifier.clickable { actions.onOpenArticle(article.id) }) {
                 ArticleCard(
+                    observeOfflineText = observeOfflineText,
                     article = article,
                     selected = state.selectedArticleId == article.id,
                     onClick = {},

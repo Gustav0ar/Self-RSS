@@ -58,6 +58,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import com.selffeed.android.R
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -88,6 +90,7 @@ fun ArticleReaderPane(
     appearance: ReaderAppearance = ReaderAppearance(),
     preferHtml: Boolean = true,
     onPreferHtmlChanged: (Boolean) -> Unit = {},
+    observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
     val readerArticles = remember(articles, selectedArticle) {
         articles.withSelectedArticle(selectedArticle)
@@ -100,6 +103,7 @@ fun ArticleReaderPane(
 
     if (readerArticles.isEmpty() || selectedArticleIndex == -1) {
         ArticleDetailView(
+            observeOfflineText = observeOfflineText,
             article = selectedArticle,
             isActive = true,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
@@ -174,6 +178,7 @@ fun ArticleReaderPane(
         val article = selectedDetails[articleItem.id]
         if (article != null) {
             ArticleDetailView(
+                observeOfflineText = observeOfflineText,
                 article = article,
                 isActive = articleItem.id == selectedArticle.id,
                 onOpenOriginal = { onOpenOriginal(article) },
@@ -201,6 +206,7 @@ private fun ArticleDetailView(
     preferHtml: Boolean,
     onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
+    observeOfflineText: (String) -> Flow<Boolean>,
 ) {
     // Detail refreshes/enrichment can arrive out of order. Keep the rendered
     // snapshot monotonic so a late partial response cannot remove paragraphs,
@@ -297,6 +303,8 @@ private fun ArticleDetailView(
         article.author?.takeIf { it.isNotBlank() }?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+
+        OfflineTextStatus(article.id, observeOfflineText)
 
         if (retainedContent.html != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

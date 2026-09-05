@@ -247,6 +247,57 @@ async function selectBunFeed(page: Page) {
 }
 
 test.describe('bounded browser matrix', () => {
+	test('offline text and pending changes remain distinct, and Retry delivers the queue', async ({
+		page,
+		context,
+	}, testInfo) => {
+		await page.emulateMedia({ colorScheme: 'dark' });
+		await installStableReaderFixture(page);
+		let rejectDelivery = true;
+		await page.route(`**/api/v1/articles/${alphaArticleId}/saved`, async (route) => {
+			await route.fulfill({
+				status: rejectDelivery ? 503 : 200,
+				contentType: 'application/json',
+				body: JSON.stringify(
+					rejectDelivery
+						? { error: { message: 'Temporarily unavailable' } }
+						: {
+								data: {
+									success: true,
+									applied: true,
+									conflict: false,
+									duplicate: false,
+									saved: true,
+									revision: 1,
+								},
+							},
+				),
+			});
+		});
+		await loginThroughUi(page);
+		await page.getByRole('button', { name: /Alpha Launch/ }).click();
+		await expect(page.locator('article').getByText('Text available offline')).toBeVisible();
+		await expect(page.getByRole('status').filter({ hasText: 'Up to date' })).toBeVisible();
+		await context.setOffline(true);
+		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		await expect(page.getByText('1 change waiting', { exact: true })).toBeVisible();
+		await expect(page.getByText('Syncs when online')).toBeVisible();
+		await expect(page.locator('article').getByText('Text available offline')).toBeVisible();
+		await page.screenshot({ path: testInfo.outputPath('offline-reader.png') });
+		const failedDelivery = page.waitForResponse(
+			(response) =>
+				response.url().endsWith(`/articles/${alphaArticleId}/saved`) && response.status() === 503,
+		);
+		await context.setOffline(false);
+		await failedDelivery;
+		const retry = page.getByRole('button', { name: 'Retry', exact: true });
+		await expect(retry).toBeEnabled();
+		rejectDelivery = false;
+		await retry.click();
+		await expect(page.getByRole('status').filter({ hasText: 'Up to date' })).toBeVisible();
+		await expect(retry).toHaveCount(0);
+	});
+
 	test('login, navigation, reader back, search, and preferences remain usable', async ({
 		page,
 	}) => {

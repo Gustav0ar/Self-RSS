@@ -1,37 +1,31 @@
 import type { ApiResponse, User } from '@self-feed/shared';
-import { type DehydratedState, dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
+import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, apiFetch } from './api';
 import { parseLegacyQueryCache } from './legacy-query-cache';
+import {
+	dismissOfflineRejections,
+	notifyOfflineChange,
+	offlineRejectionCount,
+	reportOfflineRejection,
+} from './offline-changes';
+import {
+	boundedState,
+	cachedArticleIds,
+	isPersistedQueryCache,
+	PERSISTED_QUERY_ROOTS,
+	type PersistedQueryCache,
+	shouldPersistQuery,
+} from './offline-query-cache';
+import { type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
 
 const DATABASE_NAME = 'self-feed-offline';
 const STORE_NAME = 'state';
 const DATABASE_VERSION = 3;
 // Version 3 migrates legacy records into the existing v2 record format.
 const SCHEMA_VERSION = 2;
-const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_CLOCK_SKEW_MS = 5 * 60 * 1000;
-const MAX_PERSISTED_QUERIES = 600;
-const MAX_PERSISTED_BYTES = 10 * 1024 * 1024;
 const MAX_OUTBOX_ENTRIES = 1_000;
-const PERSISTED_QUERY_ROOTS = new Set([
-	'article',
-	'articles',
-	'categories',
-	'feeds',
-	'preferences',
-	'search',
-	'stats',
-]);
-
-interface PersistedQueryCache {
-	schemaVersion: number;
-	ownerId: string;
-	namespace: string;
-	persistedAt: number;
-	state: DehydratedState;
-}
-
 interface PersistedOfflineUser {
 	schemaVersion: number;
 	namespace: string;
@@ -133,8 +127,11 @@ function migrateLegacyQueryCache(store: IDBObjectStore) {
 			const currentRequest = store.get(cacheKey(user.id));
 			currentRequest.onsuccess = () => {
 				const value: unknown = currentRequest.result;
-				if (value != null && !isPersistedQueryCache(value, user.id)) return;
-				const current = isPersistedQueryCache(value, user.id) ? value : null;
+				if (value != null && !isPersistedQueryCache(value, user.id, namespace(), SCHEMA_VERSION))
+					return;
+				const current = isPersistedQueryCache(value, user.id, namespace(), SCHEMA_VERSION)
+					? value
+					: null;
 				const queries = new Map(legacy.state.queries.map((query) => [query.queryHash, query]));
 				// v2 may contain optimistic state backed by its durable outbox.
 				for (const query of current?.state.queries ?? []) {
@@ -222,6 +219,7 @@ async function updateValue<T>(
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
+		notifyOfflineChange(key.includes(':query-cache:'));
 		return { persisted: true, value };
 	}
 	return new Promise((resolve, reject) => {
@@ -244,6 +242,7 @@ async function updateValue<T>(
 		};
 		transaction.oncomplete = () => {
 			database.close();
+			notifyOfflineChange(key.includes(':query-cache:'));
 			resolve({ persisted: true, value });
 		};
 		transaction.onerror = () => {
@@ -261,6 +260,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 	const database = await openDatabase();
 	if (!database) {
 		memoryFallbackStore.delete(key);
+		notifyOfflineChange(key.includes(':query-cache:'));
 		return;
 	}
 	await new Promise<void>((resolve) => {
@@ -268,6 +268,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 		transaction.objectStore(STORE_NAME).delete(key);
 		transaction.oncomplete = () => {
 			database.close();
+			notifyOfflineChange(key.includes(':query-cache:'));
 			resolve();
 		};
 		transaction.onerror = () => {
@@ -284,23 +285,6 @@ async function withStoreLock<T>(name: string, operation: () => Promise<T>): Prom
 	return operation();
 }
 
-function shouldPersistQuery(queryKey: readonly unknown[]) {
-	return typeof queryKey[0] === 'string' && PERSISTED_QUERY_ROOTS.has(queryKey[0]);
-}
-
-function isPersistedQueryCache(value: unknown, ownerId: string): value is PersistedQueryCache {
-	if (!value || typeof value !== 'object') return false;
-	const candidate = value as Partial<PersistedQueryCache>;
-	return (
-		candidate.schemaVersion === SCHEMA_VERSION &&
-		candidate.ownerId === ownerId &&
-		candidate.namespace === namespace() &&
-		typeof candidate.persistedAt === 'number' &&
-		!!candidate.state &&
-		Array.isArray(candidate.state.queries)
-	);
-}
-
 function isUser(value: unknown): value is User {
 	if (!value || typeof value !== 'object') return false;
 	const candidate = value as Partial<User>;
@@ -312,29 +296,39 @@ function isUser(value: unknown): value is User {
 	);
 }
 
-function byteSize(value: unknown) {
-	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
-
-function boundedState(state: DehydratedState): DehydratedState {
-	const cutoff = Date.now() - MAX_CACHE_AGE_MS;
-	const candidates = state.queries
-		.filter((query) => query.state.dataUpdatedAt >= cutoff)
-		.sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)
-		.slice(0, MAX_PERSISTED_QUERIES);
-	const queries: DehydratedState['queries'] = [];
-	let bytes = 0;
-	for (const query of candidates) {
-		const queryBytes = byteSize(query);
-		if (queryBytes > MAX_PERSISTED_BYTES || bytes + queryBytes > MAX_PERSISTED_BYTES) continue;
-		queries.push(query);
-		bytes += queryBytes;
-	}
-	return { mutations: [], queries };
-}
-
 export function setOfflineSessionUser(userId: string | null) {
 	activeUserId = userId;
+	notifyOfflineChange();
+}
+
+export async function readOfflineSnapshot(
+	userId: string,
+	cachedArticles?: ReadonlySet<string>,
+): Promise<OfflineSnapshot> {
+	const database = await openDatabase().catch(() => null);
+	const records = database
+		? await readOfflineRecords(
+				database,
+				cachedArticles ? null : cacheKey(userId),
+				outboxKey(userId),
+			)
+		: null;
+	const cache = records?.cache;
+	const outbox = records?.outbox ?? memoryFallbackStore.get(outboxKey(userId));
+	return {
+		pendingCount: Array.isArray(outbox) ? outbox.length : 0,
+		storageAvailable: records !== null,
+		syncing: flushPromises.has(userId),
+		rejectedCount: offlineRejectionCount(userId),
+		articleIds:
+			records && cachedArticles
+				? cachedArticles
+				: cachedArticleIds(
+						isPersistedQueryCache(cache, userId, namespace(), SCHEMA_VERSION)
+							? boundedState(cache.state).queries
+							: [],
+					),
+	};
 }
 
 export async function persistQueryClient(queryClient: QueryClient, userId: string): Promise<void> {
@@ -348,7 +342,7 @@ export async function persistQueryClient(queryClient: QueryClient, userId: strin
 	await withStoreLock(`cache:${userId}`, async () => {
 		await updateValue<PersistedQueryCache>(cacheKey(userId), (cached) => {
 			const newestByHash = new Map(
-				isPersistedQueryCache(cached, userId)
+				isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
 					? cached.state.queries.map((query) => [query.queryHash, query])
 					: [],
 			);
@@ -375,7 +369,7 @@ export async function restoreQueryClient(
 	userId: string,
 ): Promise<boolean> {
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (!isPersistedQueryCache(cached, userId)) return false;
+	if (!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return false;
 	const state = boundedState(cached.state);
 	if (state.queries.length === 0) {
 		await clearOfflineQueryCache(userId);
@@ -383,6 +377,22 @@ export async function restoreQueryClient(
 	}
 	hydrate(queryClient, state);
 	return true;
+}
+
+/** A detail downloaded in another tab must also open without a network request. */
+export async function restoreOfflineArticle(queryClient: QueryClient, articleId: string) {
+	const userId = activeUserId;
+	if (!userId) return;
+	const cached = await readValue<unknown>(cacheKey(userId));
+	if (
+		activeUserId !== userId ||
+		!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
+	)
+		return;
+	const queries = boundedState(cached.state).queries.filter(
+		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
+	);
+	hydrate(queryClient, { mutations: [], queries });
 }
 
 export async function saveOfflineUser(user: User): Promise<void> {
@@ -440,6 +450,7 @@ export async function clearOfflineQueryCache(userId = activeUserId): Promise<voi
 export async function clearOfflineState(userId = activeUserId): Promise<void> {
 	const keys = [deleteValue(userKey(), 'strict')];
 	if (userId) {
+		dismissOfflineRejections(userId);
 		keys.push(deleteValue(cacheKey(userId)));
 		keys.push(deleteValue(outboxKey(userId), 'strict'));
 		keys.push(deleteValue(revisionsKey(userId), 'strict'));
@@ -589,14 +600,17 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					break;
 				}
 				await removeMutationIfCurrent(userId, mutation);
+				reportOfflineRejection(userId);
 				results.push({ mutation, status: 'discarded' });
 			}
 		}
 		return results;
 	}).finally(() => {
 		if (flushPromises.get(userId) === flush) flushPromises.delete(userId);
+		notifyOfflineChange(false);
 	});
 	flushPromises.set(userId, flush);
+	notifyOfflineChange(false);
 	return flush;
 }
 

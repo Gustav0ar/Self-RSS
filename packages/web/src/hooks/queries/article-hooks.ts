@@ -13,12 +13,13 @@ import {
 	useQueryClient,
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { apiFetch } from '@/lib/api';
+import { ApiClientError, apiFetch } from '@/lib/api';
 import { ARTICLE_LIMITS, REFRESH_INTERVALS } from '@/lib/constants';
 import {
 	flushOfflineArticleMutations,
 	hasPendingArticleStateMutation,
 	queueArticleStateMutation,
+	restoreOfflineArticle,
 } from '@/lib/offline-store';
 import {
 	beginArticleMutation,
@@ -210,9 +211,24 @@ export function useInfiniteArticles(
 }
 
 export function useArticle(articleId: string | null) {
+	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: articleId ? articleQueryKey(articleId) : ['article', null],
-		queryFn: ({ signal }) => fetchArticle(articleId!, signal),
+		networkMode: 'always',
+		queryFn: async ({ signal }) => {
+			if (!articleId) throw new Error('No article selected');
+			try {
+				if (!navigator.onLine) throw new TypeError('Offline');
+				return await fetchArticle(articleId, signal);
+			} catch (error) {
+				if (signal.aborted || (error instanceof ApiClientError && error.status < 500)) throw error;
+				await restoreOfflineArticle(queryClient, articleId);
+				signal.throwIfAborted();
+				const cached = queryClient.getQueryData<ArticleDetail>(articleQueryKey(articleId));
+				if (cached) return cached;
+				throw error;
+			}
+		},
 		enabled: !!articleId,
 	});
 }

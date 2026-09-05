@@ -280,6 +280,16 @@ a:focus-visible {
 }
 
 /* Reader mobile back bar (visible <lg). */
+@media (max-width: 1023px) {
+	.reading-layout > .article-list-pane {
+		flex: 1 1 0%;
+	}
+	.reading-layout[data-article-selected="true"] > .article-list-pane,
+	.reading-layout[data-article-selected="false"] > .article-reader-pane {
+		display: none;
+	}
+}
+
 .reader-mobile-bar {
 	position: sticky;
 	top: 0;

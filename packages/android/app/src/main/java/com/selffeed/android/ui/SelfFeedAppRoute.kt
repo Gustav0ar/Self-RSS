@@ -276,6 +276,9 @@ fun SelfFeedAppRoute(
                 settings = settingsState,
                 isOnline = isOnline,
             ),
+            pendingArticleChanges = appViewModel.pendingArticleChanges,
+            observeOfflineText = remember(appViewModel) { appViewModel::observeArticleTextAvailability },
+            onRetryPendingChanges = appViewModel::retryPendingArticleChanges,
             readStateOverrides = articlesViewModel.readStateOverrides,
             actions = SelfFeedAppActions(
                 onAuthModeChange = authViewModel::setAuthMode,

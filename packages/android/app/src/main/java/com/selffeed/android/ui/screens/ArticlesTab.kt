@@ -73,6 +73,9 @@ import androidx.paging.compose.LazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import com.selffeed.android.ui.components.OfflineTextStatus
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
@@ -88,6 +91,7 @@ fun ArticlesTab(
     actions: ArticleTabActions,
     pagedArticles: LazyPagingItems<ArticleListItem>,
     listState: LazyListState = rememberLazyListState(),
+    observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
@@ -266,6 +270,7 @@ fun ArticlesTab(
                         ?.let { article.copy(isSaved = it) }
                         ?: article
                     ArticleListRow(
+                        observeOfflineText = observeOfflineText,
                         article = displayedArticle,
                         isRead = isRead,
                         selected = state.selectedArticleId == article.id,
@@ -453,6 +458,7 @@ private fun ArticleListRow(
     onToggleRead: (Boolean) -> Unit,
     onToggleSaved: (() -> Unit)?,
     density: DensityPreference,
+    observeOfflineText: (String) -> Flow<Boolean>,
 ) {
     val dismissState = rememberSwipeToDismissBoxState()
     var pendingToggle by remember { mutableStateOf(false) }
@@ -532,6 +538,7 @@ private fun ArticleListRow(
                 .clickable(onClick = onClick),
         ) {
             ArticleCard(
+                observeOfflineText = observeOfflineText,
                 article = article,
                 selected = selected,
                 onClick = {}, // click handled by parent Column
@@ -607,6 +614,7 @@ internal fun ArticleCard(
     onToggleSaved: (() -> Unit)? = null,
     isReadOverride: Boolean? = null,
     density: DensityPreference = DensityPreference.COMFORTABLE,
+    observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
     val isRead = isReadOverride ?: article.isRead
     val verticalPadding = if (density == DensityPreference.COMPACT) 8.dp else 12.dp
@@ -671,6 +679,7 @@ internal fun ArticleCard(
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = MaterialTheme.typography.titleMedium.lineHeight * 0.9f,
                 )
+                OfflineTextStatus(article.id, observeOfflineText)
                 article.excerpt?.takeIf { it.isNotBlank() }?.let {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(

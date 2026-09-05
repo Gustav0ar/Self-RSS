@@ -159,6 +159,9 @@ interface SettingsRepository {
 }
 
 interface AppStatusRepository {
+    fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
+    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> = emptyFlow()
+    fun retryPendingArticleChanges() = Unit
     fun isOnline(): Boolean
     fun observeOnline(): Flow<Boolean>
 }

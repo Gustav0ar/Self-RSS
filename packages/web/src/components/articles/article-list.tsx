@@ -4,6 +4,7 @@ import { Bookmark, BookmarkCheck, Circle, CircleDot } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { DisplayDensityPreference } from '@/lib/preferences';
 import { cn } from '@/lib/utils';
+import { OfflineTextStatus } from './offline-text-status';
 
 interface ArticleListItemData {
 	id: string;
@@ -39,8 +40,8 @@ interface ArticleListProps {
 }
 
 const ROW_HEIGHT_PX = {
-	comfortable: 82,
-	compact: 56,
+	comfortable: 102,
+	compact: 76,
 } as const;
 const ROW_GAP_PX = 6; // matches `space-y-1.5`
 const ROW_OVERSCAN = 6;
@@ -359,6 +360,7 @@ function ArticleRowImpl({
 					>
 						{article.title}
 					</p>
+					<OfflineTextStatus articleId={article.id} />
 				</div>
 			</button>
 			<button

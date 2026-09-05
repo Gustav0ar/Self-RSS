@@ -191,14 +191,9 @@ export function FeedView({
 		void refreshFeed(feedId);
 	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
 
-	// If the user is on the list view (`/`) and a previously selected
-	// article is no longer in the loaded list, clear it. We only do
-	// this in the list-view case so that deep links to a specific
-	// article (`/articles/:id`) still render their target even when
-	// the surrounding list is empty (e.g. a deep link to an article
-	// that doesn't match the current All Feeds list — common after
-	// opening a search result). While the list is still loading, we
-	// preserve the URL.
+	// Clear a list selection when its article leaves the loaded list.
+	// Deep links stay open even when their article is outside that list.
+	// Wait for loading to finish before changing the URL.
 	useEffect(() => {
 		if (isLoading) return;
 		if (fromDeepLink) return;
@@ -322,8 +317,11 @@ export function FeedView({
 	}
 
 	return (
-		<div className="flex h-full min-h-0 flex-col lg:flex-row">
-			<div className="flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[clamp(23rem,28vw,33rem)] lg:border-b-0 lg:border-r">
+		<div
+			data-article-selected={Boolean(effectiveArticleId)}
+			className="reading-layout flex h-full min-h-0 flex-col lg:flex-row"
+		>
+			<div className="article-list-pane flex min-h-0 w-full shrink-0 flex-col border-b border-border/70 lg:w-[clamp(23rem,28vw,33rem)] lg:border-b-0 lg:border-r">
 				<FeedHealthBanner
 					appError={lifecycleActionError ?? feedSyncError}
 					sourceIssue={selectedFeedHealth}
@@ -403,7 +401,7 @@ export function FeedView({
 				</FeedQueryState>
 			</div>
 
-			<div className="min-h-0 flex-1 bg-background/10">
+			<div className="article-reader-pane min-h-0 flex-1 bg-background/10">
 				<ReaderPane
 					articleId={effectiveArticleId}
 					articles={readingQueue}

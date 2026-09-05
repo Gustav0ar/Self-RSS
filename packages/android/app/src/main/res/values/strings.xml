@@ -365,4 +365,12 @@
     <string name="settings_admin_password_reset">Password reset and existing sessions revoked.</string>
     <string name="settings_admin_confirm_change">Confirm account change</string>
     <string name="settings_admin_confirm_change_detail">Role and access changes sign this account out immediately. Continue?</string>
+    <plurals name="sync_pending_changes">
+        <item quantity="one">%d change waiting</item>
+        <item quantity="other">%d changes waiting</item>
+    </plurals>
+    <string name="sync_when_online">Syncs when online</string>
+    <string name="sync_up_to_date">Up to date</string>
+    <string name="article_text_available_offline">Text available offline</string>
+    <string name="article_text_not_downloaded">Text not downloaded</string>
 </resources>
