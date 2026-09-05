@@ -15,7 +15,19 @@ import {
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 import { ARTICLE_LIMITS, REFRESH_INTERVALS } from '@/lib/constants';
-import { flushOfflineArticleMutations, queueArticleStateMutation } from '@/lib/offline-store';
+import {
+	flushOfflineArticleMutations,
+	hasPendingArticleStateMutation,
+	queueArticleStateMutation,
+} from '@/lib/offline-store';
+import {
+	beginArticleMutation,
+	finishArticleMutation,
+	getSavedMutationSnapshot,
+	settledArticleState,
+	updateSavedMutationReadState,
+} from './article-mutation-rollback';
+import { findCachedArticleListItem } from './article-saved-cache-updates';
 import {
 	type ArticleQueryParams,
 	applyArticleReadState,
@@ -318,6 +330,17 @@ export function useWarmVisibleArticles() {
 	);
 }
 
+function reconcileArticleReadState(qc: QueryClient, articleId: string, read: boolean) {
+	const current =
+		findCachedArticleSnapshot(qc, articleId) ?? getSavedMutationSnapshot(qc, articleId);
+	applyArticleReadState(qc, articleId, read);
+	updateSavedMutationReadState(qc, articleId, read);
+	if (current && current.isRead !== read) {
+		applyUnreadCountDelta(qc, current.feedId, read ? -1 : 1);
+		applyStatsDelta(qc, read ? -1 : 1, read ? 1 : -1);
+	}
+}
+
 export function useMarkRead() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -328,14 +351,7 @@ export function useMarkRead() {
 			return flushOfflineArticleMutations();
 		},
 		onMutate: async ({ articleId, read }) => {
-			// Capture the active article-list query key (if any) so we only
-			// cancel in-flight fetches that would race with this optimistic
-			// update. Cancelling every `articles`/`feeds`/etc. query would also
-			// cancel fetches for *other* scopes the user is not currently
-			// viewing; if one of those refetches and then the optimistic
-			// snapshot is rolled back, the wrong scope's slot gets clobbered.
 			const activeArticlesKey = findActiveQueryKey(qc, ['articles']);
-
 			await Promise.all([
 				qc.cancelQueries({ queryKey: articleQueryKey(articleId) }),
 				activeArticlesKey ? qc.cancelQueries({ queryKey: activeArticlesKey }) : Promise.resolve(),
@@ -343,83 +359,27 @@ export function useMarkRead() {
 				qc.cancelQueries({ queryKey: ['feeds'] }),
 				qc.cancelQueries({ queryKey: ['categories'] }),
 			]);
-
-			const previousSnapshot = findCachedArticleSnapshot(qc, articleId);
-			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
-			// Snapshot every matching cache entry keyed by its full query key
-			// tuple. The optimistic update may run while the user has multiple
-			// scopes cached (different feeds, categories, sorts), and the
-			// rollback must restore each one to its pre-mutation state without
-			// ever writing into a different scope's slot.
-			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
-			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
-			const previousFeeds = qc.getQueriesData({ queryKey: ['feeds'] });
-			const previousCategories = qc.getQueriesData({ queryKey: ['categories'] });
-			const previousStats = qc.getQueryData(['stats']);
-
-			applyArticleReadState(qc, articleId, read);
-			if (previousSnapshot && previousSnapshot.isRead !== read) {
-				applyUnreadCountDelta(qc, previousSnapshot.feedId, read ? -1 : 1);
-				applyStatsDelta(qc, read ? -1 : 1, read ? 1 : -1);
-			}
-
-			return {
-				previousArticle,
-				previousArticles,
-				previousSearch,
-				previousFeeds,
-				previousCategories,
-				previousStats,
-			};
+			const baseline = beginArticleMutation(
+				qc,
+				articleId,
+				'read',
+				(findCachedArticleSnapshot(qc, articleId) ?? getSavedMutationSnapshot(qc, articleId))
+					?.isRead,
+			);
+			reconcileArticleReadState(qc, articleId, read);
+			return baseline;
 		},
-		onError: (_error, { articleId }, context) => {
-			// Restore the article detail first; it is keyed by the article id
-			// only and is unambiguous.
-			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
-			// Restore list queries by their captured key tuples. Iterating the
-			// snapshot pairs (rather than re-running the filter) makes the
-			// rollback atomic with respect to the optimistic update: only the
-			// slots that existed at snapshot time are touched, and each one is
-			// restored to the exact pre-mutation value.
-			for (const [queryKey, data] of context?.previousArticles ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
-			for (const [queryKey, data] of context?.previousSearch ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
-			for (const [queryKey, data] of context?.previousFeeds ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
-			for (const [queryKey, data] of context?.previousCategories ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
-			qc.setQueryData(['stats'], context?.previousStats);
+		onError: async (_error, { articleId }, baseline) => {
+			if (await hasPendingArticleStateMutation(articleId, 'read')) return;
+			if (baseline?.state !== undefined) reconcileArticleReadState(qc, articleId, baseline.state);
 		},
-		onSuccess: (results, { articleId }, context) => {
-			const relevant = results.filter((result) => result.mutation.articleId === articleId);
-			const terminal = relevant.at(-1);
-			if (terminal?.status === 'discarded') {
-				qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
-				for (const [queryKey, data] of context?.previousArticles ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				for (const [queryKey, data] of context?.previousSearch ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				for (const [queryKey, data] of context?.previousFeeds ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				for (const [queryKey, data] of context?.previousCategories ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				qc.setQueryData(['stats'], context?.previousStats);
-				return;
-			}
-			if (terminal?.authoritativeState !== undefined) {
-				applyArticleReadState(qc, articleId, terminal.authoritativeState);
-			}
+		onSuccess: async (results, { articleId }, baseline) => {
+			const state = settledArticleState(results, articleId, 'read', baseline);
+			if (await hasPendingArticleStateMutation(articleId, 'read')) return;
+			if (state !== undefined) reconcileArticleReadState(qc, articleId, state);
 		},
-		onSettled: () => {
+		onSettled: (_data, _error, { articleId }, baseline) => {
+			finishArticleMutation(qc, articleId, 'read', baseline);
 			qc.invalidateQueries({ queryKey: ['feeds'], refetchType: 'none' });
 			qc.invalidateQueries({ queryKey: ['categories'], refetchType: 'none' });
 			qc.invalidateQueries({ queryKey: ['stats'], refetchType: 'none' });
@@ -449,37 +409,23 @@ export function useSetArticleSaved() {
 					...previousArticle.media.filter((item) => item.type === 'image').map((item) => item.url),
 				]);
 			}
-			const previousArticles = qc.getQueriesData({ queryKey: ['articles'] });
-			const previousSearch = qc.getQueriesData({ queryKey: ['search'] });
+			const snapshot = findCachedArticleListItem(qc, articleId);
+			const baseline = beginArticleMutation(qc, articleId, 'saved', snapshot?.isSaved, snapshot);
 			applyArticleSavedState(qc, articleId, saved);
-			return { previousArticle, previousArticles, previousSearch };
+			return baseline;
 		},
-		onError: (_error, { articleId }, context) => {
-			qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
-			for (const [queryKey, data] of context?.previousArticles ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
-			for (const [queryKey, data] of context?.previousSearch ?? []) {
-				qc.setQueryData(queryKey, data);
-			}
+		onError: async (_error, { articleId }, baseline) => {
+			if (await hasPendingArticleStateMutation(articleId, 'saved')) return;
+			if (baseline?.state !== undefined)
+				applyArticleSavedState(qc, articleId, baseline.state, baseline.snapshot);
 		},
-		onSuccess: (results, { articleId }, context) => {
-			const terminal = results.filter((result) => result.mutation.articleId === articleId).at(-1);
-			if (terminal?.status === 'discarded') {
-				qc.setQueryData(articleQueryKey(articleId), context?.previousArticle);
-				for (const [queryKey, data] of context?.previousArticles ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				for (const [queryKey, data] of context?.previousSearch ?? []) {
-					qc.setQueryData(queryKey, data);
-				}
-				return;
-			}
-			if (terminal?.authoritativeState !== undefined) {
-				applyArticleSavedState(qc, articleId, terminal.authoritativeState);
-			}
+		onSuccess: async (results, { articleId }, baseline) => {
+			const state = settledArticleState(results, articleId, 'saved', baseline);
+			if (await hasPendingArticleStateMutation(articleId, 'saved')) return;
+			if (state !== undefined) applyArticleSavedState(qc, articleId, state, baseline?.snapshot);
 		},
-		onSettled: () => {
+		onSettled: (_data, _error, { articleId }, baseline) => {
+			finishArticleMutation(qc, articleId, 'saved', baseline);
 			qc.invalidateQueries({ queryKey: ['articles'], refetchType: 'none' });
 		},
 	});
