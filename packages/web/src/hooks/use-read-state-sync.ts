@@ -1,9 +1,10 @@
+import type { RealtimeEvent } from '@self-feed/shared';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyReadStateSyncEvent } from '@/hooks/queries';
 import { getClientId } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
-import { hasPendingArticleStateMutation } from '@/lib/offline-store';
+import { getPendingArticleStateMutation } from '@/lib/offline-store';
 import { streamRealtimeEvents } from '@/lib/read-state-events';
 
 export function getReadStateReconnectDelay(attempt: number) {
@@ -52,6 +53,22 @@ export function createRealtimeConnectedHandler(qc: QueryClient) {
 	};
 }
 
+export async function reconcileRealtimeEvent(
+	qc: QueryClient,
+	event: RealtimeEvent,
+	options: { clientId: string },
+) {
+	if (event.type === 'article.read_state_changed' || event.type === 'article.saved_state_changed') {
+		const kind = event.type === 'article.read_state_changed' ? 'read' : 'saved';
+		const state = event.type === 'article.read_state_changed' ? event.isRead : event.isSaved;
+		const pending = await getPendingArticleStateMutation(event.articleId, kind);
+		// The outbox is shared by tabs. An event acknowledging that intent must
+		// reach the other tabs even before the originating request removes it.
+		if (pending && pending.desiredState !== state) return;
+	}
+	applyReadStateSyncEvent(qc, event, options);
+}
+
 export function useReadStateSync(enabled: boolean) {
 	const qc = useQueryClient();
 
@@ -81,21 +98,7 @@ export function useReadStateSync(enabled: boolean) {
 				},
 				onEvent: (event) => {
 					reconnectAttempt = 0;
-					if (
-						event.type === 'article.read_state_changed' ||
-						event.type === 'article.saved_state_changed'
-					) {
-						const articleStateEvent = event;
-						const mutationKind =
-							articleStateEvent.type === 'article.read_state_changed' ? 'read' : 'saved';
-						void hasPendingArticleStateMutation(articleStateEvent.articleId, mutationKind).then(
-							(pending) => {
-								if (!pending) applyReadStateSyncEvent(qc, articleStateEvent, { clientId });
-							},
-						);
-					} else {
-						applyReadStateSyncEvent(qc, event, { clientId });
-					}
+					void reconcileRealtimeEvent(qc, event, { clientId });
 				},
 			})
 				.catch(() => {
