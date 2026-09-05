@@ -15,6 +15,7 @@ class ArticleRemoteMediator(
     private val forceInitialRefresh: Boolean,
     private val localStore: LocalStore,
     private val loadPage: suspend (limit: Int, cursor: String?) -> AppResult<ApiListResponse<ArticleListItem>>,
+    private val onCompletedRefresh: suspend () -> AppResult<Unit> = { AppResult.Success(Unit) },
 ) : RemoteMediator<Int, ArticleListItem>() {
     override suspend fun load(
         loadType: LoadType,
@@ -26,7 +27,7 @@ class ArticleRemoteMediator(
             LoadType.APPEND -> {
                 val remoteKey = localStore.readArticleRemoteKey(queryKey)
                     ?: return MediatorResult.Success(endOfPaginationReached = true)
-                if (remoteKey.endReached) return MediatorResult.Success(endOfPaginationReached = true)
+                if (remoteKey.endReached) return completeRefresh()
                 remoteKey.nextCursor
                     ?: return MediatorResult.Success(endOfPaginationReached = true)
             }
@@ -34,16 +35,7 @@ class ArticleRemoteMediator(
 
         val pageSize = state.config.pageSize.coerceAtMost(MAX_PAGE_SIZE)
         return when (val result = loadPage(pageSize, cursor)) {
-            is AppResult.Success -> {
-                localStore.writeArticleRemotePage(
-                    queryKey = queryKey,
-                    payload = result.data,
-                    clearExisting = loadType == LoadType.REFRESH,
-                )
-                MediatorResult.Success(
-                    endOfPaginationReached = !result.data.hasMore || result.data.cursor.isNullOrBlank(),
-                )
-            }
+            is AppResult.Success -> storePage(result.data, clearExisting = loadType == LoadType.REFRESH)
 
             is AppResult.Error -> {
                 // Cursor formats can legitimately change across server
@@ -52,17 +44,7 @@ class ArticleRemoteMediator(
                 // request succeeds, preserving the stale list if it does not.
                 if (loadType == LoadType.APPEND && (result.cause as? HttpException)?.code() == 409) {
                     when (val restarted = loadPage(pageSize, null)) {
-                        is AppResult.Success -> {
-                            localStore.writeArticleRemotePage(
-                                queryKey = queryKey,
-                                payload = restarted.data,
-                                clearExisting = true,
-                            )
-                            MediatorResult.Success(
-                                endOfPaginationReached =
-                                    !restarted.data.hasMore || restarted.data.cursor.isNullOrBlank(),
-                            )
-                        }
+                        is AppResult.Success -> storePage(restarted.data, clearExisting = true)
 
                         is AppResult.Error -> MediatorResult.Error(
                             restarted.cause ?: IllegalStateException(restarted.message),
@@ -73,6 +55,20 @@ class ArticleRemoteMediator(
                 }
             }
         }
+    }
+
+    private suspend fun storePage(payload: ApiListResponse<ArticleListItem>, clearExisting: Boolean): MediatorResult {
+        localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
+        return if (!payload.hasMore || payload.cursor.isNullOrBlank()) {
+            completeRefresh()
+        } else {
+            MediatorResult.Success(endOfPaginationReached = false)
+        }
+    }
+
+    private suspend fun completeRefresh(): MediatorResult = when (val result = onCompletedRefresh()) {
+        is AppResult.Success -> MediatorResult.Success(endOfPaginationReached = true)
+        is AppResult.Error -> MediatorResult.Error(result.cause ?: IllegalStateException(result.message))
     }
 
     override suspend fun initialize(): InitializeAction {
