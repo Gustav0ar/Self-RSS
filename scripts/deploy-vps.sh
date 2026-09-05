@@ -298,35 +298,45 @@ backup_existing_database() {
 		echo "Warning: could not chmod data/backups before backup; continuing with existing permissions."
 	fi
 
-	timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-	backup_name="self-feed-${timestamp}-${HEAD_SHA_SHORT}.db"
+	local timestamp backup_name backup_path api_status backup_image backup_program
+	timestamp="$(date -u +%Y%m%dT%H%M%S%NZ)"
+	backup_name="self-feed-${timestamp}-${HEAD_SHA_SHORT}-$$.db"
 	backup_path="data/backups/${backup_name}"
 	api_status="$("${CONTAINER_CLI}" inspect -f '{{.State.Status}}' selffeed-api 2>/dev/null || true)"
+	backup_program='import { Database } from "bun:sqlite";
+import { chmodSync, chownSync } from "node:fs";
+const destination = `/app/data/backups/${process.env.SELF_FEED_BACKUP_NAME}`;
+const db = new Database("/app/data/self-feed.db", { readonly: true });
+try { db.query("VACUUM INTO ?").run(destination); } finally { db.close(); }
+const backup = new Database(destination, { readonly: true });
+try {
+  const rows = backup.query("PRAGMA integrity_check").values();
+  if (rows.length !== 1 || rows[0][0] !== "ok") throw new Error("Backup integrity check failed");
+} finally { backup.close(); }
+chownSync(destination, Number(process.env.SELF_FEED_BACKUP_UID), Number(process.env.SELF_FEED_BACKUP_GID));
+chmodSync(destination, 0o600);'
+	local backup_env=(-e "SELF_FEED_BACKUP_NAME=${backup_name}" -e "SELF_FEED_BACKUP_UID=${APP_UID}" -e "SELF_FEED_BACKUP_GID=${APP_GID}")
 
+	echo "Creating consistent SQLite pre-deploy backup: ${backup_path}"
 	if [ "${api_status}" = "running" ]; then
-		echo "Creating SQLite pre-deploy backup with VACUUM INTO: ${backup_path}"
-		if "${CONTAINER_CLI}" exec --user 0:0 selffeed-api bun -e "import { Database } from 'bun:sqlite'; const db = new Database('/app/data/self-feed.db'); db.exec(\"VACUUM INTO '/app/data/backups/${backup_name}'\"); db.close();" &&
-			"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chown "${APP_UID}:${APP_GID}" "/app/data/backups/${backup_name}" &&
-			"${CONTAINER_CLI}" exec --user 0:0 selffeed-api chmod 600 "/app/data/backups/${backup_name}"; then
-			find data/backups -maxdepth 1 -type f -name 'self-feed-*.db' | sort | head -n -10 | while read -r old_backup; do
-				rm -f "${old_backup}" "${old_backup}-wal" "${old_backup}-shm"
-			done
-			return 0
+		if ! "${CONTAINER_CLI}" exec --user 0:0 "${backup_env[@]}" selffeed-api bun -e "${backup_program}"; then
+			echo "[PRE-DEPLOY] ERROR: SQLite backup failed; deployment stopped. Existing backups are unchanged."
+			rm -f "${backup_path}"
+			return 1
 		fi
-		echo "Warning: container VACUUM backup failed; falling back to host-side SQLite file copy."
 	else
-		echo "API container status is '${api_status:-missing}'; copying SQLite files for pre-deploy backup: ${backup_path}"
+		# A stopped API does not imply an idle database: a worker may still write.
+		# Run only SQLite tooling in the existing image, never application startup.
+		backup_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-api 2>/dev/null || true)"
+		backup_image="${backup_image:-${API_IMAGE}}"
+		if ! "${CONTAINER_CLI}" image inspect "${backup_image}" >/dev/null 2>&1 || \
+			! "${CONTAINER_CLI}" run --rm --network none --user 0:0 --entrypoint bun \
+				-v "${PWD}/data:/app/data" "${backup_env[@]}" "${backup_image}" -e "${backup_program}"; then
+			echo "[PRE-DEPLOY] ERROR: Consistent backup unavailable; deployment stopped. Start the API or make its image available and retry."
+			rm -f "${backup_path}"
+			return 1
+		fi
 	fi
-
-	rm -f "${backup_path}" "${backup_path}-wal" "${backup_path}-shm"
-	cp "${db_file}" "${backup_path}"
-	if [ -f "${db_file}-wal" ]; then
-		cp "${db_file}-wal" "${backup_path}-wal"
-	fi
-	if [ -f "${db_file}-shm" ]; then
-		cp "${db_file}-shm" "${backup_path}-shm"
-	fi
-	chmod 600 "${backup_path}"*
 
 	find data/backups -maxdepth 1 -type f -name 'self-feed-*.db' | sort | head -n -10 | while read -r old_backup; do
 		rm -f "${old_backup}" "${old_backup}-wal" "${old_backup}-shm"

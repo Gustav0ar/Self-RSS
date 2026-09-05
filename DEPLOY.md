@@ -244,7 +244,7 @@ sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed
      the deployment.
    - The image tag matching the latest successful build.
 4. On approval, the workflow:
-   - Creates a pre-deploy SQLite backup under `data/backups` on the VPS
+   - Creates and checks a consistent pre-deploy SQLite backup under `data/backups` on the VPS. A failed backup stops deployment and preserves existing backups. If the API is stopped, an isolated container runs the SQLite backup using the existing API image.
      when `data/self-feed.db` already exists.
    - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Pulls the new images.
