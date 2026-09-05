@@ -243,15 +243,12 @@ sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed
      the deployment.
    - The image tag matching the latest successful build.
 4. On approval, the workflow:
-   - Captures the previous Compose file, private `.env`, immutable container
-     image IDs, and SQLite schema and migration-ledger fingerprint before
-     changing configuration.
-   - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Creates a pre-deploy SQLite backup under `data/backups` on the VPS
      when `data/self-feed.db` already exists.
+   - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Pulls the new images.
    - Restarts the stack with `docker compose up -d --remove-orphans`.
-   - Health-checks Redis, API, worker, web, and the public routes.
+   - Health-checks the API and web.
    - Prunes dangling images.
 5. A `deploy-summary` artifact is uploaded for public visibility
    (image tag, commit SHA, host fingerprint) — **no secrets**.
@@ -264,6 +261,10 @@ row counts, existing protected row keys, and `PRAGMA foreign_key_check`
 before commit. If a migration would remove protected rows or leave
 orphaned rows, it is rolled back and startup fails with the backup path
 in the error.
+
+Before changing deployment configuration, the script captures the previous
+Compose file, private `.env`, immutable API/worker/web image IDs, and SQLite
+schema and migration-ledger fingerprint.
 
 Automatic rollback stops the API and worker before comparing the current
 SQLite schema and `__drizzle_migrations` ledger with the captured fingerprint.
