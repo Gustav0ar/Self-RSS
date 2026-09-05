@@ -42,23 +42,36 @@ export function OfflineStatusProvider({
 
 	useEffect(() => {
 		currentUser.current = userId;
-		let generation = 0;
-		async function refresh() {
-			const request = ++generation;
+		let disposed = false;
+		let refreshing = false;
+		let requested = false;
+		let cacheDirty = true;
+		let previous: OfflineSnapshot | null = null;
+		async function refresh(cacheChanged: boolean) {
 			setOnline(navigator.onLine);
-			if (!userId) return;
-			const next = await readOfflineSnapshot(userId);
-			if (request === generation) setSnapshot(next);
+			cacheDirty ||= cacheChanged;
+			requested = true;
+			if (!userId || refreshing) return;
+			refreshing = true;
+			while (requested && !disposed) {
+				requested = false;
+				const cachedArticles =
+					!cacheDirty && previous?.storageAvailable ? previous.articleIds : undefined;
+				cacheDirty = false;
+				previous = await readOfflineSnapshot(userId, cachedArticles);
+				if (!disposed) setSnapshot(previous);
+			}
+			refreshing = false;
 		}
-		const update = () => void refresh();
-		const unsubscribe = subscribeOfflineChanges(update);
+		const update = () => void refresh(true);
+		const unsubscribe = subscribeOfflineChanges((cacheChanged) => void refresh(cacheChanged));
 		window.addEventListener('online', update);
 		window.addEventListener('offline', update);
 		window.addEventListener('focus', update);
 		document.addEventListener('visibilitychange', update);
 		update();
 		return () => {
-			generation++;
+			disposed = true;
 			currentUser.current = null;
 			unsubscribe();
 			window.removeEventListener('online', update);

@@ -51,6 +51,42 @@ afterEach(() => {
 });
 
 describe('offline status', () => {
+	it('does not reread article bodies as queued changes arrive', async () => {
+		showStatus();
+		await screen.findByText('Up to date');
+		const reads = vi.spyOn(IDBObjectStore.prototype, 'get');
+		await act(() => queueArticleStateMutation('saved', 'article-1', true));
+		await screen.findByText('1 change waiting');
+		expect(
+			reads.mock.calls.some(([key]) => typeof key === 'string' && key.includes(':query-cache:')),
+		).toBe(false);
+	});
+
+	it('updates from another tab’s storage notification', async () => {
+		await queueArticleStateMutation('saved', 'article-1', true);
+		showStatus();
+		await screen.findByText('1 change waiting');
+		await new Promise<void>((resolve, reject) => {
+			const open = indexedDB.open('self-feed-offline');
+			open.onerror = () => reject(open.error);
+			open.onsuccess = () => {
+				const transaction = open.result.transaction('state', 'readwrite');
+				transaction.objectStore('state').clear();
+				transaction.oncomplete = () => {
+					open.result.close();
+					resolve();
+				};
+			};
+		});
+		const otherTab = new BroadcastChannel('self-feed-offline-status');
+		try {
+			otherTab.postMessage(true);
+			await screen.findByText('Up to date');
+		} finally {
+			otherTab.close();
+		}
+	});
+
 	it('respects the authenticated offline fallback even when the browser reports connectivity', async () => {
 		showStatus('user-1', new QueryClient(), true);
 		await screen.findByText('Offline');

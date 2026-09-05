@@ -8,18 +8,16 @@ import {
 	offlineRejectionCount,
 	reportOfflineRejection,
 } from './offline-changes';
-import { cachedArticleIds, type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
+import { boundedState, cachedArticleIds } from './offline-query-cache';
+import { type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
 
 const DATABASE_NAME = 'self-feed-offline';
 const STORE_NAME = 'state';
 const DATABASE_VERSION = 3;
 // Version 3 migrates legacy records into the existing v2 record format.
 const SCHEMA_VERSION = 2;
-const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_CLOCK_SKEW_MS = 5 * 60 * 1000;
-const MAX_PERSISTED_QUERIES = 600;
-const MAX_PERSISTED_BYTES = 10 * 1024 * 1024;
 const MAX_OUTBOX_ENTRIES = 1_000;
 const PERSISTED_QUERY_ROOTS = new Set([
 	'article',
@@ -229,7 +227,7 @@ async function updateValue<T>(
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
-		notifyOfflineChange();
+		notifyOfflineChange(key.includes(':query-cache:'));
 		return { persisted: true, value };
 	}
 	return new Promise((resolve, reject) => {
@@ -252,7 +250,7 @@ async function updateValue<T>(
 		};
 		transaction.oncomplete = () => {
 			database.close();
-			notifyOfflineChange();
+			notifyOfflineChange(key.includes(':query-cache:'));
 			resolve({ persisted: true, value });
 		};
 		transaction.onerror = () => {
@@ -270,7 +268,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 	const database = await openDatabase();
 	if (!database) {
 		memoryFallbackStore.delete(key);
-		notifyOfflineChange();
+		notifyOfflineChange(key.includes(':query-cache:'));
 		return;
 	}
 	await new Promise<void>((resolve) => {
@@ -278,7 +276,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 		transaction.objectStore(STORE_NAME).delete(key);
 		transaction.oncomplete = () => {
 			database.close();
-			notifyOfflineChange();
+			notifyOfflineChange(key.includes(':query-cache:'));
 			resolve();
 		};
 		transaction.onerror = () => {
@@ -323,36 +321,22 @@ function isUser(value: unknown): value is User {
 	);
 }
 
-function byteSize(value: unknown) {
-	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
-
-function boundedState(state: DehydratedState): DehydratedState {
-	const cutoff = Date.now() - MAX_CACHE_AGE_MS;
-	const candidates = state.queries
-		.filter((query) => query.state.dataUpdatedAt >= cutoff)
-		.sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)
-		.slice(0, MAX_PERSISTED_QUERIES);
-	const queries: DehydratedState['queries'] = [];
-	let bytes = 0;
-	for (const query of candidates) {
-		const queryBytes = byteSize(query);
-		if (queryBytes > MAX_PERSISTED_BYTES || bytes + queryBytes > MAX_PERSISTED_BYTES) continue;
-		queries.push(query);
-		bytes += queryBytes;
-	}
-	return { mutations: [], queries };
-}
-
 export function setOfflineSessionUser(userId: string | null) {
 	activeUserId = userId;
 	notifyOfflineChange();
 }
 
-export async function readOfflineSnapshot(userId: string): Promise<OfflineSnapshot> {
+export async function readOfflineSnapshot(
+	userId: string,
+	cachedArticles?: ReadonlySet<string>,
+): Promise<OfflineSnapshot> {
 	const database = await openDatabase().catch(() => null);
 	const records = database
-		? await readOfflineRecords(database, cacheKey(userId), outboxKey(userId))
+		? await readOfflineRecords(
+				database,
+				cachedArticles ? null : cacheKey(userId),
+				outboxKey(userId),
+			)
 		: null;
 	const cache = records?.cache;
 	const outbox = records?.outbox ?? memoryFallbackStore.get(outboxKey(userId));
@@ -361,9 +345,12 @@ export async function readOfflineSnapshot(userId: string): Promise<OfflineSnapsh
 		storageAvailable: records !== null,
 		syncing: flushPromises.has(userId),
 		rejectedCount: offlineRejectionCount(userId),
-		articleIds: cachedArticleIds(
-			isPersistedQueryCache(cache, userId) ? boundedState(cache.state).queries : [],
-		),
+		articleIds:
+			records && cachedArticles
+				? cachedArticles
+				: cachedArticleIds(
+						isPersistedQueryCache(cache, userId) ? boundedState(cache.state).queries : [],
+					),
 	};
 }
 
@@ -639,10 +626,10 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 		return results;
 	}).finally(() => {
 		if (flushPromises.get(userId) === flush) flushPromises.delete(userId);
-		notifyOfflineChange();
+		notifyOfflineChange(false);
 	});
 	flushPromises.set(userId, flush);
-	notifyOfflineChange();
+	notifyOfflineChange(false);
 	return flush;
 }
 

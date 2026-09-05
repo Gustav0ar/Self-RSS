@@ -251,6 +251,7 @@ test.describe('bounded browser matrix', () => {
 		page,
 		context,
 	}, testInfo) => {
+		await page.emulateMedia({ colorScheme: 'dark' });
 		await installStableReaderFixture(page);
 		let rejectDelivery = true;
 		await page.route(`**/api/v1/articles/${alphaArticleId}/saved`, async (route) => {
@@ -283,7 +284,12 @@ test.describe('bounded browser matrix', () => {
 		await expect(page.getByText('Syncs when online')).toBeVisible();
 		await expect(page.locator('article').getByText('Text available offline')).toBeVisible();
 		await page.screenshot({ path: testInfo.outputPath('offline-reader.png') });
+		const failedDelivery = page.waitForResponse(
+			(response) =>
+				response.url().endsWith(`/articles/${alphaArticleId}/saved`) && response.status() === 503,
+		);
 		await context.setOffline(false);
+		await failedDelivery;
 		const retry = page.getByRole('button', { name: 'Retry', exact: true });
 		await expect(retry).toBeEnabled();
 		rejectDelivery = false;

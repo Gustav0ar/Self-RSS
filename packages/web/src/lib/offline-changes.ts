@@ -1,4 +1,4 @@
-const listeners = new Set<() => void>();
+const listeners = new Set<(cacheChanged: boolean) => void>();
 let channel: BroadcastChannel | null = null;
 const rejectedCounts = new Map<string, number>();
 
@@ -8,23 +8,23 @@ export function offlineRejectionCount(userId: string) {
 
 export function reportOfflineRejection(userId: string) {
 	rejectedCounts.set(userId, offlineRejectionCount(userId) + 1);
-	for (const listener of listeners) listener();
+	for (const listener of listeners) listener(false);
 	channel?.postMessage({ kind: 'rejected', userId });
 }
 
 export function dismissOfflineRejections(userId: string) {
 	rejectedCounts.delete(userId);
-	for (const listener of listeners) listener();
+	for (const listener of listeners) listener(false);
 	channel?.postMessage({ kind: 'dismissed', userId });
 }
 
 /** Notify readers after a storage transaction settles, including other open tabs. */
-export function notifyOfflineChange() {
-	for (const listener of listeners) listener();
-	channel?.postMessage('changed');
+export function notifyOfflineChange(cacheChanged = true) {
+	for (const listener of listeners) listener(cacheChanged);
+	channel?.postMessage(cacheChanged);
 }
 
-export function subscribeOfflineChanges(listener: () => void) {
+export function subscribeOfflineChanges(listener: (cacheChanged: boolean) => void) {
 	listeners.add(listener);
 	if (!channel && typeof BroadcastChannel !== 'undefined') {
 		channel = new BroadcastChannel('self-feed-offline-status');
@@ -41,8 +41,8 @@ export function subscribeOfflineChanges(listener: () => void) {
 					rejectedCounts.set(data.userId, offlineRejectionCount(data.userId) + 1);
 				else if (data.kind === 'dismissed') rejectedCounts.delete(data.userId);
 				else return;
-			} else if (data !== 'changed') return;
-			for (const notify of listeners) notify();
+			} else if (typeof data !== 'boolean') return;
+			for (const notify of listeners) notify(data === true);
 		};
 	}
 	return () => {
