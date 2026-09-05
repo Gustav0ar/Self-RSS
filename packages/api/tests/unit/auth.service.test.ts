@@ -38,13 +38,12 @@ function createServiceWithMocks(overrides: Partial<Record<string, unknown>> = {}
 		...(overrides.userRepo as Record<string, unknown> | undefined),
 	};
 	const sessionRepo = {
-		create: vi.fn(),
+		create: vi.fn().mockResolvedValue({ id: 'new-session' }),
 		findActiveById: vi.fn(),
 		rotate: vi.fn(),
 		revoke: vi.fn(),
 		revokeForUser: vi.fn(),
 		listActiveByUserId: vi.fn(),
-		revokeAllForUser: vi.fn(),
 		...(overrides.sessionRepo as Record<string, unknown> | undefined),
 	};
 	const settingsRepo = {
@@ -105,7 +104,13 @@ describe('AuthService - changePassword', () => {
 		const updatedUser = { ...user, updatedAt: new Date('2026-02-01T00:00:00.000Z') };
 		const { service, userRepo, sessionRepo, tokenUtils, redis } = createServiceWithMocks();
 		userRepo.findById.mockResolvedValue({ ...user, passwordHash });
-		userRepo.updatePasswordHash.mockResolvedValue(updatedUser);
+		userRepo.updatePasswordHash.mockResolvedValue({
+			user: updatedUser,
+			revokedSessions: [
+				{ id: '11111111-1111-4111-8111-111111111111' },
+				{ id: '22222222-2222-4222-8222-222222222222' },
+			],
+		});
 		sessionRepo.listActiveByUserId.mockResolvedValue([
 			{ id: '11111111-1111-4111-8111-111111111111' },
 			{ id: '22222222-2222-4222-8222-222222222222' },
@@ -116,7 +121,11 @@ describe('AuthService - changePassword', () => {
 			deviceName: 'Firefox',
 		});
 
-		expect(sessionRepo.revokeAllForUser).toHaveBeenCalledWith(user.id);
+		expect(userRepo.updatePasswordHash).toHaveBeenCalledWith(
+			user.id,
+			expect.any(String),
+			passwordHash,
+		);
 		expect(redis.eval).toHaveBeenCalledWith(
 			expect.stringContaining('redis.call("SET", KEYS[1], "1", "EX", ARGV[1])'),
 			2,
@@ -128,6 +137,7 @@ describe('AuthService - changePassword', () => {
 		await expect(verifyPassword('new-password-123', nextPasswordHash)).resolves.toBe(true);
 		expect(sessionRepo.create).toHaveBeenCalledWith(
 			expect.objectContaining({ userId: user.id, clientId: 'web-client', deviceName: 'Firefox' }),
+			updatedUser,
 		);
 		expect(tokenUtils.signAccessToken).toHaveBeenCalledWith(user.id, user.role, expect.any(String));
 		expect(result).toMatchObject({
@@ -497,7 +507,7 @@ describe('AuthService - access session cache', () => {
 		expect(sessionRepo.revokeForUser).not.toHaveBeenCalled();
 	});
 
-	it('clears a stale tombstone before caching a newly created session', async () => {
+	it('honors a revocation tombstone when caching a newly created session', async () => {
 		const user = {
 			id: userId,
 			email: 'new@example.com',
@@ -517,7 +527,7 @@ describe('AuthService - access session cache', () => {
 		const createdSession = sessionRepo.create.mock.calls[0]?.[0];
 		expect(createdSession?.id).toEqual(expect.any(String));
 		expect(redis.eval).toHaveBeenCalledWith(
-			expect.stringContaining('redis.call("DEL", KEYS[1])'),
+			expect.stringContaining('if redis.call("GET", KEYS[1]) then'),
 			2,
 			`auth:session:revoked:${createdSession?.id}`,
 			`auth:session:active:${createdSession?.id}`,
