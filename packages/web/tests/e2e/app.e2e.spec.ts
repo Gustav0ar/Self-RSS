@@ -3,6 +3,14 @@ import { type APIRequestContext, expect, type Page, test } from '@playwright/tes
 const apiBaseUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://127.0.0.1:3100/api/v1';
 let cachedAdminAccessToken: string | null = null;
 
+async function sidebarAction(page: Page, name: string, action: 'Edit' | 'Delete') {
+	await page.getByRole('button', { name: `Actions for ${name}`, exact: true }).click();
+	await page
+		.getByRole('menu', { name: `Actions for ${name}`, exact: true })
+		.getByRole('menuitem', { name: action, exact: true })
+		.click();
+}
+
 function unreadBadgeName(name: string) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	return new RegExp(`^${escaped}(?: \\d+)?$`);
@@ -207,7 +215,7 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByRole('button', { name: 'Add category' }).last().click();
 	await expect(page.getByRole('button', { name: new RegExp(`^${categoryName}$`) })).toBeVisible();
 
-	await page.getByRole('button', { name: `Edit ${categoryName}` }).click();
+	await sidebarAction(page, categoryName, 'Edit');
 	await page.getByLabel('Name').fill(renamedCategory);
 	await page.getByRole('button', { name: 'Save changes' }).click();
 	await expect(
@@ -230,12 +238,12 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByRole('button', { name: 'Add category' }).last().click();
 	await expect(page.getByRole('button', { name: new RegExp(`^${emptyCategory}$`) })).toBeVisible();
 
-	await page.getByRole('button', { name: `Delete ${emptyCategory}` }).click();
+	await sidebarAction(page, emptyCategory, 'Delete');
 	await page.getByRole('button', { name: 'Delete' }).last().click();
 	await expect(page.getByRole('heading', { name: 'Delete category' })).toHaveCount(0);
 	await expect(page.getByRole('button', { name: new RegExp(`^${emptyCategory}$`) })).toHaveCount(0);
 
-	await page.getByRole('button', { name: 'Edit DevTools Digest' }).click();
+	await sidebarAction(page, 'DevTools Digest', 'Edit');
 	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/devtools.xml`);
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/platform.xml`);
 	await page.getByLabel('Custom name (optional)').fill('My DevTools');
@@ -263,7 +271,7 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 		timeout: 30_000,
 	});
 
-	await page.getByRole('button', { name: 'Delete My DevTools' }).click();
+	await sidebarAction(page, 'My DevTools', 'Delete');
 	await page.getByRole('button', { name: 'Delete' }).last().click();
 	await expect(page.getByRole('heading', { name: 'Delete feed' })).toHaveCount(0);
 	await expect(page.getByRole('button', { name: unreadBadgeName('My DevTools') })).toHaveCount(0);
@@ -400,7 +408,7 @@ test('feed health stays compact, dismissible, and actionable', async ({ page }) 
 	await warningIcon.click();
 	await expect(page.getByRole('tooltip')).toContainText('Your SelfFeed account is not blocked');
 
-	await page.getByRole('button', { name: 'Move Health checks' }).click();
+	await page.getByRole('button', { name: 'Actions for Health checks' }).click();
 	await page.getByRole('menuitem', { name: 'Move down' }).click();
 	await expect(page.getByText('Health checks moved down to position 2 of 2.')).toBeAttached();
 	expect(reorderBody).toEqual({
@@ -414,7 +422,7 @@ test('feed health stays compact, dismissible, and actionable', async ({ page }) 
 	await expect(healthStatus).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Broken Feed', exact: true }).hover();
-	await page.getByRole('button', { name: 'Edit Broken Feed' }).click();
+	await sidebarAction(page, 'Broken Feed', 'Edit');
 	await expect(page.getByRole('status', { name: 'Feed refresh issue' })).toContainText(
 		'HTTP 403: Forbidden',
 	);
@@ -523,7 +531,7 @@ test('reader sees the category delete warning for linked feeds and can import OP
 		timeout: 30_000,
 	});
 
-	await page.getByRole('button', { name: `Delete ${categoryName}` }).click();
+	await sidebarAction(page, categoryName, 'Delete');
 	await expect(
 		page.getByText('server will block deletion until they are moved or removed'),
 	).toBeVisible();
