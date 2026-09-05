@@ -1,0 +1,66 @@
+{
+	"last-user-v1": {
+		"id": "legacy-reader",
+		"email": "reader@example.com",
+		"role": "user",
+		"isActive": true,
+		"createdAt": "2026-08-01T00:00:00.000Z",
+		"updatedAt": "2026-08-01T00:00:00.000Z"
+	},
+	"query-cache-v1": {
+		"persistedAt": 1788220800000,
+		"state": {
+			"mutations": [],
+			"queries": [
+				{
+					"queryHash": "[\"article\",\"legacy-article\"]",
+					"queryKey": ["article", "legacy-article"],
+					"state": {
+						"data": {
+							"id": "legacy-article",
+							"title": "Legacy article",
+							"feedId": "feed-1",
+							"isRead": false,
+							"isSaved": false
+						},
+						"dataUpdateCount": 1,
+						"dataUpdatedAt": 1788220800000,
+						"error": null,
+						"errorUpdateCount": 0,
+						"errorUpdatedAt": 0,
+						"fetchFailureCount": 0,
+						"fetchFailureReason": null,
+						"fetchMeta": null,
+						"isInvalidated": false,
+						"status": "success",
+						"fetchStatus": "idle"
+					}
+				},
+				{
+					"queryHash": "[\"article\",\"shared-article\"]",
+					"queryKey": ["article", "shared-article"],
+					"state": {
+						"data": {
+							"id": "shared-article",
+							"title": "Older title",
+							"feedId": "feed-1",
+							"isRead": false,
+							"isSaved": false
+						},
+						"dataUpdateCount": 1,
+						"dataUpdatedAt": 1788220800000,
+						"error": null,
+						"errorUpdateCount": 0,
+						"errorUpdatedAt": 0,
+						"fetchFailureCount": 0,
+						"fetchFailureReason": null,
+						"fetchMeta": null,
+						"isInvalidated": false,
+						"status": "success",
+						"fetchStatus": "idle"
+					}
+				}
+			]
+		}
+	}
+}

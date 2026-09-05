@@ -1,10 +1,12 @@
 import type { ApiResponse, User } from '@self-feed/shared';
 import { type DehydratedState, dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, apiFetch } from './api';
+import { parseLegacyQueryCache } from './legacy-query-cache';
 
 const DATABASE_NAME = 'self-feed-offline';
 const STORE_NAME = 'state';
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
+// Version 3 migrates legacy records into the existing v2 record format.
 const SCHEMA_VERSION = 2;
 const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -105,14 +107,54 @@ function openDatabase(): Promise<IDBDatabase | null> {
 	if (!('indexedDB' in globalThis)) return Promise.resolve(null);
 	return new Promise((resolve) => {
 		const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-		request.onupgradeneeded = () => {
+		request.onupgradeneeded = (event) => {
 			if (!request.result.objectStoreNames.contains(STORE_NAME)) {
 				request.result.createObjectStore(STORE_NAME);
+			}
+			if (event.oldVersion > 0 && event.oldVersion < 3 && request.transaction) {
+				migrateLegacyQueryCache(request.transaction.objectStore(STORE_NAME));
 			}
 		};
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => resolve(null);
 	});
+}
+
+/** Recover v1 records, including those stranded by the old v2 upgrade. */
+function migrateLegacyQueryCache(store: IDBObjectStore) {
+	const userRequest = store.get('last-user-v1');
+	userRequest.onsuccess = () => {
+		const user: unknown = userRequest.result;
+		if (!isUser(user)) return;
+		const legacyRequest = store.get('query-cache-v1');
+		legacyRequest.onsuccess = () => {
+			const legacy = parseLegacyQueryCache(legacyRequest.result, PERSISTED_QUERY_ROOTS);
+			if (!legacy) return;
+			const currentRequest = store.get(cacheKey(user.id));
+			currentRequest.onsuccess = () => {
+				const value: unknown = currentRequest.result;
+				if (value != null && !isPersistedQueryCache(value, user.id)) return;
+				const current = isPersistedQueryCache(value, user.id) ? value : null;
+				const queries = new Map(legacy.state.queries.map((query) => [query.queryHash, query]));
+				// v2 may contain optimistic state backed by its durable outbox.
+				for (const query of current?.state.queries ?? []) {
+					queries.set(query.queryHash, query);
+				}
+				store.put(
+					{
+						schemaVersion: SCHEMA_VERSION,
+						ownerId: user.id,
+						namespace: namespace(),
+						persistedAt: Math.max(legacy.persistedAt, current?.persistedAt ?? 0),
+						state: { mutations: [], queries: [...queries.values()] },
+					} satisfies PersistedQueryCache,
+					cacheKey(user.id),
+				);
+				// Retain the original records. A legacy identity cannot establish a
+				// new offline lease; session activation still requires verification.
+			};
+		};
+	};
 }
 
 async function readValue<T>(key: string): Promise<T | null> {
