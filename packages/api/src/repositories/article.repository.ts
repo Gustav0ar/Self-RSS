@@ -21,6 +21,10 @@ import {
 	setArticleReadState,
 	setArticleSavedState,
 } from './article-state.persistence.js';
+import {
+	assertCurrentSnapshotDelivery,
+	type SnapshotDeliveryClaim,
+} from './snapshot-delivery.persistence.js';
 
 export type { ArticleScope } from './article-query.helpers.js';
 
@@ -498,8 +502,10 @@ export class ArticleRepository {
 		}[];
 		mediaByGuid: Map<string, (typeof articleMedia.$inferInsert)[]>;
 		updatedMediaByArticleId: Map<string, (typeof articleMedia.$inferInsert)[]>;
+		snapshotDelivery?: SnapshotDeliveryClaim;
 	}) {
 		return this.db.transaction((tx) => {
+			if (params.snapshotDelivery) assertCurrentSnapshotDelivery(tx, params.snapshotDelivery);
 			const inserted =
 				params.articlesToInsert.length > 0
 					? tx
