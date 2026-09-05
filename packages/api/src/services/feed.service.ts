@@ -264,8 +264,14 @@ export class FeedService {
 			feeds.map((feed) => feed.id),
 		);
 
-		return Promise.all(
-			feeds.map((feed) => this.serializeFeedWithCount(feed, unreadCountByFeedId.get(feed.id) ?? 0)),
+		if (this.pipelineMode === 'v2' && this.durableFacade) {
+			const rows = await this.durableFacade.lifecyclesForFeeds(userId, feeds);
+			return rows.map(({ feed, lifecycle }) =>
+				this.serializeFeed(feed, unreadCountByFeedId.get(feed.id) ?? 0, lifecycle),
+			);
+		}
+		return feeds.map((feed) =>
+			this.serializeFeed(feed, unreadCountByFeedId.get(feed.id) ?? 0, undefined),
 		);
 	}
 
@@ -276,7 +282,15 @@ export class FeedService {
 		const lifecycle =
 			this.pipelineMode === 'v2' && this.durableFacade
 				? await this.durableFacade.lifecycleForFeed(feed)
-				: {};
+				: undefined;
+		return this.serializeFeed(feed, unreadCount, lifecycle);
+	}
+
+	private serializeFeed(
+		feed: NonNullable<Awaited<ReturnType<FeedRepository['findById']>>>,
+		unreadCount: number,
+		lifecycle: Awaited<ReturnType<DurableFeedFacadeService['lifecycleForFeed']>> | undefined,
+	) {
 		return {
 			...feed,
 			...lifecycle,

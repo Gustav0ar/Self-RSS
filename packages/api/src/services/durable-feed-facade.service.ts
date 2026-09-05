@@ -19,7 +19,7 @@ import {
 	listDurableDiscoveryCandidates,
 	persistDurableDiscoveryCandidates,
 } from './durable-feed-discovery.js';
-import { buildDurableFeedLifecycle } from './durable-feed-lifecycle.js';
+import { buildDurableFeedLifecycle, buildDurableFeedLifecycles } from './durable-feed-lifecycle.js';
 import {
 	enqueueOrAttachDurableJob,
 	queueDurableRefresh,
@@ -56,6 +56,10 @@ export class DurableFeedFacadeService {
 
 	async lifecycleForFeed(feed: typeof feeds.$inferSelect) {
 		return buildDurableFeedLifecycle(this.db, feed);
+	}
+
+	async lifecyclesForFeeds(userId: string, feedRows: (typeof feeds.$inferSelect)[]) {
+		return buildDurableFeedLifecycles(this.db, userId, feedRows);
 	}
 
 	async createPendingFeed(
