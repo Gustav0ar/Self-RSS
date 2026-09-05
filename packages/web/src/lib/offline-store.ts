@@ -458,10 +458,17 @@ export async function hasPendingArticleStateMutation(
 	articleId: string,
 	kind: OfflineArticleMutationKind,
 ): Promise<boolean> {
+	return (await getPendingArticleStateMutation(articleId, kind)) !== null;
+}
+
+export async function getPendingArticleStateMutation(
+	articleId: string,
+	kind: OfflineArticleMutationKind,
+): Promise<OfflineArticleMutation | null> {
 	const userId = activeUserId;
-	if (!userId) return false;
+	if (!userId) return null;
 	const entries = (await readValue<OfflineArticleMutation[]>(outboxKey(userId))) ?? [];
-	return entries.some((entry) => entry.articleId === articleId && entry.kind === kind);
+	return entries.find((entry) => entry.articleId === articleId && entry.kind === kind) ?? null;
 }
 
 function isTransientMutationError(error: unknown) {

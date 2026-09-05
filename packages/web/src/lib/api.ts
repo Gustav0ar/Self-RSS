@@ -27,7 +27,9 @@ let refreshPromise: Promise<boolean> | null = null;
 export type RefreshOutcome = 'idle' | 'success' | 'rejected' | 'unavailable';
 let lastRefreshOutcome: RefreshOutcome = 'idle';
 let authLostHandler: ((message: string) => void) | null = null;
-const clientId = getOrCreateClientId();
+const deviceClientId = getOrCreateDeviceClientId();
+// A document gets its own event identity, including duplicated tabs and reloads.
+const clientId = crypto.randomUUID();
 
 // The refresh token is now handled securely via HttpOnly cookies.
 // We only keep the short-lived access token in memory.
@@ -60,7 +62,7 @@ export function setAuthLostHandler(handler: ((message: string) => void) | null) 
 	authLostHandler = handler;
 }
 
-function getOrCreateClientId() {
+function getOrCreateDeviceClientId() {
 	try {
 		const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
 		if (existing) return existing;
@@ -104,7 +106,7 @@ export async function refreshAccessToken(): Promise<boolean> {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
-					'X-Self-Feed-Client-Id': clientId,
+					'X-Self-Feed-Client-Id': deviceClientId,
 					'X-Self-Feed-Device-Name': getDeviceName(),
 				},
 				credentials: 'include',
@@ -133,7 +135,7 @@ export async function refreshAccessToken(): Promise<boolean> {
 	return refreshPromise;
 }
 
-function buildRequestHeaders(options: RequestInit) {
+function buildRequestHeaders(path: string, options: RequestInit) {
 	const isFormData = options.body instanceof FormData;
 	const headers: Record<string, string> = {
 		...(options.headers as Record<string, string>),
@@ -146,7 +148,8 @@ function buildRequestHeaders(options: RequestInit) {
 	if (accessToken) {
 		headers.Authorization = `Bearer ${accessToken}`;
 	}
-	headers['X-Self-Feed-Client-Id'] = clientId;
+	// Auth records the stable device; article events identify the originating tab.
+	headers['X-Self-Feed-Client-Id'] = path.startsWith('/auth/') ? deviceClientId : clientId;
 	headers['X-Self-Feed-Device-Name'] = getDeviceName();
 
 	return headers;
@@ -154,7 +157,7 @@ function buildRequestHeaders(options: RequestInit) {
 
 async function authorizedFetch(path: string, options: RequestInit = {}) {
 	throwIfAborted(options.signal);
-	const headers = buildRequestHeaders(options);
+	const headers = buildRequestHeaders(path, options);
 	const method = options.method?.toUpperCase() ?? 'GET';
 	const isMutation = method !== 'GET';
 
