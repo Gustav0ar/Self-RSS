@@ -5,6 +5,7 @@ package com.selffeed.android.network
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.SessionStore
+import com.sun.net.httpserver.HttpServer
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -14,6 +15,7 @@ import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import kotlinx.coroutines.runBlocking
@@ -26,6 +28,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
@@ -240,6 +243,7 @@ class NetworkModuleTest {
     fun `persistedRefreshCookieJar returns empty list when no cookie is stored`() {
         val store = mockk<SessionStore>()
         every { store.getRefreshCookie() } returns null
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val cookies = jar.loadForRequest(url("https://example.com"))
         assertTrue(cookies.isEmpty())
@@ -250,6 +254,7 @@ class NetworkModuleTest {
         val store = mockk<SessionStore>()
         every { store.getRefreshCookie() } returns
             "rss_refresh_token=abc123; Path=/; Domain=example.com"
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val cookies = jar.loadForRequest(url("https://example.com/api/v1/auth/refresh"))
         assertEquals(1, cookies.size)
@@ -258,10 +263,92 @@ class NetworkModuleTest {
     }
 
     @Test
+    fun `existing host only refresh cookie keeps its api origin path and secure scope`() {
+        val store = mockk<SessionStore>(relaxUnitFun = true)
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
+        // This is the existing persisted format returned by the API. It has no Domain.
+        every { store.getRefreshCookie() } returns
+            "rss_refresh_token=stored-session; Path=/api/v1/auth; Secure; HttpOnly"
+        val jar = PersistedRefreshCookieJar(store)
+
+        assertEquals(1, jar.loadForRequest(url("https://example.com/api/v1/auth/refresh")).size)
+        listOf(
+            "https://redirect.example/api/v1/auth/refresh",
+            "https://sub.example.com/api/v1/auth/refresh",
+            "https://example.com:8443/api/v1/auth/refresh",
+            "http://example.com/api/v1/auth/refresh",
+            "https://example.com/api/v1/articles",
+            "https://example.com/api/v1/authentication",
+        ).forEach { destination ->
+            assertTrue(destination, jar.loadForRequest(url(destination)).isEmpty())
+        }
+        coVerify(exactly = 0) { store.setRefreshCookie(any()) }
+    }
+
+    @Test
+    fun `foreign redirect responses cannot replace the api refresh cookie`() {
+        val store = mockk<SessionStore>(relaxUnitFun = true)
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
+        val jar = PersistedRefreshCookieJar(store)
+        val redirectUrl = url("https://redirect.example/api/v1/auth/refresh")
+        val cookie = Cookie.Builder()
+            .name("rss_refresh_token")
+            .value("other-session")
+            .hostOnlyDomain(redirectUrl.host)
+            .path("/api/v1/auth")
+            .secure()
+            .build()
+
+        jar.saveFromResponse(redirectUrl, listOf(cookie))
+
+        coVerify(exactly = 0) { store.setRefreshCookie(any()) }
+    }
+
+    @Test
+    fun `http redirect sends the refresh cookie only to the configured server`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val originCookie = AtomicReference<String?>()
+        val redirectCookie = AtomicReference<String?>()
+        val port = server.address.port
+        server.createContext("/api/v1/auth/refresh") { exchange ->
+            if (exchange.requestHeaders.getFirst("Host").startsWith("127.0.0.1:")) {
+                originCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                exchange.responseHeaders.add("Location", "http://localhost:$port/api/v1/auth/refresh")
+                exchange.sendResponseHeaders(302, -1)
+            } else {
+                redirectCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                exchange.sendResponseHeaders(200, -1)
+            }
+            exchange.close()
+        }
+        server.start()
+        try {
+            val store = mockk<SessionStore>()
+            every { store.getApiBaseUrl() } returns "http://127.0.0.1:$port/api/v1/"
+            every { store.getRefreshCookie() } returns
+                "rss_refresh_token=stored-session; Path=/api/v1/auth; HttpOnly"
+            val client = OkHttpClient.Builder()
+                .cookieJar(PersistedRefreshCookieJar(store))
+                .callTimeout(5, TimeUnit.SECONDS)
+                .build()
+            client.newCall(Request.Builder().url("http://127.0.0.1:$port/api/v1/auth/refresh").build())
+                .execute().use { response -> assertEquals(200, response.code) }
+
+            assertEquals("rss_refresh_token=stored-session", originCookie.get())
+            assertNull(redirectCookie.get())
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdown()
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun `persistedRefreshCookieJar discards expired cookies and clears storage`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
         every { store.getRefreshCookie() } returns
             "rss_refresh_token=abc; Path=/; Domain=example.com; Max-Age=0"
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val cookies = jar.loadForRequest(url("https://example.com/api/v1/auth/refresh"))
         assertTrue(cookies.isEmpty())
@@ -272,6 +359,7 @@ class NetworkModuleTest {
     @Test
     fun `saveFromResponse only stores the refresh cookie`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val parsedUrl = url("https://example.com")
         val sessionCookie = Cookie.Builder()
@@ -294,6 +382,7 @@ class NetworkModuleTest {
     fun `saveFromResponse does not throw when secure storage fails`() {
         val store = mockk<SessionStore>()
         coEvery { store.setRefreshCookie(any()) } throws IllegalStateException("missing keystore key")
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val refreshCookie = Cookie.Builder()
             .name("rss_refresh_token")
@@ -309,6 +398,7 @@ class NetworkModuleTest {
     fun `loadForRequest returns empty when secure storage read fails`() {
         val store = mockk<SessionStore>()
         every { store.getRefreshCookie() } throws IllegalStateException("missing keystore key")
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
 
         val cookies = jar.loadForRequest(url("https://example.com/api/v1/auth/refresh"))
@@ -319,6 +409,7 @@ class NetworkModuleTest {
     @Test
     fun `saveFromResponse ignores non-refresh cookies`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val parsedUrl = url("https://example.com")
         val sessionCookie = Cookie.Builder()
