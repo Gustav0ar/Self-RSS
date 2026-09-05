@@ -69,12 +69,16 @@ describe('SidebarTree category move controls', () => {
 			category('second', 'Second', 1),
 			category('third', 'Third', 2),
 		]);
-		const trigger = screen.getByRole('button', { name: 'Move Second' });
+		const trigger = screen.getByRole('button', { name: 'Actions for Second' });
 
 		fireEvent.click(trigger);
-		const menu = screen.getByRole('menu', { name: 'Move Second' });
+		const menu = screen.getByRole('menu', { name: 'Actions for Second' });
 		const moveUp = within(menu).getByRole('menuitem', { name: 'Move up' });
-		await waitFor(() => expect(document.activeElement).toBe(moveUp));
+		await waitFor(() =>
+			expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'Edit' })),
+		);
+		fireEvent.keyDown(menu, { key: 'ArrowDown' });
+		expect(document.activeElement).toBe(moveUp);
 		expect(trigger.className).toContain('h-11');
 		expect(moveUp.className).toContain('min-h-11');
 
@@ -83,7 +87,7 @@ describe('SidebarTree category move controls', () => {
 		await waitFor(() => {
 			expect(onReorderCategory).toHaveBeenCalledWith('first', 'second');
 			expect(screen.getByText('Second moved up to position 1 of 3.')).toBeTruthy();
-			expect(screen.queryByRole('menu', { name: 'Move Second' })).toBeNull();
+			expect(screen.queryByRole('menu', { name: 'Actions for Second' })).toBeNull();
 			expect(document.activeElement).toBe(trigger);
 		});
 	});
@@ -95,7 +99,7 @@ describe('SidebarTree category move controls', () => {
 			category('third', 'Third', 2),
 		]);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Move Second' }));
+		fireEvent.click(screen.getByRole('button', { name: 'Actions for Second' }));
 		fireEvent.click(screen.getByRole('menuitem', { name: 'Move down' }));
 
 		await waitFor(() => {
@@ -116,13 +120,13 @@ describe('SidebarTree category move controls', () => {
 			new Set(['parent-a']),
 		);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Move Parent A' }));
+		fireEvent.click(screen.getByRole('button', { name: 'Actions for Parent A' }));
 		expect((screen.getByRole('menuitem', { name: 'Move up' }) as HTMLButtonElement).disabled).toBe(
 			true,
 		);
 		fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Move Child A' }));
+		fireEvent.click(screen.getByRole('button', { name: 'Actions for Child A' }));
 		expect((screen.getByRole('menuitem', { name: 'Move up' }) as HTMLButtonElement).disabled).toBe(
 			true,
 		);
@@ -134,14 +138,14 @@ describe('SidebarTree category move controls', () => {
 	it('closes on Escape, restores trigger focus, and performs no reorder', async () => {
 		const onReorderCategory = vi.fn().mockResolvedValue(true);
 		renderTree([category('first', 'First', 0), category('second', 'Second', 1)], onReorderCategory);
-		const trigger = screen.getByRole('button', { name: 'Move First' });
+		const trigger = screen.getByRole('button', { name: 'Actions for First' });
 
 		fireEvent.click(trigger);
-		const menu = screen.getByRole('menu', { name: 'Move First' });
+		const menu = screen.getByRole('menu', { name: 'Actions for First' });
 		fireEvent.keyDown(menu, { key: 'Escape' });
 
 		await waitFor(() => {
-			expect(screen.queryByRole('menu', { name: 'Move First' })).toBeNull();
+			expect(screen.queryByRole('menu', { name: 'Actions for First' })).toBeNull();
 			expect(document.activeElement).toBe(trigger);
 		});
 		expect(onReorderCategory).not.toHaveBeenCalled();
@@ -151,11 +155,11 @@ describe('SidebarTree category move controls', () => {
 		const onReorderCategory = vi.fn().mockResolvedValue(false);
 		renderTree([category('first', 'First', 0), category('second', 'Second', 1)], onReorderCategory);
 
-		fireEvent.click(screen.getByRole('button', { name: 'Move First' }));
+		fireEvent.click(screen.getByRole('button', { name: 'Actions for First' }));
 		fireEvent.click(screen.getByRole('menuitem', { name: 'Move down' }));
 
 		await waitFor(() => expect(onReorderCategory).toHaveBeenCalledTimes(1));
 		expect(screen.queryByText(/First moved down/)).toBeNull();
-		expect(screen.getByRole('menu', { name: 'Move First' })).toBeTruthy();
+		expect(screen.getByRole('menu', { name: 'Actions for First' })).toBeTruthy();
 	});
 });

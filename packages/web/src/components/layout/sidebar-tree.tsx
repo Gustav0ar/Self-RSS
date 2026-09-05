@@ -4,18 +4,15 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Folder,
-	GripVertical,
 	Inbox,
-	Pencil,
 	Rss as RssIcon,
-	Trash2,
 	TriangleAlert,
 	X,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { feedHealthFingerprint, feedHealthIssue } from '@/lib/feed-health';
 import { cn } from '@/lib/utils';
-import { SidebarCategoryMoveMenu } from './sidebar-category-move-menu';
+import { SidebarActionsMenu } from './sidebar-actions-menu';
 import { SidebarFeedHealthIndicator } from './sidebar-feed-health-indicator';
 import type { CategoryReorderHandler } from './sidebar-reorder';
 
@@ -338,8 +335,23 @@ function CategoryTreeRow({
 		onAnnounce(`${source.name} moved to position ${nextIndex + 1} of ${siblingCategories.length}.`);
 	}
 
+	async function moveCategory(direction: 'up' | 'down') {
+		const adjacent = siblingCategories[siblingIndex + (direction === 'up' ? -1 : 1)];
+		if (!adjacent) return false;
+		const succeeded =
+			direction === 'up'
+				? await onReorderCategory(adjacent.id, category.id)
+				: await onReorderCategory(category.id, adjacent.id);
+		if (!succeeded) return false;
+		const nextPosition = siblingIndex + (direction === 'up' ? 0 : 2);
+		onAnnounce(
+			`${category.name} moved ${direction} to position ${nextPosition} of ${siblingCategories.length}.`,
+		);
+		return true;
+	}
+
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: HTML5 drag-and-drop has no semantic primitive; the inner grip is a button.
+		// biome-ignore lint/a11y/noStaticElementInteractions: HTML5 drag-and-drop has no semantic primitive; the folder button is the drag handle.
 		<div
 			className={cn(
 				'rounded-xl transition-shadow',
@@ -363,99 +375,78 @@ function CategoryTreeRow({
 				void handleDrop();
 			}}
 		>
-			<div className="group/category relative">
-				<div
-					className={cn(
-						'flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 pr-28 text-left text-sm font-medium hover:bg-accent/80',
-						selectedCategoryId === category.id && 'bg-accent text-sidebar-active',
-					)}
+			<div
+				className={cn(
+					'flex min-h-[3.375rem] w-full min-w-0 items-center gap-1 rounded-xl px-1 py-1 text-left text-sm font-medium hover:bg-accent/80',
+					selectedCategoryId === category.id && 'bg-accent text-sidebar-active',
+				)}
+			>
+				{isNested ? (
+					<span className="h-7 w-3 shrink-0 border-l border-border/60" aria-hidden="true" />
+				) : null}
+				<button
+					type="button"
+					onClick={(event) => {
+						event.stopPropagation();
+						if (!hasNestedRows) return;
+						onToggleCategory(category.id);
+					}}
+					aria-label={isExpanded ? `Collapse ${category.name}` : `Expand ${category.name}`}
+					aria-expanded={isExpanded}
+					disabled={!hasNestedRows}
+					className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 disabled:opacity-30 pointer-coarse:h-11 pointer-coarse:w-11"
 				>
-					{isNested ? (
-						<span className="h-7 w-3 shrink-0 border-l border-border/60" aria-hidden="true" />
+					{isExpanded ? (
+						<ChevronDown className="h-3.5 w-3.5" />
+					) : (
+						<ChevronRight className="h-3.5 w-3.5" />
+					)}
+				</button>
+				<button
+					type="button"
+					aria-label={`Drag to reorder ${category.name}`}
+					title="Drag to reorder"
+					tabIndex={-1}
+					draggable
+					onClick={() => onSelectCategory(category.id)}
+					onDragStart={(event) => {
+						event.dataTransfer.effectAllowed = 'move';
+						event.dataTransfer.setData('text/plain', category.id);
+						onCategoryDragStart(category.id);
+					}}
+					onDragEnd={onCategoryDragEnd}
+					className="inline-flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-primary hover:bg-background/80 active:cursor-grabbing"
+				>
+					<Folder className={isNested ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+				</button>
+				<button
+					type="button"
+					onClick={() => onSelectCategory(category.id)}
+					aria-label={categoryUnread > 0 ? `${category.name} ${categoryUnread}` : category.name}
+					className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left"
+				>
+					<div className="min-w-0 flex-1 overflow-hidden">
+						<SidebarOverflowText text={category.name} />
+						<p className="mt-0.5 truncate text-[11px] font-normal text-muted-foreground">
+							{category.feedCount} {category.feedCount === 1 ? 'feed' : 'feeds'}
+						</p>
+					</div>
+					{categoryUnread > 0 ? (
+						<span className="min-w-6 shrink-0 text-center text-xs tabular-nums text-muted-foreground">
+							{categoryUnread}
+						</span>
 					) : null}
-					<button
-						type="button"
-						aria-label={`Drag to reorder ${category.name}`}
-						title="Drag to reorder"
-						tabIndex={-1}
-						draggable
-						onDragStart={(event) => {
-							event.dataTransfer.effectAllowed = 'move';
-							event.dataTransfer.setData('text/plain', category.id);
-							onCategoryDragStart(category.id);
-						}}
-						onDragEnd={onCategoryDragEnd}
-						className="-ml-1 inline-flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground/60 opacity-0 transition-opacity hover:bg-background/80 hover:text-muted-foreground group-hover/category:opacity-100 group-focus-within/category:opacity-100"
-					>
-						<GripVertical className="h-3.5 w-3.5" />
-					</button>
-					<button
-						type="button"
-						onClick={(event) => {
-							event.stopPropagation();
-							if (!hasNestedRows) return;
-							onToggleCategory(category.id);
-						}}
-						aria-label={isExpanded ? `Collapse ${category.name}` : `Expand ${category.name}`}
-						aria-expanded={isExpanded}
-						disabled={!hasNestedRows}
-						className="-ml-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 disabled:opacity-30"
-					>
-						{isExpanded ? (
-							<ChevronDown className="h-3.5 w-3.5" />
-						) : (
-							<ChevronRight className="h-3.5 w-3.5" />
-						)}
-					</button>
-					<button
-						type="button"
-						onClick={() => onSelectCategory(category.id)}
-						aria-label={categoryUnread > 0 ? `${category.name} ${categoryUnread}` : category.name}
-						className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-					>
-						<div
-							className={cn(
-								'flex shrink-0 items-center justify-center rounded-lg bg-background/80 text-primary',
-								isNested ? 'h-7 w-7' : 'h-8 w-8',
-							)}
-						>
-							<Folder className={isNested ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
-						</div>
-						<div className="min-w-0 flex-1 overflow-hidden">
-							<p className="truncate">{category.name}</p>
-							<p className="mt-0.5 truncate text-[11px] font-normal text-muted-foreground">
-								{category.feedCount} {category.feedCount === 1 ? 'feed' : 'feeds'}
-							</p>
-						</div>
-						{categoryUnread > 0 ? (
-							<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/category:opacity-0 group-focus-within/category:opacity-0">
-								{categoryUnread}
-							</span>
-						) : null}
-					</button>
-				</div>
-				<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/category:opacity-100 group-focus-within/category:opacity-100 touch-only">
-					<SidebarCategoryMoveMenu
-						category={category}
-						siblingCategories={siblingCategories}
-						siblingIndex={siblingIndex}
-						onReorderCategory={onReorderCategory}
-						onAnnounce={onAnnounce}
-					/>
-					<SidebarIconButton
-						label={`Edit ${category.name}`}
-						onClick={() => onEditCategory(category)}
-					>
-						<Pencil className="h-3.5 w-3.5" />
-					</SidebarIconButton>
-					<SidebarIconButton
-						label={`Delete ${category.name}`}
-						onClick={() => onDeleteCategory(category)}
-						className="hover:text-red-500"
-					>
-						<Trash2 className="h-3.5 w-3.5" />
-					</SidebarIconButton>
-				</div>
+				</button>
+				<SidebarActionsMenu
+					name={category.name}
+					onEdit={() => onEditCategory(category)}
+					onDelete={() => onDeleteCategory(category)}
+					move={{
+						canMoveUp: siblingIndex > 0,
+						canMoveDown: siblingIndex < siblingCategories.length - 1,
+						onMove: moveCategory,
+					}}
+				/>
 			</div>
 
 			{isExpanded ? (
@@ -521,10 +512,10 @@ function FeedTreeRow({
 	const healthDescriptionId = `feed-health-${feed.id}`;
 
 	return (
-		<div className="group/feed relative">
+		<div>
 			<div
 				className={cn(
-					'flex min-h-11 w-full min-w-0 items-center rounded-xl px-2.5 pr-20 text-sm hover:bg-accent/70',
+					'flex min-h-11 w-full min-w-0 items-center gap-1 rounded-xl px-1 text-sm hover:bg-accent/70',
 					selectedFeedId === feed.id && 'bg-accent text-sidebar-active',
 				)}
 			>
@@ -555,7 +546,7 @@ function FeedTreeRow({
 						<SidebarOverflowText text={feed.title} />
 					</div>
 					{(feed.unreadCount ?? 0) > 0 ? (
-						<span className="shrink-0 rounded-full bg-background/90 px-2.5 py-1 text-xs text-muted-foreground transition-opacity group-hover/feed:opacity-0 group-focus-within/feed:opacity-0">
+						<span className="min-w-6 shrink-0 text-center text-xs tabular-nums text-muted-foreground">
 							{feed.unreadCount}
 						</span>
 					) : null}
@@ -568,24 +559,17 @@ function FeedTreeRow({
 						warning={healthIssue.warning}
 					/>
 				) : null}
+				<SidebarActionsMenu
+					name={feed.title}
+					onEdit={() => onEditFeed(feed)}
+					onDelete={() => onDeleteFeed(feed)}
+				/>
 			</div>
 			{healthIssue ? (
 				<span id={healthDescriptionId} className="sr-only">
 					{healthIssue.warning}
 				</span>
 			) : null}
-			<div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 touch-only">
-				<SidebarIconButton label={`Edit ${feed.title}`} onClick={() => onEditFeed(feed)}>
-					<Pencil className="h-3.5 w-3.5" />
-				</SidebarIconButton>
-				<SidebarIconButton
-					label={`Delete ${feed.title}`}
-					onClick={() => onDeleteFeed(feed)}
-					className="hover:text-red-500"
-				>
-					<Trash2 className="h-3.5 w-3.5" />
-				</SidebarIconButton>
-			</div>
 		</div>
 	);
 }
@@ -595,31 +579,5 @@ function SidebarOverflowText({ text }: { text: string }) {
 		<p className="min-w-0 flex-1 truncate" title={text}>
 			{text}
 		</p>
-	);
-}
-
-function SidebarIconButton({
-	label,
-	onClick,
-	children,
-	className,
-}: {
-	label: string;
-	onClick: () => void;
-	children: ReactNode;
-	className?: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={cn(
-				'pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-background hover:text-foreground',
-				className,
-			)}
-			aria-label={label}
-		>
-			{children}
-		</button>
 	);
 }
