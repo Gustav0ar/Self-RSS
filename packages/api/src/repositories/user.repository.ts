@@ -1,6 +1,6 @@
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { userPreferences, users } from '../db/schema.js';
+import { authSessions, userPreferences, users } from '../db/schema.js';
 import { AppError } from '../middleware/errors.js';
 
 export class UserRepository {
@@ -130,20 +130,27 @@ export class UserRepository {
 		targetUserId: string,
 		data: { role?: 'admin' | 'user'; isActive?: boolean },
 	) {
-		return this.db.transaction((tx) => {
-			const target = tx.query.users.findFirst({ where: eq(users.id, targetUserId) }).sync();
-			if (!target) throw AppError.notFound('User not found');
-			this.assertAdminMutationAllowed(tx, actorUserId, target, data);
+		return this.db.transaction(
+			(tx) => {
+				const target = tx.query.users.findFirst({ where: eq(users.id, targetUserId) }).sync();
+				if (!target) throw AppError.notFound('User not found');
+				this.assertAdminMutationAllowed(tx, actorUserId, target, data);
 
-			const [updated] = tx
-				.update(users)
-				.set({ ...data, updatedAt: new Date() })
-				.where(eq(users.id, targetUserId))
-				.returning()
-				.all();
-			if (!updated) throw AppError.notFound('User not found');
-			return updated;
-		});
+				const [updated] = tx
+					.update(users)
+					.set({ ...data, updatedAt: new Date() })
+					.where(eq(users.id, targetUserId))
+					.returning()
+					.all();
+				if (!updated) throw AppError.notFound('User not found');
+				const revokedSessions =
+					data.isActive === false || data.role !== undefined
+						? this.revokeSessions(tx, targetUserId)
+						: [];
+				return { user: updated, revokedSessions };
+			},
+			{ behavior: 'immediate' },
+		);
 	}
 
 	async assertAdminUpdateAllowed(
@@ -183,13 +190,42 @@ export class UserRepository {
 		}
 	}
 
-	async updatePasswordHash(userId: string, passwordHash: string) {
-		const [updated] = await this.db
-			.update(users)
-			.set({ passwordHash, updatedAt: new Date() })
-			.where(eq(users.id, userId))
-			.returning();
-		if (!updated) throw AppError.notFound('User not found');
-		return updated;
+	async updatePasswordHash(userId: string, passwordHash: string, verifiedPasswordHash?: string) {
+		return this.db.transaction(
+			(tx) => {
+				const updated = tx
+					.update(users)
+					.set({ passwordHash, updatedAt: new Date() })
+					.where(
+						and(
+							eq(users.id, userId),
+							verifiedPasswordHash === undefined
+								? undefined
+								: and(eq(users.passwordHash, verifiedPasswordHash), eq(users.isActive, true)),
+						),
+					)
+					.returning()
+					.get();
+				if (!updated) {
+					if (verifiedPasswordHash !== undefined)
+						throw AppError.unauthorized('Authentication was lost. Please sign in again.');
+					throw AppError.notFound('User not found');
+				}
+				return { user: updated, revokedSessions: this.revokeSessions(tx, userId) };
+			},
+			{ behavior: 'immediate' },
+		);
+	}
+
+	private revokeSessions(
+		tx: Parameters<Parameters<Database['transaction']>[0]>[0],
+		userId: string,
+	) {
+		return tx
+			.update(authSessions)
+			.set({ revokedAt: new Date() })
+			.where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
+			.returning({ id: authSessions.id })
+			.all();
 	}
 }

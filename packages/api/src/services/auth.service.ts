@@ -15,23 +15,9 @@ import type { TokenPayload, TokenUtils } from '../utils/tokens.js';
 
 const logger = createLogger();
 
-const CACHE_NEW_AUTH_SESSION_SCRIPT = `
-redis.call("DEL", KEYS[1])
-redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
-return 1
-`;
-
 const REVOKE_AUTH_SESSION_SCRIPT = `
 redis.call("SET", KEYS[1], "1", "EX", ARGV[1])
 redis.call("DEL", KEYS[2])
-return 1
-`;
-
-const CACHE_ACTIVE_AUTH_SESSION_SCRIPT = `
-if redis.call("GET", KEYS[1]) then
-	return 0
-end
-redis.call("SET", KEYS[2], ARGV[1], "EX", ARGV[2])
 return 1
 `;
 
@@ -111,7 +97,7 @@ export class AuthService {
 			registrationLocked: settings.registrationLocked,
 		});
 
-		const tokens = await this.issueTokens(user.id, user.role, metadata);
+		const tokens = await this.issueTokens(user, metadata);
 		return { user: this.sanitizeUser(user), tokens };
 	}
 
@@ -129,7 +115,7 @@ export class AuthService {
 			throw AppError.unauthorized('Invalid email or password');
 		}
 
-		const tokens = await this.issueTokens(user.id, user.role, metadata);
+		const tokens = await this.issueTokens(user, metadata);
 		return { user: this.sanitizeUser(user), tokens };
 	}
 
@@ -200,12 +186,16 @@ export class AuthService {
 		}
 
 		const passwordHash = await hashPassword(newPassword);
-		// Revoke first so a Redis failure cannot leave old sessions active after
-		// the credential changes. A later failure remains recoverable by signing
-		// in with the new password.
-		await this.revokeAllUserSessions(userId);
-		const updatedUser = await this.userRepo.updatePasswordHash(userId, passwordHash);
-		const tokens = await this.issueTokens(updatedUser.id, updatedUser.role, metadata);
+		// Invalidate known sessions before changing credentials, then invalidate
+		// every session revoked by the transaction before reporting success.
+		await this.prepareUserSessionRevocation(userId);
+		const { user: updatedUser, revokedSessions } = await this.userRepo.updatePasswordHash(
+			userId,
+			passwordHash,
+			user.passwordHash,
+		);
+		await this.revokeCachedSessions(revokedSessions);
+		const tokens = await this.issueTokens(updatedUser, metadata);
 		return { user: this.sanitizeUser(updatedUser), tokens };
 	}
 
@@ -248,43 +238,25 @@ export class AuthService {
 			if (revoked !== null) {
 				return false;
 			}
-			const activeOwner = await this.redis.get(CacheKeys.authSessionActive(sessionId));
-			if (activeOwner !== null) {
-				return activeOwner === userId;
-			}
 		} catch (error) {
 			this.logSessionCacheFailure('read', sessionId, error);
 		}
 
+		// SQLite remains authoritative when a security update commits but its
+		// Redis invalidation fails. Positive cache entries cannot grant access.
 		const session = await this.sessionRepo.findActiveById(sessionId);
 		if (session?.userId !== userId) {
 			return false;
 		}
 
 		try {
-			const cached = await this.redis.eval(
-				CACHE_ACTIVE_AUTH_SESSION_SCRIPT,
-				2,
-				CacheKeys.authSessionRevoked(sessionId),
-				CacheKeys.authSessionActive(sessionId),
-				userId,
-				String(CacheTTL.authSessionActive),
-			);
-			const cacheResult =
-				typeof cached === 'number' || typeof cached === 'string' ? Number(cached) : Number.NaN;
-			if (cacheResult !== 0 && cacheResult !== 1) {
-				throw new Error('Invalid Redis auth session cache response');
-			}
-			if (cacheResult === 0) {
-				return false;
-			}
+			// A revocation may have started while the database read was in flight.
+			return (await this.redis.get(CacheKeys.authSessionRevoked(sessionId))) === null;
 		} catch (error) {
-			this.logSessionCacheFailure('populate', sessionId, error);
+			this.logSessionCacheFailure('read', sessionId, error);
 			const currentSession = await this.sessionRepo.findActiveById(sessionId);
 			return currentSession?.userId === userId;
 		}
-
-		return true;
 	}
 
 	async adminCreateUser(email: string, password: string, role: string) {
@@ -316,36 +288,51 @@ export class AuthService {
 	) {
 		await this.userRepo.assertAdminUpdateAllowed(actorUserId, targetUserId, data);
 		if (data.isActive === false || data.role !== undefined) {
-			await this.revokeAllUserSessions(targetUserId);
+			await this.prepareUserSessionRevocation(targetUserId);
 		}
-		const user = await this.userRepo.updateForAdmin(actorUserId, targetUserId, data);
+		const { user, revokedSessions } = await this.userRepo.updateForAdmin(
+			actorUserId,
+			targetUserId,
+			data,
+		);
+		await this.revokeCachedSessions(revokedSessions);
 		return this.sanitizeUser(user);
 	}
 
 	async adminResetPassword(targetUserId: string, password: string) {
-		await this.revokeAllUserSessions(targetUserId);
 		const passwordHash = await hashPassword(password);
-		const user = await this.userRepo.updatePasswordHash(targetUserId, passwordHash);
+		await this.prepareUserSessionRevocation(targetUserId);
+		const { user, revokedSessions } = await this.userRepo.updatePasswordHash(
+			targetUserId,
+			passwordHash,
+		);
+		await this.revokeCachedSessions(revokedSessions);
 		return this.sanitizeUser(user);
 	}
 
-	private async issueTokens(userId: string, role: string, metadata: AuthSessionMetadataInput) {
+	private async issueTokens(
+		user: NonNullable<Awaited<ReturnType<UserRepository['findById']>>>,
+		metadata: AuthSessionMetadataInput,
+	) {
 		const refreshToken = createRefreshToken();
 		const sessionId = parseRefreshToken(refreshToken)?.sessionId;
 		if (!sessionId) {
 			throw AppError.internal('Failed to create auth session');
 		}
-		await this.sessionRepo.create({
-			id: sessionId,
-			userId,
-			refreshTokenHash: hashRefreshToken(refreshToken),
-			clientId: metadata.clientId ?? null,
-			deviceName: sanitizeDeviceName(metadata.deviceName),
-			userAgent: metadata.userAgent ?? null,
-			ipAddress: metadata.ipAddress ?? null,
-		});
-		await this.cacheNewSession(userId, sessionId);
-		const accessToken = await this.tokenUtils.signAccessToken(userId, role, sessionId);
+		const session = await this.sessionRepo.create(
+			{
+				id: sessionId,
+				userId: user.id,
+				refreshTokenHash: hashRefreshToken(refreshToken),
+				clientId: metadata.clientId ?? null,
+				deviceName: sanitizeDeviceName(metadata.deviceName),
+				userAgent: metadata.userAgent ?? null,
+				ipAddress: metadata.ipAddress ?? null,
+			},
+			user,
+		);
+		if (!session) throw AppError.unauthorized(AUTH_LOST_MESSAGE);
+		const accessToken = await this.tokenUtils.signAccessToken(user.id, user.role, sessionId);
 		return {
 			accessToken,
 			refreshToken,
@@ -403,7 +390,7 @@ export class AuthService {
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
 
-		const tokens = await this.issueTokens(user.id, user.role, metadata);
+		const tokens = await this.issueTokens(user, metadata);
 		return { user: this.sanitizeUser(user), tokens };
 	}
 
@@ -415,21 +402,6 @@ export class AuthService {
 			}
 		} catch {
 			return;
-		}
-	}
-
-	private async cacheNewSession(userId: string, sessionId: string) {
-		try {
-			await this.redis.eval(
-				CACHE_NEW_AUTH_SESSION_SCRIPT,
-				2,
-				CacheKeys.authSessionRevoked(sessionId),
-				CacheKeys.authSessionActive(sessionId),
-				userId,
-				String(CacheTTL.authSessionActive),
-			);
-		} catch (error) {
-			this.logSessionCacheFailure('create', sessionId, error);
 		}
 	}
 
@@ -451,10 +423,14 @@ export class AuthService {
 		}
 	}
 
-	private async revokeAllUserSessions(userId: string) {
+	private async prepareUserSessionRevocation(userId: string) {
 		const sessions = await this.sessionRepo.listActiveByUserId(userId);
+		await this.revokeCachedSessions(sessions);
+	}
+
+	/** Also covers sessions created after the initial cache invalidation. */
+	private async revokeCachedSessions(sessions: { id: string }[]) {
 		await Promise.all(sessions.map((session) => this.prepareSessionRevocation(session.id)));
-		await this.sessionRepo.revokeAllForUser(userId);
 	}
 
 	private logSessionCacheFailure(operation: string, sessionId: string, error: unknown) {

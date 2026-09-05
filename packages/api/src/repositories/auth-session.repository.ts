@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { authSessions } from '../db/schema.js';
+import { authSessions, users } from '../db/schema.js';
 
 export interface AuthSessionCreateInput {
 	id: string;
@@ -44,25 +44,47 @@ export class AuthSessionRepository {
 		);
 	}
 
-	async create(data: AuthSessionCreateInput) {
+	/** Revalidate the account under the same write lock that creates its session. */
+	async create(
+		data: AuthSessionCreateInput,
+		verifiedUser: Pick<typeof users.$inferSelect, 'passwordHash' | 'role'>,
+	) {
 		const now = new Date();
-		const [session] = await this.db
-			.insert(authSessions)
-			.values({
-				id: data.id,
-				userId: data.userId,
-				refreshTokenHash: data.refreshTokenHash,
-				clientId: data.clientId ?? null,
-				deviceName: data.deviceName,
-				userAgent: data.userAgent ?? null,
-				ipAddress: data.ipAddress ?? null,
-				createdAt: now,
-				lastSeenAt: now,
-				rotatedAt: now,
-				expiresAt: new Date(now.getTime() + this.policy.absoluteTtlMs),
-			})
-			.returning();
-		return session;
+		return this.db.transaction(
+			(tx) => {
+				const currentUser = tx
+					.select({ id: users.id })
+					.from(users)
+					.where(
+						and(
+							eq(users.id, data.userId),
+							eq(users.passwordHash, verifiedUser.passwordHash),
+							eq(users.role, verifiedUser.role),
+							eq(users.isActive, true),
+						),
+					)
+					.get();
+				if (!currentUser) return undefined;
+				return tx
+					.insert(authSessions)
+					.values({
+						id: data.id,
+						userId: data.userId,
+						refreshTokenHash: data.refreshTokenHash,
+						clientId: data.clientId ?? null,
+						deviceName: data.deviceName,
+						userAgent: data.userAgent ?? null,
+						ipAddress: data.ipAddress ?? null,
+						createdAt: now,
+						lastSeenAt: now,
+						rotatedAt: now,
+						expiresAt: new Date(now.getTime() + this.policy.absoluteTtlMs),
+					})
+					.returning()
+					.get();
+			},
+			{ behavior: 'immediate' },
+		);
 	}
 
 	async findById(id: string) {
@@ -156,14 +178,6 @@ export class AuthSessionRepository {
 			.where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
 			.returning();
 		return session;
-	}
-
-	async revokeAllForUser(userId: string) {
-		return this.db
-			.update(authSessions)
-			.set({ revokedAt: new Date() })
-			.where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
-			.returning();
 	}
 
 	async cleanupExpired(batchSize: number, now = new Date()) {

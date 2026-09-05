@@ -5,7 +5,7 @@ import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
 import { closeDb, getDb } from '../../src/db/client.js';
-import { CacheKeys, CacheTTL, closeRedis, getRedis } from '../../src/db/redis.js';
+import { CacheKeys, closeRedis, getRedis } from '../../src/db/redis.js';
 import {
 	articles,
 	auditLogs,
@@ -265,7 +265,6 @@ describe('API integration', () => {
 			.update(authSessions)
 			.set({ expiresAt: new Date(Date.now() - 1_000) })
 			.where(eq(authSessions.id, absoluteSession!.id));
-		await redis.del(CacheKeys.authSessionActive(absoluteSession!.id));
 		expect(
 			(await authedRequest('/api/v1/auth/me', absolute.body.data.tokens.accessToken as string))
 				.response.status,
@@ -287,7 +286,6 @@ describe('API integration', () => {
 			.update(authSessions)
 			.set({ lastSeenAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1_000) })
 			.where(eq(authSessions.id, idleSession!.id));
-		await redis.del(CacheKeys.authSessionActive(idleSession!.id));
 		expect(
 			(await authedRequest('/api/v1/auth/me', idle.body.data.tokens.accessToken as string)).response
 				.status,
@@ -429,12 +427,7 @@ describe('API integration', () => {
 
 		const [storedSession] = await db.select().from(authSessions);
 		expect(storedSession).toBeTruthy();
-		expect(await redis.get(CacheKeys.authSessionActive(storedSession!.id))).toBe(
-			registered.body.data.user.id,
-		);
-		const activeSessionTtl = await redis.ttl(CacheKeys.authSessionActive(storedSession!.id));
-		expect(activeSessionTtl).toBeGreaterThan(0);
-		expect(activeSessionTtl).toBeLessThanOrEqual(CacheTTL.authSessionActive);
+		expect(await redis.get(CacheKeys.authSessionActive(storedSession!.id))).toBeNull();
 		expect(await redis.get(CacheKeys.authSessionRevoked(storedSession!.id))).toBeNull();
 		const unchangedHash = storedSession!.refreshTokenHash;
 		const staleRotate = await deps.repos.authSession.rotate(
