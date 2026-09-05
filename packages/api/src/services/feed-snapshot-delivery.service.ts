@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { articleMedia, articles } from '../db/schema.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
+import { SnapshotDeliveryRejectedError } from '../repositories/snapshot-delivery.persistence.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
 import type { NormalizedFeedItem, NormalizedFeedPayload } from './normalized-feed.types.js';
 
@@ -107,7 +108,7 @@ export class FeedSnapshotDeliveryService {
 			if (!delivery) break;
 			const leaseSeconds = options.leaseSeconds ?? 60;
 			await withLeaseHeartbeat({
-				operation: () => this.processDelivery(delivery.id, workerId, options.now ?? new Date()),
+				operation: () => this.processDelivery(delivery.id, workerId, options.now),
 				renew: () =>
 					this.ingestionRepository.renewDelivery(
 						delivery.id,
@@ -121,7 +122,8 @@ export class FeedSnapshotDeliveryService {
 		return processed;
 	}
 
-	async processDelivery(deliveryId: string, workerId: string, now = new Date()) {
+	async processDelivery(deliveryId: string, workerId: string, now?: Date) {
+		const startedAt = now ?? new Date();
 		const context = await this.ingestionRepository.findDeliveryContext(deliveryId);
 		if (!context) throw new Error('Snapshot delivery context was not found');
 		try {
@@ -130,7 +132,7 @@ export class FeedSnapshotDeliveryService {
 			}
 			const payload = JSON.parse(context.snapshot.normalizedPayload) as NormalizedFeedPayload;
 			const mapped = payload.items.map((item) =>
-				mapNormalizedItemToArticle(context.feed.id, item, now),
+				mapNormalizedItemToArticle(context.feed.id, item, startedAt),
 			);
 			const existing = await this.articleRepository.findByFeedGuids(
 				context.feed.id,
@@ -162,7 +164,7 @@ export class FeedSnapshotDeliveryService {
 					excerpt: item.article.excerpt ?? null,
 					heroImageUrl: item.article.heroImageUrl ?? null,
 					publishedAt: item.article.publishedAt ?? null,
-					fetchedAt: now,
+					fetchedAt: startedAt,
 					incrementContentVersion: true,
 					hash: item.article.hash,
 				});
@@ -171,22 +173,28 @@ export class FeedSnapshotDeliveryService {
 					item.media.map((media) => ({ ...media, articleId: current.id })),
 				);
 			}
+			const completedAt = now ?? new Date();
 			const inserted = await this.articleRepository.persistSyncResults({
 				articlesToInsert,
 				articlesToUpdate,
 				mediaByGuid,
 				updatedMediaByArticleId,
+				snapshotDelivery: { deliveryId, workerId, now: completedAt },
 			});
-			await this.ingestionRepository.updateFeedFromSource(context.feed.id, context.source.id, now);
+			await this.ingestionRepository.updateFeedFromSource(
+				context.feed.id,
+				context.source.id,
+				completedAt,
+			);
 			const completion = await this.ingestionRepository.finishDelivery(
 				deliveryId,
 				workerId,
 				{ status: 'completed' },
-				now,
+				completedAt,
 			);
 			if (!completion) return null;
 			for (const requestId of completion.requestIds) {
-				await this.ingestionRepository.aggregateRefreshRequest(requestId, now);
+				await this.ingestionRepository.aggregateRefreshRequest(requestId, completedAt);
 			}
 			try {
 				await this.callbacks.afterCommit?.({
@@ -201,6 +209,23 @@ export class FeedSnapshotDeliveryService {
 			return completion.delivery;
 		} catch (error) {
 			if (error instanceof PostCommitCallbackError) throw error.original;
+			const completedAt = now ?? new Date();
+			if (error instanceof SnapshotDeliveryRejectedError) {
+				if (error.reason === 'lease_lost') return null;
+				const completion = await this.ingestionRepository.finishDelivery(
+					deliveryId,
+					workerId,
+					{
+						status: 'completed',
+						error: { code: error.reason, details: 'The subscription now uses a different source' },
+					},
+					completedAt,
+				);
+				for (const requestId of completion?.requestIds ?? []) {
+					await this.ingestionRepository.aggregateRefreshRequest(requestId, completedAt);
+				}
+				return completion?.delivery ?? null;
+			}
 			const attempts = context.delivery.attempts;
 			const dead = attempts >= context.delivery.maxAttempts;
 			const delaySeconds = [60, 300, 1_800][Math.min(Math.max(attempts - 1, 0), 2)]!;
@@ -209,17 +234,17 @@ export class FeedSnapshotDeliveryService {
 				workerId,
 				{
 					status: dead ? 'dead' : 'pending',
-					availableAt: new Date(now.getTime() + delaySeconds * 1_000),
+					availableAt: new Date(completedAt.getTime() + delaySeconds * 1_000),
 					error: {
 						code: 'delivery_failed',
 						details: error instanceof Error ? error.message : String(error),
 					},
 				},
-				now,
+				completedAt,
 			);
 			if (dead && completion) {
 				for (const requestId of completion.requestIds) {
-					await this.ingestionRepository.aggregateRefreshRequest(requestId, now);
+					await this.ingestionRepository.aggregateRefreshRequest(requestId, completedAt);
 				}
 			}
 			return null;
