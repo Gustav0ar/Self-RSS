@@ -1,8 +1,9 @@
 # SelfFeed Deployment
 
-This is the **single source of truth** for deploying the repo to your VPS. The
-deploy runs in a protected GitHub Actions environment, so logs and secrets are
-only visible to you — public users only see the deploy-summary artifact.
+This is the source of truth for deploying the repo to your VPS. The protected
+`production` environment requires approval before deployment and releases its
+secrets only after approval. Workflow logs and artifacts in this public
+repository are readable by people with repository read access.
 
 ## One-time GitHub configuration
 
@@ -15,19 +16,19 @@ Do this once after the repo is created, before the first deploy.
 3. **Deployment protection rules**:
    - Enable **Required reviewers** and add yourself.
    - (Optional) Enable **Wait timer** if you want a cooldown window.
-4. **Environment visibility**:
-   - Default is fine — environment is only visible to people with at
-     least Write access to the repo. Anonymous visitors to the Actions
-     tab cannot view runs in this environment, cannot view its logs,
-     and cannot see its secrets or variables.
+4. **Log visibility**:
+   - Environment protection does not make workflow runs, logs, or artifacts
+     private. GitHub requires sign-in to view workflow run information.
+   - Keep credentials and sensitive application data out of command output,
+     container diagnostics, and uploaded artifacts. Secret masking does not
+     replace reviewing what commands print.
 5. **Deployment branches**: restrict to `main`.
 
 ### 2. Add environment secrets
 
-Under the `production` environment, add these secrets. They are
-**environment-scoped**, which means they are only available to jobs
-that use `environment: production` and only visible to people with
-write access to the repo.
+Under the `production` environment, add these secrets. Jobs must reference
+`environment: production` and pass its protection rules before accessing them.
+GitHub does not display stored secret values in repository settings.
 
 | Secret           | Example value                         |
 | ---------------- | ------------------------------------- |
@@ -43,8 +44,8 @@ The SSH public key for `VPS_SSH_KEY` must be installed in that account's
 
 ### 3. Add environment variables
 
-These are non-sensitive and can live in vars (visible to repo members
-but not to the public):
+These values are non-sensitive and can live in configuration variables. Treat
+values written to workflow logs or artifacts as public:
 
 | Var                       | Default                 | Notes                                  |
 | ------------------------- | ----------------------- | -------------------------------------- |
@@ -321,12 +322,17 @@ normal feed refresh resumes before considering the rollback complete.
 
 ## Visibility recap
 
-- **Public users** see: the workflow file, the `deploy-summary`
-  artifact, the commit history.
-- **Public users do NOT see**: deploy logs, environment secrets,
-  environment variables, environment name (when restricted), or
-  approval history.
-- **You (and any collaborators you add)** see everything.
+- People with repository read access can view workflow runs and logs and
+  download artifacts. Public repository workflow information requires GitHub
+  sign-in, not collaborator status.
+- Required reviewers control whether deployment proceeds. Environment
+  protection controls when the job can access secrets, not who can read its logs.
+- GitHub masks registered secrets in logs, but derived values and sensitive
+  application output can still be exposed. The `deploy-summary` artifact contains
+  only deployment metadata; apply the same care to container diagnostics.
+
+See GitHub's [workflow log documentation](https://docs.github.com/en/actions/how-tos/monitor-workflows/use-workflow-run-logs)
+and [deployment environment documentation](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments).
 
 ## Retention Cleanup Configuration
 

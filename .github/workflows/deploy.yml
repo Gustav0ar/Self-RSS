@@ -1,15 +1,9 @@
 name: Deploy
 
-# Visibility strategy:
-# - This workflow lives in a public repo, so its definition is public.
-# - It runs inside the "production" environment, which is configured on
-#   GitHub to require approval from a list of reviewers (the repo owner
-#   in this case) and to be visible only to people with at least Write
-#   access to the repo. Anonymous visitors to the Actions tab cannot see
-#   the run logs, environment secrets, or environment variables.
-# - The workflow uploads a deploy-summary artifact (image tag, commit
-#   SHA, target host, status) that IS public, so anyone can verify
-#   that a deploy happened without seeing the secret material.
+# The protected production environment gates execution and access to secrets.
+# It does not make this public repository's workflow logs or artifacts private.
+# Keep credentials and sensitive application data out of all command output,
+# including container diagnostics. The deploy summary contains metadata only.
 
 on:
   workflow_run:
@@ -119,7 +113,7 @@ jobs:
     needs: preflight
     # `environment: production` gates the job on the repo's protected
     # environment configuration. Configure the environment in the GitHub
-    # UI to require reviewers and to limit visibility to repo members.
+    # UI to require reviewers. This does not restrict workflow log visibility.
     environment: production
     if: needs.preflight.result == 'success'
     steps:
