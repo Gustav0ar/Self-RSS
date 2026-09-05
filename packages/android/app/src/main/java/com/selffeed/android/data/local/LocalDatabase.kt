@@ -164,6 +164,8 @@ data class ArticleDetailEntity(
     val writtenAt: Long,
 )
 
+data class SavedArticleSnapshot(val articleId: String, val savedRevision: Int?)
+
 @Dao
 interface LocalStoreDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -221,6 +223,19 @@ interface LocalStoreDao {
         """,
     )
     fun savedArticlePagingSource(): PagingSource<Int, ArticleListItem>
+
+    @Query(
+        """
+        SELECT articles.id AS articleId, article_state_revisions.savedRevision
+        FROM articles
+        LEFT JOIN article_state_revisions ON article_state_revisions.articleId = articles.id
+        WHERE articles.isSaved = 1
+          AND articles.id NOT IN (SELECT articleId FROM article_query_entries WHERE queryKey = :queryKey)
+          AND articles.id NOT IN (SELECT articleId FROM pending_saved_state_mutations)
+        ORDER BY articles.id
+        """,
+    )
+    suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleQueryEntries(entries: List<ArticleQueryEntryEntity>)

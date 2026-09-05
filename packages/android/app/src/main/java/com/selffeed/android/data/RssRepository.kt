@@ -37,6 +37,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -395,6 +398,9 @@ class RssRepository @Inject constructor(
                         queryKey = queryKey,
                         forceInitialRefresh = query.generation > 0L,
                         localStore = localStore,
+                        onCompletedRefresh = {
+                            if (query.savedOnly) reconcileSavedArticles(queryKey) else AppResult.Success(Unit)
+                        },
                         loadPage = { limit, cursor ->
                             runtime.safeCall {
                                 runtime.withRetry {
@@ -422,6 +428,36 @@ class RssRepository @Inject constructor(
                     }
                 },
             )
+        }
+    }
+
+    /** Missing list membership needs confirmation because saved state can change between pages. */
+    internal suspend fun reconcileSavedArticles(queryKey: String): AppResult<Unit> = safeReadCall {
+        val generation = sessionGeneration.get()
+        val missing = localStore.savedArticlesMissingFromQuery(queryKey)
+        for (batch in missing.chunked(4)) {
+            val confirmed = coroutineScope {
+                batch.map { snapshot ->
+                    async {
+                        val saved = try {
+                            runtime.withRetry { articleRemote.article(snapshot.articleId) }.isSaved
+                        } catch (error: HttpException) {
+                            if (error.code() == 404) false else throw error
+                        }
+                        snapshot to saved
+                    }
+                }.awaitAll()
+            }
+            if (generation != sessionGeneration.get()) return@safeReadCall
+            for ((snapshot, saved) in confirmed) {
+                if (!saved && localStore.clearSavedStateIfUnchanged(snapshot)) {
+                    val key = "article:${snapshot.articleId}"
+                    runtime.getCached<ArticleDetail>(key)?.let { detail ->
+                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = false))
+                    }
+                    runtime.invalidateByPrefix("search")
+                }
+            }
         }
     }
 

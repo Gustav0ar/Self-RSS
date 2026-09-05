@@ -94,6 +94,32 @@ class LocalStore(
     fun savedArticlePagingSource(): PagingSource<Int, ArticleListItem> =
         dao.savedArticlePagingSource()
 
+    suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot> =
+        dao.savedArticlesMissingFromQuery(queryKey)
+
+    /** Applies a confirmed remote removal only while the captured local intent is unchanged. */
+    suspend fun clearSavedStateIfUnchanged(snapshot: SavedArticleSnapshot): Boolean {
+        val removed = database.withTransaction {
+            val articleId = snapshot.articleId
+            if (dao.readPendingSavedStateMutation(articleId) != null ||
+                dao.readArticleStateRevision(articleId)?.savedRevision != snapshot.savedRevision ||
+                dao.readArticle(articleId)?.isSaved != true
+            ) return@withTransaction false
+
+            dao.updateArticleSavedState(articleId, false)
+            dao.readArticleDetail(articleId)?.let { entity ->
+                articleDetailAdapter.fromJson(entity.payloadJson)?.let { detail ->
+                    dao.upsertArticleDetail(
+                        entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = false))),
+                    )
+                }
+            }
+            true
+        }
+        if (removed) notifyInvalidation(TABLE_ARTICLES)
+        return removed
+    }
+
     suspend fun readArticleRemoteKey(queryKey: String): ArticleRemoteKeyEntity? =
         dao.readArticleRemoteKey(queryKey)
 

@@ -167,6 +167,104 @@ class ArticleRemoteMediatorTest {
         assertEquals(listOf("fresh"), page.data.map(ArticleListItem::id))
     }
 
+    @Test
+    fun `empty saved refresh removes a saved article left by another client`() = runBlocking {
+        store.writeArticleRemotePage(
+            queryKey = QUERY_KEY,
+            payload = ApiListResponse(data = listOf(article("removed-save").copy(isSaved = true)), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        val mediator = ArticleRemoteMediator(
+            queryKey = QUERY_KEY,
+            forceInitialRefresh = true,
+            localStore = store,
+            loadPage = { _, _ -> AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false)) },
+            onCompletedRefresh = ::confirmRemovals,
+        )
+
+        mediator.load(LoadType.REFRESH, pagingState())
+
+        val saved = store.savedArticlePagingSource().load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as androidx.paging.PagingSource.LoadResult.Page
+        assertTrue(saved.data.isEmpty())
+    }
+
+    @Test
+    fun `partial and failed saved pages preserve membership until a restarted mediator finishes`() = runBlocking {
+        store.writeArticleRemotePage(
+            QUERY_KEY,
+            ApiListResponse(data = listOf(article("removed-save").copy(isSaved = true)), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        val mediator = ArticleRemoteMediator(
+            queryKey = QUERY_KEY,
+            forceInitialRefresh = true,
+            localStore = store,
+            loadPage = { _, cursor ->
+                if (cursor == null) AppResult.Success(
+                    ApiListResponse(data = listOf(article("first").copy(isSaved = true)), cursor = "next", hasMore = true),
+                ) else AppResult.Error("offline")
+            },
+            onCompletedRefresh = ::confirmRemovals,
+        )
+        mediator.load(LoadType.REFRESH, pagingState())
+        assertTrue(savedIds().contains("removed-save"))
+        assertTrue(mediator.load(LoadType.APPEND, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Error)
+        assertTrue(savedIds().contains("removed-save"))
+
+        store = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideMoshi())
+        val restarted = ArticleRemoteMediator(
+            queryKey = QUERY_KEY,
+            forceInitialRefresh = false,
+            localStore = store,
+            loadPage = { _, cursor ->
+                assertEquals("next", cursor)
+                AppResult.Success(ApiListResponse(data = listOf(article("last").copy(isSaved = true)), cursor = null, hasMore = false))
+            },
+            onCompletedRefresh = ::confirmRemovals,
+        )
+        restarted.load(LoadType.APPEND, pagingState())
+
+        assertEquals(setOf("first", "last"), savedIds())
+    }
+
+    @Test
+    fun `failed membership confirmation can retry after the last page is persisted`() = runBlocking {
+        var confirmations = 0
+        var pageLoads = 0
+        val mediator = ArticleRemoteMediator(
+            queryKey = QUERY_KEY,
+            forceInitialRefresh = true,
+            localStore = store,
+            loadPage = { _, _ ->
+                pageLoads++
+                AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false))
+            },
+            onCompletedRefresh = {
+                confirmations++
+                if (confirmations == 1) AppResult.Error("confirmation unavailable") else AppResult.Success(Unit)
+            },
+        )
+
+        assertTrue(mediator.load(LoadType.REFRESH, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Error)
+        assertTrue(mediator.load(LoadType.APPEND, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Success)
+        assertEquals(2, confirmations)
+        assertEquals(1, pageLoads)
+    }
+
+    private suspend fun confirmRemovals(): AppResult<Unit> {
+        store.savedArticlesMissingFromQuery(QUERY_KEY).forEach { store.clearSavedStateIfUnchanged(it) }
+        return AppResult.Success(Unit)
+    }
+
+    private suspend fun savedIds(): Set<String> {
+        val page = store.savedArticlePagingSource().load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as androidx.paging.PagingSource.LoadResult.Page
+        return page.data.map(ArticleListItem::id).toSet()
+    }
+
     private fun pagingState(): PagingState<Int, ArticleListItem> = PagingState(
         pages = emptyList(),
         anchorPosition = null,

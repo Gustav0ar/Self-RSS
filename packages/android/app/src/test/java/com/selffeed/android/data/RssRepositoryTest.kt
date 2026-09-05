@@ -827,6 +827,86 @@ class RssRepositoryTest {
         return HttpException(Response.error<Any>(code, body))
     }
 
+    @Test
+    fun `saved reconciliation confirms remote unsaves and deletions while retaining cached content`() = runTest {
+        cacheSavedArticles("unsaved", "deleted")
+        every { sessionStore.getAccessToken() } returns "test-session"
+        coEvery { api.article("unsaved") } returns com.selffeed.android.network.ApiEnvelope(
+            sampleArticleDetail("unsaved", false).copy(isSaved = true),
+        )
+        repository.refreshArticleDetail("unsaved")
+        coEvery { api.article("unsaved") } returns com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("unsaved", false))
+        coEvery { api.article("deleted") } throws httpError(404, "Article unavailable")
+
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
+
+        val reopened = LocalStore(context, com.selffeed.android.network.NetworkModule.provideMoshi())
+        assertTrue(reopened.savedArticlesMissingFromQuery("saved-current").isEmpty())
+        assertEquals(false, reopened.readArticleDetail("unsaved")?.isSaved)
+        assertEquals(false, reopened.readArticleDetail("deleted")?.isSaved)
+        assertEquals("<p>Body</p>", reopened.readArticleDetail("deleted")?.contentHtml)
+        assertEquals(false, repository.cachedArticleDetail("unsaved")?.isSaved)
+    }
+
+    @Test
+    fun `saved reconciliation preserves queued intent and articles still saved beyond the list cutoff`() = runTest {
+        cacheSavedArticles("pending", "still-saved")
+        localStore.queueSavedStateMutation("pending", true)
+        coEvery { api.article("still-saved") } returns com.selffeed.android.network.ApiEnvelope(
+            sampleArticleDetail("still-saved", false).copy(isSaved = true),
+        )
+
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
+
+        assertEquals(true, localStore.readArticleDetail("pending")?.isSaved)
+        assertEquals(1, localStore.readPendingSavedStateMutations().size)
+        assertEquals(true, localStore.readArticleDetail("still-saved")?.isSaved)
+        coVerify(exactly = 0) { api.article("pending") }
+    }
+
+    @Test
+    fun `saved reconciliation cannot erase new pending or acknowledged saves during confirmation`() = runTest {
+        cacheSavedArticles("pending", "acknowledged")
+        coEvery { api.article("pending") } coAnswers {
+            localStore.queueSavedStateMutation("pending", true)
+            com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("pending", false))
+        }
+        coEvery { api.article("acknowledged") } coAnswers {
+            val mutation = localStore.queueSavedStateMutation("acknowledged", true)
+            localStore.acknowledgeSavedStateMutation(mutation, true, revision = 7)
+            com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("acknowledged", false))
+        }
+
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
+
+        assertEquals(true, localStore.readArticleDetail("pending")?.isSaved)
+        assertEquals(true, localStore.readArticleDetail("acknowledged")?.isSaved)
+        assertEquals("pending", localStore.readPendingSavedStateMutations().single().articleId)
+    }
+
+    @Test
+    fun `unavailable saved-state confirmation keeps the offline collection intact`() = runTest {
+        cacheSavedArticles("unconfirmed")
+        coEvery { api.article("unconfirmed") } throws java.net.SocketTimeoutException("offline")
+
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Error)
+
+        assertEquals(true, localStore.readArticleDetail("unconfirmed")?.isSaved)
+        assertEquals(listOf("unconfirmed"), localStore.savedArticlesMissingFromQuery("saved-current").map { it.articleId })
+    }
+
+    private suspend fun cacheSavedArticles(vararg ids: String) {
+        localStore.writeArticleRemotePage(
+            "saved-old",
+            ApiListResponse(data = ids.map { sampleArticle(it).copy(isSaved = true) }, cursor = null, hasMore = false),
+            clearExisting = true,
+        )
+        ids.forEach { localStore.writeArticleDetail(sampleArticleDetail(it, false).copy(isSaved = true)) }
+        localStore.writeArticleRemotePage(
+            "saved-current", ApiListResponse(data = emptyList(), cursor = null, hasMore = false), clearExisting = true,
+        )
+    }
+
     private fun sampleArticleDetail(id: String, isRead: Boolean): ArticleDetail = ArticleDetail(
         id = id,
         feedId = "feed-1",
