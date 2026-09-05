@@ -8,6 +8,7 @@ const DEFAULT_MIGRATIONS_TABLE = '__drizzle_migrations';
 const MIGRATION_GUARD_TABLE = '__self_feed_migration_guard';
 const PROTECTED_TABLES = [
 	{ name: 'users', keyColumns: ['id'] },
+	{ name: 'auth_sessions', keyColumns: ['id'] },
 	{ name: 'user_preferences', keyColumns: ['user_id'] },
 	{ name: 'categories', keyColumns: ['id'] },
 	{ name: 'feed_origins', keyColumns: ['id'] },
@@ -22,6 +23,9 @@ const PROTECTED_TABLES = [
 	{ name: 'articles', keyColumns: ['id'] },
 	{ name: 'article_media', keyColumns: ['id'] },
 	{ name: 'article_reads', keyColumns: ['user_id', 'article_id'] },
+	{ name: 'article_saves', keyColumns: ['user_id', 'article_id'] },
+	{ name: 'article_user_states', keyColumns: ['user_id', 'article_id'] },
+	{ name: 'article_state_mutations', keyColumns: ['user_id', 'mutation_id'] },
 	{ name: 'sync_runs', keyColumns: ['id'] },
 	{ name: 'user_metrics_daily', keyColumns: ['user_id', 'date'] },
 	{ name: 'app_settings', keyColumns: ['id'] },
