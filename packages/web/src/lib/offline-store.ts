@@ -12,6 +12,7 @@ import {
 	boundedState,
 	cachedArticleIds,
 	isPersistedQueryCache,
+	PERSISTED_QUERY_ROOTS,
 	type PersistedQueryCache,
 	shouldPersistQuery,
 } from './offline-query-cache';
@@ -126,8 +127,11 @@ function migrateLegacyQueryCache(store: IDBObjectStore) {
 			const currentRequest = store.get(cacheKey(user.id));
 			currentRequest.onsuccess = () => {
 				const value: unknown = currentRequest.result;
-				if (value != null && !isPersistedQueryCache(value, user.id)) return;
-				const current = isPersistedQueryCache(value, user.id) ? value : null;
+				if (value != null && !isPersistedQueryCache(value, user.id, namespace(), SCHEMA_VERSION))
+					return;
+				const current = isPersistedQueryCache(value, user.id, namespace(), SCHEMA_VERSION)
+					? value
+					: null;
 				const queries = new Map(legacy.state.queries.map((query) => [query.queryHash, query]));
 				// v2 may contain optimistic state backed by its durable outbox.
 				for (const query of current?.state.queries ?? []) {
