@@ -64,6 +64,7 @@ sealed interface ArticleFeatureEvent {
         val markedCount: Int,
     ) : ArticleFeatureEvent
 
+    data class ArticleSavedStateChanged(val articleId: String, val saved: Boolean) : ArticleFeatureEvent
     data class ArticlesChanged(val articleId: String? = null) : ArticleFeatureEvent
 }
 
@@ -115,6 +116,16 @@ class ArticlesViewModel @Inject constructor(
         }
         articleWarmingManager.setScope(viewModelScope)
         articleWarmingManager.setOnArticlesWarmed(::retainWarmedArticles)
+
+        viewModelScope.launch {
+            repository.savedStateRejections().collect { rejection ->
+                applyArticleSavedState(rejection.articleId, rejection.restoredSaved)
+                _state.update {
+                    it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed))
+                }
+                _events.emit(ArticleFeatureEvent.ArticleSavedStateChanged(rejection.articleId, rejection.restoredSaved))
+            }
+        }
 
         // Forward read state manager events to our events flow
         viewModelScope.launch {
@@ -361,14 +372,12 @@ class ArticlesViewModel @Inject constructor(
         val previous = _state.value.savedState(articleId) ?: !saved
         applyArticleSavedState(articleId, saved)
         viewModelScope.launch {
-            repository.updateCachedSavedState(articleId, saved)
             when (val result = repository.setSaved(articleId, saved)) {
                 is AppResult.Success -> {
                     if (_state.value.savedOnly && !saved) refreshArticlePager()
                 }
 
                 is AppResult.Error -> {
-                    repository.updateCachedSavedState(articleId, previous)
                     applyArticleSavedState(articleId, previous)
                     onFailure()
                     _state.update {
@@ -565,6 +574,10 @@ class ArticlesViewModel @Inject constructor(
         when (event) {
             is ArticleFeatureEvent.ArticleReadStateChanged -> {
                 applyArticleReadStateOptimistic(event.articleId, event.read)
+            }
+
+            is ArticleFeatureEvent.ArticleSavedStateChanged -> {
+                applyArticleSavedState(event.articleId, event.saved)
             }
 
             is ArticleFeatureEvent.ScopeMarkedRead -> {

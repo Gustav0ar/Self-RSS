@@ -228,6 +228,32 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `rejecting an older save cannot discard or roll back a newer intent`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("newer-save"))
+        val old = store.queueSavedStateMutation("newer-save", saved = true)
+        val current = store.queueSavedStateMutation("newer-save", saved = false)
+
+        assertEquals(null, store.discardSavedStateMutation(old))
+        assertEquals(current.mutationId, store.readPendingSavedStateMutations().single().mutationId)
+        assertEquals(false, store.readArticleDetail("newer-save")?.isSaved)
+    }
+
+    @Test
+    fun `rejected detail only save restores the state before inserting its article row`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("detail-only-rollback"))
+        val mutation = store.queueSavedStateMutation("detail-only-rollback", saved = true)
+
+        assertEquals(false, mutation.previousState)
+        store.discardSavedStateMutation(mutation)
+
+        assertEquals(false, store.readArticleDetail("detail-only-rollback")?.isSaved)
+        val page = store.savedArticlePagingSource().load(
+            PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
+        ) as PagingSource.LoadResult.Page
+        assertTrue(page.data.isEmpty())
+    }
+
+    @Test
     fun `permanently rejected saved intent restores its pre mutation state`() = runBlocking {
         store.writeArticleRemotePage(
             queryKey = "query-save-rollback",

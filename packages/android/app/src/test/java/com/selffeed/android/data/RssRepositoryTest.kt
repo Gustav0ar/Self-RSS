@@ -25,12 +25,20 @@ import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.SessionRefreshCoordinator
 import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.SyncResponse
+import com.selffeed.android.ui.ArticlesViewModel
+import com.selffeed.android.ui.MainDispatcherRule
+import com.selffeed.android.ui.articles.ArticleWarmingManager
+import com.selffeed.android.ui.articles.EnrichmentManager
+import com.selffeed.android.ui.articles.ReadStateManager
 import com.squareup.moshi.Moshi
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -42,6 +50,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -56,7 +65,9 @@ import retrofit2.Response
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
+@OptIn(ExperimentalCoroutinesApi::class)
 class RssRepositoryTest {
+    @get:Rule val mainDispatcherRule = MainDispatcherRule()
     private lateinit var context: Context
     private lateinit var api: RssApi
     private lateinit var sessionStore: SessionStore
@@ -108,6 +119,39 @@ class RssRepositoryTest {
             imageLoader = imageLoader,
             networkMonitor = networkMonitor,
         )
+    }
+
+    @Test
+    fun `worker rejection restores saved state through the real ViewModel repository and Room`() = runTest {
+        val articleId = "saved-rollback"
+        val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)
+        every { sessionStore.getAccessToken() } returns "test-session"
+        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.setSaved(articleId, any()) } throws httpError(404, "Article unavailable")
+        onlineState.value = false
+        val viewModel = ArticlesViewModel(
+            repository, ReadStateManager(repository), EnrichmentManager(repository), ArticleWarmingManager(repository),
+        )
+        val viewModelStore = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
+        try {
+            viewModel.openArticle(articleId)
+            viewModel.state.first { it.selectedArticle?.contentHtml != null }
+            viewModel.setSaved(articleId, true)
+            localStore.invalidations.first { localStore.readPendingSavedStateMutations().isNotEmpty() }
+            assertEquals(true, viewModel.state.value.selectedArticle?.isSaved)
+
+            onlineState.value = true
+            assertTrue(repository.flushPendingArticleStateMutations())
+            runCurrent()
+
+            assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
+            assertEquals(false, localStore.readArticleDetail(articleId)?.isSaved)
+            assertEquals(false, repository.cachedArticleDetail(articleId)?.isSaved)
+            assertEquals(false, viewModel.state.value.selectedArticle?.isSaved)
+            assertNotNull(viewModel.state.value.errorMessage)
+        } finally {
+            viewModelStore.clear()
+        }
     }
 
     @Test

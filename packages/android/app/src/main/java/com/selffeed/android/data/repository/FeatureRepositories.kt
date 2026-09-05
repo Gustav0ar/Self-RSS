@@ -165,6 +165,8 @@ class ArticleRepositoryImpl @Inject constructor(
     override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> =
         delegate.setSaved(articleId, saved)
 
+    override fun savedStateRejections(): Flow<SavedStateRejection> = delegate.savedStateRejections()
+
     override suspend fun markAllRead(
         feedId: String?,
         categoryId: String?

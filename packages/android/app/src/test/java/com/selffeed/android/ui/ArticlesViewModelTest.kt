@@ -78,6 +78,7 @@ class ArticlesViewModelTest {
         every { repository.cachedArticleDetail(any()) } returns null
         every { repository.articlePagingData(any(), any()) } returns flowOf(PagingData.empty())
         every { repository.prefetchHeroImages(any()) } just runs
+        every { repository.savedStateRejections() } returns kotlinx.coroutines.flow.emptyFlow()
         every { repository.readStateEvents() } returns kotlinx.coroutines.flow.flowOf()
         every { repository.clientId() } returns "test-client"
         coEvery { repository.invalidateReadStateCaches(any()) } just runs
@@ -753,7 +754,6 @@ class ArticlesViewModelTest {
 
         assertTrue(viewModel.state.value.items.single().isSaved)
         assertTrue(viewModel.state.value.selectedArticle?.isSaved == true)
-        coVerify { repository.updateCachedSavedState("a1", true) }
         coVerify { repository.setSaved("a1", true) }
     }
 
