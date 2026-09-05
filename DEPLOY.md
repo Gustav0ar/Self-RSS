@@ -243,12 +243,15 @@ sudo bash /tmp/setup-vps-deploy-user.sh /mnt/storage/containers/selfrss selffeed
      the deployment.
    - The image tag matching the latest successful build.
 4. On approval, the workflow:
+   - Captures the previous Compose file, private `.env`, immutable container
+     image IDs, and SQLite schema and migration-ledger fingerprint before
+     changing configuration.
+   - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Creates a pre-deploy SQLite backup under `data/backups` on the VPS
      when `data/self-feed.db` already exists.
-   - Pulls the `docker-compose.yml` from the repo at the deploy commit.
    - Pulls the new images.
    - Restarts the stack with `docker compose up -d --remove-orphans`.
-   - Health-checks the API and web.
+   - Health-checks Redis, API, worker, web, and the public routes.
    - Prunes dangling images.
 5. A `deploy-summary` artifact is uploaded for public visibility
    (image tag, commit SHA, host fingerprint) — **no secrets**.
@@ -261,6 +264,24 @@ row counts, existing protected row keys, and `PRAGMA foreign_key_check`
 before commit. If a migration would remove protected rows or leave
 orphaned rows, it is rolled back and startup fails with the backup path
 in the error.
+
+Automatic rollback stops the API and worker before comparing the current
+SQLite schema and `__drizzle_migrations` ledger with the captured fingerprint.
+When both are unchanged, it restores the matching previous configuration and
+starts the captured API, worker, and web image IDs, leaving Redis unchanged.
+It leaves the database files in place, including user writes made after
+deployment began. It never restores a database backup automatically.
+
+If the schema or ledger changed, or their current state cannot be read,
+rollback refuses to start previous images. The target configuration, images,
+and database remain in place, with the API and worker stopped. Correct the
+target release or deploy a compatible forward fix, then retry the deployment.
+
+Recovery metadata lives under `.deploy-recovery/<target-sha>` with private
+permissions because it includes `.env`. Failed-attempt retries reuse the
+original recovery set. A successful deployment closes that attempt; a later
+deployment of the same SHA captures the now-current release as its baseline.
+Completed recovery metadata is retained separately from SQLite backups.
 
 ## Durable feed ingestion rollout
 
