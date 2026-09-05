@@ -321,6 +321,8 @@ export function useWarmVisibleArticles() {
 export function useMarkRead() {
 	const qc = useQueryClient();
 	return useMutation({
+		// The mutation persists its own outbox before attempting network delivery.
+		networkMode: 'always',
 		mutationFn: async ({ articleId, read }: { articleId: string; read: boolean }) => {
 			await queueArticleStateMutation('read', articleId, read, 'manual');
 			return flushOfflineArticleMutations();
@@ -428,6 +430,7 @@ export function useMarkRead() {
 export function useSetArticleSaved() {
 	const qc = useQueryClient();
 	return useMutation({
+		networkMode: 'always',
 		mutationFn: async ({ articleId, saved }: { articleId: string; saved: boolean }) => {
 			await queueArticleStateMutation('saved', articleId, saved);
 			return flushOfflineArticleMutations();

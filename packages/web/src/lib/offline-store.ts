@@ -478,6 +478,7 @@ function isTransientMutationError(error: unknown) {
 export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlushResult[]> {
 	const userId = activeUserId;
 	if (!userId) return [];
+	if (typeof navigator !== 'undefined' && !navigator.onLine) return [];
 	const existingFlush = flushPromises.get(userId);
 	if (existingFlush) return existingFlush;
 	const flush = withStoreLock(`flush:${userId}`, async () => {
