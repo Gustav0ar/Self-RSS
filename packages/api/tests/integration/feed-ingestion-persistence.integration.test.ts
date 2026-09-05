@@ -90,6 +90,23 @@ async function setupReplacementFacade() {
 	};
 }
 
+function subscribeSource(
+	db: Awaited<ReturnType<typeof setupDatabase>>['db'],
+	source: typeof schema.feedSources.$inferSelect,
+) {
+	db.insert(schema.feeds)
+		.values({
+			id: `subscription-${source.id}`,
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: source.id,
+			feedUrl: source.normalizedUrl,
+			sourceId: source.id,
+			nextSyncAt: source.nextFetchAt,
+		})
+		.run();
+}
+
 describe('durable feed ingestion persistence', () => {
 	it('reports queue, staleness, backoff, and circuit state from SQLite truth', async () => {
 		const { sqlite, repository } = await setupDatabase();
@@ -735,13 +752,14 @@ describe('durable feed ingestion persistence', () => {
 			port: 443,
 		});
 		for (let index = 0; index < 7; index += 1) {
-			await repository.upsertSource({
+			const source = await repository.upsertSource({
 				id: `claim-source-${index}`,
 				normalizedUrl: `https://claim.example.com/feed-${index}.xml`,
 				requestedUrl: `https://claim.example.com/feed-${index}.xml`,
 				originId: origin.id,
 				nextFetchAt: now,
 			});
+			subscribeSource(db, source);
 		}
 		const scheduler = new DurableFeedScheduler(repository, { batchSize: 3, jitter: () => 0 });
 		expect(await scheduler.tick(now)).toHaveLength(3);
@@ -809,7 +827,7 @@ describe('durable feed ingestion persistence', () => {
 	});
 
 	it('bounds publisher concurrency at four and serializes parsing across many origins', async () => {
-		const { repository } = await setupDatabase();
+		const { db, repository } = await setupDatabase();
 		const now = new Date('2026-07-18T00:00:00Z');
 		for (let index = 0; index < 20; index += 1) {
 			const origin = await repository.upsertOrigin({
@@ -818,13 +836,14 @@ describe('durable feed ingestion persistence', () => {
 				host: `parallel-${index}.example.com`,
 				port: 443,
 			});
-			await repository.upsertSource({
+			const source = await repository.upsertSource({
 				id: `parallel-source-${index}`,
 				normalizedUrl: `https://parallel-${index}.example.com/feed.xml`,
 				requestedUrl: `https://parallel-${index}.example.com/feed.xml`,
 				originId: origin.id,
 				nextFetchAt: now,
 			});
+			subscribeSource(db, source);
 		}
 		await new DurableFeedScheduler(repository, { batchSize: 100 }).tick(now);
 		let activeNetwork = 0;
@@ -1760,6 +1779,7 @@ describe('durable feed ingestion persistence', () => {
 				createdAt: now,
 				updatedAt: now,
 			});
+			subscribeSource(db, source);
 		}
 		let requests = 0;
 		const worker = new DurableFeedWorker(repository, {
@@ -1886,6 +1906,7 @@ describe('durable feed ingestion persistence', () => {
 			createdAt: now,
 			updatedAt: now,
 		});
+		subscribeSource(db, source);
 		const controller = new AbortController();
 		const publisherOutcomes: string[] = [];
 		let publisherRequests = 0;
@@ -2025,6 +2046,7 @@ describe('durable feed ingestion persistence', () => {
 			nextFetchAt: clock,
 		});
 		let title = 'Version one';
+		subscribeSource(db, source);
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'hash-worker',
 			originStartGapSeconds: 0,
@@ -2103,6 +2125,7 @@ describe('durable feed ingestion persistence', () => {
 			originId: origin.id,
 			nextFetchAt: clock,
 		});
+		subscribeSource(db, source);
 		const requestedUrls: string[] = [];
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'feedburner-worker',
@@ -2154,6 +2177,7 @@ describe('durable feed ingestion persistence', () => {
 			originId: origin.id,
 			nextFetchAt: clock,
 		});
+		subscribeSource(db, source);
 		const requestedUrls: string[] = [];
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'melhores-destinos-worker',
@@ -2306,6 +2330,7 @@ describe('durable feed ingestion persistence', () => {
 			createdAt: now,
 			updatedAt: now,
 		});
+		subscribeSource(db, source);
 
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'relay-worker',
@@ -2361,6 +2386,7 @@ describe('durable feed ingestion persistence', () => {
 			createdAt: now,
 			updatedAt: now,
 		});
+		subscribeSource(db, source);
 		const worker = new DurableFeedWorker(repository, {
 			workerId: 'permanent-worker',
 			originStartGapSeconds: 0,

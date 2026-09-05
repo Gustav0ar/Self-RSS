@@ -10,8 +10,10 @@ import {
 	lt,
 	lte,
 	ne,
+	not,
 	notInArray,
 	or,
+	type SQLWrapper,
 	sql,
 } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
@@ -28,6 +30,14 @@ import { aggregateRefreshRequests } from './refresh-request-aggregation.js';
 type SourceUpdate = Partial<typeof feedSources.$inferInsert>;
 type OriginUpdate = Partial<typeof feedOrigins.$inferInsert>;
 
+function hasSourceSubscription(sourceId: SQLWrapper) {
+	return sql`EXISTS (
+		SELECT 1 FROM feeds subscription
+		WHERE subscription.source_id = ${sourceId}
+		OR subscription.pending_source_id = ${sourceId}
+	)`;
+}
+
 export class FeedIngestionSourceWorkRepository {
 	constructor(protected db: Database) {}
 	async enqueueDueSources(limit: number, now = new Date(), positiveJitterSeconds = 0) {
@@ -41,6 +51,7 @@ export class FeedIngestionSourceWorkRepository {
 					and(
 						inArray(feedSources.state, ['active', 'paused']),
 						lte(feedSources.nextFetchAt, now),
+						hasSourceSubscription(feedSources.id),
 						sql`NOT EXISTS (
 							SELECT 1 FROM feed_fetch_jobs active
 							WHERE active.source_id = ${feedSources.id}
@@ -129,6 +140,7 @@ export class FeedIngestionSourceWorkRepository {
 					)
 					.run();
 			}
+			expiredRequestIds.push(...this.retireUnsubscribedJobs(tx, now));
 
 			const jobDue = or(
 				and(
@@ -192,6 +204,7 @@ export class FeedIngestionSourceWorkRepository {
 				.where(
 					and(
 						jobDue,
+						hasSourceSubscription(feedSources.id),
 						or(
 							snapshotRecovery,
 							and(
@@ -250,6 +263,57 @@ export class FeedIngestionSourceWorkRepository {
 		});
 		await aggregateRefreshRequests(this.db, result.expiredRequestIds, now);
 		return result.claim;
+	}
+
+	/** Retire unclaimed work while preserving snapshots and live worker leases. */
+	private retireUnsubscribedJobs(
+		tx: Parameters<Parameters<Database['transaction']>[0]>[0],
+		now: Date,
+	) {
+		const retired = tx
+			.update(feedFetchJobs)
+			.set({
+				status: 'completed',
+				completedAt: now,
+				leaseOwner: null,
+				leaseExpiresAt: null,
+				lastErrorCode: 'no_subscribers',
+				lastErrorDetails: 'No subscriptions reference this source',
+				updatedAt: now,
+			})
+			.where(
+				and(
+					or(
+						eq(feedFetchJobs.status, 'queued'),
+						and(eq(feedFetchJobs.status, 'running'), lte(feedFetchJobs.leaseExpiresAt, now)),
+					),
+					not(hasSourceSubscription(feedFetchJobs.sourceId)),
+				),
+			)
+			.returning({ id: feedFetchJobs.id })
+			.all();
+		if (retired.length === 0) return [];
+		return tx
+			.update(feedRefreshRequestItems)
+			.set({
+				status: 'failed',
+				completedAt: now,
+				lastErrorCode: 'no_subscribers',
+				lastErrorDetails: 'No subscriptions reference this source',
+				updatedAt: now,
+			})
+			.where(
+				and(
+					inArray(
+						feedRefreshRequestItems.jobId,
+						retired.map((job) => job.id),
+					),
+					inArray(feedRefreshRequestItems.status, ['pending', 'running']),
+				),
+			)
+			.returning({ requestId: feedRefreshRequestItems.requestId })
+			.all()
+			.map((item) => item.requestId);
 	}
 
 	async renewFetchJob(jobId: string, workerId: string, leaseSeconds: number, now = new Date()) {
