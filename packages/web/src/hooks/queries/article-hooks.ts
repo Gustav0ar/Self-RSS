@@ -26,6 +26,7 @@ import {
 	buildArticleSearchParams,
 	findActiveQueryKey,
 	findCachedArticleSnapshot,
+	infiniteArticleQueryKey,
 	invalidateReaderQueries,
 } from './cache-utils';
 
@@ -149,15 +150,14 @@ export function useInfiniteArticles(
 	const limit = params.limit ?? 30;
 	const queryKey = useMemo(
 		() =>
-			[
-				'articles',
-				params.feedId ?? null,
-				params.categoryId ?? null,
-				params.unreadOnly ?? false,
-				params.savedOnly ?? false,
-				params.sort ?? 'latest',
+			infiniteArticleQueryKey({
+				feedId: params.feedId,
+				categoryId: params.categoryId,
+				unreadOnly: params.unreadOnly,
+				savedOnly: params.savedOnly,
+				sort: params.sort,
 				limit,
-			] as const,
+			}),
 		[params.feedId, params.categoryId, params.unreadOnly, params.savedOnly, params.sort, limit],
 	);
 	const savedFallback = buildSavedArticlesFallback(qc, params, limit);
