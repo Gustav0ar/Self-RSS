@@ -135,6 +135,10 @@ fun SelfFeedAppRoute(
                 searchViewModel.applyArticleReadState(articleId, read)
             }
 
+            override fun applyArticleSavedState(articleId: String, saved: Boolean) {
+                searchViewModel.updateSavedState(articleId, saved)
+            }
+
             override fun applyScopeMarkedRead(
                 feedId: String?,
                 categoryId: String?,

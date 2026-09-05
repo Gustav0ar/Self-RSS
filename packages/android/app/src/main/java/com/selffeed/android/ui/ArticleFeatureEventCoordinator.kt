@@ -4,6 +4,7 @@ interface ArticleFeatureEventSink {
     fun applyUnreadDelta(feedId: String?, unreadDelta: Int)
     fun applyStatsDelta(unreadDelta: Int, readDelta: Int)
     fun applyArticleReadState(articleId: String, read: Boolean)
+    fun applyArticleSavedState(articleId: String, saved: Boolean)
     fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>)
     fun applySearchScopeMarkedRead(feedIds: Set<String>)
     fun applyAllSearchMarkedRead()
@@ -33,6 +34,10 @@ class ArticleFeatureEventCoordinator {
                 sink.applyUnreadDelta(event.feedId, event.unreadDelta)
                 sink.applyStatsDelta(event.unreadDelta, event.readDelta)
                 sink.applyArticleReadState(event.articleId, event.read)
+            }
+
+            is ArticleFeatureEvent.ArticleSavedStateChanged -> {
+                sink.applyArticleSavedState(event.articleId, event.saved)
             }
 
             is ArticleFeatureEvent.ScopeMarkedRead -> {

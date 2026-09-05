@@ -15,6 +15,7 @@ import com.selffeed.android.data.remote.SearchRemoteDataSource
 import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.ReadStateStreamClient
 import com.selffeed.android.data.repository.RepositoryRuntime
+import com.selffeed.android.data.repository.SavedStateRejection
 import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
@@ -92,6 +93,7 @@ class RssRepository @Inject constructor(
     // scope tied to the repository means background work survives
     // individual failures and is cleaned up when the process dies.
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val savedStateRejectionEvents = MutableSharedFlow<SavedStateRejection>(extraBufferCapacity = 32)
     private val authLostEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
     private val analyticsSessionLock = Any()
     private val completedArticleIds = mutableSetOf<String>()
@@ -628,13 +630,15 @@ class RssRepository @Inject constructor(
         }
     }
 
+    override fun savedStateRejections(): Flow<SavedStateRejection> = savedStateRejectionEvents.asSharedFlow()
+
     override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall {
         val key = "article:$articleId"
         val previous = runtime.getCached<ArticleDetail>(key)
+        localStore.queueSavedStateMutation(articleId, saved)
         if (previous != null) {
             runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isSaved = saved))
         }
-        localStore.queueSavedStateMutation(articleId, saved)
         runtime.invalidateByPrefix("articles")
         runtime.invalidateByPrefix("search")
         runCatching { ArticleStateSyncWorker.kickOnce(imageRequestContext) }
@@ -1027,7 +1031,14 @@ class RssRepository @Inject constructor(
                     if (read != null && (saved == null || read.updatedAt <= saved.updatedAt)) {
                         localStore.discardReadStateMutation(read)
                     } else if (saved != null) {
-                        localStore.discardSavedStateMutation(saved)
+                        localStore.discardSavedStateMutation(saved)?.let { restored ->
+                            val key = "article:${saved.articleId}"
+                            runtime.getCached<ArticleDetail>(key)?.let { detail ->
+                                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = restored))
+                            }
+                            runtime.invalidateByPrefix("search")
+                            savedStateRejectionEvents.emit(SavedStateRejection(saved.articleId, restored))
+                        }
                     }
                     return@repeat
                 }

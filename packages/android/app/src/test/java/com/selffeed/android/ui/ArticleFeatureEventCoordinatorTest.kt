@@ -30,6 +30,15 @@ class ArticleFeatureEventCoordinatorTest {
     }
 
     @Test
+    fun `saved state rejection updates search results`() {
+        val sink = RecordingSink()
+        coordinator.handle(
+            ArticleFeatureEvent.ArticleSavedStateChanged("a-1", false), FeedsUiState(), sink,
+        )
+        assertEquals(listOf("a-1" to false), sink.articleSavedStates)
+    }
+
+    @Test
     fun `category mark-read maps latest feeds into search update`() {
         val sink = RecordingSink()
 
@@ -122,6 +131,7 @@ class ArticleFeatureEventCoordinatorTest {
     private class RecordingSink : ArticleFeatureEventSink {
         val unreadDeltas = mutableListOf<Pair<String?, Int>>()
         val statsDeltas = mutableListOf<Pair<Int, Int>>()
+        val articleSavedStates = mutableListOf<Pair<String, Boolean>>()
         val articleReadStates = mutableListOf<Pair<String, Boolean>>()
         val scopeMarkedRead = mutableListOf<Triple<String?, String?, Set<String>>>()
         val searchScopeMarkedRead = mutableListOf<Set<String>>()
@@ -137,6 +147,10 @@ class ArticleFeatureEventCoordinatorTest {
 
         override fun applyArticleReadState(articleId: String, read: Boolean) {
             articleReadStates += articleId to read
+        }
+
+        override fun applyArticleSavedState(articleId: String, saved: Boolean) {
+            articleSavedStates += articleId to saved
         }
 
         override fun applyScopeMarkedRead(

@@ -23,6 +23,7 @@ import com.selffeed.android.network.UpdatePreferencesRequest
 import com.selffeed.android.network.User
 import com.selffeed.android.network.UserPreferences
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 interface AuthRepository {
     fun getApiBaseUrl(): String
@@ -87,6 +88,8 @@ interface FeedRepository {
     suspend fun exportOpml(): AppResult<String>
 }
 
+data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean)
+
 interface ArticleRepository {
     fun articlePagingData(
         query: ArticlePageQuery,
@@ -110,6 +113,7 @@ interface ArticleRepository {
     ): AppResult<Boolean>
 
     suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean>
+    fun savedStateRejections(): Flow<SavedStateRejection> = emptyFlow()
     suspend fun markAllRead(
         feedId: String? = null,
         categoryId: String? = null

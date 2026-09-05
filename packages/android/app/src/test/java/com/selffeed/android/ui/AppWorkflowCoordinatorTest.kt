@@ -74,6 +74,7 @@ class AppWorkflowCoordinatorTest {
         override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) = Unit
         override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) = Unit
         override fun applyArticleReadState(articleId: String, read: Boolean) = Unit
+        override fun applyArticleSavedState(articleId: String, saved: Boolean) = Unit
         override fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>) = Unit
         override fun applySearchScopeMarkedRead(feedIds: Set<String>) = Unit
         override fun applyAllSearchMarkedRead() = Unit

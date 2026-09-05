@@ -191,7 +191,9 @@ class LocalStore(
             val detail = detailEntity?.let {
                 runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
             }
-            if (dao.readArticle(articleId) == null && detail != null) {
+            val article = dao.readArticle(articleId)
+            val previousState = previous?.previousState ?: article?.isSaved ?: detail?.isSaved
+            if (article == null && detail != null) {
                 dao.upsertArticles(listOf(detail.toArticleEntity(saved)))
             }
             queued = PendingSavedStateMutationEntity(
@@ -199,7 +201,7 @@ class LocalStore(
                 saved = saved,
                 mutationId = UUID.randomUUID().toString(),
                 baseRevision = previous?.baseRevision ?: revision,
-                previousState = previous?.previousState ?: dao.readArticle(articleId)?.isSaved ?: detail?.isSaved,
+                previousState = previousState,
                 updatedAt = System.currentTimeMillis(),
             )
             dao.updateArticleSavedState(articleId, saved)
@@ -385,10 +387,12 @@ class LocalStore(
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
     }
 
-    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity) {
+    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): Boolean? {
+        var restoredState: Boolean? = null
         database.withTransaction {
             if (dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0) {
                 mutation.previousState?.let { previous ->
+                    restoredState = previous
                     dao.updateArticleSavedState(mutation.articleId, previous)
                     dao.readArticleDetail(mutation.articleId)?.let { entity ->
                         runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
@@ -401,6 +405,7 @@ class LocalStore(
             }
         }
         notifyInvalidation(TABLE_ARTICLES)
+        return restoredState
     }
 
     suspend fun clearAcknowledgedReadStateOverride(articleId: String) {
