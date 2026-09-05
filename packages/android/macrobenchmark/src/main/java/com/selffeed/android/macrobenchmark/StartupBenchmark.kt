@@ -87,6 +87,6 @@ class BaselineProfileGenerator {
 
 private fun benchmarkReaderIntent(): Intent = Intent(Intent.ACTION_MAIN).apply {
     addCategory(Intent.CATEGORY_LAUNCHER)
-    setPackage(TARGET_PACKAGE)
+    setClassName(TARGET_PACKAGE, "$TARGET_PACKAGE.MainActivity")
     putExtra(BenchmarkScenarioExtra, BenchmarkReaderScenarioName)
 }
