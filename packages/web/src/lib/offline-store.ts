@@ -11,6 +11,7 @@ import {
 import {
 	boundedState,
 	cachedArticleIds,
+	isPersistedQueryCache,
 	type PersistedQueryCache,
 	shouldPersistQuery,
 } from './offline-query-cache';
@@ -280,19 +281,6 @@ async function withStoreLock<T>(name: string, operation: () => Promise<T>): Prom
 	return operation();
 }
 
-function isPersistedQueryCache(value: unknown, ownerId: string): value is PersistedQueryCache {
-	if (!value || typeof value !== 'object') return false;
-	const candidate = value as Partial<PersistedQueryCache>;
-	return (
-		candidate.schemaVersion === SCHEMA_VERSION &&
-		candidate.ownerId === ownerId &&
-		candidate.namespace === namespace() &&
-		typeof candidate.persistedAt === 'number' &&
-		!!candidate.state &&
-		Array.isArray(candidate.state.queries)
-	);
-}
-
 function isUser(value: unknown): value is User {
 	if (!value || typeof value !== 'object') return false;
 	const candidate = value as Partial<User>;
@@ -332,7 +320,9 @@ export async function readOfflineSnapshot(
 			records && cachedArticles
 				? cachedArticles
 				: cachedArticleIds(
-						isPersistedQueryCache(cache, userId) ? boundedState(cache.state).queries : [],
+						isPersistedQueryCache(cache, userId, namespace(), SCHEMA_VERSION)
+							? boundedState(cache.state).queries
+							: [],
 					),
 	};
 }
@@ -348,7 +338,7 @@ export async function persistQueryClient(queryClient: QueryClient, userId: strin
 	await withStoreLock(`cache:${userId}`, async () => {
 		await updateValue<PersistedQueryCache>(cacheKey(userId), (cached) => {
 			const newestByHash = new Map(
-				isPersistedQueryCache(cached, userId)
+				isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
 					? cached.state.queries.map((query) => [query.queryHash, query])
 					: [],
 			);
@@ -375,7 +365,7 @@ export async function restoreQueryClient(
 	userId: string,
 ): Promise<boolean> {
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (!isPersistedQueryCache(cached, userId)) return false;
+	if (!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return false;
 	const state = boundedState(cached.state);
 	if (state.queries.length === 0) {
 		await clearOfflineQueryCache(userId);
@@ -390,7 +380,11 @@ export async function restoreOfflineArticle(queryClient: QueryClient, articleId:
 	const userId = activeUserId;
 	if (!userId) return;
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (activeUserId !== userId || !isPersistedQueryCache(cached, userId)) return;
+	if (
+		activeUserId !== userId ||
+		!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
+	)
+		return;
 	const queries = boundedState(cached.state).queries.filter(
 		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
 	);

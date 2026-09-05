@@ -78,3 +78,21 @@ function hasReadableHtml(html: string) {
 		element.remove();
 	return Boolean(template.content.textContent?.trim());
 }
+
+export function isPersistedQueryCache(
+	value: unknown,
+	ownerId: string,
+	origin: string,
+	schemaVersion: number,
+): value is PersistedQueryCache {
+	if (!value || typeof value !== 'object') return false;
+	const candidate = value as Partial<PersistedQueryCache>;
+	return (
+		candidate.schemaVersion === schemaVersion &&
+		candidate.ownerId === ownerId &&
+		candidate.namespace === origin &&
+		typeof candidate.persistedAt === 'number' &&
+		!!candidate.state &&
+		Array.isArray(candidate.state.queries)
+	);
+}
