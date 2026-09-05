@@ -1,5 +1,5 @@
 import type { ApiResponse, User } from '@self-feed/shared';
-import { type DehydratedState, dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
+import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, apiFetch } from './api';
 import { parseLegacyQueryCache } from './legacy-query-cache';
 import {
@@ -8,7 +8,12 @@ import {
 	offlineRejectionCount,
 	reportOfflineRejection,
 } from './offline-changes';
-import { boundedState, cachedArticleIds } from './offline-query-cache';
+import {
+	boundedState,
+	cachedArticleIds,
+	type PersistedQueryCache,
+	shouldPersistQuery,
+} from './offline-query-cache';
 import { type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
 
 const DATABASE_NAME = 'self-feed-offline';
@@ -19,24 +24,6 @@ const SCHEMA_VERSION = 2;
 const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
 const OFFLINE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_OUTBOX_ENTRIES = 1_000;
-const PERSISTED_QUERY_ROOTS = new Set([
-	'article',
-	'articles',
-	'categories',
-	'feeds',
-	'preferences',
-	'search',
-	'stats',
-]);
-
-interface PersistedQueryCache {
-	schemaVersion: number;
-	ownerId: string;
-	namespace: string;
-	persistedAt: number;
-	state: DehydratedState;
-}
-
 interface PersistedOfflineUser {
 	schemaVersion: number;
 	namespace: string;
@@ -291,10 +278,6 @@ async function withStoreLock<T>(name: string, operation: () => Promise<T>): Prom
 		return navigator.locks.request(`self-feed:${namespace()}:${name}`, operation);
 	}
 	return operation();
-}
-
-function shouldPersistQuery(queryKey: readonly unknown[]) {
-	return typeof queryKey[0] === 'string' && PERSISTED_QUERY_ROOTS.has(queryKey[0]);
 }
 
 function isPersistedQueryCache(value: unknown, ownerId: string): value is PersistedQueryCache {

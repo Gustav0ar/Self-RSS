@@ -4,6 +4,28 @@ const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_QUERIES = 600;
 const MAX_PERSISTED_BYTES = 10 * 1024 * 1024;
 
+const PERSISTED_QUERY_ROOTS = new Set([
+	'article',
+	'articles',
+	'categories',
+	'feeds',
+	'preferences',
+	'search',
+	'stats',
+]);
+
+export interface PersistedQueryCache {
+	schemaVersion: number;
+	ownerId: string;
+	namespace: string;
+	persistedAt: number;
+	state: DehydratedState;
+}
+
+export function shouldPersistQuery(queryKey: readonly unknown[]) {
+	return typeof queryKey[0] === 'string' && PERSISTED_QUERY_ROOTS.has(queryKey[0]);
+}
+
 function byteSize(value: unknown) {
 	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
