@@ -168,38 +168,57 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		);
 	}
 
-	if (isLoading) {
-		return (
-			<div className="flex h-full items-center justify-center px-6 py-10">
-				<p className="text-sm text-muted-foreground">Loading article...</p>
-			</div>
-		);
-	}
+	const mobileBar = (
+		<div className="reader-mobile-bar">
+			<button
+				type="button"
+				onClick={() => {
+					if (window.history.length > 1) {
+						router.history.back();
+					} else {
+						void router.navigate({ to: '/' });
+					}
+				}}
+				className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-muted-foreground hover:bg-accent hover:text-foreground"
+				aria-label="Back to article list"
+			>
+				<ArrowLeft className="h-4 w-4" />
+			</button>
+			{article ? (
+				<p className="line-clamp-1 min-w-0 flex-1 text-sm font-medium text-foreground">
+					{article.title}
+				</p>
+			) : null}
+		</div>
+	);
 
-	if (isError) {
+	if (isLoading || isError || !article) {
 		return (
-			<div className="flex h-full items-center justify-center px-6 py-10">
-				<div className="text-center">
-					<p className="text-sm font-medium text-foreground">Could not load this article</p>
-					<p className="mt-1 text-xs text-muted-foreground">Check your connection and try again.</p>
-					<button
-						type="button"
-						onClick={() => void refetch()}
-						disabled={isFetching}
-						className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
-					>
-						<RefreshCw className="h-4 w-4" />
-						Retry
-					</button>
+			<div className="flex h-full flex-col">
+				{mobileBar}
+				<div className="flex flex-1 items-center justify-center px-6 py-10">
+					{isLoading ? (
+						<p className="text-sm text-muted-foreground">Loading article...</p>
+					) : isError ? (
+						<div className="text-center">
+							<p className="text-sm font-medium text-foreground">Could not load this article</p>
+							<p className="mt-1 text-xs text-muted-foreground">
+								Check your connection and try again.
+							</p>
+							<button
+								type="button"
+								onClick={() => void refetch()}
+								disabled={isFetching}
+								className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
+							>
+								<RefreshCw className="h-4 w-4" />
+								Retry
+							</button>
+						</div>
+					) : (
+						<p className="text-sm text-muted-foreground">Article not found</p>
+					)}
 				</div>
-			</div>
-		);
-	}
-
-	if (!article) {
-		return (
-			<div className="flex h-full items-center justify-center px-6 py-10">
-				<p className="text-sm text-muted-foreground">Article not found</p>
 			</div>
 		);
 	}
@@ -224,25 +243,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 				style={{ transform: 'scaleX(0)' }}
 				aria-hidden="true"
 			/>
-			<div className="reader-mobile-bar">
-				<button
-					type="button"
-					onClick={() => {
-						if (window.history.length > 1) {
-							router.history.back();
-						} else {
-							void router.navigate({ to: '/' });
-						}
-					}}
-					className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-muted-foreground hover:bg-accent hover:text-foreground"
-					aria-label="Back to article list"
-				>
-					<ArrowLeft className="h-4 w-4" />
-				</button>
-				<p className="line-clamp-1 min-w-0 flex-1 text-sm font-medium text-foreground">
-					{article.title}
-				</p>
-			</div>
+			{mobileBar}
 			<article className="grid min-h-full gap-5 px-4 py-4 sm:px-5 lg:px-6 2xl:grid-cols-[minmax(0,1fr)_20rem]">
 				<div className="min-w-0">
 					<header className="motion-enter max-w-[82ch]">

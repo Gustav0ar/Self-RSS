@@ -46,16 +46,22 @@ const articleWithEmbeddedHtml = {
 const markReadMutate = vi.fn();
 const enrichMutate = vi.fn();
 let autoMarkReadMode = 'on_navigate';
-let currentArticle = articleWithEmbeddedHtml;
+let currentArticle: typeof articleWithEmbeddedHtml | undefined = articleWithEmbeddedHtml;
+let articleIsLoading = false;
 let articleIsError = false;
 const refetchArticle = vi.fn();
 const setSavedMutate = vi.fn();
 const trackArticleCompletion = vi.fn();
+const router = { history: { back: vi.fn() }, navigate: vi.fn() };
+
+vi.mock('@tanstack/react-router', () => ({
+	useRouter: () => router,
+}));
 
 vi.mock('../../src/hooks/queries', () => ({
 	useArticle: () => ({
 		data: currentArticle,
-		isLoading: false,
+		isLoading: articleIsLoading,
 		isError: articleIsError,
 		isFetching: false,
 		refetch: refetchArticle,
@@ -79,11 +85,13 @@ describe('ReaderPane', () => {
 		vi.clearAllMocks();
 		autoMarkReadMode = 'on_navigate';
 		currentArticle = articleWithEmbeddedHtml;
+		articleIsLoading = false;
 		articleIsError = false;
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
+		vi.restoreAllMocks();
 	});
 
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
@@ -254,12 +262,41 @@ describe('ReaderPane', () => {
 
 	it('shows a retry action for transient article failures', () => {
 		articleIsError = true;
-		currentArticle = null as never;
+		currentArticle = undefined;
 		const { getByText } = render(<ReaderPane articleId="article-1" />);
 
 		fireEvent.click(getByText('Retry'));
 
 		expect(refetchArticle).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		['loading', 'Loading article...'],
+		['error', 'Could not load this article'],
+		['missing', 'Article not found'],
+	])('keeps back navigation available when the article is %s', (state, message) => {
+		currentArticle = undefined;
+		articleIsLoading = state === 'loading';
+		articleIsError = state === 'error';
+		vi.spyOn(window.history, 'length', 'get').mockReturnValue(2);
+		const { getByRole, getByText } = render(<ReaderPane articleId="article-1" />);
+
+		expect(getByText(message)).toBeTruthy();
+		fireEvent.click(getByRole('button', { name: 'Back to article list' }));
+
+		expect(router.history.back).toHaveBeenCalledOnce();
+	});
+
+	it('returns to the article list when a failed deep link has no previous history entry', () => {
+		currentArticle = undefined;
+		articleIsError = true;
+		vi.spyOn(window.history, 'length', 'get').mockReturnValue(1);
+		const { getByRole } = render(<ReaderPane articleId="article-1" />);
+
+		fireEvent.click(getByRole('button', { name: 'Back to article list' }));
+
+		expect(router.navigate).toHaveBeenCalledWith({ to: '/' });
+		expect(router.history.back).not.toHaveBeenCalled();
 	});
 
 	it('updates scroll progress through a scheduled DOM write', () => {
