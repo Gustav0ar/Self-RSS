@@ -137,7 +137,8 @@ class PersistedRefreshCookieJar(
     private val sessionStore: SessionStore,
 ) : CookieJar {
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        val refresh = cookies.firstOrNull { it.name == REFRESH_COOKIE_NAME }
+        configuredOriginFor(url) ?: return
+        val refresh = cookies.firstOrNull { it.name == REFRESH_COOKIE_NAME && it.matches(url) }
         if (refresh != null) {
             runCatching {
                 runBlocking(Dispatchers.IO) {
@@ -149,11 +150,14 @@ class PersistedRefreshCookieJar(
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        val origin = configuredOriginFor(url) ?: return emptyList()
         val rawCookie = runCatching { sessionStore.getRefreshCookie() }
             .onFailure { logCookieJarError("Failed to read refresh cookie", it) }
             .getOrNull()
             ?: return emptyList()
-        val cookie = Cookie.parse(url, rawCookie) ?: return emptyList()
+        // Host-only cookies omit Domain when serialized. Restore that host from
+        // the persisted API server, never from a redirect's destination.
+        val cookie = Cookie.parse(origin, rawCookie) ?: return emptyList()
         return if (cookie.expiresAt < System.currentTimeMillis()) {
             runCatching {
                 runBlocking(Dispatchers.IO) {
@@ -162,8 +166,18 @@ class PersistedRefreshCookieJar(
             }
                 .onFailure { logCookieJarError("Failed to clear expired refresh cookie", it) }
             emptyList()
-        } else {
+        } else if (cookie.matches(url)) {
             listOf(cookie)
+        } else {
+            emptyList()
+        }
+    }
+
+    private fun configuredOriginFor(url: HttpUrl): HttpUrl? {
+        val origin = runCatching { apiEndpointUrl(sessionStore.getApiBaseUrl(), "") }.getOrNull()
+            ?: return null
+        return origin.takeIf {
+            it.scheme == url.scheme && it.host == url.host && it.port == url.port
         }
     }
 
