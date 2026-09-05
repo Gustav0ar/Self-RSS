@@ -263,6 +263,28 @@ before commit. If a migration would remove protected rows or leave
 orphaned rows, it is rolled back and startup fails with the backup path
 in the error.
 
+Before changing deployment configuration, the script captures the previous
+Compose file, private `.env`, immutable API/worker/web image IDs, and SQLite
+schema and migration-ledger fingerprint.
+
+Automatic rollback stops the API and worker before comparing the current
+SQLite schema and `__drizzle_migrations` ledger with the captured fingerprint.
+When both are unchanged, it restores the matching previous configuration and
+starts the captured API, worker, and web image IDs, leaving Redis unchanged.
+It leaves the database files in place, including user writes made after
+deployment began. It never restores a database backup automatically.
+
+If the schema or ledger changed, or their current state cannot be read,
+rollback refuses to start previous images. The target configuration, images,
+and database remain in place, with the API and worker stopped. Correct the
+target release or deploy a compatible forward fix, then retry the deployment.
+
+Recovery metadata lives under `.deploy-recovery/<target-sha>` with private
+permissions because it includes `.env`. Failed-attempt retries reuse the
+original recovery set. A successful deployment closes that attempt; a later
+deployment of the same SHA captures the now-current release as its baseline.
+Completed recovery metadata is retained separately from SQLite backups.
+
 ## Durable feed ingestion rollout
 
 Production Docker Compose defaults `FEED_PIPELINE_MODE` to `v2` for both

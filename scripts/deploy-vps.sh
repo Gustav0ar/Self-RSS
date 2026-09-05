@@ -41,6 +41,7 @@ echo "::endgroup::"
 
 mkdir -p "${DEPLOY_PATH}"
 cd "${DEPLOY_PATH}"
+RECOVERY_DIR="${PWD}/.deploy-recovery/${HEAD_SHA}"
 
 dump_compose_diagnostics() {
 	echo "::group::Compose diagnostics"
@@ -54,73 +55,150 @@ fail_with_diagnostics() {
 	exit 1
 }
 
+database_schema_fingerprint() {
+	local image="$1"
+	if [ ! -f data/self-feed.db ]; then
+		printf '%s\n' missing
+		return 0
+	fi
+	"${CONTAINER_CLI}" run --rm --pull never --network none --user 0:0 \
+		--volume "${PWD}/data:/app/data:ro" --entrypoint bun "${image}" -e '
+		import { Database } from "bun:sqlite";
+		import { createHash } from "node:crypto";
+		const db = new Database("/app/data/self-feed.db", { readonly: true });
+		try {
+			const snapshot = db.transaction(() => {
+				const schema = db.query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all();
+				const ledger = schema.some(row => row.type === "table" && row.name === "__drizzle_migrations")
+					? db.query("SELECT * FROM __drizzle_migrations ORDER BY id").all() : [];
+				return { schema, ledger };
+			})();
+			console.log(createHash("sha256").update(JSON.stringify(snapshot)).digest("hex"));
+		} finally { db.close(); }
+	'
+}
+
 rollback_deploy() {
-	echo "=========================================="
-	echo "ROLLBACK: Initiating rollback to previous image"
-	echo "=========================================="
-
-	if [ "${ROLLBACK_AVAILABLE}" != "true" ] || \
-		! "${CONTAINER_CLI}" image inspect "${PREVIOUS_API_IMAGE}" >/dev/null 2>&1 || \
-		! "${CONTAINER_CLI}" image inspect "${PREVIOUS_WEB_IMAGE}" >/dev/null 2>&1; then
-		echo "[ROLLBACK] ERROR: A complete local rollback image set is unavailable"
+	echo "[ROLLBACK] Stopping API and worker before checking database compatibility"
+	if ! "${COMPOSE_ARGS[@]}" -f docker-compose.yml stop api worker; then
+		echo "[ROLLBACK] Cannot confirm writers stopped; refusing to start previous images. Fix forward."
 		fail_with_diagnostics
 	fi
 
-	echo "[ROLLBACK] Restoring previous API and web images"
-	if ! "${CONTAINER_CLI}" tag "${PREVIOUS_API_IMAGE}" "${API_IMAGE}" || \
-		! "${CONTAINER_CLI}" tag "${PREVIOUS_WEB_IMAGE}" "${WEB_IMAGE}"; then
-		echo "[ROLLBACK] ERROR: Failed to restore one or more previous image tags"
+	if [ "${ROLLBACK_AVAILABLE}" != true ]; then
+		echo "[ROLLBACK] No complete recovery set is available. Target configuration and data retained; API/worker remain stopped. Fix forward."
 		fail_with_diagnostics
 	fi
-
-	echo "[ROLLBACK] Restarting containers with previous image"
-	"${COMPOSE_ARGS[@]}" -f docker-compose.yml up -d --remove-orphans --force-recreate api worker web || {
-		echo "[ROLLBACK] ERROR: Failed to restart containers"
+	local current_fingerprint previous_fingerprint api_image image
+	api_image="$(cat "${RECOVERY_DIR}/api-image")"
+	previous_fingerprint="$(cat "${RECOVERY_DIR}/fingerprint")"
+	if ! current_fingerprint="$(database_schema_fingerprint "${api_image}")"; then
+		echo "[ROLLBACK] Database compatibility is unreadable. Target configuration and data retained; API/worker remain stopped. Fix forward."
 		fail_with_diagnostics
-	}
-
-	echo "[ROLLBACK] Verifying container health after rollback"
-	if wait_for_container_health selffeed-redis Redis; then
-		if wait_for_container_health selffeed-api API; then
-			if wait_for_container_health selffeed-web Web; then
-				if wait_for_container_health selffeed-worker Worker; then
-					echo "=========================================="
-					echo "ROLLBACK: Completed successfully - services healthy"
-					echo "=========================================="
-					echo "[ROLLBACK] New deployment failed; previous version restored and healthy."
-					exit 2  # Exit code 2 indicates rollback was performed
-				fi
-			fi
+	fi
+	if [ "${current_fingerprint}" != "${previous_fingerprint}" ]; then
+		echo "[ROLLBACK] Database schema or migration ledger changed. Previous images will not be started."
+		echo "[ROLLBACK] Target configuration, images, and all user data retained. API/worker remain stopped; deploy a compatible forward fix."
+		fail_with_diagnostics
+	fi
+	for image in api worker web; do
+		if ! "${CONTAINER_CLI}" image inspect "$(cat "${RECOVERY_DIR}/${image}-image")" >/dev/null 2>&1; then
+			echo "[ROLLBACK] A captured image is unavailable. Target configuration and data retained; fix forward."
+			fail_with_diagnostics
 		fi
+	done
+
+	echo "[ROLLBACK] Database schema is unchanged; restoring the matching previous configuration and images"
+	cp "${RECOVERY_DIR}/docker-compose.yml" docker-compose.yml || fail_with_diagnostics
+	cp "${RECOVERY_DIR}/.env" .env || fail_with_diagnostics
+	chmod 600 .env
+	# The deploy process exports target image metadata. Let the restored .env
+	# supply the old configuration, with immutable image IDs pinned separately.
+	if ! (
+		unset IMAGE_TAG IMAGE_OWNER_LOWERCASE REGISTRY APP_UID APP_GID
+		"${COMPOSE_ARGS[@]}" -f docker-compose.yml -f "${RECOVERY_DIR}/images.yml" \
+			up -d --no-deps --remove-orphans --force-recreate --pull never api worker web
+	); then
+		echo "[ROLLBACK] Failed to restart the captured release"
+		fail_with_diagnostics
 	fi
 
-	echo "[ROLLBACK] ERROR: Health checks failed after rollback"
+	if wait_for_container_health selffeed-redis Redis && \
+		wait_for_container_health selffeed-api API && \
+		wait_for_container_health selffeed-web Web && \
+		wait_for_container_health selffeed-worker Worker; then
+		echo "[ROLLBACK] Previous release restored. Database files and post-deploy user writes were preserved."
+		exit 2
+	fi
+	echo "[ROLLBACK] Health checks failed after restoring the captured release"
 	fail_with_diagnostics
 }
 
 save_current_images() {
-	echo "Saving current API and web images as the local rollback set"
-	current_api_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-api 2>/dev/null || true)"
-	current_web_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-web 2>/dev/null || true)"
-	target_api_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${API_IMAGE}" 2>/dev/null || true)"
-	target_web_image="$("${CONTAINER_CLI}" image inspect -f '{{.Id}}' "${WEB_IMAGE}" 2>/dev/null || true)"
-
-	# A retry after a partial rollout sees the target image ID on a container.
-	# Preserve the rollback set captured by the original attempt in that case.
-	if [ "${current_api_image}" != "${target_api_image}" ] && \
-		[ "${current_web_image}" != "${target_web_image}" ] && \
-		[ -n "${current_api_image}" ] && [ -n "${current_web_image}" ]; then
-		"${CONTAINER_CLI}" tag "${current_api_image}" "${PREVIOUS_API_IMAGE}"
-		"${CONTAINER_CLI}" tag "${current_web_image}" "${PREVIOUS_WEB_IMAGE}"
+	local api_image worker_image web_image file
+	# A successful deployment closes its attempt. Deploying the same SHA again
+	# needs a fresh baseline, not the version that preceded its first success.
+	if [ -f "${RECOVERY_DIR}/deployment-succeeded" ]; then
+		mv "${RECOVERY_DIR}" "${RECOVERY_DIR}.completed-$(date -u +%Y%m%dT%H%M%S)-$$" || return 1
 	fi
-
-	if "${CONTAINER_CLI}" image inspect "${PREVIOUS_API_IMAGE}" >/dev/null 2>&1 && \
-		"${CONTAINER_CLI}" image inspect "${PREVIOUS_WEB_IMAGE}" >/dev/null 2>&1; then
-		ROLLBACK_AVAILABLE=true
-		echo "[PRE-DEPLOY] Complete local rollback image set is available"
+	if [ ! -d "${RECOVERY_DIR}" ]; then
+		api_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-api 2>/dev/null || true)"
+		worker_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-worker 2>/dev/null || true)"
+		web_image="$("${CONTAINER_CLI}" inspect -f '{{.Image}}' selffeed-web 2>/dev/null || true)"
+		(
+			umask 077
+			mkdir -p "${RECOVERY_DIR%/*}" || exit 1
+			staging="$(mktemp -d "${RECOVERY_DIR}.capture.XXXXXX")" || exit 1
+			trap 'rm -rf "${staging}"' EXIT
+			if [ -z "${api_image}" ] || [ -z "${web_image}" ] || \
+				[ "${api_image}" != "${worker_image}" ] || \
+				[ ! -f docker-compose.yml ] || [ ! -f .env ]; then
+				# Preserve the absence of a baseline on retries of an initial or
+				# incomplete installation, instead of adopting partially new state.
+				touch "${staging}/unavailable" || exit 1
+			else
+				local fingerprint
+				if ! fingerprint="$(database_schema_fingerprint "${api_image}")" || \
+					[[ ! "${fingerprint}" =~ ^([0-9a-f]{64}|missing)$ ]]; then
+					echo "[PRE-DEPLOY] Cannot read the existing database schema; deployment stopped before changing configuration."
+					exit 1
+				fi
+				cp docker-compose.yml "${staging}/docker-compose.yml" || exit 1
+				cp .env "${staging}/.env" || exit 1
+				chmod 600 "${staging}/.env" || exit 1
+				printf '%s\n' "${fingerprint}" > "${staging}/fingerprint" || exit 1
+				printf '%s\n' "${api_image}" > "${staging}/api-image" || exit 1
+				printf '%s\n' "${worker_image}" > "${staging}/worker-image" || exit 1
+				printf '%s\n' "${web_image}" > "${staging}/web-image" || exit 1
+				printf 'services:\n  api:\n    image: %s\n  worker:\n    image: %s\n  web:\n    image: %s\n' \
+					"${api_image}" "${worker_image}" "${web_image}" > "${staging}/images.yml" || exit 1
+				# Keep the captured image IDs reachable through local tags when
+				# a successful deployment prunes dangling images.
+				"${CONTAINER_CLI}" tag "${api_image}" "${PREVIOUS_API_IMAGE}" || exit 1
+				"${CONTAINER_CLI}" tag "${web_image}" "${PREVIOUS_WEB_IMAGE}" || exit 1
+			fi
+			touch "${staging}/ready" || exit 1
+			mv "${staging}" "${RECOVERY_DIR}" || exit 1
+		) || return 1
+	fi
+	if [ ! -f "${RECOVERY_DIR}/ready" ]; then
+		echo "[PRE-DEPLOY] Recovery metadata is incomplete; refusing to replace it during a retry."
+		return 1
+	fi
+	if [ -f "${RECOVERY_DIR}/unavailable" ]; then
+		ROLLBACK_AVAILABLE=false
+		echo "[PRE-DEPLOY] No complete previous release is available for automatic rollback"
 	else
-		echo "[PRE-DEPLOY] No complete prior deployment is available for rollback"
+		for file in docker-compose.yml .env api-image worker-image web-image fingerprint images.yml; do
+			[ -s "${RECOVERY_DIR}/${file}" ] || return 1
+		done
+		ROLLBACK_AVAILABLE=true
+		echo "[PRE-DEPLOY] Preserved recovery set is ready for this deployment attempt"
 	fi
+}
+
+mark_deploy_success() {
+	touch "${RECOVERY_DIR}/deployment-succeeded"
 }
 
 wait_for_container_health() {
@@ -370,6 +448,13 @@ if ! chmod 750 data 2>/dev/null; then
 	echo "Warning: could not chmod data before permission normalization; continuing with existing permissions."
 fi
 
+if [ ! -f .env ]; then
+	echo ".env is missing in ${DEPLOY_PATH}; create it with the production secrets before deploying."
+	exit 1
+fi
+# Capture the previous configuration before downloading or rewriting any files.
+save_current_images || fail_with_diagnostics
+
 curl_headers=(-H "Accept: application/vnd.github.raw")
 if [ -n "${GITHUB_TOKEN}" ]; then
 	curl_headers+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
@@ -386,10 +471,6 @@ curl -fsSL \
 	-o self-feed-navigation-whitelist.yaml \
 	"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${HEAD_SHA}/deploy/crowdsec/self-feed-navigation-whitelist.yaml"
 
-if [ ! -f .env ]; then
-	echo ".env is missing in ${DEPLOY_PATH}; create it with the production secrets before deploying."
-	exit 1
-fi
 normalize_domain_name
 install_crowdsec_navigation_whitelist self-feed-navigation-whitelist.yaml
 
@@ -408,9 +489,6 @@ export REGISTRY
 ensure_data_permissions
 backup_existing_database
 
-# Save current images before deploying for rollback capability.
-save_current_images
-
 # Pull images, restart services, prune.
 "${COMPOSE_ARGS[@]}" -f docker-compose.yml pull || fail_with_diagnostics
 ensure_data_permissions
@@ -425,4 +503,5 @@ wait_for_container_health selffeed-web Web || { echo "[DEPLOY] Web health check 
 wait_for_container_health selffeed-worker Worker || { echo "[DEPLOY] Worker health check failed"; rollback_deploy; }
 verify_public_routes || { echo "[DEPLOY] Public route smoke check failed"; rollback_deploy; }
 
+mark_deploy_success
 "${CONTAINER_CLI}" image prune -f

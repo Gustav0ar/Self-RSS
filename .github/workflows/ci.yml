@@ -66,6 +66,8 @@ jobs:
       - name: Verify generated OpenAPI is committed
         run: git diff --exit-code -- packages/api/openapi.json
       - run: bun run test
+      - name: Verify deployment rollback preserves persistent data
+        run: python3 scripts/test_deploy_rollback.py
       - name: Install pinned web Playwright browsers
         run: bun run --filter '@self-feed/web' playwright:install
       - run: bun run test:integration
