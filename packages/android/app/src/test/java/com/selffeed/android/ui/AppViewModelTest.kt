@@ -5,6 +5,11 @@ import com.selffeed.android.data.SessionStore
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +44,24 @@ class AppViewModelTest {
     @After
     fun teardown() {
         Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `pending changes remain unknown until durable count arrives and retry keeps the count`() = runTest {
+        val counts = MutableSharedFlow<Int>()
+        every { repository.observePendingArticleChanges() } returns counts
+        every { repository.retryPendingArticleChanges() } returns Unit
+        val viewModel = AppViewModel(repository, sessionStore)
+        val observed = mutableListOf<Int>()
+        backgroundScope.launch(testDispatcher) { viewModel.pendingArticleChanges.collect { observed += it } }
+        runCurrent()
+        assertTrue(observed.isEmpty())
+        counts.emit(3)
+        viewModel.retryPendingArticleChanges()
+        verify(exactly = 1) { repository.retryPendingArticleChanges() }
+        assertEquals(listOf(3), observed)
+        counts.emit(0)
+        assertEquals(listOf(3, 0), observed)
     }
 
     @Test

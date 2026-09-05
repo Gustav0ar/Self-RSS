@@ -2,6 +2,13 @@ import type { ApiResponse, User } from '@self-feed/shared';
 import { type DehydratedState, dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, apiFetch } from './api';
 import { parseLegacyQueryCache } from './legacy-query-cache';
+import {
+	dismissOfflineRejections,
+	notifyOfflineChange,
+	offlineRejectionCount,
+	reportOfflineRejection,
+} from './offline-changes';
+import { cachedArticleIds, type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
 
 const DATABASE_NAME = 'self-feed-offline';
 const STORE_NAME = 'state';
@@ -222,6 +229,7 @@ async function updateValue<T>(
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
+		notifyOfflineChange();
 		return { persisted: true, value };
 	}
 	return new Promise((resolve, reject) => {
@@ -244,6 +252,7 @@ async function updateValue<T>(
 		};
 		transaction.oncomplete = () => {
 			database.close();
+			notifyOfflineChange();
 			resolve({ persisted: true, value });
 		};
 		transaction.onerror = () => {
@@ -261,6 +270,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 	const database = await openDatabase();
 	if (!database) {
 		memoryFallbackStore.delete(key);
+		notifyOfflineChange();
 		return;
 	}
 	await new Promise<void>((resolve) => {
@@ -268,6 +278,7 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 		transaction.objectStore(STORE_NAME).delete(key);
 		transaction.oncomplete = () => {
 			database.close();
+			notifyOfflineChange();
 			resolve();
 		};
 		transaction.onerror = () => {
@@ -335,6 +346,25 @@ function boundedState(state: DehydratedState): DehydratedState {
 
 export function setOfflineSessionUser(userId: string | null) {
 	activeUserId = userId;
+	notifyOfflineChange();
+}
+
+export async function readOfflineSnapshot(userId: string): Promise<OfflineSnapshot> {
+	const database = await openDatabase().catch(() => null);
+	const records = database
+		? await readOfflineRecords(database, cacheKey(userId), outboxKey(userId))
+		: null;
+	const cache = records?.cache;
+	const outbox = records?.outbox ?? memoryFallbackStore.get(outboxKey(userId));
+	return {
+		pendingCount: Array.isArray(outbox) ? outbox.length : 0,
+		storageAvailable: records !== null,
+		syncing: flushPromises.has(userId),
+		rejectedCount: offlineRejectionCount(userId),
+		articleIds: cachedArticleIds(
+			isPersistedQueryCache(cache, userId) ? boundedState(cache.state).queries : [],
+		),
+	};
 }
 
 export async function persistQueryClient(queryClient: QueryClient, userId: string): Promise<void> {
@@ -383,6 +413,18 @@ export async function restoreQueryClient(
 	}
 	hydrate(queryClient, state);
 	return true;
+}
+
+/** A detail downloaded in another tab must also open without a network request. */
+export async function restoreOfflineArticle(queryClient: QueryClient, articleId: string) {
+	const userId = activeUserId;
+	if (!userId) return;
+	const cached = await readValue<unknown>(cacheKey(userId));
+	if (activeUserId !== userId || !isPersistedQueryCache(cached, userId)) return;
+	const queries = boundedState(cached.state).queries.filter(
+		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
+	);
+	hydrate(queryClient, { mutations: [], queries });
 }
 
 export async function saveOfflineUser(user: User): Promise<void> {
@@ -440,6 +482,7 @@ export async function clearOfflineQueryCache(userId = activeUserId): Promise<voi
 export async function clearOfflineState(userId = activeUserId): Promise<void> {
 	const keys = [deleteValue(userKey(), 'strict')];
 	if (userId) {
+		dismissOfflineRejections(userId);
 		keys.push(deleteValue(cacheKey(userId)));
 		keys.push(deleteValue(outboxKey(userId), 'strict'));
 		keys.push(deleteValue(revisionsKey(userId), 'strict'));
@@ -589,14 +632,17 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					break;
 				}
 				await removeMutationIfCurrent(userId, mutation);
+				reportOfflineRejection(userId);
 				results.push({ mutation, status: 'discarded' });
 			}
 		}
 		return results;
 	}).finally(() => {
 		if (flushPromises.get(userId) === flush) flushPromises.delete(userId);
+		notifyOfflineChange();
 	});
 	flushPromises.set(userId, flush);
+	notifyOfflineChange();
 	return flush;
 }
 

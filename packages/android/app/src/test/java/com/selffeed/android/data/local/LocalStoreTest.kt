@@ -11,6 +11,12 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkModule
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertFalse
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -46,6 +52,75 @@ class LocalStoreTest {
     @After
     fun teardown() {
         runBlocking { store.clearAll() }
+    }
+
+    @Test
+    fun `active status collectors follow committed outbox changes`() = runBlocking {
+        val counts = Channel<Int>(Channel.UNLIMITED)
+        val collector = launch { store.observePendingArticleChanges().collect { counts.send(it) } }
+        try {
+            assertEquals(0, withTimeout(5_000) { counts.receive() })
+            val mutation = store.queueSavedStateMutation("a-1", true)
+            assertEquals(1, withTimeout(5_000) { counts.receive() })
+            store.acknowledgeSavedStateMutation(mutation, true, 1)
+            assertEquals(0, withTimeout(5_000) { counts.receive() })
+        } finally {
+            collector.cancel()
+            counts.close()
+        }
+    }
+
+    @Test
+    fun `pending status counts durable coalesced read and save intentions until acknowledgement`() = runBlocking {
+        assertEquals(0, store.observePendingArticleChanges().first())
+        val firstRead = store.queueReadStateMutation("a-1", true)
+        val newestRead = store.queueReadStateMutation("a-1", false)
+        val save = store.queueSavedStateMutation("a-1", true)
+        assertEquals(2, store.observePendingArticleChanges().first())
+
+        val reopened = LocalStore(ApplicationProvider.getApplicationContext(), moshi)
+        assertEquals(2, reopened.observePendingArticleChanges().first())
+        reopened.acknowledgeReadStateMutation(firstRead, true, 1)
+        assertEquals(2, reopened.observePendingArticleChanges().first())
+        reopened.acknowledgeReadStateMutation(newestRead, false, 2)
+        assertEquals(1, reopened.observePendingArticleChanges().first())
+        reopened.acknowledgeSavedStateMutation(save, true, 1)
+        assertEquals(0, reopened.observePendingArticleChanges().first())
+    }
+
+    @Test
+    fun `offline text availability requires persisted body and does not follow saved state`() = runBlocking {
+        assertFalse(store.observeArticleTextAvailability("a-1").first())
+        store.writeArticleDetail(sampleDetail("a-1").copy(isSaved = true, excerpt = "Summary only"))
+        assertFalse(store.observeArticleTextAvailability("a-1").first())
+        for (mediaOnlyHtml in listOf(
+            "<img src='https://example.com/image.jpg' alt='Remote image'>",
+            "<iframe src='https://example.com/video'></iframe>",
+            "<video src='https://example.com/video.mp4'>Remote video fallback</video>",
+            "<script>remotePlayer()</script><style>body { color: white; }</style>",
+            "<p>&nbsp; </p>",
+        )) {
+            store.writeArticleDetail(sampleDetail("a-1").copy(isSaved = true, contentHtml = mediaOnlyHtml))
+            assertFalse(store.observeArticleTextAvailability("a-1").first())
+        }
+        store.writeArticleDetail(sampleDetail("a-1").copy(contentText = "Downloaded body", isSaved = false))
+        assertTrue(store.observeArticleTextAvailability("a-1").first())
+
+        val reopened = LocalStore(ApplicationProvider.getApplicationContext(), moshi)
+        assertTrue(reopened.observeArticleTextAvailability("a-1").first())
+        reopened.writeArticleDetail(sampleDetail("a-1").copy(contentHtml = "<p>Downloaded HTML body</p>"))
+        assertTrue(reopened.observeArticleTextAvailability("a-1").first())
+        reopened.clearTable(LocalStore.TABLE_ARTICLE_DETAILS)
+        assertFalse(reopened.observeArticleTextAvailability("a-1").first())
+    }
+
+    @Test
+    fun `new account starts without old queue or offline text availability`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("a-1").copy(contentText = "Private text"))
+        store.queueSavedStateMutation("a-1", true)
+        store.clearAll()
+        assertEquals(0, store.observePendingArticleChanges().first())
+        assertFalse(store.observeArticleTextAvailability("a-1").first())
     }
 
     @Test

@@ -59,7 +59,7 @@ describe('ArticleList', () => {
 		expect(favicon?.getAttribute('referrerpolicy')).toBe('no-referrer');
 		const rowContainer = row.parentElement;
 		expect(rowContainer?.classList.contains('overflow-hidden')).toBe(true);
-		expect(rowContainer?.style.height).toBe('82px');
+		expect(rowContainer?.style.height).toBe('102px');
 	});
 
 	it('renders an empty-state action when provided', () => {

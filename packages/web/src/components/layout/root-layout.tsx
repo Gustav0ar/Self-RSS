@@ -13,6 +13,7 @@ import {
 } from '@/lib/preferences';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
+import { OfflineStatusProvider } from '@/providers/offline-status';
 import { useTheme } from '@/providers/theme';
 import {
 	buildArticleRouteSearch,
@@ -20,6 +21,7 @@ import {
 	validateArticleRouteSearch,
 } from '@/routes/article-route-search';
 import { Sidebar } from './sidebar';
+import { SyncStatusLine } from './sync-status-line';
 import { TopBar } from './top-bar';
 
 export function RootLayout() {
@@ -27,7 +29,7 @@ export function RootLayout() {
 	const routeSearch = useRouterState({
 		select: (state) => validateArticleRouteSearch(state.location.search as Record<string, unknown>),
 	});
-	const { isAuthenticated, isLoading } = useAuth();
+	const { isAuthenticated, isLoading, isOffline, user } = useAuth();
 	const { selectedFeedId, selectedCategoryId } = useAppState();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const searchQuery = routeSearch.q ?? '';
@@ -139,11 +141,20 @@ export function RootLayout() {
 							);
 						}}
 					/>
-					<main className="surface-card surface-quiet motion-enter min-h-0 flex-1 overflow-hidden rounded-2xl">
-						<ErrorBoundary>
-							<Outlet />
-						</ErrorBoundary>
-					</main>
+					<OfflineStatusProvider
+						key={user?.id}
+						userId={user?.id ?? null}
+						sessionOffline={isOffline}
+					>
+						<main className="surface-card surface-quiet motion-enter flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl">
+							<div className="min-h-0 flex-1">
+								<ErrorBoundary>
+									<Outlet />
+								</ErrorBoundary>
+							</div>
+							<SyncStatusLine />
+						</main>
+					</OfflineStatusProvider>
 				</div>
 			</div>
 

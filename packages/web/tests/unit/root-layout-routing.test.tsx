@@ -5,6 +5,13 @@ import { RootLayout } from '../../src/components/layout/root-layout';
 const navigateMock = vi.fn();
 const sidebarPropsSpy = vi.fn();
 const topBarPropsSpy = vi.fn();
+function renderLayout() {
+	return render(
+		<QueryClientProvider client={new QueryClient()}>
+			<RootLayout />
+		</QueryClientProvider>,
+	);
+}
 let routeSearchMock: Record<string, unknown> = {};
 let appStateMock = {
 	selectedFeedId: 'feed-1' as string | undefined,
@@ -118,7 +125,7 @@ describe('RootLayout routing', () => {
 	});
 
 	it('navigates to article URLs while preserving the current feed context', () => {
-		render(<RootLayout />);
+		renderLayout();
 
 		fireEvent.click(screen.getByRole('button', { name: 'Open article' }));
 
@@ -130,7 +137,7 @@ describe('RootLayout routing', () => {
 	});
 
 	it('navigates sidebar selections through the router', () => {
-		render(<RootLayout />);
+		renderLayout();
 		navigateMock.mockClear();
 
 		fireEvent.click(screen.getByRole('button', { name: 'All feeds' }));
@@ -150,7 +157,7 @@ describe('RootLayout routing', () => {
 
 	it('keeps search query in the URL while preserving the current selection', () => {
 		routeSearchMock = { q: 'Alpha' };
-		render(<RootLayout />);
+		renderLayout();
 
 		expect(topBarPropsSpy).toHaveBeenLastCalledWith(
 			expect.objectContaining({
@@ -174,7 +181,7 @@ describe('RootLayout routing', () => {
 			selectedCategoryId: 'category-1',
 		};
 		routeSearchMock = { q: 'Alpha' };
-		render(<RootLayout />);
+		renderLayout();
 
 		fireEvent.click(screen.getByRole('button', { name: 'Scope current' }));
 
@@ -188,7 +195,7 @@ describe('RootLayout routing', () => {
 	it('restores body overflow when the mobile sidebar drawer closes', () => {
 		document.body.style.overflow = 'clip';
 
-		render(<RootLayout />);
+		renderLayout();
 
 		fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 		expect(document.body.style.overflow).toBe('hidden');
@@ -197,3 +204,5 @@ describe('RootLayout routing', () => {
 		expect(document.body.style.overflow).toBe('clip');
 	});
 });
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

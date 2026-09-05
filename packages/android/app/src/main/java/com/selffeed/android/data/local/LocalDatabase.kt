@@ -12,6 +12,7 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.paging.PagingSource
 import com.selffeed.android.network.ArticleListItem
+import kotlinx.coroutines.flow.Flow
 
 object LocalTables {
     const val CATEGORIES = "categories"
@@ -168,6 +169,12 @@ data class SavedArticleSnapshot(val articleId: String, val savedRevision: Int?)
 
 @Dao
 interface LocalStoreDao {
+    @Query("SELECT (SELECT COUNT(*) FROM pending_read_state_mutations) + (SELECT COUNT(*) FROM pending_saved_state_mutations)")
+    fun observePendingArticleChanges(): Flow<Int>
+
+    @Query("SELECT * FROM article_details WHERE id = :articleId LIMIT 1")
+    fun observeArticleDetail(articleId: String): Flow<ArticleDetailEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCategories(categories: List<CategoryEntity>)
 

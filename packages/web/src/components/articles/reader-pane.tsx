@@ -7,6 +7,7 @@ import { useArticle, useMarkRead, usePreferences, useSetArticleSaved } from '@/h
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { trackArticleCompletion } from '@/lib/product-analytics';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
+import { OfflineTextStatus } from './offline-text-status';
 import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
 import {
 	useReaderScrollProgress,
@@ -294,6 +295,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							onToggleRead={toggleRead}
 							onToggleSaved={toggleSaved}
 						/>
+						<OfflineTextStatus articleId={article.id} />
 					</header>
 
 					{hasContent ? (

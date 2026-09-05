@@ -117,6 +117,7 @@ Install these in Android Studio SDK Manager:
 - Reader text size, font, density, and auto-mark behavior are applied consistently to the reader and article queue.
 - Tablets and foldables use a list-detail reader layout once sufficient width is available; compact screens retain the focused reader flow.
 - Search-result readers return to Search when closed, preserving the original query and results.
+- The bottom status line counts durable read and save changes waiting for delivery. Retry schedules the existing background worker. Per-article offline labels require persisted body content; images and embeds may still need a connection.
 
 ## Release Checklist
 

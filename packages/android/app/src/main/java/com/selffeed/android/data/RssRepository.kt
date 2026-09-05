@@ -817,6 +817,15 @@ class RssRepository @Inject constructor(
         flushProductAnalyticsEvents()
     }
 
+    override fun observePendingArticleChanges(): Flow<Int> = localStore.observePendingArticleChanges()
+
+    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        localStore.observeArticleTextAvailability(articleId)
+
+    override fun retryPendingArticleChanges() {
+        if (isLoggedIn()) ArticleStateSyncWorker.kickOnce(imageRequestContext)
+    }
+
     override fun isOnline(): Boolean = networkMonitor.online.value
 
     override fun observeOnline(): Flow<Boolean> = networkMonitor.online

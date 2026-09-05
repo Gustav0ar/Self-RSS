@@ -7,6 +7,9 @@ import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.repository.AppStatusRepository
 import com.selffeed.android.network.normalizeApiServerHost
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +54,18 @@ class AppViewModel @Inject constructor(
     /** Online state mirrored from the [com.selffeed.android.network.NetworkMonitor]. */
     val isOnline: StateFlow<Boolean> = repository.observeOnline()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repository.isOnline())
+
+    // Cold flows start when the authenticated UI subscribes. No synthetic zero
+    // is emitted before Room has read the durable queue.
+    val pendingArticleChanges: Flow<Int> = flow { emitAll(repository.observePendingArticleChanges()) }
+
+    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        repository.observeArticleTextAvailability(articleId)
+
+    fun retryPendingArticleChanges() {
+        runCatching { repository.retryPendingArticleChanges() }
+            .onFailure { postError(it.message) }
+    }
 
     fun setTab(tab: HomeTab) {
         _chrome.value = _chrome.value.copy(activeTab = tab, globalError = null, globalStatus = null)

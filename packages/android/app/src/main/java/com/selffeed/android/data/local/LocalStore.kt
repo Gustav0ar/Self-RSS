@@ -2,6 +2,7 @@ package com.selffeed.android.data.local
 
 import android.content.Context
 import androidx.paging.PagingSource
+import androidx.core.text.HtmlCompat
 import androidx.room.Room
 import androidx.room.withTransaction
 import com.selffeed.android.network.ApiListResponse
@@ -13,9 +14,13 @@ import com.selffeed.android.network.UserPreferences
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
 
@@ -471,14 +476,43 @@ class LocalStore(
         isSaved = dao.readPendingSavedStateMutation(detail.id)?.saved ?: detail.isSaved,
     )
 
-    override suspend fun readArticleDetail(articleId: String): ArticleDetail? {
-        val detail = dao.readArticleDetail(articleId) ?: return null
+    fun observePendingArticleChanges(): Flow<Int> = dao.observePendingArticleChanges().distinctUntilChanged()
+
+    /** Only persisted, reopenable body content counts, independent of bookmark state. */
+    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        dao.observeArticleDetail(articleId).distinctUntilChanged().map { entity ->
+            readableArticleDetail(entity)?.hasReadableText() ?: false
+        }.distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    private fun ArticleDetail.hasReadableText(): Boolean {
+        if (!contentText.isNullOrBlank()) return true
+        val html = contentHtml?.takeIf(String::isNotBlank) ?: return false
+        var excludedStart = 0
+        var excludedDepth = 0
+        val text = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY, null) { opening, tag, output, _ ->
+            if (tag in NON_TEXT_HTML_TAGS) {
+                if (opening) {
+                    if (excludedDepth++ == 0) excludedStart = output.length
+                } else if (excludedDepth > 0 && --excludedDepth == 0) {
+                    output.delete(excludedStart, output.length)
+                }
+            }
+        }
+        // Android represents images with an object replacement character.
+        return text.any { !it.isWhitespace() && it != '\uFFFC' }
+    }
+
+    override suspend fun readArticleDetail(articleId: String): ArticleDetail? =
+        readableArticleDetail(dao.readArticleDetail(articleId))
+
+    private suspend fun readableArticleDetail(detail: ArticleDetailEntity?): ArticleDetail? {
+        detail ?: return null
         val parsed = runCatching { articleDetailAdapter.fromJson(detail.payloadJson) }.getOrNull()
         if (System.currentTimeMillis() - detail.writtenAt > MAX_ARTICLE_DETAIL_AGE_MS) {
             // A saved article is an explicit offline promise. It remains readable
             // until the user unsaves it or signs out, even after normal cache TTLs.
             if (parsed?.isSaved == true) return parsed
-            dao.clearArticleDetail(articleId)
+            dao.clearArticleDetail(detail.id)
             return null
         }
         return parsed
@@ -700,6 +734,7 @@ class LocalStore(
         )
 
     companion object {
+        private val NON_TEXT_HTML_TAGS = setOf("iframe", "video", "audio", "embed", "object", "svg", "script", "style", "noscript")
         private const val DB_NAME = "selffeed.db"
         const val TABLE_CATEGORIES = LocalTables.CATEGORIES
         const val TABLE_FEEDS = LocalTables.FEEDS

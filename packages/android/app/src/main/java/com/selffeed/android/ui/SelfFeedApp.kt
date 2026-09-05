@@ -111,6 +111,9 @@ import com.selffeed.android.ui.screens.SettingsTab
 import com.selffeed.android.ui.screens.StatsTab
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import androidx.compose.runtime.key
+import com.selffeed.android.ui.components.ArticleSyncStatusLine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -191,6 +194,9 @@ fun SelfFeedApp(
     readStateOverrides: StateFlow<Map<String, Boolean>>,
     actions: SelfFeedAppActions,
     articlePagingData: Flow<PagingData<ArticleListItem>>,
+    pendingArticleChanges: Flow<Int> = emptyFlow(),
+    observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
+    onRetryPendingChanges: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState =
@@ -508,6 +514,10 @@ fun SelfFeedApp(
             onRetryPreferences = actions.onRetryPreferences,
         )
     }
+    // Changing account or server creates fresh collectors, even for reused article IDs.
+    val scopedOfflineText = remember(state.auth.user?.id, state.auth.apiBaseUrl, observeOfflineText) {
+        { articleId: String -> observeOfflineText(articleId) }
+    }
     val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit =
         { preferHtml, onPreferHtmlChanged ->
             selectedArticle?.let { article ->
@@ -515,6 +525,7 @@ fun SelfFeedApp(
                     articles = articleQueue,
                     selectedArticle = article,
                     prefetchedArticles = state.articles.readerDetails,
+                    observeOfflineText = scopedOfflineText,
                     onOpenOriginal = { openedArticle ->
                         openedArticle.canonicalUrl?.let { url ->
                             openExternalUrl(context, url)
@@ -597,10 +608,15 @@ fun SelfFeedApp(
                 )
             },
             bottomBar = {
-                AppBottomBar(
-                    activeTab = activeTab,
-                    onTabSelected = actions.onTabSelected,
-                )
+                Column {
+                    key(state.auth.user?.id, state.auth.apiBaseUrl) {
+                        ArticleSyncStatusLine(state.isOnline, pendingArticleChanges, onRetryPendingChanges)
+                    }
+                    AppBottomBar(
+                        activeTab = activeTab,
+                        onTabSelected = actions.onTabSelected,
+                    )
+                }
             },
         ) { paddingValues ->
             if (state.auth.isAuthenticated) {
@@ -643,6 +659,7 @@ fun SelfFeedApp(
                                         actions = immediateArticleActions,
                                         pagedArticles = articlePagingItems,
                                         listState = articleListState,
+                                        observeOfflineText = scopedOfflineText,
                                     )
                                 },
                                 detailContent = readerContent,
@@ -650,7 +667,7 @@ fun SelfFeedApp(
                             )
                         }
 
-                        HomeTab.SEARCH -> SearchTab(searchTabState, searchActions)
+                        HomeTab.SEARCH -> SearchTab(searchTabState, searchActions, scopedOfflineText)
                         HomeTab.SETTINGS -> SettingsTab(settingsTabState, settingsActions)
                         HomeTab.STATS -> StatsTab(settingsTabState, settingsActions)
                         HomeTab.FEEDS -> FeedsTab(
