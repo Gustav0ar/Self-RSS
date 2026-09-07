@@ -145,6 +145,26 @@ class SessionStore internal constructor(
 
     fun getAccessToken(): String? = cachedAccessToken
 
+    /** Starts a login/register attempt without allowing the previous account's requests to authenticate it. */
+    suspend fun beginAuthentication(): ApiSession = withContext(ioDispatcher) {
+        sessionMutationMutex.withLock {
+            dataStore.edit { prefs ->
+                prefs.remove(KEY_ACCESS_TOKEN)
+                prefs.remove(KEY_REFRESH_COOKIE)
+                prefs.remove(KEY_LAST_AUTHENTICATED_AT)
+            }
+            synchronized(cacheLock) {
+                sessionGeneration += 1
+                cachedAccessToken = null
+                cachedRefreshCookie = null
+                cachedLastAuthenticatedAt = null
+                accessTokenLoaded = true
+                refreshCookieLoaded = true
+                ApiSession(sessionGeneration, getApiBaseUrl())
+            }
+        }
+    }
+
     fun currentSession(): ApiSession = synchronized(cacheLock) {
         ApiSession(sessionGeneration, getApiBaseUrl())
     }

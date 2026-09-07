@@ -416,7 +416,7 @@ object NetworkModule {
             .callFactory { request ->
                 // Retrofit creates the call before OkHttp queues it. Bind both the
                 // destination and cookie storage here, before logout can clear them.
-                val session = sessionStore.currentSession()
+                val session = request.tag(ApiSession::class.java) ?: sessionStore.currentSession()
                 val boundRequest = request.newBuilder()
                     .tag(ApiSession::class.java, session)
                     .url(rewriteApiRequestUrl(request.url, session.apiBaseUrl))

@@ -1,5 +1,6 @@
 package com.selffeed.android.data.remote
 
+import com.selffeed.android.data.ApiSession
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AdminCreateUserRequest
 import com.selffeed.android.network.AdminResetPasswordRequest
@@ -45,11 +46,11 @@ class AuthRemoteDataSource @Inject constructor(
     private val api: RssApi,
 ) {
     suspend fun registrationStatus(): RegistrationStatusResponse = api.registrationStatus().data
-    suspend fun login(email: String, password: String): AuthResponse =
-        api.login(LoginRequest(email, password)).data
+    suspend fun login(email: String, password: String, session: ApiSession): AuthResponse =
+        api.login(LoginRequest(email, password), session).data
 
-    suspend fun register(email: String, password: String): AuthResponse =
-        api.register(RegisterRequest(email, password)).data
+    suspend fun register(email: String, password: String, session: ApiSession): AuthResponse =
+        api.register(RegisterRequest(email, password), session).data
 
     suspend fun logout(accessToken: String?, refreshCookie: String?): Boolean = api.logout(
         authorization = accessToken?.takeIf(String::isNotBlank)?.let { "Bearer $it" },

@@ -128,8 +128,8 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun login(email: String, password: String) = safePublicCall {
-        val session = sessionStore.currentSession()
-        val response = authRemote.login(email, password)
+        val session = sessionStore.beginAuthentication()
+        val response = authRemote.login(email, password, session)
         check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
         sessionGeneration.incrementAndGet()
         clearCacheAndDatabase()
@@ -140,8 +140,8 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun register(email: String, password: String) = safePublicCall {
-        val session = sessionStore.currentSession()
-        val response = authRemote.register(email, password)
+        val session = sessionStore.beginAuthentication()
+        val response = authRemote.register(email, password, session)
         check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
         sessionGeneration.incrementAndGet()
         clearCacheAndDatabase()

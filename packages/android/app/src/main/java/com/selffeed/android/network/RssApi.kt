@@ -1,5 +1,7 @@
 package com.selffeed.android.network
 
+import com.selffeed.android.data.ApiSession
+import retrofit2.http.Tag
 import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import retrofit2.Response
@@ -19,10 +21,16 @@ interface RssApi {
     suspend fun registrationStatus(): ApiEnvelope<RegistrationStatusResponse>
 
     @POST("auth/login")
-    suspend fun login(@Body request: LoginRequest): ApiEnvelope<AuthResponse>
+    suspend fun login(
+        @Body request: LoginRequest,
+        @Tag session: ApiSession? = null,
+    ): ApiEnvelope<AuthResponse>
 
     @POST("auth/register")
-    suspend fun register(@Body request: RegisterRequest): ApiEnvelope<AuthResponse>
+    suspend fun register(
+        @Body request: RegisterRequest,
+        @Tag session: ApiSession? = null,
+    ): ApiEnvelope<AuthResponse>
 
     @POST("auth/logout")
     suspend fun logout(

@@ -126,9 +126,9 @@ class RssRepositoryTest {
     fun `login response after logout cannot restore the access token`() = runTest {
         val session = ApiSession(0, "rss.example.com")
         val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.AuthResponse>>()
-        every { sessionStore.currentSession() } returns session
+        coEvery { sessionStore.beginAuthentication() } returns session
         coEvery { sessionStore.setAccessTokenIfCurrent(session, any()) } returns false
-        coEvery { api.login(any()) } coAnswers { response.await() }
+        coEvery { api.login(any(), any()) } coAnswers { response.await() }
 
         val login = async { repository.login("reader@example.com", "password") }
         runCurrent()
