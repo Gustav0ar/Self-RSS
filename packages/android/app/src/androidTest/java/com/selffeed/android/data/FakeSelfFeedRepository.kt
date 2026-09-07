@@ -281,6 +281,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     }
 
     override fun cachedArticleDetail(articleId: String): ArticleDetail? = null
+    override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? = cachedArticleDetail(articleId)
+
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
         AppResult.Success(fakeArticleDetail(articleId))
 

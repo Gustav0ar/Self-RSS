@@ -17,6 +17,8 @@ import com.selffeed.android.ui.components.shareOpmlContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 
 @Composable
@@ -45,6 +47,9 @@ fun SelfFeedAppRoute(
     val articlesState by articlesViewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
+    val readingSessionKey = remember(authState.isAuthenticated, authState.apiBaseUrl, authState.user?.id) {
+        if (authState.isAuthenticated) appViewModel.readingSessionIdentity(authState.user?.id) else null
+    }
     val themePreference = ThemePreference.fromApiValue(settingsState.preferences?.theme).apiValue
     val darkTheme = when (themePreference) {
         "light" -> false
@@ -104,7 +109,8 @@ fun SelfFeedAppRoute(
 
             override fun clearUnauthenticatedSession() {
                 articlesViewModel.stopReadStateSync()
-                articlesViewModel.clearSessionReadStateMemory()
+                articlesViewModel.clearReadingSession()
+                appViewModel.clearReadingSession()
             }
 
             override fun applyArticlePreferences(
@@ -112,8 +118,7 @@ fun SelfFeedAppRoute(
                 hideRead: Boolean,
                 autoMarkReadMode: String
             ) {
-                articlesViewModel.setFilter(sort = defaultSort, hideRead = hideRead)
-                articlesViewModel.setAutoMarkReadMode(autoMarkReadMode)
+                articlesViewModel.applyPreferences(defaultSort, hideRead, autoMarkReadMode)
             }
 
             override fun refreshAfterFeedSync() {
@@ -177,7 +182,14 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(authState.isAuthenticated) {
+        LaunchedEffect(authState.loading, authState.isAuthenticated, authState.apiBaseUrl, authState.user?.id) {
+            if (authState.loading) return@LaunchedEffect
+            if (authState.isAuthenticated) {
+                appViewModel.bindReadingSession(readingSessionKey)
+                articlesViewModel.restoreReadingSession(readingSessionKey)
+                currentCoroutineContext().ensureActive()
+                appViewModel.finishReadingSessionRestore()
+            }
             workflowCoordinator.onAuthenticationChanged(authState.isAuthenticated, workflowSink)
         }
 
@@ -187,8 +199,8 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(authState.isAuthenticated, chromeState.pendingExternalAction?.key) {
-            if (!authState.isAuthenticated) return@LaunchedEffect
+        LaunchedEffect(authState.isAuthenticated, chromeState.restoringReadingSession, chromeState.pendingExternalAction?.key) {
+            if (!authState.isAuthenticated || !appViewModel.hasReadingSession(readingSessionKey)) return@LaunchedEffect
             when (val action = appViewModel.consumeExternalAction()) {
                 is ExternalAction.OpenArticle -> {
                     articlesViewModel.openArticle(action.articleId)
@@ -224,10 +236,13 @@ fun SelfFeedAppRoute(
         }
 
         LaunchedEffect(
+            authState.isAuthenticated,
+            chromeState.restoringReadingSession,
             settingsState.preferences?.defaultSort,
             settingsState.preferences?.hideRead,
             settingsState.preferences?.autoMarkReadMode,
         ) {
+            if (!authState.isAuthenticated || !appViewModel.hasReadingSession(readingSessionKey)) return@LaunchedEffect
             workflowCoordinator.onPreferencesChanged(settingsState.preferences, workflowSink)
         }
 
@@ -268,7 +283,9 @@ fun SelfFeedAppRoute(
 
         SelfFeedApp(
             state = SelfFeedAppState(
-                auth = authState,
+                auth = authState.copy(
+                    loading = authState.loading || authState.isAuthenticated && !appViewModel.hasReadingSession(readingSessionKey),
+                ),
                 chrome = chromeState,
                 feeds = feedsState,
                 articles = articlesState,
@@ -286,6 +303,8 @@ fun SelfFeedAppRoute(
                 onRegister = authViewModel::register,
                 onLogout = {
                     articlesViewModel.stopReadStateSync()
+                    articlesViewModel.clearReadingSession()
+                    appViewModel.clearReadingSession()
                     authViewModel.logout()
                 },
                 onTabSelected = { tab ->

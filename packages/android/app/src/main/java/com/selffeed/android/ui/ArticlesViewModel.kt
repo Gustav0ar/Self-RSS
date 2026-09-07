@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
@@ -16,6 +17,7 @@ import com.selffeed.android.ui.articles.ReadStateChangeSource
 import com.selffeed.android.ui.articles.ReadStateManager
 import com.selffeed.android.ui.components.withNonRegressiveReaderContent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,6 +76,7 @@ class ArticlesViewModel @Inject constructor(
     private val readStateManager: ReadStateManager,
     private val enrichmentManager: EnrichmentManager,
     private val articleWarmingManager: ArticleWarmingManager,
+    private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
 ) : ViewModel() {
     private val _state = MutableStateFlow(ArticlesUiState())
     val state: StateFlow<ArticlesUiState> = _state.asStateFlow()
@@ -136,6 +139,76 @@ class ArticlesViewModel @Inject constructor(
         }
     }
 
+    private var readingSessionKey: String? = null
+    private var readingSessionRestored = false
+    private var preserveRestoredFiltersOnBootstrap = false
+
+    /** Rehydrate identifiers from Room after the caller has authenticated the account. */
+    suspend fun restoreReadingSession(sessionKey: String?) {
+        if (sessionKey != null && readingSessionKey == sessionKey && readingSessionRestored) return
+        val canRestore = sessionKey != null && savedStateHandle.get<String>("reading.session") == sessionKey
+        val articleId = if (canRestore) savedStateHandle.get<String>("reading.article") else null
+        val restored = if (canRestore) ArticlesUiState(
+            selectedFeedId = savedStateHandle["reading.feed"],
+            selectedCategoryId = savedStateHandle["reading.category"],
+            savedOnly = savedStateHandle["reading.saved"] ?: false,
+            sort = savedStateHandle["reading.sort"],
+            hideRead = savedStateHandle["reading.hideRead"] ?: false,
+        ) else ArticlesUiState()
+        clearReadingSession()
+        readingSessionKey = sessionKey
+        preserveRestoredFiltersOnBootstrap = canRestore
+        _state.value = restored
+        readStateManager.updateScope(restored.selectedFeedId, restored.selectedCategoryId)
+        readStateManager.updateFilter(restored.hideRead)
+        refreshArticlePager()
+        saveReadingSession()
+        savedStateHandle["reading.article"] = articleId
+        val requestId = openArticleSequence.get()
+        if (articleId != null) {
+            val article = try {
+                repository.readCachedArticleDetail(articleId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (readingSessionKey != sessionKey || requestId != openArticleSequence.get()) return
+            if (article != null) selectArticle(article)
+        }
+        readingSessionRestored = true
+        saveReadingSession()
+    }
+
+    fun clearReadingSession() {
+        openArticleSequence.incrementAndGet()
+        closeArticle()
+        readingSessionKey = null
+        readingSessionRestored = false
+        preserveRestoredFiltersOnBootstrap = false
+        readStateManager.stopReadStateSync()
+        readStateManager.clearSessionMemory()
+        readStateManager.updateItems(emptyList())
+        readStateManager.updateScope(null, null)
+        readStateManager.updateFilter(false)
+        _readStateOverrides.value = emptyMap()
+        _state.value = ArticlesUiState()
+        savedStateHandle.keys().filter { it.startsWith("reading.") }.forEach { savedStateHandle.remove<Any>(it) }
+        refreshArticlePager()
+    }
+
+    private fun saveReadingSession() {
+        val sessionKey = readingSessionKey ?: return
+        val current = _state.value
+        savedStateHandle["reading.session"] = sessionKey
+        savedStateHandle["reading.article"] = current.visibleReaderArticleId ?: current.selectedArticle?.id
+        savedStateHandle["reading.feed"] = current.selectedFeedId
+        savedStateHandle["reading.category"] = current.selectedCategoryId
+        savedStateHandle["reading.saved"] = current.savedOnly
+        savedStateHandle["reading.sort"] = current.sort
+        savedStateHandle["reading.hideRead"] = current.hideRead
+    }
+
     fun setScope(feedId: String?, categoryId: String?) {
         val current = _state.value
         if (current.selectedFeedId == feedId && current.selectedCategoryId == categoryId) return
@@ -154,6 +227,7 @@ class ArticlesViewModel @Inject constructor(
             )
         }
         readStateManager.updateScope(feedId, categoryId)
+        saveReadingSession()
         refreshArticlePager()
     }
 
@@ -174,6 +248,7 @@ class ArticlesViewModel @Inject constructor(
         }
         if (changed) {
             readStateManager.updateFilter(_state.value.hideRead)
+            saveReadingSession()
             refreshArticlePager()
         }
     }
@@ -195,7 +270,17 @@ class ArticlesViewModel @Inject constructor(
             )
         }
         readStateManager.updateScope(_state.value.selectedFeedId, _state.value.selectedCategoryId)
+        saveReadingSession()
         refreshArticlePager()
+    }
+
+    fun applyPreferences(defaultSort: String, hideRead: Boolean, autoMarkReadMode: String) {
+        if (preserveRestoredFiltersOnBootstrap) {
+            preserveRestoredFiltersOnBootstrap = false
+        } else {
+            setFilter(defaultSort, hideRead)
+        }
+        setAutoMarkReadMode(autoMarkReadMode)
     }
 
     fun setAutoMarkReadMode(mode: String?) {
@@ -335,6 +420,7 @@ class ArticlesViewModel @Inject constructor(
             if (queue.none { it.id == articleId }) current
             else current.copy(visibleReaderArticleId = articleId)
         }
+        saveReadingSession()
     }
 
     fun closeArticle() {
@@ -351,6 +437,7 @@ class ArticlesViewModel @Inject constructor(
         }
         enrichmentManager.updateSelectedArticle(null)
         readStateManager.updateSelectedArticle(null)
+        saveReadingSession()
     }
 
     fun openAdjacentArticle(direction: Int) {
@@ -543,6 +630,7 @@ class ArticlesViewModel @Inject constructor(
         val selectedArticle = _state.value.selectedArticle ?: return
         enrichmentManager.updateSelectedArticle(selectedArticle)
         readStateManager.updateSelectedArticle(selectedArticle)
+        saveReadingSession()
     }
 
     private fun applyArticleReadStateConfirmed(
