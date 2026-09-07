@@ -256,6 +256,98 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `old read acknowledgment cannot replace a newer cached intent`() = runTest {
+        val articleId = "article-read-replaced"
+        val detail = sampleArticleDetail(articleId, isRead = false)
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        repository.article(articleId)
+
+        val oldDeliveryStarted = CompletableDeferred<Unit>()
+        val releaseOldDelivery = CompletableDeferred<Unit>()
+        val newDeliveryStarted = CompletableDeferred<Unit>()
+        val releaseNewDelivery = CompletableDeferred<Unit>()
+        coEvery { api.markRead(articleId, any()) } coAnswers {
+            if (secondArg<com.selffeed.android.network.MarkReadRequest>().read) {
+                oldDeliveryStarted.complete(Unit)
+                releaseOldDelivery.await()
+                com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
+            } else {
+                newDeliveryStarted.complete(Unit)
+                releaseNewDelivery.await()
+                com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = false, revision = 2))
+            }
+        }
+
+        val oldIntent = async { repository.markRead(articleId, true) }
+        oldDeliveryStarted.await()
+        val newIntent = async(start = CoroutineStart.UNDISPATCHED) { repository.markRead(articleId, false) }
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                localStore.invalidations.first {
+                    localStore.readPendingReadStateMutations().singleOrNull()?.read == false
+                }
+            }
+        }
+        releaseOldDelivery.complete(Unit)
+        newDeliveryStarted.await()
+        try {
+            assertEquals(false, repository.cachedArticleDetail(articleId)?.isRead)
+            assertEquals(false, (repository.article(articleId) as AppResult.Success).data.isRead)
+        } finally {
+            releaseNewDelivery.complete(Unit)
+            assertTrue(oldIntent.await() is AppResult.Success)
+            assertTrue(newIntent.await() is AppResult.Success)
+        }
+    }
+
+    @Test
+    fun `old saved acknowledgment cannot replace a newer cached intent`() = runTest {
+        val articleId = "article-save-replaced"
+        val detail = sampleArticleDetail(articleId, isRead = false)
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        repository.article(articleId)
+
+        val oldDeliveryStarted = CompletableDeferred<Unit>()
+        val releaseOldDelivery = CompletableDeferred<Unit>()
+        val newDeliveryStarted = CompletableDeferred<Unit>()
+        val releaseNewDelivery = CompletableDeferred<Unit>()
+        coEvery { api.setSaved(articleId, any()) } coAnswers {
+            if (secondArg<com.selffeed.android.network.SaveArticleRequest>().saved) {
+                oldDeliveryStarted.complete(Unit)
+                releaseOldDelivery.await()
+                com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, saved = true, revision = 1))
+            } else {
+                newDeliveryStarted.complete(Unit)
+                releaseNewDelivery.await()
+                com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, saved = false, revision = 2))
+            }
+        }
+
+        val oldIntent = async { repository.setSaved(articleId, true) }
+        oldDeliveryStarted.await()
+        val newIntent = async(start = CoroutineStart.UNDISPATCHED) { repository.setSaved(articleId, false) }
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                localStore.invalidations.first {
+                    localStore.readPendingSavedStateMutations().singleOrNull()?.saved == false
+                }
+            }
+        }
+        releaseOldDelivery.complete(Unit)
+        newDeliveryStarted.await()
+        try {
+            assertEquals(false, repository.cachedArticleDetail(articleId)?.isSaved)
+            assertEquals(false, (repository.article(articleId) as AppResult.Success).data.isSaved)
+        } finally {
+            releaseNewDelivery.complete(Unit)
+            assertTrue(oldIntent.await() is AppResult.Success)
+            assertTrue(newIntent.await() is AppResult.Success)
+        }
+    }
+
+    @Test
     fun `automatic markRead sends auto source to the API`() = runTest {
         val articleId = "article-auto"
         every { sessionStore.getAccessToken() } returns "token"
