@@ -1,6 +1,5 @@
 package com.selffeed.android.data
 
-import com.selffeed.android.network.CategoryOrderUpdate
 import android.content.Context
 import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
@@ -22,6 +21,7 @@ import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.EnrichArticleResponse
+import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkMonitor
