@@ -47,6 +47,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -102,6 +104,7 @@ class RssRepository @Inject constructor(
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
     private val sessionGeneration = AtomicLong(0)
+    private val preferencesMutex = Mutex()
 
     init {
         refreshScope.launch {
@@ -551,11 +554,13 @@ class RssRepository @Inject constructor(
     private fun refreshPreferencesInBackground() {
         val generation = sessionGeneration.get()
         refreshScope.launch {
-            runCatching {
-                runtime.withRetry { settingsRemote.preferences() }.also { preferences ->
-                    if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
-                    runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
-                    localStore.writePreferences(preferences)
+            preferencesMutex.withLock {
+                runCatching {
+                    runtime.withRetry { settingsRemote.preferences() }.also { preferences ->
+                        if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
+                        runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
+                        localStore.writePreferences(preferences)
+                    }
                 }
             }
         }
@@ -727,23 +732,27 @@ class RssRepository @Inject constructor(
         search(query = query, categoryId = null, cursor = null)
 
     override suspend fun preferences() = safeReadCall {
-        localStore.readPreferences()?.let { cached ->
-            refreshPreferencesInBackground()
-            return@safeReadCall cached
-        }
-        runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) {
-            runtime.withRetry { settingsRemote.preferences() }.also {
-                localStore.writePreferences(it)
+        preferencesMutex.withLock {
+            localStore.readPreferences()?.let { cached ->
+                refreshPreferencesInBackground()
+                return@withLock cached
+            }
+            runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) {
+                runtime.withRetry { settingsRemote.preferences() }.also {
+                    localStore.writePreferences(it)
+                }
             }
         }
     }
 
     override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall {
-        settingsRemote.updatePreferences(request).also {
-            localStore.writePreferences(it)
-            runtime.invalidateByPrefix("preferences")
-            runtime.invalidateByPrefix("articles")
-            runtime.invalidateByPrefix("search")
+        preferencesMutex.withLock {
+            settingsRemote.updatePreferences(request).also {
+                localStore.writePreferences(it)
+                runtime.invalidateByPrefix("preferences")
+                runtime.invalidateByPrefix("articles")
+                runtime.invalidateByPrefix("search")
+            }
         }
     }
 

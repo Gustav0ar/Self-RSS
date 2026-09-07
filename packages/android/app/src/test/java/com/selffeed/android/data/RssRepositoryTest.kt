@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -905,6 +906,36 @@ class RssRepositoryTest {
         localStore.writeArticleRemotePage(
             "saved-current", ApiListResponse(data = emptyList(), cursor = null, hasMore = false), clearExisting = true,
         )
+    }
+
+    @Test
+    fun `preference background refresh cannot overwrite a later saved value`() = runTest {
+        val initial = com.selffeed.android.network.UserPreferences(
+            theme = "dark", fontFamily = "system-ui", textSize = 16, density = "comfortable",
+            defaultSort = "latest", hideRead = false, keyboardShortcutsEnabled = true,
+            autoMarkReadMode = "on_navigate",
+        )
+        localStore.writePreferences(initial)
+        every { sessionStore.getAccessToken() } returns "test-session"
+        val refreshStarted = CompletableDeferred<Unit>()
+        val refreshResponse = CompletableDeferred<Unit>()
+        coEvery { api.preferences() } coAnswers {
+            refreshStarted.complete(Unit)
+            refreshResponse.await()
+            com.selffeed.android.network.ApiEnvelope(initial)
+        }
+        coEvery { api.updatePreferences(any()) } returns
+            com.selffeed.android.network.ApiEnvelope(initial.copy(textSize = 22))
+        assertEquals(initial, (repository.preferences() as AppResult.Success).data)
+        refreshStarted.await()
+        val save = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.currentCoroutineContext()).async {
+            repository.updatePreferences(com.selffeed.android.network.UpdatePreferencesRequest(textSize = 22))
+        }
+        runCurrent()
+        coVerify(exactly = 0) { api.updatePreferences(any()) }
+        refreshResponse.complete(Unit)
+        assertTrue(save.await() is AppResult.Success)
+        assertEquals(22, localStore.readPreferences()?.textSize)
     }
 
     private fun sampleArticleDetail(id: String, isRead: Boolean): ArticleDetail = ArticleDetail(

@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -45,11 +47,20 @@ class SettingsViewModel @Inject constructor(
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
+    private val preferenceSaveMutex = Mutex()
+    private var preferenceEditVersion = 0L
+
     fun loadPreferences() {
         if (_state.value.preferencesLoading) return
         _state.update { it.copy(preferencesLoading = true, preferencesLoadError = null) }
+        val editVersion = preferenceEditVersion
         viewModelScope.launch {
-            when (val result = repository.preferences()) {
+            val result = repository.preferences()
+            if (editVersion != preferenceEditVersion) {
+                _state.update { it.copy(preferencesLoading = false) }
+                return@launch
+            }
+            when (result) {
                 is AppResult.Success -> {
                     val normalized = result.data.withNormalizedTheme()
                     _state.update {
@@ -77,16 +88,19 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updatePreferences(request: UpdatePreferencesRequest) {
+        preferenceEditVersion += 1
         viewModelScope.launch {
-            when (val result = repository.updatePreferences(request)) {
-                is AppResult.Success -> _state.update {
-                    it.copy(
-                        preferences = result.data.withNormalizedTheme(),
-                        statusMessage = PresentationText.resource(R.string.settings_saved),
-                    )
-                }
-                is AppResult.Error -> _state.update {
-                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+            preferenceSaveMutex.withLock {
+                when (val result = repository.updatePreferences(request)) {
+                    is AppResult.Success -> _state.update {
+                        it.copy(
+                            preferences = result.data.withNormalizedTheme(),
+                            statusMessage = PresentationText.resource(R.string.settings_saved),
+                        )
+                    }
+                    is AppResult.Error -> _state.update {
+                        it.copy(errorMessage = PresentationText.dynamic(result.message))
+                    }
                 }
             }
         }
