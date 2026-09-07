@@ -187,6 +187,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         parentCategoryId: String?,
     ): AppResult<CategoryWithCounts> = AppResult.Error("Not supported in fake")
 
+    override suspend fun reorderCategories(updates: List<com.selffeed.android.network.CategoryOrderUpdate>): AppResult<Unit> =
+        AppResult.Error("Not supported in fake")
+
     override suspend fun deleteCategory(id: String): AppResult<Boolean> =
         AppResult.Error("Not supported in fake")
 

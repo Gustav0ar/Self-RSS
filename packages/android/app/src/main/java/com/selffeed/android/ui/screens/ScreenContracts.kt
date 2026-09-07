@@ -1,5 +1,6 @@
 package com.selffeed.android.ui.screens
 
+import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthSession
 import com.selffeed.android.network.CategoryWithCounts
@@ -22,6 +23,7 @@ data class FeedTabState(
     val selectedCategoryId: String?,
     val selectedFeedId: String?,
     val loading: Boolean = false,
+    val reorderingCategories: Boolean = false,
     val lastImportSummary: OpmlImportSummary? = null,
     val syncStatus: FeedSyncAllStatus? = null,
     val lifecycleActionFeedId: String? = null,
@@ -38,6 +40,7 @@ data class FeedTabActions(
     val onCreateCategory: (String, String?) -> Unit = { _, _ -> },
     val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
     val onDeleteCategory: (String) -> Unit = {},
+    val onMoveCategory: (String, CategoryMoveDirection) -> Unit = { _, _ -> },
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
     val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},

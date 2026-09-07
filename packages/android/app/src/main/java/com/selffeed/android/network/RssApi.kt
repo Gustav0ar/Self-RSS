@@ -54,6 +54,9 @@ interface RssApi {
         @Body request: UpdateCategoryRequest,
     ): ApiEnvelope<CategoryWithCounts>
 
+    @PATCH("categories/reorder")
+    suspend fun reorderCategories(@Body request: ReorderCategoriesRequest): ApiEnvelope<ReorderCategoriesResponse>
+
     @DELETE("categories/{id}")
     suspend fun deleteCategory(@Path("id") id: String): ApiEnvelope<SuccessResponse>
 

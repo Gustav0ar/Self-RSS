@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.network.CategoryOrderUpdate
 import android.content.Context
 import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
@@ -47,6 +48,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -99,6 +102,8 @@ class RssRepository @Inject constructor(
     private val savedStateRejectionEvents = MutableSharedFlow<SavedStateRejection>(extraBufferCapacity = 32)
     private val authLostEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
     private val analyticsSessionLock = Any()
+    private val categoryCacheMutex = Mutex()
+    private val categoryOrderRevision = AtomicLong()
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
     private val sessionGeneration = AtomicLong(0)
@@ -204,26 +209,42 @@ class RssRepository @Inject constructor(
 
     override suspend fun categories() = safeReadCall {
         flushPendingArticleStateMutations()
-        runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
-            runtime.recordCacheHit()
-            return@safeReadCall it
-        }
+        categoryCacheMutex.withLock {
+            runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
+                runtime.recordCacheHit()
+                return@safeReadCall it
+            }
 
-        val cachedCategories = offlineReadStore.readCategories()
-        if (cachedCategories.isNotEmpty()) {
-            runtime.putCached("categories", CATEGORIES_TTL_MS, cachedCategories)
-            refreshCategoriesInBackground()
-            return@safeReadCall cachedCategories
+            val cachedCategories = offlineReadStore.readCategories()
+            if (cachedCategories.isNotEmpty()) {
+                runtime.putCached("categories", CATEGORIES_TTL_MS, cachedCategories)
+                refreshCategoriesInBackground()
+                return@safeReadCall cachedCategories
+            }
         }
 
         try {
-            runtime.cachedGet(key = "categories", ttlMs = CATEGORIES_TTL_MS) {
-                runtime.withRetry { feedRemote.categories() }.also { categories ->
-                    offlineReadStore.writeCategories(categories)
-                }
-            }
+            fetchCategories()
         } catch (e: Exception) {
             offlineReadStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
+        }
+    }
+
+    private suspend fun fetchCategories(): List<CategoryWithCounts> {
+        val generation = sessionGeneration.get()
+        while (true) {
+            val revision = categoryOrderRevision.get()
+            val categories = runtime.withRetry { feedRemote.categories() }
+            categoryCacheMutex.withLock {
+                check(generation == sessionGeneration.get()) { "Session changed" }
+                // A reorder completed while this snapshot was in flight. Fetch
+                // again rather than putting the old order back into either cache.
+                if (revision == categoryOrderRevision.get()) {
+                    offlineReadStore.writeCategories(categories)
+                    runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                    return categories
+                }
+            }
         }
     }
 
@@ -243,6 +264,19 @@ class RssRepository @Inject constructor(
                 invalidateFeedAndArticleCaches()
             }
         }
+
+    override suspend fun reorderCategories(updates: List<CategoryOrderUpdate>) = safeCall {
+        val generation = sessionGeneration.get()
+        check(feedRemote.reorderCategories(updates) == updates.size) { "Category order was not fully saved" }
+        categoryCacheMutex.withLock {
+            check(generation == sessionGeneration.get()) { "Session changed" }
+            categoryOrderRevision.incrementAndGet()
+            val reordered = applyCategoryOrder(offlineReadStore.readCategories(), updates)
+            offlineReadStore.writeCategories(reordered)
+            runtime.invalidateByPrefix("categories")
+            runtime.invalidateByPrefix("stats")
+        }
+    }
 
     override suspend fun deleteCategory(id: String) = safeCall {
         feedRemote.deleteCategory(id).also {
@@ -524,12 +558,17 @@ class RssRepository @Inject constructor(
 
     private fun refreshCategoriesInBackground() {
         val generation = sessionGeneration.get()
+        val orderRevision = categoryOrderRevision.get()
         refreshScope.launch {
             runCatching {
                 runtime.withRetry { feedRemote.categories() }.also { categories ->
-                    if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
-                    runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
-                    offlineReadStore.writeCategories(categories)
+                    categoryCacheMutex.withLock {
+                        if (generation != sessionGeneration.get() || !isLoggedIn() ||
+                            orderRevision != categoryOrderRevision.get()
+                        ) return@withLock
+                        runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                        offlineReadStore.writeCategories(categories)
+                    }
                 }
             }
         }

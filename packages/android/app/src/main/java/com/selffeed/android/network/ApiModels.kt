@@ -80,6 +80,15 @@ data class CategoryTreeResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class CategoryOrderUpdate(val id: String, val sortOrder: Int)
+
+@JsonClass(generateAdapter = true)
+data class ReorderCategoriesRequest(val updates: List<CategoryOrderUpdate>)
+
+@JsonClass(generateAdapter = true)
+data class ReorderCategoriesResponse(val updatedCount: Int)
+
+@JsonClass(generateAdapter = true)
 data class CategoryWithCounts(
     val id: String,
     val userId: String? = null,

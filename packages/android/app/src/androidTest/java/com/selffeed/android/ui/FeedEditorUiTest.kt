@@ -101,6 +101,8 @@ class FeedEditorUiTest {
 
         composeRule.onNodeWithText("News Feed").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("feed-overflow-feed-1").performClick()
+        composeRule.onNodeWithText("Move up").assertDoesNotExist()
+        composeRule.onNodeWithText("Move down").assertDoesNotExist()
         composeRule.onNodeWithText("Edit").performClick()
         composeRule.onNodeWithTag("feed-url-field")
             .assertTextContains("https://example.com/original.xml")

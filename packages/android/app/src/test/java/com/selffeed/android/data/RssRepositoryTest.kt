@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -583,6 +584,59 @@ class RssRepositoryTest {
         assertEquals(0L, after["retryCount"])
         assertEquals(0L, after["cacheMissCount"])
         assertEquals(0L, after["cacheHitCount"])
+    }
+
+    @Test
+    fun `category reorder persists the new order without discarding cached category counts`() = runTest {
+        val original = listOf(sampleCategory("first").copy(unreadCount = 4), sampleCategory("second"))
+        offlineReadStore.writeCategories(original)
+        val updates = listOf(
+            com.selffeed.android.network.CategoryOrderUpdate("second", 0),
+            com.selffeed.android.network.CategoryOrderUpdate("first", 1),
+        )
+        val request = com.selffeed.android.network.ReorderCategoriesRequest(updates)
+        coEvery { api.reorderCategories(request) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.ReorderCategoriesResponse(2),
+        )
+
+        assertEquals(AppResult.Success(Unit), repository.reorderCategories(updates))
+        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
+        assertEquals(listOf("second", "first"), cacheStore.readCategories().map { it.id })
+        assertEquals(4, localStore.readCategories().last().unreadCount)
+        coVerify(exactly = 1) { api.reorderCategories(request) }
+    }
+
+    @Test
+    fun `cold category response cannot restore an order replaced while it was loading`() = runTest {
+        val original = listOf(sampleCategory("first"), sampleCategory("second"))
+        val updated = listOf(sampleCategory("second"), sampleCategory("first").copy(sortOrder = 1))
+        val pending = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        var requests = 0
+        coEvery { api.categories() } coAnswers {
+            requests++
+            val response = if (requests == 1) {
+                started.complete(Unit)
+                pending.await()
+                original
+            } else updated
+            com.selffeed.android.network.ApiEnvelope(com.selffeed.android.network.CategoryTreeResponse(response, 0))
+        }
+        coEvery { api.reorderCategories(any()) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.ReorderCategoriesResponse(2),
+        )
+        val loading = async { repository.categories() }
+        started.await()
+        repository.reorderCategories(listOf(
+            com.selffeed.android.network.CategoryOrderUpdate("second", 0),
+            com.selffeed.android.network.CategoryOrderUpdate("first", 1),
+        ))
+        pending.complete(Unit)
+
+        assertEquals(AppResult.Success(updated), loading.await())
+        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
+        assertEquals(listOf("second", "first"), cacheStore.readCategories().map { it.id })
+        coVerify(exactly = 2) { api.categories() }
     }
 
     @Test

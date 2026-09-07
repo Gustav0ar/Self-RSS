@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.CategoryMoveDirection
+import com.selffeed.android.data.categoryMoveUpdates
+import com.selffeed.android.data.applyCategoryOrder
 import com.selffeed.android.data.repository.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import com.selffeed.android.network.CategoryWithCounts
@@ -34,6 +37,7 @@ import javax.inject.Inject
 
 data class FeedsUiState(
     val loading: Boolean = false,
+    val reorderingCategories: Boolean = false,
     val categories: List<CategoryWithCounts> = emptyList(),
     val feeds: List<FeedWithCounts> = emptyList(),
     val lastSyncSummary: SyncResponse? = null,
@@ -69,6 +73,8 @@ class FeedsViewModel @Inject constructor(
     private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
     private var syncMonitorJob: Job? = null
+    private var categoryLoadRevision = 0L
+    private var categoryReloadPending = false
 
     fun offerExternalFeed(url: String) {
         _state.update { it.copy(externalFeedUrl = url) }
@@ -105,8 +111,15 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun loadCategories() {
+        if (_state.value.reorderingCategories) {
+            categoryReloadPending = true
+            return
+        }
+        val revision = ++categoryLoadRevision
         viewModelScope.launch {
-            when (val result = repository.categories()) {
+            val result = repository.categories()
+            if (revision != categoryLoadRevision) return@launch
+            when (result) {
                 is AppResult.Success -> _state.update { it.copy(categories = result.data) }
                 is AppResult.Error -> _state.update {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
@@ -164,6 +177,37 @@ class FeedsViewModel @Inject constructor(
                 // This is background reconciliation. Existing offline/error UX
                 // remains authoritative when the server cannot be reached.
                 is AppResult.Error -> Unit
+            }
+        }
+    }
+
+    fun moveCategory(id: String, direction: CategoryMoveDirection) {
+        if (_state.value.reorderingCategories) return
+        val updates = categoryMoveUpdates(_state.value.categories, id, direction) ?: return
+        categoryLoadRevision++
+        _state.update { it.copy(reorderingCategories = true, errorMessage = null) }
+        viewModelScope.launch {
+            try {
+                when (val result = repository.reorderCategories(updates)) {
+                    is AppResult.Success -> _state.update {
+                        it.copy(
+                            categories = applyCategoryOrder(it.categories, updates),
+                            statusMessage = PresentationText.resource(
+                                if (direction == CategoryMoveDirection.UP) R.string.feeds_category_moved_up
+                                else R.string.feeds_category_moved_down,
+                            ),
+                        )
+                    }
+                    is AppResult.Error -> _state.update {
+                        it.copy(errorMessage = PresentationText.dynamic(result.message))
+                    }
+                }
+            } finally {
+                _state.update { it.copy(reorderingCategories = false) }
+                if (categoryReloadPending) {
+                    categoryReloadPending = false
+                    loadCategories()
+                }
             }
         }
     }

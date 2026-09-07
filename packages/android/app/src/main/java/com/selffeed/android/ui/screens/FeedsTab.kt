@@ -1,5 +1,8 @@
 package com.selffeed.android.ui.screens
 
+import com.selffeed.android.data.CategoryMoveDirection
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowDownward
 import android.content.Context
 import android.net.Uri
 import androidx.annotation.StringRes
@@ -157,6 +160,8 @@ internal sealed interface FeedDrawerRow {
 internal data class CategoryDrawerRow(
     val category: CategoryWithCounts,
     override val depth: Int,
+    val siblingIndex: Int,
+    val siblingCount: Int,
 ) : FeedDrawerRow {
     override val key = "cat-${category.id}"
     override val contentType = "category"
@@ -175,19 +180,20 @@ internal fun buildFeedDrawerRows(
     feedsByCategory: Map<String, List<FeedWithCounts>>,
     isExpanded: (String) -> Boolean,
 ): List<FeedDrawerRow> = buildList {
-    fun addCategory(category: CategoryWithCounts, depth: Int) {
-        add(CategoryDrawerRow(category, depth))
+    fun addCategory(category: CategoryWithCounts, depth: Int, index: Int, count: Int) {
+        add(CategoryDrawerRow(category, depth, index, count))
         if (!isExpanded(category.id)) return
 
         feedsByCategory[category.id].orEmpty().forEach { feed ->
             add(FeedDrawerFeedRow(feed, depth + 1))
         }
-        category.children.orEmpty().forEach { child ->
-            addCategory(child, depth + 1)
+        val children = category.children.orEmpty()
+        children.forEachIndexed { childIndex, child ->
+            addCategory(child, depth + 1, childIndex, children.size)
         }
     }
 
-    categories.forEach { category -> addCategory(category, depth = 0) }
+    categories.forEachIndexed { index, category -> addCategory(category, 0, index, categories.size) }
 }
 
 @Composable
@@ -479,6 +485,10 @@ fun FeedsTab(
                             onExpand = {
                                 expandedCategories[category.id] = !isExpanded
                             },
+                            onMove = { direction -> actions.onMoveCategory(category.id, direction) },
+                            canMoveUp = !state.reorderingCategories && row.siblingIndex > 0,
+                            canMoveDown = !state.reorderingCategories && row.siblingIndex < row.siblingCount - 1,
+                            menuModifier = Modifier.testTag("category-overflow-${category.id}"),
                             onEdit = { managementDialog = FeedManagementDialog.CategoryEditor(category) },
                             onDelete = { managementDialog = FeedManagementDialog.DeleteCategory(category) },
                         )
@@ -1149,6 +1159,10 @@ private fun DrawerItem(
     onExpand: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    onMove: ((CategoryMoveDirection) -> Unit)? = null,
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
+    menuModifier: Modifier = Modifier,
 ) {
     Row(
         modifier = Modifier
@@ -1192,7 +1206,10 @@ private fun DrawerItem(
             }
         }
         if (onEdit != null || onDelete != null) {
-            FeedOverflowMenu(onEdit = onEdit, onDelete = onDelete)
+            FeedOverflowMenu(
+                onEdit = onEdit, onDelete = onDelete, onMove = onMove,
+                canMoveUp = canMoveUp, canMoveDown = canMoveDown, modifier = menuModifier,
+            )
         }
     }
 }
@@ -1202,6 +1219,9 @@ private fun FeedOverflowMenu(
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    onMove: ((CategoryMoveDirection) -> Unit)? = null,
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -1219,6 +1239,26 @@ private fun FeedOverflowMenu(
                     onClick = {
                         expanded = false
                         edit()
+                    },
+                )
+            }
+            onMove?.let { move ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.action_move_up)) },
+                    leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
+                    enabled = canMoveUp,
+                    onClick = {
+                        expanded = false
+                        move(CategoryMoveDirection.UP)
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.action_move_down)) },
+                    leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
+                    enabled = canMoveDown,
+                    onClick = {
+                        expanded = false
+                        move(CategoryMoveDirection.DOWN)
                     },
                 )
             }

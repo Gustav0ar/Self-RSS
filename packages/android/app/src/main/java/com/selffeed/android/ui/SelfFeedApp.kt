@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.data.CategoryMoveDirection
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
@@ -140,6 +141,7 @@ data class SelfFeedAppActions(
     val onCreateCategory: (String, String?) -> Unit = { _, _ -> },
     val onUpdateCategory: (String, String, String?) -> Unit = { _, _, _ -> },
     val onDeleteCategory: (String) -> Unit = {},
+    val onMoveCategory: (String, CategoryMoveDirection) -> Unit = { _, _ -> },
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
     val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},
@@ -343,6 +345,7 @@ fun SelfFeedApp(
         selectedFeedId,
         state.feeds.loading,
         state.feeds.lastImportSummary,
+        state.feeds.reorderingCategories,
         state.feeds.syncStatus,
         state.feeds.lifecycleActionFeedId,
         state.feeds.externalFeedUrl,
@@ -358,6 +361,7 @@ fun SelfFeedApp(
             selectedCategoryId = selectedCategoryId,
             selectedFeedId = selectedFeedId,
             loading = state.feeds.loading,
+            reorderingCategories = state.feeds.reorderingCategories,
             lastImportSummary = state.feeds.lastImportSummary,
             syncStatus = state.feeds.syncStatus,
             lifecycleActionFeedId = state.feeds.lifecycleActionFeedId,
@@ -457,6 +461,7 @@ fun SelfFeedApp(
             onCreateCategory = actions.onCreateCategory,
             onUpdateCategory = actions.onUpdateCategory,
             onDeleteCategory = actions.onDeleteCategory,
+            onMoveCategory = actions.onMoveCategory,
             onCreateFeed = actions.onCreateFeed,
             onUpdateFeed = actions.onUpdateFeed,
             onDeleteFeed = actions.onDeleteFeed,

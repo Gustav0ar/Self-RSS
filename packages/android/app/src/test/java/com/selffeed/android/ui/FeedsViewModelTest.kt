@@ -2,6 +2,8 @@ package com.selffeed.android.ui
 
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.CategoryMoveDirection
+import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
@@ -25,6 +27,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -56,6 +59,70 @@ class FeedsViewModelTest {
     @After
     fun teardown() {
         Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `moving a nested category updates only siblings and preserves concurrent unread counts`() = runTest {
+        coEvery { repository.feeds(any()) } returns AppResult.Success(listOf(sampleFeed("f", "b")))
+        val children = listOf(sampleCategory("a"), sampleCategory("b")).map { it.copy(parentCategoryId = "parent") }
+        val original = listOf(sampleCategory("parent", children = children), sampleCategory("other"))
+        coEvery { repository.categories() } returns AppResult.Success(original)
+        val pending = CompletableDeferred<AppResult<Unit>>()
+        coEvery { repository.reorderCategories(any()) } coAnswers { pending.await() }
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+
+        viewModel.loadFeeds()
+        viewModel.moveCategory("b", CategoryMoveDirection.UP)
+        viewModel.moveCategory("a", CategoryMoveDirection.DOWN)
+        assertTrue(viewModel.state.value.reorderingCategories)
+        assertEquals(original, viewModel.state.value.categories)
+        viewModel.applyUnreadDelta("f", 3)
+        pending.complete(AppResult.Success(Unit))
+        runCurrent()
+
+        assertFalse(viewModel.state.value.reorderingCategories)
+        assertEquals(listOf("parent", "other"), viewModel.state.value.categories.map { it.id })
+        val reordered = viewModel.state.value.categories.first().children.orEmpty()
+        assertEquals(listOf("b", "a"), reordered.map { it.id })
+        assertEquals(3, reordered.first().unreadCount)
+        coVerify(exactly = 1) { repository.reorderCategories(listOf(CategoryOrderUpdate("b", 0), CategoryOrderUpdate("a", 1))) }
+    }
+
+    @Test
+    fun `category boundaries and failed requests leave the existing order intact`() = runTest {
+        val original = listOf(sampleCategory("a"), sampleCategory("b"))
+        coEvery { repository.categories() } returns AppResult.Success(original)
+        coEvery { repository.reorderCategories(any()) } returns AppResult.Error("Offline")
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+
+        viewModel.moveCategory("a", CategoryMoveDirection.UP)
+        viewModel.moveCategory("b", CategoryMoveDirection.DOWN)
+        viewModel.moveCategory("missing", CategoryMoveDirection.UP)
+        coVerify(exactly = 0) { repository.reorderCategories(any()) }
+        viewModel.moveCategory("b", CategoryMoveDirection.UP)
+
+        assertEquals(original, viewModel.state.value.categories)
+        assertFalse(viewModel.state.value.reorderingCategories)
+        assertEquals(PresentationText.dynamic("Offline"), viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `category load started before a move cannot undo the saved order`() = runTest {
+        val original = listOf(sampleCategory("a"), sampleCategory("b"))
+        coEvery { repository.categories() } returns AppResult.Success(original)
+        coEvery { repository.reorderCategories(any()) } returns AppResult.Success(Unit)
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadCategories()
+        val oldLoad = CompletableDeferred<AppResult<List<CategoryWithCounts>>>()
+        coEvery { repository.categories() } coAnswers { oldLoad.await() }
+        viewModel.loadCategories()
+        viewModel.moveCategory("b", CategoryMoveDirection.UP)
+        oldLoad.complete(AppResult.Success(original))
+        runCurrent()
+
+        assertEquals(listOf("b", "a"), viewModel.state.value.categories.map { it.id })
     }
 
     @Test

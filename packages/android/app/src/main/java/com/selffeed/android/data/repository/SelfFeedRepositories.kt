@@ -1,5 +1,6 @@
 package com.selffeed.android.data.repository
 
+import com.selffeed.android.network.CategoryOrderUpdate
 import androidx.paging.PagingData
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.ArticlePageQuery
@@ -53,6 +54,8 @@ interface FeedRepository {
         name: String?,
         parentCategoryId: String?
     ): AppResult<CategoryWithCounts>
+
+    suspend fun reorderCategories(updates: List<CategoryOrderUpdate>): AppResult<Unit>
 
     suspend fun deleteCategory(id: String): AppResult<Boolean>
     suspend fun feeds(categoryId: String? = null): AppResult<List<FeedWithCounts>>
