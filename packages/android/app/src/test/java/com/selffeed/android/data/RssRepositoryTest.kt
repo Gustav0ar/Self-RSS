@@ -685,6 +685,70 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `local unread queued during a bulk receipt remains unread in UI and counts`() =
+        assertLocalChoiceDuringBulk(initiallyRead = true)
+
+    @Test
+    fun `local read queued during a bulk receipt is not counted twice`() =
+        assertLocalChoiceDuringBulk(initiallyRead = false)
+
+    private fun assertLocalChoiceDuringBulk(initiallyRead: Boolean) = runTest {
+        val article = sampleArticle("bulk-interleaving").copy(isRead = initiallyRead)
+        localStore.writeArticleRemotePage("bulk-interleaving", ApiListResponse(listOf(article), null, false), true)
+        onlineState.value = false
+        val remoteEvents = MutableSharedFlow<com.selffeed.android.network.ReadStateSyncEvent>()
+        val reconciled = CompletableDeferred<Unit>()
+        val resumeReceipt = CompletableDeferred<Unit>()
+        val articleRepository = object : ArticleRepository by repository {
+            override fun readStateEvents() = remoteEvents
+            override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): com.selffeed.android.data.repository.BulkReadReconciliation {
+                val snapshot = repository.markCachedArticlesReadByFeeds(feedIds)
+                reconciled.complete(Unit)
+                resumeReceipt.await()
+                return snapshot
+            }
+        }
+        val viewModel = ArticlesViewModel(
+            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            ArticleWarmingManager(articleRepository),
+        )
+        val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
+        try {
+            viewModel.updateArticleQueueSnapshot(listOf(article))
+            viewModel.startReadStateSync()
+            val bulk = async {
+                viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead }
+                    as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
+            }
+            runCurrent()
+            remoteEvents.emit(com.selffeed.android.network.ArticlesMarkedReadEvent(
+                eventId = "bulk-interleaving", feedIds = listOf(article.feedId), markedCount = if (initiallyRead) 0 else 1,
+                scope = com.selffeed.android.network.ReadStateScope(feedId = article.feedId),
+                clientId = "another-device", updatedAt = "2026-09-07T00:00:00Z",
+            ))
+            reconciled.await()
+            val local = async {
+                viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ArticleReadStateChanged }
+            }
+            runCurrent()
+            viewModel.markRead(article.id, !initiallyRead)
+            local.await()
+            assertEquals(!initiallyRead, localStore.readPendingReadStateMutations().single().read)
+            resumeReceipt.complete(Unit)
+            val event = bulk.await()
+            assertEquals(!initiallyRead, localStore.readPendingReadStateMutations().single().read)
+            assertEquals(!initiallyRead, viewModel.state.value.items.single().isRead)
+            assertEquals(!initiallyRead, viewModel.readStateOverrides.value[article.id])
+            assertEquals(if (initiallyRead) mapOf(article.id to article.feedId) else emptyMap<String, String>(),
+                event.retainedUnreadArticleFeeds)
+            assertEquals(0, event.markedCount)
+        } finally {
+            resumeReceipt.complete(Unit)
+            store.clear()
+        }
+    }
+
+    @Test
     fun `foreign bulk read preserves pending unread while updating the rest of its scope`() = runTest {
         val pending = sampleArticle("pending-unread").copy(isRead = true)
         val unread = sampleArticle("ordinary-unread").copy(isRead = false)

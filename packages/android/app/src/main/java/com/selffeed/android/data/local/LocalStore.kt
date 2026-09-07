@@ -311,6 +311,7 @@ class LocalStore(
     suspend fun markArticlesReadByFeeds(feedIds: Collection<String>): BulkReadReconciliation {
         val unreadArticleFeeds = mutableMapOf<String, String>()
         var locallyHandledCount = 0
+        val pendingArticleIds = mutableSetOf<String>()
         database.withTransaction {
             val pending = dao.readPendingReadStateMutations()
             for (mutation in pending) {
@@ -319,6 +320,7 @@ class LocalStore(
                         articleDetailAdapter.fromJson(it.payloadJson)?.feedId
                     }
                 if (feedIds.isNotEmpty() && feedId !in feedIds) continue
+                pendingArticleIds += mutation.articleId
                 if (!mutation.read && feedId != null) unreadArticleFeeds[mutation.articleId] = feedId
                 // The server counted this receipt, but the local choice already
                 // controls the UI and must not change its unread total again.
@@ -328,7 +330,7 @@ class LocalStore(
             dao.markArticleReadOverridesByFeeds(feedIds.distinct(), feedIds.isEmpty(), System.currentTimeMillis())
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
-        return BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount)
+        return BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount, pendingArticleIds)
     }
 
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =

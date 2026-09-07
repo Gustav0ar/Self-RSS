@@ -180,4 +180,6 @@ interface SelfFeedRepository :
 data class BulkReadReconciliation(
     val unreadArticleFeeds: Map<String, String> = emptyMap(),
     val locallyHandledCount: Int = 0,
+    // Includes both read and unread choices already considered by this receipt.
+    val pendingArticleIds: Set<String> = emptySet(),
 )
