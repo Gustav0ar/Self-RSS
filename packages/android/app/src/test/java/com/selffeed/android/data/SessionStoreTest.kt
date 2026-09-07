@@ -36,6 +36,30 @@ class SessionStoreTest {
     }
 
     @Test
+    fun `logout rejects token and cookie writes from a previous session`() = runBlocking {
+        val session = store.currentSession()
+        store.clear()
+
+        assertFalse(store.isCurrentSession(session))
+        assertFalse(store.setAccessTokenIfCurrent(session, "late-access"))
+        assertFalse(store.setRefreshCookieIfCurrent(session, "late-cookie"))
+        assertNull(store.getAccessToken())
+        assertNull(store.getRefreshCookie())
+    }
+
+    @Test
+    fun `switching back to the same server does not revive an old session`() = runBlocking {
+        store.setApiBaseUrl("first.example.com")
+        val session = store.currentSession()
+        store.setApiBaseUrl("second.example.com")
+        store.setApiBaseUrl("first.example.com")
+
+        assertFalse(store.isCurrentSession(session))
+        assertFalse(store.setAccessTokenIfCurrent(session, "late-access"))
+        assertFalse(store.setRefreshCookieIfCurrent(session, "late-cookie"))
+    }
+
+    @Test
     fun `getClientId returns a non-empty id on first call and is stable`() {
         val first = store.getClientId()
         assertNotNull(first)

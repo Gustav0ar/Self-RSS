@@ -131,6 +131,26 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `login response after logout cannot restore the access token`() = runTest {
+        val session = ApiSession(0, "rss.example.com")
+        val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.AuthResponse>>()
+        coEvery { sessionStore.beginAuthentication() } returns session
+        coEvery { sessionStore.setAccessTokenIfCurrent(session, any()) } returns false
+        coEvery { api.login(any(), any()) } coAnswers { response.await() }
+
+        val login = async { repository.login("reader@example.com", "password") }
+        runCurrent()
+        repository.logout()
+        response.complete(com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.AuthResponse(sampleUser(), com.selffeed.android.network.AccessTokenOnly("late-token")),
+        ))
+
+        assertTrue(login.await() is AppResult.Error)
+        coVerify(exactly = 0) { sessionStore.setAccessToken(any()) }
+        coVerify(exactly = 0) { sessionStore.recordAuthenticated(any()) }
+    }
+
+    @Test
     fun `worker rejection restores saved state through the real ViewModel repository and Room`() = runTest {
         val articleId = "saved-rollback"
         val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)

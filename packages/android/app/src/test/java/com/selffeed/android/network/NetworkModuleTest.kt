@@ -5,6 +5,8 @@ package com.selffeed.android.network
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.SessionStore
+import com.selffeed.android.data.ApiSession
+import com.selffeed.android.data.remote.AuthRemoteDataSource
 import com.sun.net.httpserver.HttpServer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -31,10 +33,192 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class NetworkModuleTest {
+    private fun stubSession(store: SessionStore) {
+        every { store.currentSession() } answers {
+            ApiSession(0, store.getApiBaseUrl())
+        }
+        every { store.isCurrentSession(any()) } answers {
+            firstArg<ApiSession>().apiBaseUrl == store.getApiBaseUrl()
+        }
+        every { store.getAccessTokenIfCurrent(any()) } answers {
+            if (store.isCurrentSession(firstArg())) store.getAccessToken() else null
+        }
+        every { store.getRefreshCookieIfCurrent(any()) } answers {
+            if (store.isCurrentSession(firstArg())) store.getRefreshCookie() else null
+        }
+        coEvery { store.setAccessTokenIfCurrent(any(), any()) } coAnswers {
+            if (!store.isCurrentSession(firstArg())) false else {
+                store.setAccessToken(secondArg())
+                true
+            }
+        }
+        coEvery { store.setRefreshCookieIfCurrent(any(), any()) } coAnswers {
+            if (!store.isCurrentSession(firstArg())) false else {
+                store.setRefreshCookie(secondArg())
+                true
+            }
+        }
+    }
+
+    @Test
+    fun `queued logout keeps its original server after a server switch`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val receivedHost = AtomicReference<String>()
+        val receivedCookie = AtomicReference<String>()
+        server.createContext("/api/v1/auth/logout") { exchange ->
+            receivedHost.set(exchange.requestHeaders.getFirst("Host"))
+            receivedCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+            val body = """{"data":{"success":true}}""".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        val originalServer = "127.0.0.1:${server.address.port}"
+        val currentServer = AtomicReference(originalServer)
+        val store = mockk<SessionStore>(relaxed = true)
+        stubSession(store)
+        every { store.getApiBaseUrl() } answers { currentServer.get() }
+        every { store.getAccessToken() } returns null
+        every { store.getRefreshCookie() } returns null
+        val started = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val client = NetworkModule.provideOkHttpClient(
+            ApplicationProvider.getApplicationContext(), store, mockk(relaxed = true),
+        ).newBuilder().apply {
+            interceptors().add(0) { chain ->
+                started.countDown()
+                check(resume.await(5, TimeUnit.SECONDS))
+                chain.proceed(chain.request())
+            }
+        }.build()
+        try {
+            val remote = AuthRemoteDataSource(NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store))
+            val pending = CompletableFuture.supplyAsync {
+                runBlocking { remote.logout("old-access", "rss_refresh_token=old-refresh; Path=/api/v1/auth") }
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            currentServer.set("localhost:${server.address.port}")
+            resume.countDown()
+            assertTrue(pending.get(5, TimeUnit.SECONDS))
+            assertEquals(originalServer, receivedHost.get())
+            assertEquals("rss_refresh_token=old-refresh", receivedCookie.get())
+        } finally {
+            resume.countDown()
+            server.stop(0)
+            client.cache?.close()
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `old session unauthorized response cannot retry with the new token`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val started = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        server.createContext("/api/v1/auth/me") { exchange ->
+            requests.incrementAndGet()
+            started.countDown()
+            check(resume.await(5, TimeUnit.SECONDS))
+            exchange.sendResponseHeaders(401, -1)
+            exchange.close()
+        }
+        server.start()
+        val store = mockk<SessionStore>(relaxed = true)
+        stubSession(store)
+        every { store.getApiBaseUrl() } returns "127.0.0.1:${server.address.port}"
+        every { store.getAccessToken() } returns "old-access"
+        every { store.getRefreshCookie() } returns null
+        val coordinator = mockk<SessionRefreshCoordinator>(relaxed = true)
+        val client = NetworkModule.provideOkHttpClient(
+            ApplicationProvider.getApplicationContext(), store, coordinator,
+        )
+        try {
+            val api = NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store)
+            val pending = CompletableFuture.supplyAsync { runBlocking { runCatching { api.me() } } }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            every { store.isCurrentSession(any()) } returns false
+            every { store.getAccessToken() } returns "new-account-token"
+            resume.countDown()
+
+            assertTrue(pending.get(5, TimeUnit.SECONDS).exceptionOrNull() is retrofit2.HttpException)
+            assertEquals(1, requests.get())
+            io.mockk.verify(exactly = 0) { coordinator.refreshAccessToken(any()) }
+        } finally {
+            resume.countDown()
+            server.stop(0)
+            client.cache?.close()
+            client.connectionPool.evictAll()
+            client.dispatcher.executorService.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `refresh finishing after logout cannot restore credentials`() = assertRefreshResult(false, true)
+
+    @Test
+    fun `refresh finishing after a server switch cannot restore credentials`() = assertRefreshResult(true, true)
+
+    @Test
+    fun `refresh in the current session updates access and refresh tokens`() = assertRefreshResult(false, false)
+
+    private fun assertRefreshResult(switchServer: Boolean, clearSession: Boolean) {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val started = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        server.createContext("/api/v1/auth/refresh") { exchange ->
+            started.countDown()
+            check(resume.await(5, TimeUnit.SECONDS))
+            exchange.responseHeaders.add("Set-Cookie", "rss_refresh_token=late-refresh; Path=/api/v1/auth")
+            val body = """{"data":{"tokens":{"accessToken":"late-access"}}}""".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        val currentServer = AtomicReference("127.0.0.1:${server.address.port}")
+        val accessToken = AtomicReference<String?>("old-access")
+        val refreshCookie = AtomicReference<String?>("rss_refresh_token=old-refresh; Path=/api/v1/auth")
+        val store = mockk<SessionStore>(relaxed = true)
+        stubSession(store)
+        every { store.getApiBaseUrl() } answers { currentServer.get() }
+        every { store.getAccessToken() } answers { accessToken.get() }
+        every { store.getRefreshCookie() } answers { refreshCookie.get() }
+        coEvery { store.setAccessToken(any()) } answers { accessToken.set(firstArg()) }
+        coEvery { store.setRefreshCookie(any()) } answers { refreshCookie.set(firstArg()) }
+        try {
+            val coordinator = SessionRefreshCoordinator(store, NetworkModule.provideMoshi())
+            val pending = CompletableFuture.supplyAsync { coordinator.refreshAccessToken() }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            if (clearSession) {
+                accessToken.set(null)
+                refreshCookie.set(null)
+                every { store.isCurrentSession(any()) } returns false
+            }
+            if (switchServer) currentServer.set("localhost:${server.address.port}")
+            resume.countDown()
+            val result = pending.get(5, TimeUnit.SECONDS)
+            if (clearSession) {
+                assertTrue(result is SessionRefreshResult.Unavailable)
+                assertNull(accessToken.get())
+                assertNull(refreshCookie.get())
+            } else {
+                assertEquals(SessionRefreshResult.Success("late-access"), result)
+                assertEquals("late-access", accessToken.get())
+                assertTrue(refreshCookie.get()!!.contains("rss_refresh_token=late-refresh"))
+            }
+        } finally {
+            resume.countDown()
+            server.stop(0)
+        }
+    }
+
     @Test
     fun `provideMoshi returns a Moshi with the boolean adapter installed`() {
         val moshi = NetworkModule.provideMoshi()
@@ -155,6 +339,7 @@ class NetworkModuleTest {
     fun `api client persists refresh cookies from auth responses`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getApiBaseUrl() } returns "10.0.2.2:3000"
         every { store.getAccessToken() } returns null
         every { store.getRefreshCookie() } returns null
@@ -186,6 +371,7 @@ class NetworkModuleTest {
 
     private suspend fun loginRequestUrlForConfiguredServer(server: String): HttpUrl {
         val store = mockk<SessionStore>()
+        stubSession(store)
         every { store.getApiBaseUrl() } returns server
         val capturedUrl = AtomicReference<HttpUrl>()
         val client = OkHttpClient.Builder()
@@ -217,7 +403,7 @@ class NetworkModuleTest {
                     .build()
             }
             .build()
-        val api = NetworkModule.provideApi(client, NetworkModule.provideMoshi())
+        val api = NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store)
 
         val response = api.login(LoginRequest("reader@example.com", "password123"))
 
@@ -242,6 +428,7 @@ class NetworkModuleTest {
     @Test
     fun `persistedRefreshCookieJar returns empty list when no cookie is stored`() {
         val store = mockk<SessionStore>()
+        stubSession(store)
         every { store.getRefreshCookie() } returns null
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
@@ -252,6 +439,7 @@ class NetworkModuleTest {
     @Test
     fun `persistedRefreshCookieJar returns a valid cookie`() {
         val store = mockk<SessionStore>()
+        stubSession(store)
         every { store.getRefreshCookie() } returns
             "rss_refresh_token=abc123; Path=/; Domain=example.com"
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
@@ -265,6 +453,7 @@ class NetworkModuleTest {
     @Test
     fun `existing host only refresh cookie keeps its api origin path and secure scope`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         // This is the existing persisted format returned by the API. It has no Domain.
         every { store.getRefreshCookie() } returns
@@ -288,6 +477,7 @@ class NetworkModuleTest {
     @Test
     fun `foreign redirect responses cannot replace the api refresh cookie`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val redirectUrl = url("https://redirect.example/api/v1/auth/refresh")
@@ -324,6 +514,7 @@ class NetworkModuleTest {
         server.start()
         try {
             val store = mockk<SessionStore>()
+        stubSession(store)
             every { store.getApiBaseUrl() } returns "http://127.0.0.1:$port/api/v1/"
             every { store.getRefreshCookie() } returns
                 "rss_refresh_token=stored-session; Path=/api/v1/auth; HttpOnly"
@@ -346,6 +537,7 @@ class NetworkModuleTest {
     @Test
     fun `persistedRefreshCookieJar discards expired cookies and clears storage`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getRefreshCookie() } returns
             "rss_refresh_token=abc; Path=/; Domain=example.com; Max-Age=0"
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
@@ -359,6 +551,7 @@ class NetworkModuleTest {
     @Test
     fun `saveFromResponse only stores the refresh cookie`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val parsedUrl = url("https://example.com")
@@ -381,6 +574,7 @@ class NetworkModuleTest {
     @Test
     fun `saveFromResponse does not throw when secure storage fails`() {
         val store = mockk<SessionStore>()
+        stubSession(store)
         coEvery { store.setRefreshCookie(any()) } throws IllegalStateException("missing keystore key")
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
@@ -397,6 +591,7 @@ class NetworkModuleTest {
     @Test
     fun `loadForRequest returns empty when secure storage read fails`() {
         val store = mockk<SessionStore>()
+        stubSession(store)
         every { store.getRefreshCookie() } throws IllegalStateException("missing keystore key")
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
@@ -409,6 +604,7 @@ class NetworkModuleTest {
     @Test
     fun `saveFromResponse ignores non-refresh cookies`() {
         val store = mockk<SessionStore>(relaxUnitFun = true)
+        stubSession(store)
         every { store.getApiBaseUrl() } returns "https://example.com/api/v1/"
         val jar = PersistedRefreshCookieJar(store)
         val parsedUrl = url("https://example.com")
