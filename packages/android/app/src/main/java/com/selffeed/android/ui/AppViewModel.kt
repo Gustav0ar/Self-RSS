@@ -1,5 +1,8 @@
 package com.selffeed.android.ui
 
+import android.util.Base64
+import org.json.JSONObject
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
@@ -31,6 +34,7 @@ data class AppChromeState(
     val globalStatus: PresentationText? = null,
     val globalError: PresentationText? = null,
     val sessionReady: Boolean = false,
+    val restoringReadingSession: Boolean = false,
     val pendingExternalAction: ExternalAction? = null,
     val serverChangeConfirmation: ExternalAction.OpenArticle? = null,
 )
@@ -39,8 +43,9 @@ data class AppChromeState(
 class AppViewModel @Inject constructor(
     private val repository: AppStatusRepository,
     private val sessionStore: SessionStore,
+    private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
 ) : ViewModel() {
-    private val _chrome = MutableStateFlow(AppChromeState())
+    private val _chrome = MutableStateFlow(AppChromeState(restoringReadingSession = true))
     val chrome: StateFlow<AppChromeState> = _chrome.asStateFlow()
 
     init {
@@ -49,6 +54,61 @@ class AppViewModel @Inject constructor(
             sessionStore.preload()
             _chrome.value = _chrome.value.copy(sessionReady = true)
         }
+    }
+
+    private var readingSessionKey: String? = null
+
+    /** Called only after authentication, including the validated offline lease. */
+    fun readingSessionIdentity(userId: String?): String? {
+        // Offline bootstrap has no /me response. The stored token subject is
+        // only a cache namespace here, never a substitute for authentication.
+        val subject = userId ?: runCatching {
+            val payload = sessionStore.getAccessToken()?.split('.')?.getOrNull(1) ?: return@runCatching null
+            JSONObject(String(Base64.decode(payload, Base64.URL_SAFE), Charsets.UTF_8))
+                .optString("sub").takeIf { it.isNotBlank() }
+        }.getOrNull()
+        return subject?.let { "${sessionStore.getApiBaseUrl()}\n$it" }
+    }
+
+    fun bindReadingSession(sessionKey: String?) {
+        if (sessionKey != null && readingSessionKey == sessionKey) return
+        val canRestore = sessionKey != null && savedStateHandle.get<String>("reading.session") == sessionKey
+        if (!canRestore) savedStateHandle.keys().filter { it.startsWith("reading.") }
+            .forEach { savedStateHandle.remove<Any>(it) }
+        readingSessionKey = sessionKey
+        _chrome.value = _chrome.value.copy(
+            activeTab = if (canRestore) restoredTab("reading.tab") else HomeTab.ARTICLES,
+            readerOrigin = if (canRestore) restoredTab("reading.origin") else HomeTab.ARTICLES,
+            restoringReadingSession = true,
+        )
+        saveReadingSession()
+    }
+
+    fun hasReadingSession(sessionKey: String?): Boolean =
+        readingSessionKey == sessionKey && !_chrome.value.restoringReadingSession
+
+    fun finishReadingSessionRestore() {
+        _chrome.value = _chrome.value.copy(restoringReadingSession = false)
+    }
+
+    fun clearReadingSession() {
+        readingSessionKey = null
+        savedStateHandle.keys().filter { it.startsWith("reading.") }.forEach { savedStateHandle.remove<Any>(it) }
+        _chrome.value = _chrome.value.copy(
+            activeTab = HomeTab.ARTICLES,
+            readerOrigin = HomeTab.ARTICLES,
+            restoringReadingSession = true,
+        )
+    }
+
+    private fun restoredTab(key: String): HomeTab =
+        HomeTab.entries.firstOrNull { it.name == savedStateHandle.get<String>(key) } ?: HomeTab.ARTICLES
+
+    private fun saveReadingSession() {
+        val sessionKey = readingSessionKey ?: return
+        savedStateHandle["reading.session"] = sessionKey
+        savedStateHandle["reading.tab"] = _chrome.value.activeTab.name
+        savedStateHandle["reading.origin"] = _chrome.value.readerOrigin.name
     }
 
     /** Online state mirrored from the [com.selffeed.android.network.NetworkMonitor]. */
@@ -69,6 +129,7 @@ class AppViewModel @Inject constructor(
 
     fun setTab(tab: HomeTab) {
         _chrome.value = _chrome.value.copy(activeTab = tab, globalError = null, globalStatus = null)
+        saveReadingSession()
     }
 
     fun offerExternalAction(action: ExternalAction?) {
@@ -118,10 +179,12 @@ class AppViewModel @Inject constructor(
             globalError = null,
             globalStatus = null,
         )
+        saveReadingSession()
     }
 
     fun closeReader() {
         _chrome.value = _chrome.value.copy(activeTab = _chrome.value.readerOrigin)
+        saveReadingSession()
     }
 
     fun setSyncingFeeds(syncing: Boolean) {

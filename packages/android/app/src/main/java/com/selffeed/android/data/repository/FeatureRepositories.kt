@@ -145,6 +145,9 @@ class ArticleRepositoryImpl @Inject constructor(
     override fun cachedArticleDetail(articleId: String): ArticleDetail? =
         delegate.cachedArticleDetail(articleId)
 
+    override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? =
+        delegate.readCachedArticleDetail(articleId)
+
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
         delegate.prefetchArticle(articleId)
 

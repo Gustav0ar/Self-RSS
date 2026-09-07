@@ -624,6 +624,9 @@ class RssRepository @Inject constructor(
     override fun cachedArticleDetail(articleId: String): ArticleDetail? =
         runtime.getCached("article:$articleId")
 
+    override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? =
+        localStore.readArticleDetail(articleId)?.let { localStore.applyPendingArticleState(it) }
+
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
         article(articleId)
 

@@ -101,6 +101,7 @@ interface ArticleRepository {
 
     suspend fun article(articleId: String, forceRefresh: Boolean = false): AppResult<ArticleDetail>
     fun cachedArticleDetail(articleId: String): ArticleDetail?
+    suspend fun readCachedArticleDetail(articleId: String): ArticleDetail?
     suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail>
     suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail>
     fun prefetchHeroImages(imageUrls: Iterable<String?>)
