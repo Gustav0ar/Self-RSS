@@ -11,6 +11,7 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthResponse
 import com.selffeed.android.network.AuthSession
+import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.ChangePasswordRequest
 import com.selffeed.android.network.CreateCategoryRequest
@@ -77,6 +78,9 @@ class FeedRemoteDataSource @Inject constructor(
         parentCategoryId: String?
     ): CategoryWithCounts =
         api.updateCategory(id, UpdateCategoryRequest(name, parentCategoryId)).data
+
+    suspend fun reorderCategories(updates: List<CategoryOrderUpdate>): Int =
+        api.reorderCategories(com.selffeed.android.network.ReorderCategoriesRequest(updates)).data.updatedCount
 
     suspend fun deleteCategory(id: String): Boolean = api.deleteCategory(id).data.success
     suspend fun feeds(categoryId: String?): List<FeedWithCounts> = api.feeds(categoryId).data

@@ -377,4 +377,8 @@
     <string name="sync_up_to_date">Up to date</string>
     <string name="article_text_available_offline">Text available offline</string>
     <string name="article_text_not_downloaded">Text not downloaded</string>
+    <string name="action_move_up">Move up</string>
+    <string name="action_move_down">Move down</string>
+    <string name="feeds_category_moved_up">Category moved up</string>
+    <string name="feeds_category_moved_down">Category moved down</string>
 </resources>

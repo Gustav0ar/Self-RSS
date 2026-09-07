@@ -14,6 +14,16 @@ class FeedMutationContractTest {
     private val adapter = moshi.adapter<ApiEnvelope<FeedWithCounts>>(envelopeType)
 
     @Test
+    fun `category reorder matches the existing API request and response`() {
+        val request = ReorderCategoriesRequest(listOf(CategoryOrderUpdate("second", 0), CategoryOrderUpdate("first", 1)))
+        assertEquals(
+            """{"updates":[{"id":"second","sortOrder":0},{"id":"first","sortOrder":1}]}""",
+            moshi.adapter(ReorderCategoriesRequest::class.java).toJson(request),
+        )
+        assertEquals(2, moshi.adapter(ReorderCategoriesResponse::class.java).fromJson("""{"updatedCount":2}""")?.updatedCount)
+    }
+
+    @Test
     fun `create and update response fixture decodes unread count`() {
         val response = adapter.fromJson(
             """

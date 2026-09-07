@@ -317,6 +317,7 @@ fun SelfFeedAppRoute(
                 onCreateCategory = feedsViewModel::createCategory,
                 onUpdateCategory = feedsViewModel::updateCategory,
                 onDeleteCategory = feedsViewModel::deleteCategory,
+                onMoveCategory = feedsViewModel::moveCategory,
                 onCreateFeed = feedsViewModel::createFeed,
                 onUpdateFeed = { id, feedUrl, title, categoryId, pollingIntervalMinutes ->
                     feedsViewModel.updateFeed(
