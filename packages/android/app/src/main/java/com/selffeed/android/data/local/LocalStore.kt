@@ -336,9 +336,11 @@ class LocalStore(
         mutation: PendingReadStateMutationEntity,
         read: Boolean,
         revision: Int,
-    ) {
+    ): Boolean {
+        var acknowledged = false
         database.withTransaction {
             if (dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0) {
+                acknowledged = true
                 dao.updateArticleReadState(mutation.articleId, read)
                 dao.readArticleDetail(mutation.articleId)?.let { entity ->
                     runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
@@ -355,15 +357,18 @@ class LocalStore(
             }
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+        return acknowledged
     }
 
     suspend fun acknowledgeSavedStateMutation(
         mutation: PendingSavedStateMutationEntity,
         saved: Boolean,
         revision: Int,
-    ) {
+    ): Boolean {
+        var acknowledged = false
         database.withTransaction {
             if (dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0) {
+                acknowledged = true
                 dao.updateArticleSavedState(mutation.articleId, saved)
                 dao.readArticleDetail(mutation.articleId)?.let { entity ->
                     runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
@@ -379,6 +384,7 @@ class LocalStore(
             }
         }
         notifyInvalidation(TABLE_ARTICLES)
+        return acknowledged
     }
 
     suspend fun rebaseReadStateMutation(mutation: PendingReadStateMutationEntity, revision: Int) {
