@@ -1,8 +1,5 @@
 package com.selffeed.android.ui.screens
 
-import com.selffeed.android.data.CategoryMoveDirection
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.ArrowDownward
 import android.content.Context
 import android.net.Uri
 import androidx.annotation.StringRes
@@ -34,6 +31,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
@@ -115,6 +114,7 @@ import androidx.paging.compose.LazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthSession

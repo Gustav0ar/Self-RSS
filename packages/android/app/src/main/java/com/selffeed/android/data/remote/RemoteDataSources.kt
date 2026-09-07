@@ -1,6 +1,5 @@
 package com.selffeed.android.data.remote
 
-import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AdminCreateUserRequest
 import com.selffeed.android.network.AdminResetPasswordRequest
@@ -11,6 +10,7 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthResponse
 import com.selffeed.android.network.AuthSession
+import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.ChangePasswordRequest
 import com.selffeed.android.network.CreateCategoryRequest
