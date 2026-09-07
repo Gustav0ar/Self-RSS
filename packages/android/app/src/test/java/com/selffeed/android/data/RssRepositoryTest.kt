@@ -130,100 +130,6 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `Room and memory article reads finish while queued delivery is blocked`() = runTest {
-        val articleId = "cached-during-sync"
-        val detail = sampleArticleDetail(articleId, isRead = false)
-        every { sessionStore.getAccessToken() } returns "test-session"
-        localStore.writeArticleDetail(detail)
-        localStore.queueReadStateMutation(articleId, read = true)
-        localStore.queueSavedStateMutation(articleId, saved = true)
-        val deliveryStarted = CompletableDeferred<Unit>()
-        val releaseDelivery = CompletableDeferred<Unit>()
-        coEvery { api.markRead(articleId, any()) } coAnswers {
-            deliveryStarted.complete(Unit)
-            releaseDelivery.await()
-            com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
-        }
-        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
-            MarkReadResponse(success = true, saved = true, revision = 1),
-        )
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
-        val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
-        val delivery = async { worker.doWork() }
-        deliveryStarted.await()
-        try {
-            // Use a real-clock deadline because Room runs outside the test dispatcher.
-            withContext(Dispatchers.Default) {
-                withTimeout(5_000) {
-                    val expected = AppResult.Success(detail.copy(isRead = true, isSaved = true))
-                    assertEquals(expected, repository.article(articleId))
-                    assertEquals(expected, repository.article(articleId))
-                    assertEquals(expected, repository.prefetchArticle(articleId))
-                }
-            }
-            assertEquals(articleId, localStore.readPendingReadStateMutations().single().articleId)
-            assertEquals(articleId, localStore.readPendingSavedStateMutations().single().articleId)
-        } finally {
-            releaseDelivery.complete(Unit)
-            assertEquals(ListenableWorker.Result.success(), delivery.await())
-        }
-        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
-        assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, any()) }
-        coVerify(exactly = 1) { api.setSaved(articleId, any()) }
-    }
-
-    @Test
-    fun `overlapping outbox drains deliver each mutation once`() = runTest {
-        val articleId = "one-delivery"
-        localStore.queueReadStateMutation(articleId, read = true)
-        val deliveryStarted = CompletableDeferred<Unit>()
-        val duplicateStarted = CompletableDeferred<Unit>()
-        val releaseDelivery = CompletableDeferred<Unit>()
-        coEvery { api.markRead(articleId, any()) } coAnswers {
-            if (!deliveryStarted.complete(Unit)) duplicateStarted.complete(Unit)
-            releaseDelivery.await()
-            com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
-        }
-        val first = async { repository.flushPendingArticleStateMutations() }
-        deliveryStarted.await()
-        val second = async(start = CoroutineStart.UNDISPATCHED) { repository.flushPendingArticleStateMutations() }
-        try {
-            val duplicate = withContext(Dispatchers.Default) {
-                withTimeoutOrNull(500) { duplicateStarted.await() }
-            }
-            assertNull("The same mutation must not be sent while its first delivery is pending", duplicate)
-        } finally {
-            releaseDelivery.complete(Unit)
-            assertTrue(first.await())
-            assertTrue(second.await())
-        }
-        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, any()) }
-    }
-
-    @Test
-    fun `worker retries a durable mutation after transient delivery failure`() = runTest {
-        val articleId = "worker-retry"
-        every { sessionStore.getAccessToken() } returns "test-session"
-        localStore.writeArticleDetail(sampleArticleDetail(articleId, isRead = false))
-        localStore.queueSavedStateMutation(articleId, saved = true)
-        coEvery { api.setSaved(articleId, any()) } throws java.net.SocketTimeoutException("temporarily offline")
-        val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
-
-        assertEquals(ListenableWorker.Result.retry(), worker.doWork())
-        assertEquals(articleId, localStore.readPendingSavedStateMutations().single().articleId)
-        assertEquals(true, localStore.readArticleDetail(articleId)?.isSaved)
-
-        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
-            MarkReadResponse(success = true, saved = true, revision = 1),
-        )
-        assertEquals(ListenableWorker.Result.success(), worker.doWork())
-        assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
-        assertEquals(true, localStore.readArticleDetail(articleId)?.isSaved)
-    }
-
-    @Test
     fun `worker rejection restores saved state through the real ViewModel repository and Room`() = runTest {
         val articleId = "saved-rollback"
         val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)
@@ -836,6 +742,100 @@ class RssRepositoryTest {
         assertEquals("Unable to refresh session. Please check your connection.", (result as AppResult.Error).message)
         coVerify(exactly = 0) { sessionStore.clear() }
         coVerify(exactly = 0) { api.me() }
+    }
+
+    @Test
+    fun `Room and memory article reads finish while queued delivery is blocked`() = runTest {
+        val articleId = "cached-during-sync"
+        val detail = sampleArticleDetail(articleId, isRead = false)
+        every { sessionStore.getAccessToken() } returns "test-session"
+        localStore.writeArticleDetail(detail)
+        localStore.queueReadStateMutation(articleId, read = true)
+        localStore.queueSavedStateMutation(articleId, saved = true)
+        val deliveryStarted = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        coEvery { api.markRead(articleId, any()) } coAnswers {
+            deliveryStarted.complete(Unit)
+            releaseDelivery.await()
+            com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
+        }
+        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
+            MarkReadResponse(success = true, saved = true, revision = 1),
+        )
+        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
+        val delivery = async { worker.doWork() }
+        deliveryStarted.await()
+        try {
+            // Use a real-clock deadline because Room runs outside the test dispatcher.
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    val expected = AppResult.Success(detail.copy(isRead = true, isSaved = true))
+                    assertEquals(expected, repository.article(articleId))
+                    assertEquals(expected, repository.article(articleId))
+                    assertEquals(expected, repository.prefetchArticle(articleId))
+                }
+            }
+            assertEquals(articleId, localStore.readPendingReadStateMutations().single().articleId)
+            assertEquals(articleId, localStore.readPendingSavedStateMutations().single().articleId)
+        } finally {
+            releaseDelivery.complete(Unit)
+            assertEquals(ListenableWorker.Result.success(), delivery.await())
+        }
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
+        coVerify(exactly = 1) { api.markRead(articleId, any()) }
+        coVerify(exactly = 1) { api.setSaved(articleId, any()) }
+    }
+
+    @Test
+    fun `overlapping outbox drains deliver each mutation once`() = runTest {
+        val articleId = "one-delivery"
+        localStore.queueReadStateMutation(articleId, read = true)
+        val deliveryStarted = CompletableDeferred<Unit>()
+        val duplicateStarted = CompletableDeferred<Unit>()
+        val releaseDelivery = CompletableDeferred<Unit>()
+        coEvery { api.markRead(articleId, any()) } coAnswers {
+            if (!deliveryStarted.complete(Unit)) duplicateStarted.complete(Unit)
+            releaseDelivery.await()
+            com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
+        }
+        val first = async { repository.flushPendingArticleStateMutations() }
+        deliveryStarted.await()
+        val second = async(start = CoroutineStart.UNDISPATCHED) { repository.flushPendingArticleStateMutations() }
+        try {
+            val duplicate = withContext(Dispatchers.Default) {
+                withTimeoutOrNull(500) { duplicateStarted.await() }
+            }
+            assertNull("The same mutation must not be sent while its first delivery is pending", duplicate)
+        } finally {
+            releaseDelivery.complete(Unit)
+            assertTrue(first.await())
+            assertTrue(second.await())
+        }
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        coVerify(exactly = 1) { api.markRead(articleId, any()) }
+    }
+
+    @Test
+    fun `worker retries a durable mutation after transient delivery failure`() = runTest {
+        val articleId = "worker-retry"
+        every { sessionStore.getAccessToken() } returns "test-session"
+        localStore.writeArticleDetail(sampleArticleDetail(articleId, isRead = false))
+        localStore.queueSavedStateMutation(articleId, saved = true)
+        coEvery { api.setSaved(articleId, any()) } throws java.net.SocketTimeoutException("temporarily offline")
+        val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
+
+        assertEquals(ListenableWorker.Result.retry(), worker.doWork())
+        assertEquals(articleId, localStore.readPendingSavedStateMutations().single().articleId)
+        assertEquals(true, localStore.readArticleDetail(articleId)?.isSaved)
+
+        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
+            MarkReadResponse(success = true, saved = true, revision = 1),
+        )
+        assertEquals(ListenableWorker.Result.success(), worker.doWork())
+        assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
+        assertEquals(true, localStore.readArticleDetail(articleId)?.isSaved)
     }
 
     @Test
