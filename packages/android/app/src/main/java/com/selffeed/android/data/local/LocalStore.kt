@@ -5,6 +5,7 @@ import androidx.paging.PagingSource
 import androidx.core.text.HtmlCompat
 import androidx.room.Room
 import androidx.room.withTransaction
+import com.selffeed.android.data.repository.BulkReadReconciliation
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -307,11 +308,29 @@ class LocalStore(
     suspend fun readArticleReadOverrides(): Map<String, Boolean> =
         dao.readArticleReadOverrides().associate { it.articleId to it.read }
 
-    suspend fun markArticlesReadByFeeds(feedIds: Collection<String>) {
-        val ids = feedIds.distinct()
-        if (ids.isEmpty()) return
-        dao.markArticleReadOverridesByFeeds(ids, System.currentTimeMillis())
+    suspend fun markArticlesReadByFeeds(feedIds: Collection<String>): BulkReadReconciliation {
+        val unreadArticleFeeds = mutableMapOf<String, String>()
+        var locallyHandledCount = 0
+        val pendingArticleIds = mutableSetOf<String>()
+        database.withTransaction {
+            val pending = dao.readPendingReadStateMutations()
+            for (mutation in pending) {
+                val feedId = dao.readArticle(mutation.articleId)?.feedId
+                    ?: dao.readArticleDetail(mutation.articleId)?.let {
+                        articleDetailAdapter.fromJson(it.payloadJson)?.feedId
+                    }
+                if (feedIds.isNotEmpty() && feedId !in feedIds) continue
+                pendingArticleIds += mutation.articleId
+                if (!mutation.read && feedId != null) unreadArticleFeeds[mutation.articleId] = feedId
+                // The server counted this receipt, but the local choice already
+                // controls the UI and must not change its unread total again.
+                if (mutation.previousState == false) locallyHandledCount++
+                dao.upsertPendingReadStateMutation(mutation.copy(previousState = true))
+            }
+            dao.markArticleReadOverridesByFeeds(feedIds.distinct(), feedIds.isEmpty(), System.currentTimeMillis())
+        }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+        return BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount, pendingArticleIds)
     }
 
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =
