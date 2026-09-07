@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.BulkReadReconciliation
 import androidx.paging.PagingData
 import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ApiListResponse
@@ -329,18 +330,20 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     }
 
     override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?) {
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean {
         articleReadStates[articleId] = read
+        return read
     }
 
     override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) {
         articleSavedStates[articleId] = saved
     }
 
-    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation {
         fakeArticles
             .filter { feedIds.isEmpty() || it.feedId in feedIds }
             .forEach { articleReadStates[it.id] = true }
+        return BulkReadReconciliation()
     }
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =

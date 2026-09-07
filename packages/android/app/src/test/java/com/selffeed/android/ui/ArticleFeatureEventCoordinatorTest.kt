@@ -105,6 +105,27 @@ class ArticleFeatureEventCoordinatorTest {
     }
 
     @Test
+    fun `bulk reconciliation restores unread badges and search overrides after clearing the scope`() {
+        val sink = RecordingSink()
+        coordinator.handle(
+            ArticleFeatureEvent.ScopeMarkedRead(
+                feedId = null,
+                categoryId = null,
+                affectedFeedIds = emptySet(),
+                markedCount = 1,
+                retainedUnreadArticleFeeds = mapOf("a-1" to "f-1", "a-2" to "f-1", "a-3" to "f-2"),
+            ),
+            FeedsUiState(),
+            sink,
+        )
+        assertEquals(listOf(Triple(null, null, emptySet<String>())), sink.scopeMarkedRead)
+        assertEquals(listOf("f-1" to 2, "f-2" to 1), sink.unreadDeltas)
+        assertEquals(listOf(-1 to 1), sink.statsDeltas)
+        assertEquals(listOf(Unit), sink.allSearchMarkedRead)
+        assertEquals(listOf("a-1" to false, "a-2" to false, "a-3" to false), sink.articleReadStates)
+    }
+
+    @Test
     fun `article content refresh updates every dependent surface including the paged list`() {
         val calls = mutableListOf<String>()
 

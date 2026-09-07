@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.data.repository.BulkReadReconciliation
 import com.selffeed.android.data.AppResult
 import androidx.paging.PagingData
 import com.selffeed.android.data.repository.ArticleRepository
@@ -60,7 +61,7 @@ class ArticlesViewModelTest {
         coEvery { repository.markRead(any(), any(), any()) } coAnswers {
             AppResult.Success(secondArg<Boolean>())
         }
-        coEvery { repository.updateCachedReadState(any(), any()) } just runs
+        coEvery { repository.updateCachedReadState(any(), any(), any()) } answers { secondArg<Boolean>() }
         coEvery { repository.updateCachedSavedState(any(), any()) } just runs
         coEvery { repository.setSaved(any(), any()) } coAnswers {
             AppResult.Success(secondArg<Boolean>())
@@ -83,7 +84,7 @@ class ArticlesViewModelTest {
         every { repository.clientId() } returns "test-client"
         coEvery { repository.invalidateReadStateCaches(any()) } just runs
         coEvery { repository.invalidateArticleContentCaches(any()) } just runs
-        coEvery { repository.markCachedArticlesReadByFeeds(any()) } just runs
+        coEvery { repository.markCachedArticlesReadByFeeds(any()) } returns BulkReadReconciliation()
 
         // Create real managers with mocked repository
         readStateManager = ReadStateManager(repository)

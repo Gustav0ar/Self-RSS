@@ -46,6 +46,9 @@ class ArticleFeatureEventCoordinator {
                     categoryId = event.categoryId,
                     affectedFeedIds = event.affectedFeedIds,
                 )
+                event.retainedUnreadArticleFeeds.values.groupingBy { it }.eachCount().forEach { (feedId, count) ->
+                    sink.applyUnreadDelta(feedId, count)
+                }
                 sink.applyStatsDelta(
                     unreadDelta = -event.markedCount,
                     readDelta = event.markedCount,
@@ -56,6 +59,7 @@ class ArticleFeatureEventCoordinator {
                 } else {
                     sink.applySearchScopeMarkedRead(searchFeedIds)
                 }
+                event.retainedUnreadArticleFeeds.keys.forEach { sink.applyArticleReadState(it, false) }
             }
 
             is ArticleFeatureEvent.ArticlesChanged -> sink.refreshArticleContent()

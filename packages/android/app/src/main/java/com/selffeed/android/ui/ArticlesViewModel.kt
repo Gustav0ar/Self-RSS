@@ -62,6 +62,7 @@ sealed interface ArticleFeatureEvent {
         val categoryId: String?,
         val affectedFeedIds: Set<String>,
         val markedCount: Int,
+        val retainedUnreadArticleFeeds: Map<String, String> = emptyMap(),
     ) : ArticleFeatureEvent
 
     data class ArticleSavedStateChanged(val articleId: String, val saved: Boolean) : ArticleFeatureEvent
@@ -581,7 +582,7 @@ class ArticlesViewModel @Inject constructor(
             }
 
             is ArticleFeatureEvent.ScopeMarkedRead -> {
-                applyScopeReadState(event.affectedFeedIds)
+                applyScopeReadState(event.affectedFeedIds, event.retainedUnreadArticleFeeds.keys)
             }
 
             is ArticleFeatureEvent.ArticlesChanged -> {
@@ -595,40 +596,40 @@ class ArticlesViewModel @Inject constructor(
         }
     }
 
-    private fun applyScopeReadState(affectedFeedIds: Set<String>) {
+    private fun applyScopeReadState(affectedFeedIds: Set<String>, retainedUnread: Set<String> = emptySet()) {
         val rememberedReadStates = mutableListOf<Pair<String, Boolean>>()
         _state.update { current ->
             current.items
                 .filter { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
                 .forEach {
-                    readStateManager.readStateStore.remember(it.id, true)
-                    rememberedReadStates += it.id to true
+                    readStateManager.readStateStore.remember(it.id, it.id !in retainedUnread)
+                    rememberedReadStates += it.id to (it.id !in retainedUnread)
                 }
             current.selectedArticle
                 ?.takeIf { current.articleMatchesAffectedFeeds(it, affectedFeedIds) }
                 ?.let {
-                    readStateManager.readStateStore.remember(it.id, true)
-                    rememberedReadStates += it.id to true
+                    readStateManager.readStateStore.remember(it.id, it.id !in retainedUnread)
+                    rememberedReadStates += it.id to (it.id !in retainedUnread)
                 }
 
             current.copy(
                 items = current.items.map { article ->
                     if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                        article.copy(isRead = true)
+                        article.copy(isRead = article.id !in retainedUnread)
                     } else {
                         article
                     }
                 },
                 selectedArticle = current.selectedArticle?.let { article ->
                     if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                        article.copy(isRead = true)
+                        article.copy(isRead = article.id !in retainedUnread)
                     } else {
                         article
                     }
                 },
                 readerDetails = current.readerDetails.mapValues { (_, article) ->
                     if (current.articleMatchesAffectedFeeds(article, affectedFeedIds)) {
-                        article.copy(isRead = true)
+                        article.copy(isRead = article.id !in retainedUnread)
                     } else {
                         article
                     }

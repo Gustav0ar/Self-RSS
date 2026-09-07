@@ -324,10 +324,12 @@ interface LocalStoreDao {
     @Query(
         """
         INSERT OR REPLACE INTO article_read_overrides(articleId, read, updatedAt)
-        SELECT id, 1, :updatedAt FROM articles WHERE feedId IN (:feedIds)
+        SELECT id, COALESCE(
+            (SELECT read FROM pending_read_state_mutations WHERE articleId = articles.id), 1
+        ), :updatedAt FROM articles WHERE :allFeeds OR feedId IN (:feedIds)
         """,
     )
-    suspend fun markArticleReadOverridesByFeeds(feedIds: List<String>, updatedAt: Long)
+    suspend fun markArticleReadOverridesByFeeds(feedIds: List<String>, allFeeds: Boolean, updatedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleDetail(detail: ArticleDetailEntity)

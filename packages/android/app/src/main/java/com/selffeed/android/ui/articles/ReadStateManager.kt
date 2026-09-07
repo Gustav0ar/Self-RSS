@@ -216,56 +216,55 @@ class ReadStateManager @Inject constructor(
 
     private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
         val previous = currentArticleReadState(event.articleId)
-        repository.updateCachedReadState(event.articleId, event.isRead, event.revision)
-        repository.invalidateReadStateCaches(event.articleId)
-        rememberArticleReadState(event.articleId, event.isRead)
-        items = items.withReadState(event.articleId, event.isRead)
-        selectedArticle = selectedArticle?.withReadState(event.articleId, event.isRead)
+        val read = repository.updateCachedReadState(event.articleId, event.isRead, event.revision)
+        rememberArticleReadState(event.articleId, read)
+        items = items.withReadState(event.articleId, read)
+        selectedArticle = selectedArticle?.withReadState(event.articleId, read)
 
-        val changed = previous?.let { it != event.isRead } ?: true
-        val unreadDelta = if (!changed) 0 else if (event.isRead) -1 else 1
+        val changed = previous?.let { it != read } ?: (read == event.isRead)
+        val unreadDelta = if (!changed) 0 else if (read) -1 else 1
         _events.emit(
             ArticleFeatureEvent.ArticleReadStateChanged(
                 articleId = event.articleId,
                 feedId = event.feedId,
-                read = event.isRead,
+                read = read,
                 unreadDelta = unreadDelta,
-                readDelta = if (!changed) 0 else if (event.isRead) 1 else -1,
+                readDelta = -unreadDelta,
             ),
         )
+        repository.invalidateReadStateCaches(event.articleId)
     }
 
     private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
-        repository.invalidateReadStateCaches()
         val feedIds = event.feedIds.toSet()
-        repository.markCachedArticlesReadByFeeds(feedIds)
-
+        val reconciliation = repository.markCachedArticlesReadByFeeds(feedIds)
+        val retainedUnread = reconciliation.unreadArticleFeeds.keys
         items = items.map { article ->
             if (articleMatchesAffectedFeeds(article, feedIds)) {
-                rememberArticleReadState(article.id, true)
+                val read = article.id !in retainedUnread
+                rememberArticleReadState(article.id, read)
                 repository.updateCachedReadState(article.id, true)
-                article.copy(isRead = true)
-            } else {
-                article
-            }
+                article.copy(isRead = read)
+            } else article
         }
         selectedArticle = selectedArticle?.let { article ->
             if (articleMatchesAffectedFeeds(article, feedIds)) {
-                rememberArticleReadState(article.id, true)
+                val read = article.id !in retainedUnread
+                rememberArticleReadState(article.id, read)
                 repository.updateCachedReadState(article.id, true)
-                article.copy(isRead = true)
-            } else {
-                article
-            }
+                article.copy(isRead = read)
+            } else article
         }
         _events.emit(
             ArticleFeatureEvent.ScopeMarkedRead(
                 feedId = event.scope.feedId,
                 categoryId = event.scope.categoryId,
                 affectedFeedIds = feedIds,
-                markedCount = event.markedCount,
+                markedCount = (event.markedCount - reconciliation.locallyHandledCount).coerceAtLeast(0),
+                retainedUnreadArticleFeeds = reconciliation.unreadArticleFeeds,
             ),
         )
+        repository.invalidateReadStateCaches()
     }
 
     private fun currentArticleReadState(articleId: String): Boolean? =

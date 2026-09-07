@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.BulkReadReconciliation
 import android.content.Context
 import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
@@ -947,12 +948,13 @@ class RssRepository @Inject constructor(
         // durable query rows atomically when the user asks for fresh content.
     }
 
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?) {
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean {
         val visibleState = localStore.updateArticleReadState(articleId, read, revision)
         val key = "article:$articleId"
         runtime.getCached<ArticleDetail>(key)?.let { cached ->
             runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = visibleState))
         }
+        return visibleState
     }
 
     override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) {
@@ -965,9 +967,10 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("search")
     }
 
-    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) {
-        localStore.markArticlesReadByFeeds(feedIds)
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation {
+        val reconciliation = localStore.markArticlesReadByFeeds(feedIds)
         runtime.invalidateByPrefix("search")
+        return reconciliation
     }
 
     private suspend fun clearCacheAndDatabase() {
