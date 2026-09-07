@@ -125,98 +125,6 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `foreign read event preserves pending intent in Room reader and counts until delivery`() = runTest {
-        val article = sampleArticle("pending-read").copy(isRead = false)
-        localStore.writeArticleRemotePage("pending-read", ApiListResponse(listOf(article), null, false), true)
-        onlineState.value = false
-        repository.markRead(article.id, true)
-        val remoteEvents = MutableSharedFlow<com.selffeed.android.network.ReadStateSyncEvent>()
-        val articleRepository = object : ArticleRepository by repository {
-            override fun readStateEvents() = remoteEvents
-        }
-        val viewModel = ArticlesViewModel(
-            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
-            ArticleWarmingManager(articleRepository),
-        )
-        val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
-        try {
-            viewModel.updateArticleQueueSnapshot(listOf(article.copy(isRead = true)))
-            viewModel.startReadStateSync()
-            val received = async { viewModel.events.first() }
-            runCurrent()
-            remoteEvents.emit(com.selffeed.android.network.ArticleReadStateChangedEvent(
-                eventId = "foreign-unread", articleId = article.id, feedId = article.feedId,
-                isRead = false, source = "manual", clientId = "another-device",
-                updatedAt = "2026-09-05T00:00:00Z", revision = 3,
-            ))
-            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ArticleReadStateChanged
-            assertEquals(true, viewModel.state.value.items.single().isRead)
-            assertEquals(true, viewModel.readStateOverrides.value[article.id])
-            assertEquals(true, localStore.readPendingReadStateMutations().single().read)
-            assertEquals(0, event.unreadDelta)
-            assertEquals(0, event.readDelta)
-
-            coEvery { api.markRead(article.id, any()) } returns com.selffeed.android.network.ApiEnvelope(
-                MarkReadResponse(success = true, read = true, revision = 4),
-            )
-            onlineState.value = true
-            assertTrue(repository.flushPendingArticleStateMutations())
-            assertTrue(localStore.readPendingReadStateMutations().isEmpty())
-            assertEquals(true, viewModel.readStateOverrides.value[article.id])
-        } finally {
-            store.clear()
-        }
-    }
-
-    @Test
-    fun `foreign bulk read preserves pending unread while updating the rest of its scope`() = runTest {
-        val pending = sampleArticle("pending-unread").copy(isRead = true)
-        val unread = sampleArticle("ordinary-unread").copy(isRead = false)
-        val other = sampleArticle("other-feed").copy(feedId = "other-feed", isRead = false)
-        localStore.writeArticleRemotePage("bulk", ApiListResponse(listOf(pending, unread, other), null, false), true)
-        localStore.writeArticleDetail(sampleArticleDetail(pending.id, true).copy(isEnriched = true))
-        onlineState.value = false
-        repository.markRead(pending.id, false)
-        val remoteEvents = MutableSharedFlow<com.selffeed.android.network.ReadStateSyncEvent>()
-        val articleRepository = object : ArticleRepository by repository {
-            override fun readStateEvents() = remoteEvents
-        }
-        val viewModel = ArticlesViewModel(
-            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
-            ArticleWarmingManager(articleRepository),
-        )
-        val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
-        try {
-            viewModel.setAutoMarkReadMode("disabled")
-            viewModel.updateArticleQueueSnapshot(listOf(pending.copy(isRead = false), unread, other))
-            viewModel.openArticle(pending.id)
-            viewModel.state.first { it.selectedArticle?.contentHtml != null }
-            viewModel.startReadStateSync()
-            val received = async { viewModel.events.first() }
-            runCurrent()
-            remoteEvents.emit(com.selffeed.android.network.ArticlesMarkedReadEvent(
-                eventId = "foreign-bulk", feedIds = listOf(pending.feedId), markedCount = 1,
-                scope = com.selffeed.android.network.ReadStateScope(feedId = pending.feedId),
-                clientId = "another-device", updatedAt = "2026-09-05T00:00:00Z",
-            ))
-            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
-            assertEquals(mapOf(pending.id to pending.feedId), event.retainedUnreadArticleFeeds)
-            assertEquals(1, event.markedCount)
-            assertEquals(mapOf(pending.id to false, unread.id to true, other.id to false),
-                viewModel.state.value.items.associate { it.id to it.isRead })
-            assertEquals(false, viewModel.readStateOverrides.value[pending.id])
-            assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
-            assertEquals(false, viewModel.state.value.readerDetails[pending.id]?.isRead)
-            assertEquals(false, localStore.readArticleDetail(pending.id)?.isRead)
-            assertEquals(false, repository.cachedArticleDetail(pending.id)?.isRead)
-            assertEquals(false, localStore.readArticleReadOverrides()[pending.id])
-            assertEquals(false, localStore.readPendingReadStateMutations().single().read)
-        } finally {
-            store.clear()
-        }
-    }
-
-    @Test
     fun `worker rejection restores saved state through the real ViewModel repository and Room`() = runTest {
         val articleId = "saved-rollback"
         val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)
@@ -730,6 +638,98 @@ class RssRepositoryTest {
         assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
         assertEquals(listOf("f-network"), cacheStore.readFeeds().map { it.id })
         coVerify(exactly = 1) { api.feeds(null) }
+    }
+
+    @Test
+    fun `foreign read event preserves pending intent in Room reader and counts until delivery`() = runTest {
+        val article = sampleArticle("pending-read").copy(isRead = false)
+        localStore.writeArticleRemotePage("pending-read", ApiListResponse(listOf(article), null, false), true)
+        onlineState.value = false
+        repository.markRead(article.id, true)
+        val remoteEvents = MutableSharedFlow<com.selffeed.android.network.ReadStateSyncEvent>()
+        val articleRepository = object : ArticleRepository by repository {
+            override fun readStateEvents() = remoteEvents
+        }
+        val viewModel = ArticlesViewModel(
+            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            ArticleWarmingManager(articleRepository),
+        )
+        val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
+        try {
+            viewModel.updateArticleQueueSnapshot(listOf(article.copy(isRead = true)))
+            viewModel.startReadStateSync()
+            val received = async { viewModel.events.first() }
+            runCurrent()
+            remoteEvents.emit(com.selffeed.android.network.ArticleReadStateChangedEvent(
+                eventId = "foreign-unread", articleId = article.id, feedId = article.feedId,
+                isRead = false, source = "manual", clientId = "another-device",
+                updatedAt = "2026-09-05T00:00:00Z", revision = 3,
+            ))
+            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ArticleReadStateChanged
+            assertEquals(true, viewModel.state.value.items.single().isRead)
+            assertEquals(true, viewModel.readStateOverrides.value[article.id])
+            assertEquals(true, localStore.readPendingReadStateMutations().single().read)
+            assertEquals(0, event.unreadDelta)
+            assertEquals(0, event.readDelta)
+
+            coEvery { api.markRead(article.id, any()) } returns com.selffeed.android.network.ApiEnvelope(
+                MarkReadResponse(success = true, read = true, revision = 4),
+            )
+            onlineState.value = true
+            assertTrue(repository.flushPendingArticleStateMutations())
+            assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+            assertEquals(true, viewModel.readStateOverrides.value[article.id])
+        } finally {
+            store.clear()
+        }
+    }
+
+    @Test
+    fun `foreign bulk read preserves pending unread while updating the rest of its scope`() = runTest {
+        val pending = sampleArticle("pending-unread").copy(isRead = true)
+        val unread = sampleArticle("ordinary-unread").copy(isRead = false)
+        val other = sampleArticle("other-feed").copy(feedId = "other-feed", isRead = false)
+        localStore.writeArticleRemotePage("bulk", ApiListResponse(listOf(pending, unread, other), null, false), true)
+        localStore.writeArticleDetail(sampleArticleDetail(pending.id, true).copy(isEnriched = true))
+        onlineState.value = false
+        repository.markRead(pending.id, false)
+        val remoteEvents = MutableSharedFlow<com.selffeed.android.network.ReadStateSyncEvent>()
+        val articleRepository = object : ArticleRepository by repository {
+            override fun readStateEvents() = remoteEvents
+        }
+        val viewModel = ArticlesViewModel(
+            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            ArticleWarmingManager(articleRepository),
+        )
+        val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
+        try {
+            viewModel.setAutoMarkReadMode("disabled")
+            viewModel.updateArticleQueueSnapshot(listOf(pending.copy(isRead = false), unread, other))
+            viewModel.openArticle(pending.id)
+            viewModel.state.first { it.selectedArticle?.contentHtml != null }
+            viewModel.startReadStateSync()
+            val received = async { viewModel.events.first() }
+            runCurrent()
+            remoteEvents.emit(com.selffeed.android.network.ArticlesMarkedReadEvent(
+                eventId = "foreign-bulk", feedIds = listOf(pending.feedId), markedCount = 1,
+                scope = com.selffeed.android.network.ReadStateScope(feedId = pending.feedId),
+                clientId = "another-device", updatedAt = "2026-09-05T00:00:00Z",
+            ))
+            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
+            assertEquals(mapOf(pending.id to pending.feedId), event.retainedUnreadArticleFeeds)
+            assertEquals(1, event.markedCount)
+            assertEquals(mapOf(pending.id to false, unread.id to true, other.id to false),
+                viewModel.state.value.items.associate { it.id to it.isRead })
+            assertEquals(false, viewModel.readStateOverrides.value[pending.id])
+            assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
+            assertEquals(false, viewModel.state.value.readerDetails[pending.id]?.isRead)
+            assertEquals(false, localStore.readArticleDetail(pending.id)?.isRead)
+            assertEquals(false, repository.cachedArticleDetail(pending.id)?.isRead)
+            assertEquals(false, localStore.readArticleReadOverrides()[pending.id])
+            assertEquals(false, localStore.readPendingReadStateMutations().single().read)
+        } finally {
+            store.clear()
+        }
     }
 
     @Test
