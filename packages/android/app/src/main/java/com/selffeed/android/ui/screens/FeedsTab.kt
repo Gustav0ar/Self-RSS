@@ -1,7 +1,5 @@
 package com.selffeed.android.ui.screens
 
-import android.content.Context
-import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -82,6 +80,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -131,10 +130,11 @@ import com.selffeed.android.ui.feedLifecyclePresentation
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
-import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.time.Instant
 
@@ -199,6 +199,8 @@ fun FeedsTab(
     val context = LocalContext.current
     val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
     var managementDialog by remember { mutableStateOf<FeedManagementDialog?>(null) }
+    val importScope = rememberCoroutineScope()
+    var importReadJob by remember { mutableStateOf<Job?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     val opmlReadError = stringResource(R.string.feeds_read_opml_error)
 
@@ -241,11 +243,15 @@ fun FeedsTab(
     val allCategories = state.categories.flattenCategories()
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val contents = readBoundedOpml(context, uri)
-        if (contents == null) {
-            importError = opmlReadError
-        } else {
-            actions.onImportOpml(uri.lastPathSegment?.substringAfterLast('/') ?: "feeds.opml", contents)
+        importReadJob?.cancel()
+        importReadJob = importScope.launch {
+            importError = null
+            val contents = readBoundedOpml { context.contentResolver.openInputStream(uri) }
+            if (contents == null) {
+                importError = opmlReadError
+            } else {
+                actions.onImportOpml(uri.lastPathSegment?.substringAfterLast('/') ?: "feeds.opml", contents)
+            }
         }
     }
 
@@ -1117,26 +1123,6 @@ private fun CategoryWithCounts.descendantIds(): Set<String> = buildSet {
     }
     visit(this@descendantIds)
 }
-
-private fun readBoundedOpml(context: Context, uri: Uri): ByteArray? = try {
-    context.contentResolver.openInputStream(uri)?.use { input ->
-        val output = ByteArrayOutputStream()
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var total = 0
-        while (true) {
-            val read = input.read(buffer)
-            if (read <= 0) break
-            total += read
-            if (total > MAX_OPML_BYTES) return null
-            output.write(buffer, 0, read)
-        }
-        output.toByteArray()
-    }
-} catch (_: Exception) {
-    null
-}
-
-private const val MAX_OPML_BYTES = 5 * 1024 * 1024
 
 @Composable
 private fun DrawerItem(
