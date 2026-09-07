@@ -28,11 +28,7 @@ data class SearchUiState(
     val errorMessage: PresentationText? = null,
 )
 
-/**
- * Owns the search tab: query debounce, results pagination. Designed to be
- * lightweight — search has no offline cache and no SSE, just an HTTP
- * round-trip with debounce.
- */
+/** Debounces and paginates searches, including the repository's cached offline results. */
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: SearchRepository,
@@ -44,20 +40,20 @@ class SearchViewModel @Inject constructor(
     private var requestGeneration = 0L
 
     fun setQuery(query: String) {
-        _state.update { it.copy(query = query) }
-        if (query.length < MIN_QUERY_LENGTH) {
-            debounceJob?.cancel()
-            requestGeneration += 1
-            _state.update {
-                it.copy(
-                    results = emptyList(),
-                    cursor = null,
-                    hasMore = false,
-                    loading = false,
-                    loadingMore = false,
-                    resultLimitReached = false,
-                )
-            }
+        if (_state.value.query == query) return
+        debounceJob?.cancel()
+        requestGeneration += 1
+        _state.update {
+            it.copy(
+                query = query,
+                results = emptyList(),
+                cursor = null,
+                hasMore = false,
+                loading = false,
+                loadingMore = false,
+                resultLimitReached = false,
+                errorMessage = null,
+            )
         }
     }
 
@@ -73,6 +69,7 @@ class SearchViewModel @Inject constructor(
         debounceJob?.cancel()
         _state.update {
             it.copy(
+                results = emptyList(),
                 cursor = null,
                 hasMore = false,
                 loading = true,
@@ -101,8 +98,8 @@ class SearchViewModel @Inject constructor(
         if (!snapshot.hasMore || snapshot.loadingMore || snapshot.cursor == null) return
         val generation = requestGeneration
         val categoryId = activeCategoryId(snapshot)
+        _state.update { it.copy(loadingMore = true, errorMessage = null) }
         viewModelScope.launch {
-            _state.update { it.copy(loadingMore = true) }
             runSearch(snapshot.query.trim(), categoryId, snapshot.cursor, generation)
         }
     }
@@ -162,10 +159,6 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun clearMessages() {
-        _state.update { it.copy(errorMessage = null) }
-    }
-
     fun updateSavedState(articleId: String, saved: Boolean) {
         _state.update { state ->
             state.copy(
@@ -198,6 +191,7 @@ class SearchViewModel @Inject constructor(
                             resultLimitReached = reachedLimit,
                             loading = false,
                             loadingMore = false,
+                            errorMessage = null,
                         )
                     }
                 } else {
@@ -212,6 +206,7 @@ class SearchViewModel @Inject constructor(
                             hasMore = result.data.hasMore && !reachedLimit,
                             resultLimitReached = reachedLimit,
                             loadingMore = false,
+                            errorMessage = null,
                         )
                     }
                 }

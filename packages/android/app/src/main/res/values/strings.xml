@@ -127,6 +127,10 @@
     <string name="search_scope_all">All</string>
     <string name="search_scope_current">Current</string>
     <string name="search_load_more">Load more results</string>
+    <string name="search_loading">Searching…</string>
+    <string name="search_loading_more">Loading more results…</string>
+    <string name="search_no_matches">No matching articles</string>
+    <string name="search_no_cached_matches">No matching cached articles</string>
     <string name="search_limit_notice">Showing first %1$d results. Refine the search to narrow them.</string>
     <plurals name="search_result_count">
         <item quantity="one">%d result</item>
