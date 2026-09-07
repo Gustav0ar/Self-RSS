@@ -80,6 +80,7 @@ class RssRepository @Inject constructor(
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
 ) : SelfFeedRepository {
+    private val preferencesMutex = Mutex()
     private val runtime = RepositoryRuntime(
         moshi = moshi,
         maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
@@ -104,7 +105,6 @@ class RssRepository @Inject constructor(
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
     private val sessionGeneration = AtomicLong(0)
-    private val preferencesMutex = Mutex()
 
     init {
         refreshScope.launch {
