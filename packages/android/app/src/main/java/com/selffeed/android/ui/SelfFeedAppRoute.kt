@@ -417,7 +417,6 @@ fun SelfFeedAppRoute(
                     authViewModel.clearMessages()
                     feedsViewModel.clearMessages()
                     articlesViewModel.clearMessages()
-                    searchViewModel.clearMessages()
                     settingsViewModel.clearMessages()
                     appViewModel.clearMessages()
                 },

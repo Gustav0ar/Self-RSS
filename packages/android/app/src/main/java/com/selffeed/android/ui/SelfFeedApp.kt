@@ -263,7 +263,6 @@ fun SelfFeedApp(
     val errorMessage = (if (state.auth.isAuthenticated) state.auth.errorMessage else null)
         ?: state.feeds.errorMessage
         ?: state.articles.errorMessage
-        ?: state.search.errorMessage
         ?: state.settings.errorMessage
         ?: state.chrome.globalError
     val statusMessage = state.auth.statusMessage
@@ -409,6 +408,7 @@ fun SelfFeedApp(
         state.search.selectedCategoryId,
         state.search.currentCategoryOnly,
         state.search.resultLimitReached,
+        state.search.errorMessage,
         state.isOnline,
     ) {
         SearchTabState(
@@ -421,6 +421,7 @@ fun SelfFeedApp(
             currentCategoryAvailable = state.search.selectedCategoryId != null,
             currentCategoryOnly = state.search.currentCategoryOnly,
             resultLimitReached = state.search.resultLimitReached,
+            errorMessage = state.search.errorMessage,
             isOffline = !state.isOnline,
         )
     }

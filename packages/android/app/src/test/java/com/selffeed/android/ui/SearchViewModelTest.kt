@@ -128,6 +128,49 @@ class SearchViewModelTest {
     }
 
     @Test
+    fun `typing a new query immediately removes old results and errors`() = runTest {
+        coEvery { repository.search("old", null, null) } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle("old-article", "f-1")), "next", true),
+        )
+        coEvery { repository.search("old", null, "next") } returns AppResult.Error("Try again")
+        val viewModel = SearchViewModel(repository)
+        viewModel.setQuery("old")
+        viewModel.search(debounceMs = 0L)
+        viewModel.loadMore()
+
+        viewModel.setQuery("new")
+
+        assertTrue(viewModel.state.value.results.isEmpty())
+        assertNull(viewModel.state.value.cursor)
+        assertNull(viewModel.state.value.errorMessage)
+        assertFalse(viewModel.state.value.hasMore)
+    }
+
+    @Test
+    fun `retrying pagination keeps current results and clears the failure on success`() = runTest {
+        coEvery { repository.search("query", null, null) } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle("first", "f-1")), "next", true),
+        )
+        coEvery { repository.search("query", null, "next") } returns AppResult.Error("Try again")
+        val viewModel = SearchViewModel(repository)
+        viewModel.setQuery("query")
+        viewModel.search(debounceMs = 0L)
+        viewModel.loadMore()
+        assertEquals(listOf("first"), viewModel.state.value.results.map { it.id })
+        assertEquals("next", viewModel.state.value.cursor)
+
+        coEvery { repository.search("query", null, "next") } returns AppResult.Success(
+            ApiListResponse(listOf(sampleArticle("second", "f-1")), null, false),
+        )
+        viewModel.loadMore()
+
+        assertEquals(listOf("first", "second"), viewModel.state.value.results.map { it.id })
+        assertNull(viewModel.state.value.errorMessage)
+        coVerify(exactly = 1) { repository.search("query", null, null) }
+        coVerify(exactly = 2) { repository.search("query", null, "next") }
+    }
+
+    @Test
     fun `current category scope passes category id to repository`() = runTest {
         val viewModel = SearchViewModel(repository)
         viewModel.setSelectedCategoryId("cat-1")
@@ -186,13 +229,6 @@ class SearchViewModelTest {
         viewModel.setQuery("selffeed")
         viewModel.loadMore()
         coVerify(exactly = 0) { repository.search(any(), any(), any()) }
-    }
-
-    @Test
-    fun `clearMessages wipes the error`() = runTest {
-        val viewModel = SearchViewModel(repository)
-        viewModel.clearMessages()
-        assertEquals(null, viewModel.state.value.errorMessage)
     }
 
     @Test

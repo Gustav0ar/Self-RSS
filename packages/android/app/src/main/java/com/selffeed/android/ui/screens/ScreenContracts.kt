@@ -91,6 +91,7 @@ data class SearchTabState(
     val currentCategoryOnly: Boolean,
     val resultLimitReached: Boolean,
     val isOffline: Boolean = false,
+    val errorMessage: PresentationText? = null,
 )
 
 data class SearchTabActions(
