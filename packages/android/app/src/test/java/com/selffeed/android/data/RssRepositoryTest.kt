@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -119,6 +120,26 @@ class RssRepositoryTest {
             imageLoader = imageLoader,
             networkMonitor = networkMonitor,
         )
+    }
+
+    @Test
+    fun `login response after logout cannot restore the access token`() = runTest {
+        val session = ApiSession(0, "rss.example.com")
+        val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.AuthResponse>>()
+        every { sessionStore.currentSession() } returns session
+        coEvery { sessionStore.setAccessTokenIfCurrent(session, any()) } returns false
+        coEvery { api.login(any()) } coAnswers { response.await() }
+
+        val login = async { repository.login("reader@example.com", "password") }
+        runCurrent()
+        repository.logout()
+        response.complete(com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.AuthResponse(sampleUser(), com.selffeed.android.network.AccessTokenOnly("late-token")),
+        ))
+
+        assertTrue(login.await() is AppResult.Error)
+        coVerify(exactly = 0) { sessionStore.setAccessToken(any()) }
+        coVerify(exactly = 0) { sessionStore.recordAuthenticated(any()) }
     }
 
     @Test

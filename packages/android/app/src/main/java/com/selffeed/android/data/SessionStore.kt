@@ -22,6 +22,8 @@ import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -30,6 +32,9 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+/** Identifies one local session without retaining its credentials. */
+data class ApiSession(val generation: Long, val apiBaseUrl: String)
 
 /**
  * Persists the user's session (access token, refresh cookie, install-scoped
@@ -73,6 +78,8 @@ class SessionStore internal constructor(
     private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
 
     private val cacheLock = Any()
+    private val sessionMutationMutex = Mutex()
+    private var sessionGeneration = 0L
 
     // Cached session values. `preload()` is the single disk-read boundary;
     // synchronous networking callbacks only consult these in-memory values.
@@ -138,27 +145,59 @@ class SessionStore internal constructor(
 
     fun getAccessToken(): String? = cachedAccessToken
 
-    suspend fun setAccessToken(token: String?) = withContext(ioDispatcher) {
+    fun currentSession(): ApiSession = synchronized(cacheLock) {
+        ApiSession(sessionGeneration, getApiBaseUrl())
+    }
+
+    fun isCurrentSession(session: ApiSession): Boolean = synchronized(cacheLock) {
+        session.generation == sessionGeneration && session.apiBaseUrl == getApiBaseUrl()
+    }
+
+    fun getAccessTokenIfCurrent(session: ApiSession): String? = synchronized(cacheLock) {
+        if (isCurrentSession(session)) cachedAccessToken else null
+    }
+
+    suspend fun setAccessToken(token: String?) {
+        setAccessTokenIfCurrent(currentSession(), token)
+    }
+
+    suspend fun setAccessTokenIfCurrent(session: ApiSession, token: String?): Boolean = withContext(ioDispatcher) {
+        sessionMutationMutex.withLock {
+            if (!isCurrentSession(session)) return@withLock false
             val encrypted = token?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_ACCESS_TOKEN) else prefs[KEY_ACCESS_TOKEN] = encrypted
             }
-        synchronized(cacheLock) {
-            cachedAccessToken = token
-            accessTokenLoaded = true
+            synchronized(cacheLock) {
+                cachedAccessToken = token
+                accessTokenLoaded = true
+            }
+            true
         }
     }
 
     fun getRefreshCookie(): String? = cachedRefreshCookie
 
-    suspend fun setRefreshCookie(rawCookie: String?) = withContext(ioDispatcher) {
+    fun getRefreshCookieIfCurrent(session: ApiSession): String? = synchronized(cacheLock) {
+        if (isCurrentSession(session)) cachedRefreshCookie else null
+    }
+
+    suspend fun setRefreshCookie(rawCookie: String?) {
+        setRefreshCookieIfCurrent(currentSession(), rawCookie)
+    }
+
+    suspend fun setRefreshCookieIfCurrent(session: ApiSession, rawCookie: String?): Boolean = withContext(ioDispatcher) {
+        sessionMutationMutex.withLock {
+            if (!isCurrentSession(session)) return@withLock false
             val encrypted = rawCookie?.let(::encrypt)
             dataStore.edit { prefs ->
                 if (encrypted == null) prefs.remove(KEY_REFRESH_COOKIE) else prefs[KEY_REFRESH_COOKIE] = encrypted
             }
-        synchronized(cacheLock) {
-            cachedRefreshCookie = rawCookie
-            refreshCookieLoaded = true
+            synchronized(cacheLock) {
+                cachedRefreshCookie = rawCookie
+                refreshCookieLoaded = true
+            }
+            true
         }
     }
 
@@ -229,57 +268,63 @@ class SessionStore internal constructor(
     }
 
     suspend fun setApiBaseUrl(rawBaseUrl: String): String = withContext(ioDispatcher) {
-        val normalized = normalizeApiServerHost(rawBaseUrl)
-        val previous = getApiBaseUrl()
-        val changed = previous != normalized
-        dataStore.edit { prefs ->
-            prefs[KEY_API_BASE_URL] = normalized
-            if (changed) {
-                prefs.remove(KEY_ACCESS_TOKEN)
-                prefs.remove(KEY_REFRESH_COOKIE)
-                prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
-                prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
-                prefs.remove(KEY_LAST_AUTHENTICATED_AT)
+        sessionMutationMutex.withLock {
+            val normalized = normalizeApiServerHost(rawBaseUrl)
+            val previous = getApiBaseUrl()
+            val changed = previous != normalized
+            dataStore.edit { prefs ->
+                prefs[KEY_API_BASE_URL] = normalized
+                if (changed) {
+                    prefs.remove(KEY_ACCESS_TOKEN)
+                    prefs.remove(KEY_REFRESH_COOKIE)
+                    prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
+                    prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
+                    prefs.remove(KEY_LAST_AUTHENTICATED_AT)
+                }
             }
+            synchronized(cacheLock) {
+                cachedApiBaseUrl = normalized
+                apiBaseUrlLoaded = true
+                if (changed) {
+                    sessionGeneration += 1
+                    cachedAccessToken = null
+                    cachedRefreshCookie = null
+                    cachedFeedRefreshRequestId = null
+                    cachedLastAuthenticatedAt = null
+                    accessTokenLoaded = true
+                    refreshCookieLoaded = true
+                }
+            }
+            normalized
         }
-        synchronized(cacheLock) {
-            cachedApiBaseUrl = normalized
-            apiBaseUrlLoaded = true
-            if (changed) {
+    }
+
+    suspend fun clear() = withContext(ioDispatcher) {
+        sessionMutationMutex.withLock {
+            val clientId = cachedClientId ?: getClientId()
+            val apiBaseUrl = getApiBaseUrl()
+            val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
+            dataStore.edit { prefs ->
+                prefs.clear()
+                prefs[KEY_CLIENT_ID] = clientId
+                prefs[KEY_API_BASE_URL] = apiBaseUrl
+                if (legacyMigrationMarker != null) {
+                    prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
+                }
+            }
+            synchronized(cacheLock) {
+                sessionGeneration += 1
                 cachedAccessToken = null
                 cachedRefreshCookie = null
+                cachedClientId = clientId
+                cachedApiBaseUrl = apiBaseUrl
                 cachedFeedRefreshRequestId = null
                 cachedLastAuthenticatedAt = null
                 accessTokenLoaded = true
                 refreshCookieLoaded = true
+                apiBaseUrlLoaded = true
+                preloaded = true
             }
-        }
-        normalized
-    }
-
-    suspend fun clear() = withContext(ioDispatcher) {
-        val clientId = cachedClientId ?: getClientId()
-        val apiBaseUrl = getApiBaseUrl()
-        val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
-        dataStore.edit { prefs ->
-            prefs.clear()
-            prefs[KEY_CLIENT_ID] = clientId
-            prefs[KEY_API_BASE_URL] = apiBaseUrl
-            if (legacyMigrationMarker != null) {
-                prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
-            }
-        }
-        synchronized(cacheLock) {
-            cachedAccessToken = null
-            cachedRefreshCookie = null
-            cachedClientId = clientId
-            cachedApiBaseUrl = apiBaseUrl
-            cachedFeedRefreshRequestId = null
-            cachedLastAuthenticatedAt = null
-            accessTokenLoaded = true
-            refreshCookieLoaded = true
-            apiBaseUrlLoaded = true
-            preloaded = true
         }
     }
 

@@ -71,8 +71,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideApi(client: OkHttpClient, moshi: Moshi): RssApi =
-        NetworkModule.provideApi(client, moshi)
+    fun provideApi(client: OkHttpClient, moshi: Moshi, sessionStore: SessionStore): RssApi =
+        NetworkModule.provideApi(client, moshi, sessionStore)
 
     @Provides
     @Singleton

@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
+import com.selffeed.android.data.ApiSession
 import com.squareup.moshi.FromJson
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.JsonReader
@@ -54,7 +55,6 @@ class SessionRefreshCoordinator(
                     certificatePinner(pinner)
                 }
             }
-            .cookieJar(PersistedRefreshCookieJar(sessionStore))
             .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -63,10 +63,13 @@ class SessionRefreshCoordinator(
     }
 
     @Volatile
-    private var lastRejectedAtMs: Long = 0L
+    private var lastRejection: Pair<ApiSession, Long>? = null
 
-    fun refreshAccessToken(): SessionRefreshResult = synchronized(lock) {
-        val refreshCookie = runCatching { sessionStore.getRefreshCookie() }
+    fun refreshAccessToken(): SessionRefreshResult = refreshAccessToken(sessionStore.currentSession())
+
+    fun refreshAccessToken(session: ApiSession): SessionRefreshResult = synchronized(lock) {
+        if (!sessionStore.isCurrentSession(session)) return@synchronized staleSession()
+        val refreshCookie = runCatching { sessionStore.getRefreshCookieIfCurrent(session) }
             .getOrElse { error -> return@synchronized SessionRefreshResult.Unavailable(error) }
         if (refreshCookie.isNullOrBlank()) {
             return@synchronized SessionRefreshResult.Unavailable(
@@ -75,7 +78,7 @@ class SessionRefreshCoordinator(
         }
 
         val request = Request.Builder()
-            .url(apiEndpointUrl(sessionStore.getApiBaseUrl(), "auth/refresh"))
+            .url(apiEndpointUrl(session.apiBaseUrl, "auth/refresh"))
             .post("{}".toRequestBody("application/json".toMediaType()))
             .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
             .header("X-Self-Feed-Device-Name", androidDeviceName())
@@ -83,10 +86,13 @@ class SessionRefreshCoordinator(
             .build()
 
         runCatching {
-            refreshClient.newCall(request).execute().use { response ->
+            refreshClient.newBuilder()
+                .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
+                .build().newCall(request).execute().use { response ->
+                if (!sessionStore.isCurrentSession(session)) return@use staleSession()
                 when {
                     response.code == 401 -> {
-                        markRejected()
+                        markRejected(session)
                         SessionRefreshResult.Rejected
                     }
                     !response.isSuccessful -> SessionRefreshResult.Unavailable(
@@ -102,10 +108,11 @@ class SessionRefreshCoordinator(
                                 IOException("Refresh response was empty or invalid"),
                             )
                         val accessToken = parsed.data.tokens.accessToken
-                        runBlocking(Dispatchers.IO) {
-                            sessionStore.setAccessToken(accessToken)
+                        val stored = runBlocking(Dispatchers.IO) {
+                            sessionStore.setAccessTokenIfCurrent(session, accessToken)
                         }
-                        lastRejectedAtMs = 0L
+                        if (!stored) return@use staleSession()
+                        lastRejection = null
                         SessionRefreshResult.Success(accessToken)
                     }
                 }
@@ -115,13 +122,17 @@ class SessionRefreshCoordinator(
         }
     }
 
+    private fun staleSession() = SessionRefreshResult.Unavailable(IOException("Session changed"))
+
     fun hasRecentRefreshRejection(windowMs: Long = RECENT_REFRESH_REJECTION_WINDOW_MS): Boolean {
-        val ageMs = System.currentTimeMillis() - lastRejectedAtMs
+        val (session, rejectedAt) = lastRejection ?: return false
+        if (!sessionStore.isCurrentSession(session)) return false
+        val ageMs = System.currentTimeMillis() - rejectedAt
         return ageMs in 0..windowMs
     }
 
-    private fun markRejected() {
-        lastRejectedAtMs = System.currentTimeMillis()
+    private fun markRejected(session: ApiSession) {
+        lastRejection = session to System.currentTimeMillis()
     }
 
     private companion object {
@@ -135,6 +146,7 @@ class SessionRefreshCoordinator(
 
 class PersistedRefreshCookieJar(
     private val sessionStore: SessionStore,
+    private val session: ApiSession = sessionStore.currentSession(),
 ) : CookieJar {
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         configuredOriginFor(url) ?: return
@@ -142,7 +154,7 @@ class PersistedRefreshCookieJar(
         if (refresh != null) {
             runCatching {
                 runBlocking(Dispatchers.IO) {
-                    sessionStore.setRefreshCookie(refresh.toString())
+                    sessionStore.setRefreshCookieIfCurrent(session, refresh.toString())
                 }
             }
                 .onFailure { logCookieJarError("Failed to persist refresh cookie", it) }
@@ -151,7 +163,9 @@ class PersistedRefreshCookieJar(
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
         val origin = configuredOriginFor(url) ?: return emptyList()
-        val rawCookie = runCatching { sessionStore.getRefreshCookie() }
+        val rawCookie = runCatching {
+            sessionStore.getRefreshCookieIfCurrent(session)
+        }
             .onFailure { logCookieJarError("Failed to read refresh cookie", it) }
             .getOrNull()
             ?: return emptyList()
@@ -161,7 +175,7 @@ class PersistedRefreshCookieJar(
         return if (cookie.expiresAt < System.currentTimeMillis()) {
             runCatching {
                 runBlocking(Dispatchers.IO) {
-                    sessionStore.setRefreshCookie(null)
+                    sessionStore.setRefreshCookieIfCurrent(session, null)
                 }
             }
                 .onFailure { logCookieJarError("Failed to clear expired refresh cookie", it) }
@@ -174,7 +188,7 @@ class PersistedRefreshCookieJar(
     }
 
     private fun configuredOriginFor(url: HttpUrl): HttpUrl? {
-        val origin = runCatching { apiEndpointUrl(sessionStore.getApiBaseUrl(), "") }.getOrNull()
+        val origin = runCatching { apiEndpointUrl(session.apiBaseUrl, "") }.getOrNull()
             ?: return null
         return origin.takeIf {
             it.scheme == url.scheme && it.host == url.host && it.port == url.port
@@ -196,13 +210,14 @@ class ApiBaseUrlInterceptor(
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val original = chain.request()
-        val configuredBaseUrl = runCatching { sessionStore.getApiBaseUrl() }
-            .getOrDefault(BuildConfig.API_BASE_URL)
+        // Direct SSE calls also need a session tag for authenticated retries.
+        val session = original.tag(ApiSession::class.java) ?: sessionStore.currentSession()
+        val configuredBaseUrl = session.apiBaseUrl
         val rewrittenUrl = rewriteApiRequestUrl(
             original = original.url,
             configuredBaseUrl = configuredBaseUrl,
         )
-        return chain.proceed(original.newBuilder().url(rewrittenUrl).build())
+        return chain.proceed(original.newBuilder().tag(ApiSession::class.java, session).url(rewrittenUrl).build())
     }
 }
 
@@ -213,8 +228,11 @@ class TokenAuthenticator(
     override fun authenticate(route: okhttp3.Route?, response: okhttp3.Response): Request? {
         if (responseCount(response) >= 2) return null
         if (response.request.url.encodedPath.endsWith("/auth/refresh")) return null
+        if (response.request.url.encodedPath.endsWith("/auth/logout")) return null
+        val session = response.request.tag(ApiSession::class.java) ?: return null
+        if (!sessionStore.isCurrentSession(session)) return null
 
-        val currentToken = sessionStore.getAccessToken()
+        val currentToken = sessionStore.getAccessTokenIfCurrent(session)
         val requestToken = response.request.header("Authorization")
             ?.removePrefix("Bearer ")
         if (!currentToken.isNullOrBlank() && currentToken != requestToken) {
@@ -223,10 +241,10 @@ class TokenAuthenticator(
                 .build()
         }
 
-        return when (val refresh = sessionRefreshCoordinator.refreshAccessToken()) {
-            is SessionRefreshResult.Success -> response.request.newBuilder()
+        return when (val refresh = sessionRefreshCoordinator.refreshAccessToken(session)) {
+            is SessionRefreshResult.Success -> if (sessionStore.isCurrentSession(session)) response.request.newBuilder()
                 .header("Authorization", "Bearer ${refresh.accessToken}")
-                .build()
+                .build() else null
             SessionRefreshResult.Rejected,
             is SessionRefreshResult.Unavailable,
             -> null
@@ -363,7 +381,7 @@ object NetworkModule {
             .addInterceptor(ApiBaseUrlInterceptor(sessionStore))
             .addInterceptor { chain ->
                 val request = chain.request()
-                val accessToken = sessionStore.getAccessToken()
+                val accessToken = request.tag(ApiSession::class.java)?.let(sessionStore::getAccessTokenIfCurrent)
                 val requestBuilder = request.newBuilder()
 
                 if (!accessToken.isNullOrBlank() && request.header("Authorization") == null) {
@@ -392,10 +410,22 @@ object NetworkModule {
             .build()
     }
 
-    fun provideApi(client: OkHttpClient, moshi: Moshi): RssApi {
+    fun provideApi(client: OkHttpClient, moshi: Moshi, sessionStore: SessionStore): RssApi {
         val retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .callFactory { request ->
+                // Retrofit creates the call before OkHttp queues it. Bind both the
+                // destination and cookie storage here, before logout can clear them.
+                val session = sessionStore.currentSession()
+                val boundRequest = request.newBuilder()
+                    .tag(ApiSession::class.java, session)
+                    .url(rewriteApiRequestUrl(request.url, session.apiBaseUrl))
+                    .build()
+                client.newBuilder()
+                    .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
+                    .build()
+                    .newCall(boundRequest)
+            }
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
 
