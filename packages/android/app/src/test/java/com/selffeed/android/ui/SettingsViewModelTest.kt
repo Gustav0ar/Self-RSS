@@ -13,6 +13,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -149,6 +150,39 @@ class SettingsViewModelTest {
         viewModel.clearMessages()
         assertNull(viewModel.state.value.errorMessage)
         assertNull(viewModel.state.value.statusMessage)
+    }
+
+    @Test
+    fun `preference saves reach the server in input order`() = runTest {
+        val firstResponse = CompletableDeferred<AppResult<UserPreferences>>()
+        val requests = mutableListOf<Int?>()
+        coEvery { repository.updatePreferences(any()) } coAnswers {
+            val request = firstArg<UpdatePreferencesRequest>()
+            requests += request.textSize
+            if (requests.size == 1) firstResponse.await()
+            else AppResult.Success(samplePreferences().copy(textSize = request.textSize!!))
+        }
+        val viewModel = SettingsViewModel(repository)
+        viewModel.updateTextSize(18)
+        viewModel.updateTextSize(22)
+        assertEquals(listOf(18), requests)
+        firstResponse.complete(AppResult.Success(samplePreferences().copy(textSize = 18)))
+        assertEquals(listOf(18, 22), requests)
+        assertEquals(22, viewModel.state.value.preferences?.textSize)
+    }
+
+    @Test
+    fun `late preference load cannot overwrite a newer save`() = runTest {
+        val loadResponse = CompletableDeferred<AppResult<UserPreferences>>()
+        coEvery { repository.preferences() } coAnswers { loadResponse.await() }
+        coEvery { repository.updatePreferences(any()) } returns
+            AppResult.Success(samplePreferences().copy(textSize = 22))
+        val viewModel = SettingsViewModel(repository)
+        viewModel.loadPreferences()
+        viewModel.updateTextSize(22)
+        loadResponse.complete(AppResult.Success(samplePreferences()))
+        assertEquals(22, viewModel.state.value.preferences?.textSize)
+        assertEquals(false, viewModel.state.value.preferencesLoading)
     }
 
     private fun samplePreferences(theme: String = "system"): UserPreferences = UserPreferences(

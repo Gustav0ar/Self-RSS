@@ -80,6 +80,7 @@ class RssRepository @Inject constructor(
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
 ) : SelfFeedRepository {
+    private val preferencesMutex = Mutex()
     private val runtime = RepositoryRuntime(
         moshi = moshi,
         maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
@@ -567,11 +568,13 @@ class RssRepository @Inject constructor(
     private fun refreshPreferencesInBackground() {
         val generation = sessionGeneration.get()
         refreshScope.launch {
-            runCatching {
-                runtime.withRetry { settingsRemote.preferences() }.also { preferences ->
-                    if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
-                    runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
-                    localStore.writePreferences(preferences)
+            preferencesMutex.withLock {
+                runCatching {
+                    runtime.withRetry { settingsRemote.preferences() }.also { preferences ->
+                        if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
+                        runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
+                        localStore.writePreferences(preferences)
+                    }
                 }
             }
         }
@@ -746,23 +749,27 @@ class RssRepository @Inject constructor(
         search(query = query, categoryId = null, cursor = null)
 
     override suspend fun preferences() = safeReadCall {
-        localStore.readPreferences()?.let { cached ->
-            refreshPreferencesInBackground()
-            return@safeReadCall cached
-        }
-        runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) {
-            runtime.withRetry { settingsRemote.preferences() }.also {
-                localStore.writePreferences(it)
+        preferencesMutex.withLock {
+            localStore.readPreferences()?.let { cached ->
+                refreshPreferencesInBackground()
+                return@withLock cached
+            }
+            runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) {
+                runtime.withRetry { settingsRemote.preferences() }.also {
+                    localStore.writePreferences(it)
+                }
             }
         }
     }
 
     override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall {
-        settingsRemote.updatePreferences(request).also {
-            localStore.writePreferences(it)
-            runtime.invalidateByPrefix("preferences")
-            runtime.invalidateByPrefix("articles")
-            runtime.invalidateByPrefix("search")
+        preferencesMutex.withLock {
+            settingsRemote.updatePreferences(request).also {
+                localStore.writePreferences(it)
+                runtime.invalidateByPrefix("preferences")
+                runtime.invalidateByPrefix("articles")
+                runtime.invalidateByPrefix("search")
+            }
         }
     }
 
