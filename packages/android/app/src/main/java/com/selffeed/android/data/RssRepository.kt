@@ -47,6 +47,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -102,6 +104,7 @@ class RssRepository @Inject constructor(
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
     private val sessionGeneration = AtomicLong(0)
+    private val articleStateFlushMutex = Mutex()
 
     init {
         refreshScope.launch {
@@ -462,7 +465,6 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun article(articleId: String, forceRefresh: Boolean) = safeReadCall {
-        flushPendingArticleStateMutations()
         if (forceRefresh) {
             val stale = runtime.getCached<ArticleDetail>("article:$articleId")
                 ?: offlineReadStore.readArticleDetail(articleId)
@@ -998,7 +1000,12 @@ class RssRepository @Inject constructor(
         runtime.invalidateByPrefix("categories")
     }
 
-    suspend fun flushPendingArticleStateMutations(): Boolean {
+    // Workers and foreground actions share one drain, including its reads and acknowledgments.
+    suspend fun flushPendingArticleStateMutations(): Boolean = articleStateFlushMutex.withLock {
+        drainPendingArticleStateMutations()
+    }
+
+    private suspend fun drainPendingArticleStateMutations(): Boolean {
         if (!networkMonitor.online.value) return false
         repeat(MAX_OUTBOX_FLUSH_ATTEMPTS) {
             val read = localStore.readPendingReadStateMutations().firstOrNull()
