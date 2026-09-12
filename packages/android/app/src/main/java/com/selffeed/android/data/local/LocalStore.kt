@@ -23,6 +23,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.flowOn
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -71,6 +73,17 @@ class LocalStore internal constructor(
     private val _invalidations = MutableSharedFlow<String>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val invalidations = _invalidations.asSharedFlow()
     private val invalidationSeq = AtomicLong(0)
+    private val articleStateEpoch = AtomicLong(0)
+    // Accessed only inside Room transactions. A collector owns its references until cancellation cleanup.
+    private val observedArticleReferences = mutableMapOf<String, Int>()
+
+    val articleStateRetentionEpoch: Long get() = articleStateEpoch.get()
+
+    /** Reject responses started before watermark eviction or explicit article-context invalidation. */
+    suspend fun <T : Any> acceptArticleSnapshot(epoch: Long, block: suspend () -> T): T? =
+        database.withTransaction {
+            if (epoch != articleStateEpoch.get()) null else block()
+        }
 
     suspend fun readOwner(): LocalOwnerEntity? = dao.readOwner()
 
@@ -154,27 +167,62 @@ class LocalStore internal constructor(
 
     /** Every emission is one owner-filtered transaction, including inputs larger than SQLite's bind limit. */
     fun observeArticleStates(articleIds: Set<String>, ownerId: String): Flow<Map<String, LocalArticleState>> {
-        val batches = articleIds.toList().chunked(100)
+        val observedIds = articleIds.toList()
+        val batches = observedIds.chunked(100)
         if (batches.isEmpty()) return flowOf(emptyMap())
-        return database.invalidationTracker.createFlow(
-            LocalTables.ARTICLE_STATE_REVISIONS, LocalTables.PENDING_READ_STATE_MUTATIONS,
-            LocalTables.PENDING_SAVED_STATE_MUTATIONS, LocalTables.ARTICLES, LocalTables.CURRENT_LOCAL_OWNER,
-        ).map {
-            database.withTransaction {
-                buildMap {
-                    batches.forEach { ids ->
-                        dao.readObservedArticleStates(ids, ownerId).forEach { put(it.articleId, it.state) }
+        return flow {
+            var registered = false
+            try {
+                database.withTransaction {
+                    observedIds.forEach { id ->
+                        observedArticleReferences[id] = (observedArticleReferences[id] ?: 0) + 1
+                    }
+                    registered = true
+                }
+                emitAll(database.invalidationTracker.createFlow(
+                    LocalTables.ARTICLE_STATE_REVISIONS, LocalTables.PENDING_READ_STATE_MUTATIONS,
+                    LocalTables.PENDING_SAVED_STATE_MUTATIONS, LocalTables.ARTICLES, LocalTables.CURRENT_LOCAL_OWNER,
+                ).map {
+                    database.withTransaction {
+                        buildMap {
+                            batches.forEach { ids ->
+                                dao.readObservedArticleStates(ids, ownerId).forEach { put(it.articleId, it.state) }
+                            }
+                        }
+                    }
+                }.distinctUntilChanged())
+            } finally {
+                if (registered) withContext(NonCancellable) {
+                    database.withTransaction {
+                        val releasedIds = mutableListOf<String>()
+                        observedIds.forEach { id ->
+                            val remaining = observedArticleReferences.getValue(id) - 1
+                            if (remaining == 0) {
+                                observedArticleReferences.remove(id)
+                                releasedIds += id
+                            } else observedArticleReferences[id] = remaining
+                        }
+                        // A serial observer replacement releases before it registers again. Treat
+                        // that release as recent use so its unchanged state enters the bounded grace set.
+                        releasedIds.chunked(100).forEach { ids ->
+                            val states = dao.readArticleStateRevisions(ids)
+                            if (states.isNotEmpty()) dao.upsertArticleStateRevisions(states)
+                        }
+                        pruneArticleStateHistory()
                     }
                 }
             }
-        }.distinctUntilChanged().flowOn(Dispatchers.IO)
+        }.flowOn(Dispatchers.IO)
     }
 
     /** Merge one validated network batch atomically; pending choices remain the visible values. */
     suspend fun reconcileArticleStates(states: List<ArticleStateSnapshot>): Set<String> = database.withTransaction {
+        var createdState = false
+        var removedSave = false
         buildSet {
             states.forEach { snapshot ->
-                val state = stateRecord(snapshot.id)
+                val existing = dao.readArticleStateRevision(snapshot.id)
+                val state = existing ?: stateRecord(snapshot.id).also { createdState = true }
                 val read = ConfirmedArticleState(state.confirmedReadState, state.readRevision)
                 val saved = ConfirmedArticleState(state.confirmedSavedState, state.savedRevision)
                 if (read.merge(snapshot.isRead, snapshot.readRevision) != read) {
@@ -183,15 +231,19 @@ class LocalStore internal constructor(
                 }
                 if (saved.merge(snapshot.isSaved, snapshot.savedRevision) != saved) {
                     mergeSavedState(snapshot.id, snapshot.isSaved, snapshot.savedRevision)
+                    if (!snapshot.isSaved) removedSave = true
                     add(snapshot.id)
                 }
             }
+        }.also {
+            if (removedSave) dao.pruneOrphanArticles()
+            if (createdState || removedSave) pruneArticleStateHistory()
         }
     }
 
     suspend fun readArticleState(articleId: String): LocalArticleState =
         database.withTransaction {
-            val state = stateRecord(articleId)
+            val state = dao.readArticleStateRevision(articleId) ?: recoverArticleState(articleId)
             val read = dao.readPendingReadStateMutation(articleId)
             val saved = dao.readPendingSavedStateMutation(articleId)
             LocalArticleState(
@@ -281,6 +333,45 @@ class LocalStore internal constructor(
         })
     }
 
+    /** Apply an accepted deletion without discarding offline bodies or queued article choices. */
+    suspend fun removeFeedMetadata(feedId: String) {
+        database.withTransaction {
+            dao.readFeed(feedId)?.let { deleted ->
+                val roots = dao.readCategories().map { it.toModel() }
+                val ancestorIds = mutableSetOf<String>()
+                fun findPath(category: CategoryWithCounts, ancestors: Set<String>) {
+                    val path = ancestors + category.id
+                    if (category.id == deleted.categoryId) ancestorIds.addAll(path)
+                    category.children?.forEach { findPath(it, path) }
+                }
+                roots.forEach { findPath(it, emptySet()) }
+                fun adjust(category: CategoryWithCounts): CategoryWithCounts = category.copy(
+                    feedCount = if (category.id in ancestorIds) (category.feedCount - 1).coerceAtLeast(0) else category.feedCount,
+                    // Raw signed baselines include pending choices. Clamping before subtraction loses their scope.
+                    unreadCount = category.unreadCount - if (category.id in ancestorIds) deleted.unreadCount else 0,
+                    children = category.children?.map(::adjust),
+                )
+                dao.deleteFeed(feedId)
+                if (roots.isNotEmpty()) dao.upsertCategories(roots.mapIndexed { index, root -> adjust(root).toEntity(index) })
+            }
+            counts.forgetFeedScope(feedId)
+            counts.invalidateCountSnapshot()
+        }
+        notifyInvalidation(TABLE_FEEDS)
+        notifyInvalidation(TABLE_CATEGORIES)
+    }
+
+    /** The server accepts only empty leaf-category deletion. Preserve every other cached branch. */
+    suspend fun removeCategoryMetadata(categoryId: String) {
+        database.withTransaction {
+            fun remove(categories: List<CategoryWithCounts>): List<CategoryWithCounts> = categories
+                .filterNot { it.id == categoryId }
+                .map { category -> category.copy(children = category.children?.let(::remove)) }
+            writeCategories(remove(dao.readCategories().map { it.toModel() }))
+            counts.invalidateCountSnapshot()
+        }
+    }
+
     fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem> =
         dao.articlePagingSource(queryKey, ownerId)
 
@@ -310,6 +401,8 @@ class LocalStore internal constructor(
                     )
                 }
             }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
             true
         }
         if (removed) notifyInvalidation(TABLE_ARTICLES)
@@ -356,6 +449,7 @@ class LocalStore internal constructor(
             dao.pruneArticleRemoteKeys(MAX_CACHED_ARTICLE_QUERIES)
             dao.pruneArticleQueryEntries()
             dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
             effective
         }
         notifyInvalidation(TABLE_ARTICLES)
@@ -364,7 +458,7 @@ class LocalStore internal constructor(
 
     /** Accept server snapshots without adding search results to a paged query. */
     suspend fun reconcileArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
-        database.withTransaction { mergeArticleSnapshots(articles) }
+        database.withTransaction { mergeArticleSnapshots(articles).also { pruneArticleStateHistory() } }
 
     private suspend fun mergeArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
         articles.map { article ->
@@ -400,12 +494,17 @@ class LocalStore internal constructor(
         // A persisted unknown value must stay unknown, including after rejection.
         // Never recover a rejected optimistic projection as a confirmed baseline.
         dao.readArticleStateRevision(articleId)?.let { return it }
+        return recoverArticleState(articleId).also { dao.upsertArticleStateRevision(it) }
+    }
+
+    /** Reading a missing state must not add another history row or scan the cache for eviction. */
+    private suspend fun recoverArticleState(articleId: String): ArticleStateRevisionEntity {
         val read = dao.readPendingReadStateMutation(articleId)
         val saved = dao.readPendingSavedStateMutation(articleId)
         val article = dao.readArticle(articleId)
         val detail = if (article == null && (read == null || saved == null)
         ) dao.readArticleDetail(articleId)?.let { decodeDetail(it) } else null
-        val recovered = ArticleStateRevisionEntity(
+        return ArticleStateRevisionEntity(
             articleId, null, null,
             confirmedReadState = if (read != null) read.previousState else article?.isRead ?: detail?.isRead,
             confirmedSavedState = if (saved != null) saved.previousState else article?.isSaved ?: detail?.isSaved,
@@ -413,8 +512,6 @@ class LocalStore internal constructor(
             lastSavedMutationId = saved?.mutationId,
             articleFeedId = article?.feedId ?: detail?.feedId,
         )
-        dao.upsertArticleStateRevision(recovered)
-        return recovered
     }
 
     private fun decodeDetail(entity: ArticleDetailEntity): ArticleDetail? =
@@ -497,6 +594,7 @@ class LocalStore internal constructor(
             dao.upsertPendingReadStateMutation(queued)
             dao.upsertArticleStateRevision(state.copy(lastReadMutationId = queued.mutationId))
             counts.recordLocalReadChange(queued.countScopeJson, previous?.read ?: state.confirmedReadState, read)
+            pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return queued
@@ -537,19 +635,32 @@ class LocalStore internal constructor(
             }
             dao.upsertPendingSavedStateMutation(queued)
             dao.upsertArticleStateRevision(state.copy(lastSavedMutationId = queued.mutationId))
+            pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLES)
         return queued
     }
 
     suspend fun updateArticleReadState(articleId: String, read: Boolean, revision: Int? = null): Boolean? {
-        val visible = database.withTransaction { mergeReadState(articleId, read, revision) }
+        val visible = database.withTransaction {
+            val existing = dao.readArticleStateRevision(articleId)
+            mergeReadState(articleId, read, revision).also {
+                if (existing == null) pruneArticleStateHistory()
+            }
+        }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return visible
     }
 
     suspend fun updateArticleSavedState(articleId: String, saved: Boolean, revision: Int? = null): Boolean? {
-        val visible = database.withTransaction { mergeSavedState(articleId, saved, revision) }
+        val visible = database.withTransaction {
+            val existing = dao.readArticleStateRevision(articleId)
+            mergeSavedState(articleId, saved, revision).also { visible ->
+                val removedSave = visible == false && existing?.confirmedSavedState != false
+                if (removedSave) dao.pruneOrphanArticles()
+                if (existing == null || removedSave) pruneArticleStateHistory()
+            }
+        }
         notifyInvalidation(TABLE_ARTICLES)
         return visible
     }
@@ -559,14 +670,21 @@ class LocalStore internal constructor(
 
     suspend fun markArticlesReadByFeeds(feedIds: Collection<String>): BulkReadReconciliation {
         val result = database.withTransaction {
+            pruneArticleStateHistory()
             counts.invalidateCountSnapshot()
             val pending = dao.readPendingReadStateMutations().associateBy { it.articleId }
             val scoped = dao.readArticleStatesByFeeds(feedIds.distinct(), feedIds.isEmpty())
+                .associateByTo(linkedMapOf()) { it.state.articleId }
+            observedArticleReferences.keys.toList().chunked(100).forEach { ids ->
+                dao.readArticleStateRevisions(ids).forEach { state ->
+                    scoped.putIfAbsent(state.articleId, ScopedArticleState(state, state.articleFeedId, null, true))
+                }
+            }
             val unreadArticleFeeds = mutableMapOf<String, String>()
             val states = ArrayList<ArticleStateRevisionEntity>(scoped.size)
             val overrides = ArrayList<ArticleReadOverrideEntity>(scoped.size)
             val affectedArticleIds = mutableSetOf<String>()
-            for ((stored, metadataFeedId, cachedReadState, hasStateRecord) in scoped) {
+            for ((stored, metadataFeedId, cachedReadState, hasStateRecord) in scoped.values) {
                 val feedId = metadataFeedId ?: dao.readArticleDetail(stored.articleId)?.let { decodeDetail(it)?.feedId }
                 if (feedIds.isNotEmpty() && feedId !in feedIds) continue
                 val state = if (hasStateRecord) stored else stateRecord(stored.articleId)
@@ -598,8 +716,12 @@ class LocalStore internal constructor(
         dao.readPendingSavedStateMutations()
 
     suspend fun deletePendingReadStateMutation(articleId: String) {
-        dao.readPendingReadStateMutation(articleId)?.let {
-            dao.deletePendingReadStateMutation(articleId, it.mutationId)
+        database.withTransaction {
+            dao.readPendingReadStateMutation(articleId)?.let {
+                dao.deletePendingReadStateMutation(articleId, it.mutationId)
+            }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
         }
     }
 
@@ -622,6 +744,8 @@ class LocalStore internal constructor(
             val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
             val effective = mergeReadState(mutation.articleId, read, revision)
             counts.recordLocalReadChange(pending?.countScopeJson, before, effective)
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
             ArticleStateMutationResult(removed, effective)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
@@ -636,7 +760,10 @@ class LocalStore internal constructor(
         val result = database.withTransaction {
             stateRecord(mutation.articleId)
             val removed = dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0
-            ArticleStateMutationResult(removed, mergeSavedState(mutation.articleId, saved, revision))
+            val effective = mergeSavedState(mutation.articleId, saved, revision)
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
+            ArticleStateMutationResult(removed, effective)
         }
         notifyInvalidation(TABLE_ARTICLES)
         return result
@@ -677,14 +804,17 @@ class LocalStore internal constructor(
     suspend fun discardReadStateMutation(mutation: PendingReadStateMutationEntity): RejectedArticleMutation? {
         val result = database.withTransaction {
             val state = stateRecord(mutation.articleId)
+            val pending = dao.readPendingReadStateMutation(mutation.articleId)
             val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
             if (removed) {
                 state.confirmedReadState?.let { confirmed ->
                     mergeReadState(mutation.articleId, confirmed, state.readRevision)
                 }
                 dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
-                counts.recordLocalReadChange(mutation.countScopeJson, mutation.read, state.confirmedReadState)
+                counts.recordLocalReadChange(pending?.countScopeJson, mutation.read, state.confirmedReadState)
             }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
             if (removed) RejectedArticleMutation(state.lastReadMutationId ?: mutation.mutationId, state.confirmedReadState) else null
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
@@ -704,6 +834,8 @@ class LocalStore internal constructor(
                     mergeSavedState(mutation.articleId, confirmed, state.savedRevision)
                 }
             }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
             if (removed) RejectedArticleMutation(state.lastSavedMutationId ?: mutation.mutationId, state.confirmedSavedState) else null
         }
         notifyInvalidation(TABLE_ARTICLES)
@@ -737,6 +869,8 @@ class LocalStore internal constructor(
                 val cached = runCatching { articleDetailAdapter.fromJson(expired.payloadJson) }.getOrNull()
                 if (cached?.isSaved != true) dao.clearArticleDetail(expired.id)
             }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
@@ -791,19 +925,31 @@ class LocalStore internal constructor(
             // A saved article is an explicit offline promise. It remains readable
             // until the user unsaves it or signs out, even after normal cache TTLs.
             if (parsed?.isSaved == true || dao.isLegacyOfflineArticle(detail.id)) return parsed
-            dao.clearArticleDetail(detail.id)
+            database.withTransaction {
+                dao.clearArticleDetail(detail.id)
+                dao.pruneOrphanArticles()
+                pruneArticleStateHistory()
+            }
             return null
         }
         return parsed
     }
 
     override suspend fun clearArticleDetail(articleId: String) {
-        dao.clearArticleDetail(articleId)
+        database.withTransaction {
+            dao.clearArticleDetail(articleId)
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
+        }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
     override suspend fun clearArticleDetails() {
-        dao.clearArticleDetails()
+        database.withTransaction {
+            dao.clearArticleDetails()
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
+        }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
@@ -828,7 +974,42 @@ class LocalStore internal constructor(
         notifyInvalidation("all")
     }
 
+    /**
+     * Keep a small grace set of unreferenced watermarks. Observed and durable article state is never
+     * counted against that budget. REPLACE rowids give approximate write recency without a new schema.
+     * The caller owns a Room transaction so eviction and its response epoch change are indivisible.
+     */
+    private suspend fun pruneArticleStateHistory() {
+        var beforeRowId: Long? = null
+        var retainedOrphans = 0
+        var evicted = false
+        do {
+            val batch = dao.readOrphanArticleStates(beforeRowId, ARTICLE_STATE_PRUNE_BATCH_SIZE)
+            val expired = batch.mapNotNull { row ->
+                if (row.articleId in observedArticleReferences) null
+                else row.articleId.takeIf { ++retainedOrphans > MAX_ORPHAN_ARTICLE_STATES }
+            }
+            if (expired.isNotEmpty()) {
+                evicted = dao.deleteArticleStateRevisions(expired) > 0 || evicted
+                dao.deleteArticleReadOverrides(expired)
+            }
+            beforeRowId = batch.lastOrNull()?.writeOrder
+        } while (beforeRowId != null)
+
+        // Old bulk receipts may have left overrides even without a revision. They are presentation
+        // state for retained articles, not a second history of every article ever encountered.
+        beforeRowId = null
+        do {
+            val batch = dao.readOrphanArticleReadOverrides(beforeRowId, ARTICLE_STATE_PRUNE_BATCH_SIZE)
+            val expired = batch.mapNotNull { row -> row.articleId.takeUnless { it in observedArticleReferences } }
+            if (expired.isNotEmpty()) dao.deleteArticleReadOverrides(expired)
+            beforeRowId = batch.lastOrNull()?.writeOrder
+        } while (beforeRowId != null)
+        if (evicted) articleStateEpoch.incrementAndGet()
+    }
+
     private suspend fun clearActiveSnapshot() {
+        articleStateEpoch.incrementAndGet()
         dao.clearCategories()
         dao.clearFeeds()
         dao.clearArticles()
@@ -850,9 +1031,11 @@ class LocalStore internal constructor(
 
     override suspend fun clearArticleLists() {
         database.withTransaction {
+            articleStateEpoch.incrementAndGet()
             dao.clearArticleQueryEntries()
             dao.clearArticleRemoteKeys()
             dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLES)
     }
@@ -864,18 +1047,22 @@ class LocalStore internal constructor(
     }
 
     suspend fun clearTable(table: String) {
-        when (table) {
-            TABLE_CATEGORIES -> dao.clearCategories()
-            TABLE_FEEDS -> dao.clearFeeds()
-            TABLE_ARTICLES -> {
-                dao.clearArticles()
-                dao.clearArticleQueryEntries()
-                dao.clearArticleRemoteKeys()
-            }
+        database.withTransaction {
+            when (table) {
+                TABLE_CATEGORIES -> dao.clearCategories()
+                TABLE_FEEDS -> dao.clearFeeds()
+                TABLE_ARTICLES -> {
+                    dao.clearArticles()
+                    dao.clearArticleQueryEntries()
+                    dao.clearArticleRemoteKeys()
+                }
 
-            TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
-            TABLE_ARTICLE_READ_OVERRIDES -> dao.clearArticleReadOverrides()
-            else -> return
+                TABLE_ARTICLE_DETAILS -> dao.clearArticleDetails()
+                TABLE_ARTICLE_READ_OVERRIDES -> dao.clearArticleReadOverrides()
+                else -> return@withTransaction
+            }
+            dao.pruneOrphanArticles()
+            pruneArticleStateHistory()
         }
         notifyInvalidation(table)
     }
@@ -1030,5 +1217,7 @@ class LocalStore internal constructor(
 
         private const val MAX_ARTICLE_DETAIL_AGE_MS = 7L * 24 * 60 * 60 * 1000
         private const val MAX_CACHED_ARTICLE_QUERIES = 24
+        const val MAX_ORPHAN_ARTICLE_STATES = 256
+        private const val ARTICLE_STATE_PRUNE_BATCH_SIZE = 100
     }
 }

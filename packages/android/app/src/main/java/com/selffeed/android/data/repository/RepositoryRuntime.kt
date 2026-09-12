@@ -26,6 +26,7 @@ class RepositoryRuntime(
     private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val processingDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val cacheEpoch: () -> Long = { 0L },
 ) {
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
@@ -98,22 +99,31 @@ class RepositoryRuntime(
         throw lastException ?: IllegalStateException("withRetry exited without resolution")
     }
 
-    suspend fun <T> cachedGet(key: String, ttlMs: Long, loader: suspend () -> T): T =
-        memoryCache.getOrLoad(
-            key = key,
+    suspend fun <T> cachedGet(key: String, ttlMs: Long, loader: suspend () -> T): T {
+        // Capture before suspension: a superseded load must stay in its original namespace.
+        val scopedKey = cacheKey(key, cacheEpoch())
+        return memoryCache.getOrLoad(
+            key = scopedKey,
             ttlMs = ttlMs,
             onHit = { cacheHitCount.incrementAndGet() },
             onMiss = { cacheMissCount.incrementAndGet() },
             onStore = { cacheStoreCount.incrementAndGet() },
             loader = loader,
         )
+    }
 
-    fun <T> getCached(key: String): T? = memoryCache.get(key)
+    fun <T> getCached(key: String): T? {
+        val epoch = cacheEpoch()
+        val value = memoryCache.get<T>(cacheKey(key, epoch))
+        return value.takeIf { cacheEpoch() == epoch }
+    }
 
     fun putCached(key: String, ttlMs: Long, value: Any?) {
         cacheStoreCount.incrementAndGet()
-        memoryCache.put(key, ttlMs, value)
+        memoryCache.put(cacheKey(key, cacheEpoch()), ttlMs, value)
     }
+
+    private fun cacheKey(key: String, epoch: Long): String = "$key:epoch:$epoch"
 
     fun recordCacheHit() {
         cacheHitCount.incrementAndGet()

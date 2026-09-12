@@ -125,7 +125,7 @@ class MainActivityHiltUiTest {
     }
 
     @Test
-    fun realtimeReconnectRefreshesObservedFlagsAndCountsWithoutReplacingThePager() {
+    fun realtimeReconnectRefreshesFlagsCountsAndMissedArticleMembership() {
         repository.reset(authenticated = true)
         launchActivity()
         waitForText("Injected Article")
@@ -136,6 +136,11 @@ class MainActivityHiltUiTest {
         val articleStateBefore = repository.articleStateRefreshRequests
         val statsBefore = repository.statsRequests
 
+        repository.addArticleWithoutRealtimeEvent(com.selffeed.android.network.ArticleListItem(
+            id = "missed-article", feedId = "feed-1", feedTitle = "Injected Feed",
+            title = "Article synced while disconnected", isRead = false,
+        ))
+        composeRule.onAllNodesWithText("Article synced while disconnected").assertCountEquals(0)
         assertTrue(repository.emitRealtimeConnected())
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
@@ -143,9 +148,11 @@ class MainActivityHiltUiTest {
                 repository.categoryRequests > categoriesBefore &&
                 repository.feedRequests > feedsBefore &&
                 repository.articleStateRefreshRequests > articleStateBefore &&
+                repository.articlePagingRequests > articlesBefore &&
                 repository.statsRequests > statsBefore
         }
-        assertEquals(articlesBefore, repository.articlePagingRequests)
+        waitForText("Article synced while disconnected")
+        composeRule.onNodeWithText("Article synced while disconnected").assertIsDisplayed()
         composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
     }
 

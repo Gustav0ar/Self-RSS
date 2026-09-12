@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -243,12 +244,30 @@ private fun ArticleDetailView(
     LaunchedEffect(article.contentVersion, article.contentHtml, article.contentText, article.media) {
         retainedContent = retainedContent.mergeNonRegressive(article)
     }
+    val richHtml = retainedContent.html?.takeIf { preferHtml && allowRenderer }
+    val bodyKind = when {
+        richHtml != null -> ReaderBodyKind.Rich
+        preferHtml && article.isRichContentPending() -> ReaderBodyKind.PendingRich
+        else -> ReaderBodyKind.Text
+    }
     val scrollPosition = rememberSaveable(article.id, saver = ReaderScrollPosition.Saver) {
         ReaderScrollPosition()
     }
     val scrollState = scrollPosition.scrollState
-    var bodyPrepared by remember(article.id, preferHtml, allowRenderer) { mutableStateOf(false) }
-    var placedBody by remember(article.id, preferHtml, allowRenderer) { mutableIntStateOf(0) }
+    DisposableEffect(scrollPosition, bodyKind) {
+        // Disposal runs before the replacement body is measured. Capture the
+        // outgoing offset while it still belongs to the full article layout.
+        onDispose { scrollPosition.retainForBodyReplacement() }
+    }
+    LaunchedEffect(scrollPosition) {
+        scrollState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) scrollPosition.onUserScroll()
+        }
+    }
+    // Renderer retention can change while Text remains laid out. Only an
+    // actual body replacement invalidates its readiness and reading position.
+    var bodyPrepared by remember(article.id, bodyKind) { mutableStateOf(false) }
+    var placedBody by remember(article.id, bodyKind) { mutableIntStateOf(0) }
     val bodyLaidOut = placedBody > 0
     val placedGeneration = placedBody
     LaunchedEffect(placedGeneration, scrollPosition) {
@@ -349,8 +368,7 @@ private fun ArticleDetailView(
             // has remeasured. Release restoration only after the body is placed.
             if (bodyPrepared && placedBody == 0) placedBody = 1
         }) {
-            val html = retainedContent.html
-            if (preferHtml && html != null && allowRenderer) {
+            if (richHtml != null) {
                 // Keep the static placeholder until the renderer has a
                 // measured first frame. Restoration follows its removal
                 // and the placement of the resulting body layout.
@@ -359,7 +377,7 @@ private fun ArticleDetailView(
                 }
                 ReaderHtmlContent(
                     documentId = article.id,
-                    html = html,
+                    html = richHtml,
                     backgroundColor = backgroundColor,
                     textColor = textColor,
                     surfaceColor = surfaceColor,
@@ -375,9 +393,13 @@ private fun ArticleDetailView(
                         // restoring. Later documents keep that placed body.
                         if (placedBody > 0) placedBody++ else bodyPrepared = true
                     },
-                    onRendererFailure = { bodyPrepared = false; placedBody = 0 },
+                    onRendererFailure = {
+                        scrollPosition.retainForBodyReplacement()
+                        bodyPrepared = false
+                        placedBody = 0
+                    },
                 )
-            } else if (preferHtml && article.isRichContentPending()) {
+            } else if (bodyKind == ReaderBodyKind.PendingRich) {
                 // Keep Rich selected while the next article's detail request
                 // completes. Showing the text snapshot here made navigation
                 // look like an unwanted mode switch before HTML arrived.
@@ -408,6 +430,8 @@ private fun ArticleDetailView(
         },
     )
 }
+
+private enum class ReaderBodyKind { Rich, PendingRich, Text }
 
 private fun ArticleDetail.isRichContentPending(): Boolean =
     contentHtml.isNullOrBlank() &&

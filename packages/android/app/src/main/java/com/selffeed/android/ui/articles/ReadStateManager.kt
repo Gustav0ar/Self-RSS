@@ -179,7 +179,8 @@ class ReadStateManager @Inject constructor(private val repository: ArticleReposi
             }
             is ArticleSavedStateChangedEvent -> {
                 repository.updateCachedSavedState(event.articleId, event.isSaved, event.revision)
-                if (event.revision == null) _events.emit(ArticleFeatureEvent.ArticleStateRefreshRequested)
+                // An unseen saved article needs metadata before Room can include it in Saved.
+                _events.emit(ArticleFeatureEvent.ArticlesChanged())
             }
             is ArticlesMarkedReadEvent -> {
                 val feeds = event.feedIds.toSet()
@@ -190,7 +191,8 @@ class ReadStateManager @Inject constructor(private val repository: ArticleReposi
             }
             is RealtimeConnectedEvent -> {
                 repository.invalidateReadStateCaches()
-                _events.emit(ArticleFeatureEvent.ArticleStateRefreshRequested)
+                // Realtime has no replay, so known flags cannot recover missed list membership.
+                _events.emit(ArticleFeatureEvent.ArticlesChanged())
             }
             is ArticlesNewEvent -> {
                 repository.invalidateArticleContentCaches()

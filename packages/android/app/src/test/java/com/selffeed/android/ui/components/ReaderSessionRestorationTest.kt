@@ -16,6 +16,8 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.onAllNodesWithTag
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.ui.ArticleListDetailNavigation
@@ -112,6 +114,49 @@ class ReaderSessionRestorationTest {
         } finally { gate.release() }
     }
     @Test
+    fun `a drag during delayed preparation cancels pending scroll restoration`() {
+        val tester = StateRestorationTester(composeRule)
+        val gate = ReaderPreparationGate()
+        val preparer = ReaderContentPreparer(gate)
+        var readyCount = 0
+        val article = ArticleDetail(
+            id = "user-scroll", feedId = "feed", guid = "user-scroll", title = "Reader position",
+            contentHtml = (1..100).joinToString("") {
+                "<p>Paragraph $it. A long body that lets the reader choose a scroll position.</p>"
+            },
+            hash = "body", feedTitle = "Feed", isRead = true,
+        )
+        tester.setContent {
+            CompositionLocalProvider(LocalReaderContentPreparer provides preparer) {
+                SelfFeedTheme {
+                    ArticleReaderPane(
+                        articles = emptyList(), selectedArticle = article,
+                        preferHtml = false,
+                        onOpenOriginal = {}, onBackToList = {}, onArticleSelected = {},
+                        onArticleBodyReady = { readyCount++ },
+                    )
+                }
+            }
+        }
+        val scroll = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
+        composeRule.waitUntil(5_000) { composeRule.runOnIdle { readyCount == 1 } }
+        composeRule.onNode(scroll).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
+        gate.pause()
+        try {
+            tester.emulateSavedInstanceStateRestore()
+            composeRule.waitUntil(5_000) { gate.pendingCount > 0 }
+            composeRule.onNode(scroll).performTouchInput { swipeUp() }
+            gate.release()
+            composeRule.waitUntil(5_000) { composeRule.runOnIdle { readyCount == 2 } }
+            val offset = composeRule.onNode(scroll)
+                .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertEquals("A completed drag takes precedence over the saved offset", 0f, offset, 1f)
+        } finally {
+            gate.release()
+        }
+    }
+
+    @Test
     fun `rich restoration waits for measured body placement after visual readiness`() {
         val tester = StateRestorationTester(composeRule)
         var readyCount = 0
@@ -157,6 +202,65 @@ class ReaderSessionRestorationTest {
         assertEquals(previousReadyCount + 1, readyCount)
         val restored = composeRule.onNode(scroll).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertEquals(offset, restored, 1f)
+    }
+
+    @Test
+    fun `renderer recovery and its text fallback preserve the reading position`() {
+        val gate = ReaderPreparationGate()
+        val preparer = ReaderContentPreparer(gate)
+        var readyCount = 0
+        val article = ArticleDetail(
+            id = "renderer-recovery", feedId = "feed", guid = "renderer", title = "Renderer recovery",
+            contentHtml = (1..100).joinToString("") {
+                "<p>Paragraph $it. Enough content to retain the reading position after a renderer failure.</p>"
+            },
+            hash = "body", feedTitle = "Feed", isRead = true,
+        )
+        composeRule.setContent {
+            CompositionLocalProvider(LocalReaderContentPreparer provides preparer) {
+                SelfFeedTheme {
+                    ArticleReaderPane(
+                        articles = emptyList(), selectedArticle = article, preferHtml = true,
+                        onOpenOriginal = {}, onBackToList = {}, onArticleSelected = {},
+                        onArticleBodyReady = { readyCount++ },
+                    )
+                }
+            }
+        }
+        fun reader(): ReaderWebView? = composeRule.runOnIdle {
+            fun find(view: View): ReaderWebView? {
+                if (view is ReaderWebView) return view
+                if (view is ViewGroup) {
+                    for (index in 0 until view.childCount) find(view.getChildAt(index))?.let { return it }
+                }
+                return null
+            }
+            find(composeRule.activity.window.decorView)
+        }
+        composeRule.waitUntil(5_000) { reader() != null }
+        val firstReader = checkNotNull(reader())
+        composeRule.runOnIdle { firstReader.onHeight(5_000); firstReader.onReady() }
+        composeRule.waitUntil(5_000) { composeRule.runOnIdle { readyCount == 1 } }
+        val scroll = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
+        composeRule.onNode(scroll).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 1_500f) }
+        composeRule.runOnIdle { firstReader.onRendererGone() }
+        composeRule.waitUntil(5_000) { reader()?.let { it !== firstReader } == true }
+        val replacement = checkNotNull(reader())
+        composeRule.runOnIdle { replacement.onHeight(5_000); replacement.onReady() }
+        composeRule.waitUntil(5_000) { composeRule.runOnIdle { readyCount == 2 } }
+
+        gate.pause()
+        try {
+            composeRule.runOnIdle { replacement.onRendererGone() }
+            composeRule.waitUntil(5_000) { gate.pendingCount > 0 }
+            gate.release()
+            composeRule.waitUntil(5_000) { composeRule.runOnIdle { readyCount == 3 } }
+            val restoredOffset = composeRule.onNode(scroll)
+                .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertEquals(1_500f, restoredOffset, 1f)
+        } finally {
+            gate.release()
+        }
     }
 
     @Test
