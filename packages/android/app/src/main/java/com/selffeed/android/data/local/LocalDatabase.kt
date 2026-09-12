@@ -175,6 +175,8 @@ data class ArticleStateRevisionEntity(
     @PrimaryKey val articleId: String,
     val readRevision: Int?,
     val savedRevision: Int?,
+    val confirmedReadState: Boolean? = null,
+    val confirmedSavedState: Boolean? = null,
 )
 
 @Entity(tableName = LocalTables.PREFERENCES)
@@ -204,6 +206,13 @@ data class ArticleDetailEntity(
 )
 
 data class SavedArticleSnapshot(val articleId: String, val savedRevision: Int?)
+
+data class ScopedArticleState(
+    @androidx.room.Embedded val state: ArticleStateRevisionEntity,
+    val feedId: String?,
+    val cachedReadState: Boolean?,
+    val hasStateRecord: Boolean,
+)
 
 @Dao
 interface LocalStoreDao {
@@ -274,10 +283,10 @@ interface LocalStoreDao {
     @Query("SELECT * FROM articles WHERE id = :articleId LIMIT 1")
     suspend fun readArticle(articleId: String): ArticleEntity?
 
-    @Query("UPDATE articles SET isSaved = :saved WHERE id = :articleId")
+    @Query("UPDATE articles SET isSaved = :saved WHERE id = :articleId AND isSaved != :saved")
     suspend fun updateArticleSavedState(articleId: String, saved: Boolean)
 
-    @Query("UPDATE articles SET isRead = :read WHERE id = :articleId")
+    @Query("UPDATE articles SET isRead = :read WHERE id = :articleId AND isRead != :read")
     suspend fun updateArticleReadState(articleId: String, read: Boolean)
 
     @Query(
@@ -295,7 +304,7 @@ interface LocalStoreDao {
 
     @Query(
         """
-        SELECT articles.* FROM article_query_entries
+        SELECT articles.*, NULL AS readRevision, NULL AS savedRevision FROM article_query_entries
         INNER JOIN articles ON articles.id = article_query_entries.articleId
         WHERE article_query_entries.queryKey = :queryKey
           AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
@@ -306,7 +315,7 @@ interface LocalStoreDao {
 
     @Query(
         """
-        SELECT * FROM articles
+        SELECT articles.*, NULL AS readRevision, NULL AS savedRevision FROM articles
         WHERE isSaved = 1
           AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
         ORDER BY COALESCE(displayedAt, publishedAt) DESC, id DESC
@@ -375,6 +384,31 @@ interface LocalStoreDao {
     @Query("SELECT * FROM article_state_revisions WHERE articleId = :articleId LIMIT 1")
     suspend fun readArticleStateRevision(articleId: String): ArticleStateRevisionEntity?
 
+    @Query("""
+        SELECT items.id AS articleId, items.feedId, articles.isRead AS cachedReadState,
+            state.articleId IS NOT NULL AS hasStateRecord,
+            state.readRevision, state.savedRevision, state.confirmedReadState, state.confirmedSavedState
+        FROM (
+            SELECT id, feedId FROM articles
+            UNION ALL
+            SELECT id, feedId FROM article_details WHERE id NOT IN (SELECT id FROM articles)
+            UNION ALL
+            SELECT articleId AS id, NULL AS feedId FROM pending_read_state_mutations
+            WHERE articleId NOT IN (SELECT id FROM articles)
+              AND articleId NOT IN (SELECT id FROM article_details)
+        ) items
+        LEFT JOIN articles ON articles.id = items.id
+        LEFT JOIN article_state_revisions state ON state.articleId = items.id
+        WHERE :allFeeds OR items.feedId IN (:feedIds) OR items.feedId IS NULL
+    """)
+    suspend fun readArticleStatesByFeeds(feedIds: List<String>, allFeeds: Boolean): List<ScopedArticleState>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleStateRevisions(states: List<ArticleStateRevisionEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertArticleReadOverrides(overrides: List<ArticleReadOverrideEntity>)
+
     @Query("DELETE FROM article_read_overrides WHERE articleId = :articleId")
     suspend fun deleteArticleReadOverride(articleId: String)
 
@@ -403,16 +437,6 @@ interface LocalStoreDao {
 
     @Query("SELECT * FROM article_read_overrides")
     suspend fun readArticleReadOverrides(): List<ArticleReadOverrideEntity>
-
-    @Query(
-        """
-        INSERT OR REPLACE INTO article_read_overrides(articleId, read, updatedAt)
-        SELECT id, COALESCE(
-            (SELECT read FROM pending_read_state_mutations WHERE articleId = articles.id), 1
-        ), :updatedAt FROM articles WHERE :allFeeds OR feedId IN (:feedIds)
-        """,
-    )
-    suspend fun markArticleReadOverridesByFeeds(feedIds: List<String>, allFeeds: Boolean, updatedAt: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleDetail(detail: ArticleDetailEntity)

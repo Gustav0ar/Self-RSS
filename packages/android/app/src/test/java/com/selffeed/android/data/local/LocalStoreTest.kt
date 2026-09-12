@@ -1,6 +1,9 @@
 package com.selffeed.android.data.local
 
 import androidx.paging.PagingSource
+import androidx.room.Room
+import android.content.Context
+import java.util.UUID
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.data.remoteKey
@@ -41,17 +44,233 @@ class LocalStoreTest {
     // adapters aren't on the test classpath. Without this fallback the
     // generated-adapter lookup fails for every payload in this test.
     private val moshi = NetworkModule.provideMoshi()
+    private val context: Context = ApplicationProvider.getApplicationContext()
+    private val databaseName = "state-store-${UUID.randomUUID()}"
+    private lateinit var database: LocalDatabase
     private lateinit var store: LocalStore
+    @Volatile private var captureQueries = false
+    private val queries = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     @Before
     fun setup() {
-        store = LocalStore(ApplicationProvider.getApplicationContext(), moshi)
-        runBlocking { store.clearAll() }
+        store = openStore()
     }
 
     @After
     fun teardown() {
-        runBlocking { store.clearAll() }
+        database.close()
+        context.deleteDatabase(databaseName)
+    }
+
+    private fun openStore(): LocalStore {
+        database = Room.databaseBuilder(context, LocalDatabase::class.java, databaseName)
+            .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
+            .setQueryCallback({ query, _ -> if (captureQueries) queries += query }, java.util.concurrent.Executor { it.run() })
+            .build()
+        return LocalStore(database, moshi)
+    }
+
+    private fun reopenStore(): LocalStore {
+        database.close()
+        return openStore().also { store = it }
+    }
+
+    @Test
+    fun `an older read receipt cannot replace newer state or lower the next mutation revision`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("ordered-read"))
+        store.updateArticleReadState("ordered-read", true, revision = 10)
+
+        assertEquals(true, store.updateArticleReadState("ordered-read", false, revision = 9))
+        assertEquals(true, store.readArticleDetail("ordered-read")?.isRead)
+        assertEquals(10, store.queueReadStateMutation("ordered-read", false).baseRevision)
+    }
+
+    @Test
+    fun `an older saved receipt cannot replace newer state or lower the next mutation revision`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("ordered-save"))
+        store.updateArticleSavedState("ordered-save", true, revision = 10)
+
+        assertEquals(true, store.updateArticleSavedState("ordered-save", false, revision = 9))
+        assertEquals(true, store.readArticleDetail("ordered-save")?.isSaved)
+        assertEquals(10, store.queueSavedStateMutation("ordered-save", false).baseRevision)
+    }
+
+    @Test
+    fun `an acknowledgement cannot replace a newer server state received while its mutation was pending`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("ordered-ack"))
+        val read = store.queueReadStateMutation("ordered-ack", true)
+        val saved = store.queueSavedStateMutation("ordered-ack", true)
+        store.updateArticleReadState("ordered-ack", false, revision = 20)
+        store.updateArticleSavedState("ordered-ack", false, revision = 20)
+
+        store.acknowledgeReadStateMutation(read, true, revision = 19)
+        store.acknowledgeSavedStateMutation(saved, true, revision = 19)
+
+        assertTrue(store.readPendingReadStateMutations().isEmpty())
+        assertTrue(store.readPendingSavedStateMutations().isEmpty())
+        assertEquals(false, store.readArticleDetail("ordered-ack")?.isRead)
+        assertEquals(false, store.readArticleDetail("ordered-ack")?.isSaved)
+        assertEquals(20, store.queueReadStateMutation("ordered-ack", true).baseRevision)
+        assertEquals(20, store.queueSavedStateMutation("ordered-ack", true).baseRevision)
+    }
+
+    @Test
+    fun `a stale or unversioned snapshot cannot undo a confirmed state after reopening`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("snapshot").copy(isRead = true, isSaved = true, readRevision = 10, savedRevision = 10))
+        reopenStore()
+        store.writeArticleDetail(sampleDetail("snapshot").copy(readRevision = 9, savedRevision = 9))
+        store.writeArticleDetail(sampleDetail("snapshot"))
+
+        assertEquals(true, store.readArticleDetail("snapshot")?.isRead)
+        assertEquals(true, store.readArticleDetail("snapshot")?.isSaved)
+        assertEquals(10, store.queueReadStateMutation("snapshot", false).baseRevision)
+        assertEquals(10, store.queueSavedStateMutation("snapshot", false).baseRevision)
+    }
+
+    @Test
+    fun `an old conflict cannot rebase a newer local intent or lower its known revision`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("conflict"))
+        val oldRead = store.queueReadStateMutation("conflict", true)
+        val oldSaved = store.queueSavedStateMutation("conflict", true)
+        store.updateArticleReadState("conflict", true, 20)
+        store.updateArticleSavedState("conflict", true, 20)
+        val newRead = store.queueReadStateMutation("conflict", false)
+        val newSaved = store.queueSavedStateMutation("conflict", false)
+
+        store.rebaseReadStateMutation(oldRead, 10)
+        store.rebaseSavedStateMutation(oldSaved, 10)
+
+        assertEquals(newRead, store.readPendingReadStateMutations().single())
+        assertEquals(newSaved, store.readPendingSavedStateMutations().single())
+        assertEquals(20, newRead.baseRevision)
+        assertEquals(20, newSaved.baseRevision)
+    }
+
+    @Test
+    fun `page and search snapshots preserve known revisions and update existing offline bodies`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("snapshots").copy(contentText = "Keep this body", contentHtml = "<p>Keep this body</p>"))
+        val fresh = sampleArticle("snapshots").copy(isRead = true, isSaved = true, readRevision = 20, savedRevision = 20)
+        store.writeArticleRemotePage("state-page", ApiListResponse(listOf(fresh), null, false), true)
+        val stale = fresh.copy(isRead = false, isSaved = false, readRevision = 19, savedRevision = null)
+        val effective = store.reconcileArticleSnapshots(listOf(stale)).single()
+        assertEquals(true, effective.isRead)
+        assertEquals(true, effective.isSaved)
+        assertEquals(20, effective.savedRevision)
+        reopenStore()
+        val detail = requireNotNull(store.readArticleDetail(fresh.id))
+        assertEquals(true, detail.isRead)
+        assertEquals(true, detail.isSaved)
+        assertEquals("Keep this body", detail.contentText)
+        assertEquals("<p>Keep this body</p>", detail.contentHtml)
+    }
+
+    @Test
+    fun `bulk receipt cannot replace versioned unread state or its rejection baseline`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("bulk-versioned").copy(readRevision = 20))
+        val pending = store.queueReadStateMutation("bulk-versioned", false)
+        val result = store.markArticlesReadByFeeds(setOf("f-1"))
+        assertEquals(mapOf("bulk-versioned" to "f-1"), result.unreadArticleFeeds)
+        assertEquals(false, store.readPendingReadStateMutations().single().previousState)
+        assertEquals(false, store.discardReadStateMutation(pending).effectiveState)
+        reopenStore()
+        assertEquals(false, store.readArticleDetail("bulk-versioned")?.isRead)
+        assertEquals(true, store.updateArticleReadState("bulk-versioned", true, 21))
+    }
+
+    @Test
+    fun `unknown legacy rejection does not promote the rejected optimistic projection`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("legacy-unknown").copy(isRead = true, isSaved = true))
+        val dao = database.localStoreDao()
+        dao.upsertArticleStateRevision(ArticleStateRevisionEntity("legacy-unknown", null, null))
+        val read = store.queueReadStateMutation("legacy-unknown", true)
+        val saved = store.queueSavedStateMutation("legacy-unknown", true)
+        assertEquals(ArticleStateMutationResult(true, null), store.discardReadStateMutation(read))
+        assertEquals(ArticleStateMutationResult(true, null), store.discardSavedStateMutation(saved))
+        reopenStore()
+        assertNotNull(store.readArticleDetail("legacy-unknown"))
+        assertNull(store.queueReadStateMutation("legacy-unknown", false).previousState)
+        assertNull(store.queueSavedStateMutation("legacy-unknown", false).previousState)
+    }
+
+    @Test
+    fun `legacy revision without confirmed value keeps readable content until an equal version hydrates it`() = runBlocking {
+        database.localStoreDao().upsertArticleStateRevision(ArticleStateRevisionEntity("legacy-version", 20, 20))
+        store.writeArticleDetail(sampleDetail("legacy-version").copy(contentText = "Readable", readRevision = 19, savedRevision = 19))
+        store.writeArticleDetail(sampleDetail("legacy-version").copy(contentText = "Still readable"))
+        assertEquals("Still readable", store.readArticleDetail("legacy-version")?.contentText)
+        val pending = store.queueReadStateMutation("legacy-version", false)
+        assertEquals(20, pending.baseRevision)
+        assertNull(pending.previousState)
+        assertEquals(ArticleStateMutationResult(true, null), store.discardReadStateMutation(pending))
+        assertEquals(true, store.updateArticleReadState("legacy-version", true, 20))
+        assertEquals(true, store.updateArticleSavedState("legacy-version", true, 20))
+        reopenStore()
+        assertEquals(true, store.readArticleDetail("legacy-version")?.isRead)
+        assertEquals(true, store.readArticleDetail("legacy-version")?.isSaved)
+    }
+
+    @Test
+    fun `an obsolete conflict learns the new baseline without replacing the latest intent id`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("late-conflict"))
+        val old = store.queueReadStateMutation("late-conflict", true)
+        val current = store.queueReadStateMutation("late-conflict", false)
+        store.rebaseReadStateMutation(old, 30, read = true)
+        val remaining = store.readPendingReadStateMutations().single()
+        assertEquals(current.mutationId, remaining.mutationId)
+        assertEquals(false, remaining.read)
+        assertEquals(true, remaining.previousState)
+        assertEquals(true, store.discardReadStateMutation(current).effectiveState)
+        assertEquals(true, store.readArticleDetail("late-conflict")?.isRead)
+    }
+
+    @Test
+    fun `rejected stale search metadata does not invalidate a loaded paging source`() = runBlocking {
+        val article = sampleArticle("stable-page").copy(readRevision = 20, savedRevision = 20)
+        store.writeArticleRemotePage("stable", ApiListResponse(listOf(article), null, false), true)
+        val source = store.articlePagingSource("stable", ownerId = null)
+        source.load(PagingSource.LoadParams.Refresh<Int>(null, 30, false))
+        store.reconcileArticleSnapshots(listOf(article))
+        store.reconcileArticleSnapshots(listOf(article.copy(isRead = true, isSaved = true, readRevision = 19, savedRevision = 19)))
+        database.invalidationTracker.refreshVersionsSync()
+        assertFalse(source.invalid)
+    }
+
+    @Test
+    fun `unchanged and stale metadata pages do not read or rewrite cached body bytes`() = runBlocking {
+        val body = "<p>Cached reader body</p>".repeat(8_192)
+        val articles = (1..20).map { index ->
+            val id = "large-body-$index"
+            store.writeArticleDetail(sampleDetail(id).copy(contentHtml = body, readRevision = 20, savedRevision = 20))
+            sampleArticle(id).copy(readRevision = 20, savedRevision = 20)
+        }
+        captureQueries = true
+        try {
+            store.writeArticleRemotePage("metadata", ApiListResponse(articles, null, false), true)
+            store.reconcileArticleSnapshots(articles.map { it.copy(readRevision = 19, savedRevision = null) })
+        } finally { captureQueries = false }
+        assertTrue("Metadata reconciliation traversed body bytes: ${queries.filter { it.contains("article_details") }}",
+            queries.none { it.startsWith("SELECT * FROM article_details") || it.startsWith("INSERT OR REPLACE INTO `article_details`") })
+    }
+
+    @Test
+    fun `bulk initialization preserves a legacy pending save baseline without a revision row`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("legacy-bulk-save").copy(isSaved = true))
+        val pending = store.queueSavedStateMutation("legacy-bulk-save", false)
+        database.localStoreDao().clearArticleStateRevisions()
+        store.markArticlesReadByFeeds(setOf("f-1"))
+        assertEquals(true, store.discardSavedStateMutation(pending).effectiveState)
+        assertEquals(true, store.readArticleDetail("legacy-bulk-save")?.isSaved)
+    }
+
+    @Test
+    fun `bulk initialization preserves a saved legacy body without an article row`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("legacy-bulk-body").copy(isSaved = true))
+        database.localStoreDao().clearArticleStateRevisions()
+        store.markArticlesReadByFeeds(setOf("f-1"))
+        val pending = store.queueSavedStateMutation("legacy-bulk-body", false)
+        assertEquals(true, pending.previousState)
+        assertEquals(true, store.discardSavedStateMutation(pending).effectiveState)
+        assertEquals(true, store.readArticleDetail("legacy-bulk-body")?.isSaved)
     }
 
     @Test
@@ -78,7 +297,7 @@ class LocalStoreTest {
         val save = store.queueSavedStateMutation("a-1", true)
         assertEquals(2, store.observePendingArticleChanges().first())
 
-        val reopened = LocalStore(ApplicationProvider.getApplicationContext(), moshi)
+        val reopened = reopenStore()
         assertEquals(2, reopened.observePendingArticleChanges().first())
         reopened.acknowledgeReadStateMutation(firstRead, true, 1)
         assertEquals(2, reopened.observePendingArticleChanges().first())
@@ -106,7 +325,7 @@ class LocalStoreTest {
         store.writeArticleDetail(sampleDetail("a-1").copy(contentText = "Downloaded body", isSaved = false))
         assertTrue(store.observeArticleTextAvailability("a-1").first())
 
-        val reopened = LocalStore(ApplicationProvider.getApplicationContext(), moshi)
+        val reopened = reopenStore()
         assertTrue(reopened.observeArticleTextAvailability("a-1").first())
         reopened.writeArticleDetail(sampleDetail("a-1").copy(contentHtml = "<p>Downloaded HTML body</p>"))
         assertTrue(reopened.observeArticleTextAvailability("a-1").first())
@@ -308,7 +527,7 @@ class LocalStoreTest {
         val old = store.queueSavedStateMutation("newer-save", saved = true)
         val current = store.queueSavedStateMutation("newer-save", saved = false)
 
-        assertEquals(null, store.discardSavedStateMutation(old))
+        assertFalse(store.discardSavedStateMutation(old).removedMatchingIntent)
         assertEquals(current.mutationId, store.readPendingSavedStateMutations().single().mutationId)
         assertEquals(false, store.readArticleDetail("newer-save")?.isSaved)
     }

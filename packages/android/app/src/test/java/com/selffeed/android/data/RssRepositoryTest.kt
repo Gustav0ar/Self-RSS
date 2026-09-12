@@ -1552,6 +1552,85 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `search results and cache hits project current Room state without admitting old flags`() = runTest {
+        val id = "search-state"
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(sampleArticleDetail(id, false))
+        repository.article(id)
+        val remote = sampleArticle(id).copy(readRevision = 10, savedRevision = 10)
+        coEvery { api.search("state", categoryId = null, cursor = null, session = any()) } returns
+            ApiListResponse(listOf(remote), null, false)
+        assertEquals(false, (repository.search("state") as AppResult.Success).data.data.single().isSaved)
+
+        repository.updateCachedReadState(id, true, 20)
+        repository.updateCachedSavedState(id, true, 20)
+        val stale = remote.copy(readRevision = 19, savedRevision = 19)
+        coEvery { api.search("state", categoryId = null, cursor = null, session = any()) } returns
+            ApiListResponse(listOf(stale), null, false)
+        val refreshed = (repository.search("state") as AppResult.Success).data.data.single()
+        assertEquals(true, refreshed.isRead)
+        assertEquals(true, refreshed.isSaved)
+        assertEquals(20, refreshed.readRevision)
+        assertEquals(true, repository.cachedArticleDetail(id)?.isSaved)
+        localStore.queueSavedStateMutation(id, false)
+        assertEquals(false, (repository.search("state") as AppResult.Success).data.data.single().isSaved)
+        // A cached search row is a projection, not a new confirmation of the pending flag.
+        assertEquals(true, localStore.readPendingSavedStateMutations().single().previousState)
+    }
+
+    @Test
+    fun `a paginated search response cannot overwrite a newer receipt in the reader cache`() = runTest {
+        val id = "search-next"
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(sampleArticleDetail(id, false))
+        repository.article(id)
+        repository.updateCachedReadState(id, true, 20)
+        coEvery { api.search("state", categoryId = null, cursor = "next", session = any()) } returns
+            ApiListResponse(listOf(sampleArticle(id).copy(readRevision = 19)), null, false)
+        val result = (repository.search("state", null, "next") as AppResult.Success).data.data.single()
+        assertEquals(true, result.isRead)
+        assertEquals(20, result.readRevision)
+        assertEquals(true, repository.cachedArticleDetail(id)?.isRead)
+    }
+
+    @Test
+    fun `unversioned bulk receipts retain known unread state in RAM and Room`() = runTest {
+        val id = "bulk-known"
+        every { sessionStore.getAccessToken() } returns "token"
+        val detail = sampleArticleDetail(id, false).copy(readRevision = 20)
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(detail)
+        repository.article(id)
+        val result = repository.markCachedArticlesReadByFeeds(setOf(detail.feedId))
+        assertEquals(mapOf(id to detail.feedId), result.unreadArticleFeeds)
+        assertEquals(false, repository.cachedArticleDetail(id)?.isRead)
+        assertEquals(false, (repository.article(id) as AppResult.Success).data.isRead)
+        assertEquals(false, localStore.readArticleDetail(id)?.isRead)
+    }
+
+    @Test
+    fun `saved list confirmation uses the response revision before publishing to RAM`() = runTest {
+        val id = "saved-revision"
+        cacheSavedArticles(id)
+        every { sessionStore.getAccessToken() } returns "token"
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(
+            sampleArticleDetail(id, false).copy(isSaved = true, savedRevision = 20),
+        )
+        repository.refreshArticleDetail(id)
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(
+            sampleArticleDetail(id, false).copy(isSaved = false, savedRevision = 19),
+        )
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
+        assertEquals(true, repository.cachedArticleDetail(id)?.isSaved)
+        assertEquals(true, localStore.readArticleDetail(id)?.isSaved)
+        coEvery { api.article(id, session = any()) } returns ApiEnvelope(
+            sampleArticleDetail(id, false).copy(isSaved = false, savedRevision = 21),
+        )
+        assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
+        assertEquals(false, repository.cachedArticleDetail(id)?.isSaved)
+        assertEquals(false, localStore.readArticleDetail(id)?.isSaved)
+    }
+
+    @Test
     fun `saved reconciliation confirms remote unsaves and deletions while retaining cached content`() = runTest {
         cacheSavedArticles("unsaved", "deleted")
         every { sessionStore.getAccessToken() } returns "test-session"

@@ -177,6 +177,8 @@ data class ArticleListItem(
     val displayedAt: String? = null,
     val isRead: Boolean,
     val isSaved: Boolean = false,
+    val readRevision: Int? = null,
+    val savedRevision: Int? = null,
     val contentStatus: String = "feed_ready",
     val contentVersion: Int = 1,
 )
@@ -215,6 +217,8 @@ data class ArticleDetail(
     val media: List<ArticleMedia> = emptyList(),
     val isRead: Boolean,
     val isSaved: Boolean = false,
+    val readRevision: Int? = null,
+    val savedRevision: Int? = null,
     val isEnriched: Boolean = false,
     val contentStatus: String = "feed_ready",
     val contentVersion: Int = 1,

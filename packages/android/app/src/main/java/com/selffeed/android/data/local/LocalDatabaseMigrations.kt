@@ -3,7 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-const val LOCAL_DATABASE_VERSION = 8
+const val LOCAL_DATABASE_VERSION = 9
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -127,6 +127,34 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(db: SupportSQLiteDatabase) = db.createOwnershipTables()
 }
 
+/** Retain confirmed values independently of optimistic rows; legacy values start unknown. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE article_state_revisions ADD COLUMN confirmedReadState INTEGER")
+        db.execSQL("ALTER TABLE article_state_revisions ADD COLUMN confirmedSavedState INTEGER")
+        // Old unversioned writes could replace a flag while retaining its revision.
+        // Only a versioned response can establish those pairs after this upgrade.
+        // An unversioned pending row can use its prior state, including NULL.
+        db.execSQL("""
+            UPDATE article_state_revisions SET
+                confirmedReadState = CASE WHEN readRevision IS NOT NULL THEN NULL WHEN EXISTS (
+                    SELECT 1 FROM pending_read_state_mutations p WHERE p.articleId = article_state_revisions.articleId
+                ) THEN (
+                    SELECT previousState FROM pending_read_state_mutations p WHERE p.articleId = article_state_revisions.articleId
+                ) ELSE (
+                    SELECT isRead FROM articles a WHERE a.id = article_state_revisions.articleId
+                ) END,
+                confirmedSavedState = CASE WHEN savedRevision IS NOT NULL THEN NULL WHEN EXISTS (
+                    SELECT 1 FROM pending_saved_state_mutations p WHERE p.articleId = article_state_revisions.articleId
+                ) THEN (
+                    SELECT previousState FROM pending_saved_state_mutations p WHERE p.articleId = article_state_revisions.articleId
+                ) ELSE (
+                    SELECT isSaved FROM articles a WHERE a.id = article_state_revisions.articleId
+                ) END
+        """.trimIndent())
+    }
+}
+
 private fun SupportSQLiteDatabase.createOwnershipTables() {
     execSQL("""
         CREATE TABLE IF NOT EXISTS current_local_owner (
@@ -182,4 +210,5 @@ val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
         MIGRATION_6_7,
         MIGRATION_6_8,
         MIGRATION_7_8,
+        MIGRATION_8_9,
     )

@@ -145,6 +145,9 @@ class LocalStore internal constructor(
                 dao.readArticle(articleId)?.isSaved != true
             ) return@withTransaction false
 
+            // A 404 proves absence only while the captured state and intent remain unchanged.
+            val state = stateRecord(articleId)
+            dao.upsertArticleStateRevision(state.copy(confirmedSavedState = null))
             dao.updateArticleSavedState(articleId, false)
             dao.readArticleDetail(articleId)?.let { entity ->
                 runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
@@ -166,22 +169,16 @@ class LocalStore internal constructor(
         queryKey: String,
         payload: ApiListResponse<ArticleListItem>,
         clearExisting: Boolean,
-    ) {
-        database.withTransaction {
-            val pendingReads = dao.readPendingReadStateMutations().associateBy { it.articleId }
-            val pendingSaves = dao.readPendingSavedStateMutations().associateBy { it.articleId }
+    ): List<ArticleListItem> {
+        val articles = database.withTransaction {
+            val effective = mergeArticleSnapshots(payload.data)
             if (clearExisting) {
                 dao.clearArticleQueryEntries(queryKey)
                 dao.clearArticleRemoteKey(queryKey)
             }
             if (payload.data.isNotEmpty()) {
                 dao.upsertArticles(
-                    payload.data.map { article ->
-                        article.copy(
-                            isRead = pendingReads[article.id]?.read ?: article.isRead,
-                            isSaved = pendingSaves[article.id]?.saved ?: article.isSaved,
-                        ).toEntity()
-                    },
+                    effective.map { it.toEntity() },
                 )
                 val startPosition = dao.maxArticleQueryPosition(queryKey) + 1
                 dao.upsertArticleQueryEntries(
@@ -205,8 +202,106 @@ class LocalStore internal constructor(
             dao.pruneArticleRemoteKeys(MAX_CACHED_ARTICLE_QUERIES)
             dao.pruneArticleQueryEntries()
             dao.pruneOrphanArticles()
+            effective
         }
         notifyInvalidation(TABLE_ARTICLES)
+        return articles
+    }
+
+    /** Accept server snapshots without adding search results to a paged query. */
+    suspend fun reconcileArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
+        database.withTransaction { mergeArticleSnapshots(articles) }
+
+    private suspend fun mergeArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
+        articles.map { article ->
+            val state = stateRecord(article.id)
+            val read = ConfirmedArticleState(state.confirmedReadState, state.readRevision)
+            val saved = ConfirmedArticleState(state.confirmedSavedState, state.savedRevision)
+            // Repeated and stale metadata pages must not traverse full reader bodies.
+            if (read.merge(article.isRead, article.readRevision) != read) {
+                mergeReadState(article.id, article.isRead, article.readRevision)
+            }
+            if (saved.merge(article.isSaved, article.savedRevision) != saved) {
+                mergeSavedState(article.id, article.isSaved, article.savedRevision)
+            }
+            projectArticleSnapshot(article)
+        }
+
+    /** Cache hits already contain local projections, so they must never be readmitted as server facts. */
+    suspend fun projectArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
+        database.withTransaction { articles.map { projectArticleSnapshot(it) } }
+
+    private suspend fun projectArticleSnapshot(article: ArticleListItem): ArticleListItem {
+        val state = dao.readArticleStateRevision(article.id)
+        return article.copy(
+            isRead = dao.readPendingReadStateMutation(article.id)?.read ?: state?.confirmedReadState ?: article.isRead,
+            isSaved = dao.readPendingSavedStateMutation(article.id)?.saved ?: state?.confirmedSavedState ?: article.isSaved,
+            readRevision = if (state?.confirmedReadState != null) state.readRevision else article.readRevision,
+            savedRevision = if (state?.confirmedSavedState != null) state.savedRevision else article.savedRevision,
+        )
+    }
+
+    private suspend fun stateRecord(articleId: String): ArticleStateRevisionEntity {
+        // A persisted unknown value must stay unknown, including after rejection.
+        // Never recover a rejected optimistic projection as a confirmed baseline.
+        dao.readArticleStateRevision(articleId)?.let { return it }
+        val read = dao.readPendingReadStateMutation(articleId)
+        val saved = dao.readPendingSavedStateMutation(articleId)
+        val article = dao.readArticle(articleId)
+        val detail = if (article == null && (read == null || saved == null)
+        ) dao.readArticleDetail(articleId)?.let { decodeDetail(it) } else null
+        val recovered = ArticleStateRevisionEntity(
+            articleId, null, null,
+            confirmedReadState = if (read != null) read.previousState else article?.isRead ?: detail?.isRead,
+            confirmedSavedState = if (saved != null) saved.previousState else article?.isSaved ?: detail?.isSaved,
+        )
+        dao.upsertArticleStateRevision(recovered)
+        return recovered
+    }
+
+    private fun decodeDetail(entity: ArticleDetailEntity): ArticleDetail? =
+        runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()
+
+    private suspend fun mergeReadState(articleId: String, read: Boolean, revision: Int?): Boolean? {
+        val existing = stateRecord(articleId)
+        val confirmed = ConfirmedArticleState(existing.confirmedReadState, existing.readRevision).merge(read, revision)
+        dao.upsertArticleStateRevision(existing.copy(readRevision = confirmed.revision, confirmedReadState = confirmed.value))
+        val pending = dao.readPendingReadStateMutation(articleId)
+        if (pending != null && pending.previousState != confirmed.value) {
+            dao.upsertPendingReadStateMutation(pending.copy(previousState = confirmed.value))
+        }
+        val visible = pending?.read ?: confirmed.value
+        if (visible != null) {
+            dao.updateArticleReadState(articleId, visible)
+            dao.readArticleDetail(articleId)?.let { entity ->
+                decodeDetail(entity)?.let { detail ->
+                    dao.upsertArticleDetail(entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = visible, readRevision = confirmed.revision))))
+                }
+            }
+        }
+        if (pending != null) dao.upsertArticleReadOverride(articleId.toReadOverride(pending.read))
+        else dao.deleteArticleReadOverride(articleId)
+        return visible
+    }
+
+    private suspend fun mergeSavedState(articleId: String, saved: Boolean, revision: Int?): Boolean? {
+        val existing = stateRecord(articleId)
+        val confirmed = ConfirmedArticleState(existing.confirmedSavedState, existing.savedRevision).merge(saved, revision)
+        dao.upsertArticleStateRevision(existing.copy(savedRevision = confirmed.revision, confirmedSavedState = confirmed.value))
+        val pending = dao.readPendingSavedStateMutation(articleId)
+        if (pending != null && pending.previousState != confirmed.value) {
+            dao.upsertPendingSavedStateMutation(pending.copy(previousState = confirmed.value))
+        }
+        val visible = pending?.saved ?: confirmed.value
+        if (visible != null) {
+            dao.updateArticleSavedState(articleId, visible)
+            dao.readArticleDetail(articleId)?.let { entity ->
+                decodeDetail(entity)?.let { detail ->
+                    dao.upsertArticleDetail(entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = visible, savedRevision = confirmed.revision))))
+                }
+            }
+        }
+        return visible
     }
 
     suspend fun queueReadStateMutation(
@@ -217,7 +312,8 @@ class LocalStore internal constructor(
         lateinit var queued: PendingReadStateMutationEntity
         database.withTransaction {
             val previous = dao.readPendingReadStateMutation(articleId)
-            val revision = dao.readArticleStateRevision(articleId)?.readRevision
+            val state = stateRecord(articleId)
+            val revision = state.readRevision
             val detailEntity = dao.readArticleDetail(articleId)
             val detail = detailEntity?.let {
                 runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
@@ -227,8 +323,8 @@ class LocalStore internal constructor(
                 read = read,
                 mutationId = UUID.randomUUID().toString(),
                 source = source,
-                baseRevision = previous?.baseRevision ?: revision,
-                previousState = previous?.previousState ?: dao.readArticle(articleId)?.isRead ?: detail?.isRead,
+                baseRevision = listOfNotNull(previous?.baseRevision, revision).maxOrNull(),
+                previousState = state.confirmedReadState,
                 updatedAt = System.currentTimeMillis(),
             )
             dao.upsertArticleReadOverride(articleId.toReadOverride(read))
@@ -252,13 +348,14 @@ class LocalStore internal constructor(
         database.withTransaction {
             if (!saved) dao.removeLegacyOfflineArticle(articleId)
             val previous = dao.readPendingSavedStateMutation(articleId)
-            val revision = dao.readArticleStateRevision(articleId)?.savedRevision
+            val state = stateRecord(articleId)
+            val revision = state.savedRevision
             val detailEntity = dao.readArticleDetail(articleId)
             val detail = detailEntity?.let {
                 runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
             }
             val article = dao.readArticle(articleId)
-            val previousState = previous?.previousState ?: article?.isSaved ?: detail?.isSaved
+            val previousState = state.confirmedSavedState
             if (article == null && detail != null) {
                 dao.upsertArticles(listOf(detail.toArticleEntity(saved)))
             }
@@ -266,7 +363,7 @@ class LocalStore internal constructor(
                 articleId = articleId,
                 saved = saved,
                 mutationId = UUID.randomUUID().toString(),
-                baseRevision = previous?.baseRevision ?: revision,
+                baseRevision = listOfNotNull(previous?.baseRevision, revision).maxOrNull(),
                 previousState = previousState,
                 updatedAt = System.currentTimeMillis(),
             )
@@ -282,89 +379,56 @@ class LocalStore internal constructor(
         return queued
     }
 
-    suspend fun updateArticleReadState(articleId: String, read: Boolean, revision: Int? = null): Boolean {
-        var visibleState = read
-        database.withTransaction {
-            val pending = dao.readPendingReadStateMutation(articleId)
-            visibleState = pending?.read ?: read
-            dao.updateArticleReadState(articleId, visibleState)
-            if (pending != null) {
-                dao.upsertPendingReadStateMutation(pending.copy(previousState = read))
-                dao.upsertArticleReadOverride(articleId.toReadOverride(visibleState))
-            } else {
-                dao.deleteArticleReadOverride(articleId)
-            }
-            dao.readArticleDetail(articleId)?.let { entity ->
-                runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                    dao.upsertArticleDetail(
-                        entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = visibleState))),
-                    )
-                }
-            }
-            if (revision != null) {
-                val existing = dao.readArticleStateRevision(articleId)
-                dao.upsertArticleStateRevision(
-                    ArticleStateRevisionEntity(articleId, revision, existing?.savedRevision),
-                )
-            }
-        }
+    suspend fun updateArticleReadState(articleId: String, read: Boolean, revision: Int? = null): Boolean? {
+        val visible = database.withTransaction { mergeReadState(articleId, read, revision) }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
-        return visibleState
+        return visible
     }
 
-    suspend fun updateArticleSavedState(articleId: String, saved: Boolean, revision: Int? = null): Boolean {
-        var visibleState = saved
-        database.withTransaction {
-            val pending = dao.readPendingSavedStateMutation(articleId)
-            visibleState = pending?.saved ?: saved
-            dao.updateArticleSavedState(articleId, visibleState)
-            if (pending != null) {
-                dao.upsertPendingSavedStateMutation(pending.copy(previousState = saved))
-            }
-            dao.readArticleDetail(articleId)?.let { entity ->
-                runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                    dao.upsertArticleDetail(
-                        entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = visibleState))),
-                    )
-                }
-            }
-            if (revision != null) {
-                val existing = dao.readArticleStateRevision(articleId)
-                dao.upsertArticleStateRevision(
-                    ArticleStateRevisionEntity(articleId, existing?.readRevision, revision),
-                )
-            }
-        }
+    suspend fun updateArticleSavedState(articleId: String, saved: Boolean, revision: Int? = null): Boolean? {
+        val visible = database.withTransaction { mergeSavedState(articleId, saved, revision) }
         notifyInvalidation(TABLE_ARTICLES)
-        return visibleState
+        return visible
     }
 
     suspend fun readArticleReadOverrides(): Map<String, Boolean> =
         dao.readArticleReadOverrides().associate { it.articleId to it.read }
 
     suspend fun markArticlesReadByFeeds(feedIds: Collection<String>): BulkReadReconciliation {
-        val unreadArticleFeeds = mutableMapOf<String, String>()
-        var locallyHandledCount = 0
-        val pendingArticleIds = mutableSetOf<String>()
-        database.withTransaction {
-            val pending = dao.readPendingReadStateMutations()
-            for (mutation in pending) {
-                val feedId = dao.readArticle(mutation.articleId)?.feedId
-                    ?: dao.readArticleDetail(mutation.articleId)?.let {
-                        it.feedId ?: runCatching { articleDetailAdapter.fromJson(it.payloadJson)?.feedId }.getOrNull()
-                    }
+        val result = database.withTransaction {
+            val pending = dao.readPendingReadStateMutations().associateBy { it.articleId }
+            val scoped = dao.readArticleStatesByFeeds(feedIds.distinct(), feedIds.isEmpty())
+            val unreadArticleFeeds = mutableMapOf<String, String>()
+            val pendingArticleIds = mutableSetOf<String>()
+            var locallyHandledCount = 0
+            val states = ArrayList<ArticleStateRevisionEntity>(scoped.size)
+            val overrides = ArrayList<ArticleReadOverrideEntity>(scoped.size)
+            val affectedArticleIds = mutableSetOf<String>()
+            for ((stored, metadataFeedId, cachedReadState, hasStateRecord) in scoped) {
+                val feedId = metadataFeedId ?: dao.readArticleDetail(stored.articleId)?.let { decodeDetail(it)?.feedId }
                 if (feedIds.isNotEmpty() && feedId !in feedIds) continue
-                pendingArticleIds += mutation.articleId
-                if (!mutation.read && feedId != null) unreadArticleFeeds[mutation.articleId] = feedId
-                // The server counted this receipt, but the local choice already
-                // controls the UI and must not change its unread total again.
-                if (mutation.previousState == false) locallyHandledCount++
-                dao.upsertPendingReadStateMutation(mutation.copy(previousState = true))
+                val state = if (hasStateRecord) stored else stateRecord(stored.articleId)
+                affectedArticleIds += state.articleId
+                // Bulk receipts carry no per-article version. They are only a refresh
+                // hint once a versioned state is known, even if the value is unknown.
+                val confirmed = ConfirmedArticleState(state.confirmedReadState, state.readRevision).merge(true, null)
+                states += state.copy(confirmedReadState = confirmed.value)
+                val mutation = pending[state.articleId]
+                if (mutation != null) {
+                    pendingArticleIds += state.articleId
+                    if (mutation.previousState == false) locallyHandledCount++
+                    dao.upsertPendingReadStateMutation(mutation.copy(previousState = confirmed.value))
+                }
+                val visible = mutation?.read ?: confirmed.value ?: cachedReadState
+                if (visible != null) overrides += state.articleId.toReadOverride(visible)
+                if (visible == false && feedId != null) unreadArticleFeeds[state.articleId] = feedId
             }
-            dao.markArticleReadOverridesByFeeds(feedIds.distinct(), feedIds.isEmpty(), System.currentTimeMillis())
+            dao.upsertArticleStateRevisions(states)
+            dao.upsertArticleReadOverrides(overrides)
+            BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount, pendingArticleIds, affectedArticleIds)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
-        return BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount, pendingArticleIds)
+        return result
     }
 
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity> =
@@ -389,113 +453,84 @@ class LocalStore internal constructor(
         mutation: PendingReadStateMutationEntity,
         read: Boolean,
         revision: Int,
-    ): Boolean {
-        var acknowledged = false
-        database.withTransaction {
-            if (dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0) {
-                acknowledged = true
-                dao.updateArticleReadState(mutation.articleId, read)
-                dao.readArticleDetail(mutation.articleId)?.let { entity ->
-                    runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                        dao.upsertArticleDetail(
-                            entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = read))),
-                        )
-                    }
-                }
-                val existing = dao.readArticleStateRevision(mutation.articleId)
-                dao.upsertArticleStateRevision(
-                    ArticleStateRevisionEntity(mutation.articleId, revision, existing?.savedRevision),
-                )
-                dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
-            }
+    ): ArticleStateMutationResult {
+        val result = database.withTransaction {
+            // Recover the old baseline before removing its pending overlay.
+            stateRecord(mutation.articleId)
+            val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
+            ArticleStateMutationResult(removed, mergeReadState(mutation.articleId, read, revision))
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
-        return acknowledged
+        return result
     }
 
     suspend fun acknowledgeSavedStateMutation(
         mutation: PendingSavedStateMutationEntity,
         saved: Boolean,
         revision: Int,
-    ): Boolean {
-        var acknowledged = false
-        database.withTransaction {
-            if (dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0) {
-                acknowledged = true
-                dao.updateArticleSavedState(mutation.articleId, saved)
-                dao.readArticleDetail(mutation.articleId)?.let { entity ->
-                    runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                        dao.upsertArticleDetail(
-                            entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = saved))),
-                        )
-                    }
-                }
-                val existing = dao.readArticleStateRevision(mutation.articleId)
-                dao.upsertArticleStateRevision(
-                    ArticleStateRevisionEntity(mutation.articleId, existing?.readRevision, revision),
-                )
-            }
+    ): ArticleStateMutationResult {
+        val result = database.withTransaction {
+            stateRecord(mutation.articleId)
+            val removed = dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0
+            ArticleStateMutationResult(removed, mergeSavedState(mutation.articleId, saved, revision))
         }
         notifyInvalidation(TABLE_ARTICLES)
-        return acknowledged
+        return result
     }
 
-    suspend fun rebaseReadStateMutation(mutation: PendingReadStateMutationEntity, revision: Int) {
+    suspend fun rebaseReadStateMutation(mutation: PendingReadStateMutationEntity, revision: Int, read: Boolean? = null) {
         database.withTransaction {
+            if (read != null) mergeReadState(mutation.articleId, read, revision)
             val current = dao.readPendingReadStateMutation(mutation.articleId) ?: return@withTransaction
+            if (current.mutationId != mutation.mutationId) return@withTransaction
+            val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.readRevision ?: 0)
             dao.upsertPendingReadStateMutation(
-                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = revision),
+                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base),
             )
         }
     }
 
-    suspend fun rebaseSavedStateMutation(mutation: PendingSavedStateMutationEntity, revision: Int) {
+    suspend fun rebaseSavedStateMutation(mutation: PendingSavedStateMutationEntity, revision: Int, saved: Boolean? = null) {
         database.withTransaction {
+            if (saved != null) mergeSavedState(mutation.articleId, saved, revision)
             val current = dao.readPendingSavedStateMutation(mutation.articleId) ?: return@withTransaction
+            if (current.mutationId != mutation.mutationId) return@withTransaction
+            val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.savedRevision ?: 0)
             dao.upsertPendingSavedStateMutation(
-                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = revision),
+                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base),
             )
         }
     }
 
-    suspend fun discardReadStateMutation(mutation: PendingReadStateMutationEntity) {
-        database.withTransaction {
-            if (dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0) {
-                mutation.previousState?.let { previous ->
-                    dao.updateArticleReadState(mutation.articleId, previous)
-                    dao.readArticleDetail(mutation.articleId)?.let { entity ->
-                        runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                            dao.upsertArticleDetail(
-                                entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = previous))),
-                            )
-                        }
-                    }
+    suspend fun discardReadStateMutation(mutation: PendingReadStateMutationEntity): ArticleStateMutationResult {
+        val result = database.withTransaction {
+            val state = stateRecord(mutation.articleId)
+            val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
+            if (removed) {
+                state.confirmedReadState?.let { confirmed ->
+                    mergeReadState(mutation.articleId, confirmed, state.readRevision)
                 }
                 dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
             }
+            ArticleStateMutationResult(removed, state.confirmedReadState)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+        return result
     }
 
-    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): Boolean? {
-        var restoredState: Boolean? = null
-        database.withTransaction {
-            if (dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0) {
-                mutation.previousState?.let { previous ->
-                    restoredState = previous
-                    dao.updateArticleSavedState(mutation.articleId, previous)
-                    dao.readArticleDetail(mutation.articleId)?.let { entity ->
-                        runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
-                            dao.upsertArticleDetail(
-                                entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = previous))),
-                            )
-                        }
-                    }
+    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): ArticleStateMutationResult {
+        val result = database.withTransaction {
+            val state = stateRecord(mutation.articleId)
+            val removed = dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0
+            if (removed) {
+                state.confirmedSavedState?.let { confirmed ->
+                    mergeSavedState(mutation.articleId, confirmed, state.savedRevision)
                 }
             }
+            ArticleStateMutationResult(removed, state.confirmedSavedState)
         }
         notifyInvalidation(TABLE_ARTICLES)
-        return restoredState
+        return result
     }
 
     suspend fun clearAcknowledgedReadStateOverride(articleId: String) {
@@ -510,10 +545,9 @@ class LocalStore internal constructor(
 
     override suspend fun writeArticleDetail(detail: ArticleDetail) {
         database.withTransaction {
-            val stored = detail.copy(
-                isRead = dao.readPendingReadStateMutation(detail.id)?.read ?: detail.isRead,
-                isSaved = dao.readPendingSavedStateMutation(detail.id)?.saved ?: detail.isSaved,
-            )
+            mergeReadState(detail.id, detail.isRead, detail.readRevision)
+            mergeSavedState(detail.id, detail.isSaved, detail.savedRevision)
+            val stored = projectArticleDetail(detail)
             dao.upsertArticleDetail(
                 ArticleDetailEntity(
                     id = stored.id,
@@ -530,10 +564,18 @@ class LocalStore internal constructor(
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
-    suspend fun applyPendingArticleState(detail: ArticleDetail): ArticleDetail = detail.copy(
-        isRead = dao.readPendingReadStateMutation(detail.id)?.read ?: detail.isRead,
-        isSaved = dao.readPendingSavedStateMutation(detail.id)?.saved ?: detail.isSaved,
-    )
+    suspend fun applyPendingArticleState(detail: ArticleDetail): ArticleDetail =
+        database.withTransaction { projectArticleDetail(detail) }
+
+    private suspend fun projectArticleDetail(detail: ArticleDetail): ArticleDetail {
+        val state = dao.readArticleStateRevision(detail.id)
+        return detail.copy(
+            isRead = dao.readPendingReadStateMutation(detail.id)?.read ?: state?.confirmedReadState ?: detail.isRead,
+            isSaved = dao.readPendingSavedStateMutation(detail.id)?.saved ?: state?.confirmedSavedState ?: detail.isSaved,
+            readRevision = if (state?.confirmedReadState != null) state.readRevision else detail.readRevision,
+            savedRevision = if (state?.confirmedSavedState != null) state.savedRevision else detail.savedRevision,
+        )
+    }
 
     fun observePendingArticleChanges(): Flow<Int> = dao.observePendingArticleChanges().distinctUntilChanged()
 
@@ -566,7 +608,7 @@ class LocalStore internal constructor(
 
     private suspend fun readableArticleDetail(detail: ArticleDetailEntity?): ArticleDetail? {
         detail ?: return null
-        val parsed = runCatching { articleDetailAdapter.fromJson(detail.payloadJson) }.getOrNull()
+        val parsed = decodeDetail(detail)?.let { projectArticleDetail(it) }
         if (System.currentTimeMillis() - detail.writtenAt > MAX_ARTICLE_DETAIL_AGE_MS) {
             // A saved article is an explicit offline promise. It remains readable
             // until the user unsaves it or signs out, even after normal cache TTLs.

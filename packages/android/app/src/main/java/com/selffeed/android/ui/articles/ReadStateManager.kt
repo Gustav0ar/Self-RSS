@@ -216,7 +216,7 @@ class ReadStateManager @Inject constructor(
 
     private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
         val previous = currentArticleReadState(event.articleId)
-        val read = repository.updateCachedReadState(event.articleId, event.isRead, event.revision)
+        val read = repository.updateCachedReadState(event.articleId, event.isRead, event.revision) ?: return
         rememberArticleReadState(event.articleId, read)
         items = items.withReadState(event.articleId, read)
         selectedArticle = selectedArticle?.withReadState(event.articleId, read)
@@ -248,8 +248,11 @@ class ReadStateManager @Inject constructor(
             }
             val retainedUnread = reconciliation.unreadArticleFeeds.toMutableMap()
             for ((articleId, feedId) in affectedArticles) {
-                if (repository.updateCachedReadState(articleId, true)) retainedUnread.remove(articleId)
-                else retainedUnread[articleId] = feedId
+                when (repository.updateCachedReadState(articleId, true)) {
+                    true -> retainedUnread.remove(articleId)
+                    false -> retainedUnread[articleId] = feedId
+                    null -> if (currentArticleReadState(articleId) == false) retainedUnread[articleId] = feedId
+                }
             }
 
             // Local edits can run during either Room call. Merge them after the

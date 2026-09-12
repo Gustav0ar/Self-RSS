@@ -105,7 +105,7 @@ interface FeedRepository {
     suspend fun exportOpml(): AppResult<String>
 }
 
-data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean)
+data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean?)
 
 interface ArticleRepository {
     fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
@@ -144,7 +144,7 @@ interface ArticleRepository {
     fun readStateEvents(): Flow<ReadStateSyncEvent>
     suspend fun invalidateReadStateCaches(articleId: String? = null)
     suspend fun invalidateArticleContentCaches(articleId: String? = null)
-    suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int? = null): Boolean
+    suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int? = null): Boolean?
     suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int? = null)
     suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation
     suspend fun recordArticleCompletion(articleId: String) = Unit
@@ -201,4 +201,5 @@ data class BulkReadReconciliation(
     val locallyHandledCount: Int = 0,
     // Includes both read and unread choices already considered by this receipt.
     val pendingArticleIds: Set<String> = emptySet(),
+    val affectedArticleIds: Set<String> = emptySet(),
 )
