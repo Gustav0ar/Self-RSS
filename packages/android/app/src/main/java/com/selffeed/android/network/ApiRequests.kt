@@ -48,6 +48,9 @@ data class UpdateFeedRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class ArticleStateLookupRequest(val articleIds: List<String>)
+
+@JsonClass(generateAdapter = true)
 data class MarkReadRequest(
     val read: Boolean,
     val source: String = "manual",

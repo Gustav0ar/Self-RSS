@@ -3,6 +3,21 @@ package com.selffeed.android.network
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
+data class ArticleStateSnapshot(
+    val id: String,
+    val isRead: Boolean,
+    val isSaved: Boolean,
+    val readRevision: Int,
+    val savedRevision: Int,
+)
+
+@JsonClass(generateAdapter = true)
+data class ArticleStateLookupResponse(
+    val states: List<ArticleStateSnapshot>,
+    val missingIds: List<String>,
+)
+
+@JsonClass(generateAdapter = true)
 data class ApiEnvelope<T>(
     val data: T,
 )

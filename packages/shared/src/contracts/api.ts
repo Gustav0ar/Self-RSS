@@ -172,6 +172,16 @@ export interface ArticleDetail extends Article {
 	isEnriched: boolean;
 }
 
+export type ArticleStateSnapshot = Required<
+	Pick<ArticleListItem, 'id' | 'isRead' | 'isSaved' | 'readRevision' | 'savedRevision'>
+>;
+
+export interface ArticleStateLookupResponse {
+	states: ArticleStateSnapshot[];
+	/** Missing and unowned IDs are indistinguishable. Absence is not a false state. */
+	missingIds: string[];
+}
+
 export interface MarkAllReadResponse {
 	markedCount: number;
 	feedIds: string[];

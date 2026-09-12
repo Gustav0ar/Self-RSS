@@ -60,6 +60,8 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 		FeedWithCounts: 'FeedWithCounts',
 		ArticleListItem: 'ArticleListItem',
 		ArticleDetail: 'ArticleDetail',
+		ArticleStateSnapshot: 'ArticleStateSnapshot',
+		ArticleStateLookupResponse: 'ArticleStateLookupResponse',
 		Preferences: 'UserPreferences',
 		Stats: 'StatsResponse',
 		AppSettings: 'AppSettingsResponse',
