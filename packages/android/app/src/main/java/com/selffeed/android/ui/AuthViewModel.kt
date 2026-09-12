@@ -10,7 +10,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -42,28 +46,29 @@ class AuthViewModel @Inject constructor(
     private val _state = MutableStateFlow(AuthUiState())
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
+    private var initialized = false
+    private var authActionJob: Job? = null
+    private var passwordChangeJob: Job? = null
+
     init {
         viewModelScope.launch {
-            repository.authEvents().collectLatest { message ->
-                val signedOut = AuthUiState(
-                    loading = false,
-                    isAuthenticated = false,
-                    apiBaseUrl = repository.getApiBaseUrl(),
-                    errorMessage = PresentationText.dynamic(message),
-                )
-                _state.value = signedOut
-                val enabled = loadRegistrationEnabled()
-                // Registration metadata must not replace a login or edit made while it loaded.
-                _state.compareAndSet(signedOut, signedOut.copy(registrationEnabled = enabled))
+            repository.authEvents().collect { message ->
+                launchAuthAction {
+                    showSignedOut(
+                        repository.getApiBaseUrl(),
+                        PresentationText.dynamic(message),
+                    )
+                }
             }
         }
     }
 
     fun bootstrap() {
-        viewModelScope.launch {
+        if (initialized) return
+        launchAuthAction {
             val apiBaseUrl = repository.getApiBaseUrl()
             if (repository.isLoggedIn()) {
-                when (val result = repository.restoreSession()) {
+                when (val result = awaitActive { repository.restoreSession() }) {
                     is AppResult.Success -> _state.value = _state.value.copy(
                         loading = false,
                         isAuthenticated = true,
@@ -73,18 +78,8 @@ class AuthViewModel @Inject constructor(
                     )
 
                     is AppResult.Error -> {
-                        if (result.message == AUTH_LOST_MESSAGE) {
-                            val enabled = loadRegistrationEnabled()
-                            _state.value = _state.value.copy(
-                                loading = false,
-                                isAuthenticated = false,
-                                authMode = AuthMode.LOGIN,
-                                apiBaseUrl = apiBaseUrl,
-                                registrationEnabled = enabled,
-                                errorMessage = PresentationText.resource(R.string.auth_session_lost),
-                            )
-                        } else if (repository.canUseOfflineSession()) {
-                            repository.recordOfflineRestore()
+                        if (result.message != AUTH_LOST_MESSAGE && repository.canUseOfflineSession()) {
+                            awaitActive { repository.recordOfflineRestore() }
                             _state.value = _state.value.copy(
                                 loading = false,
                                 isAuthenticated = true,
@@ -92,15 +87,7 @@ class AuthViewModel @Inject constructor(
                                 errorMessage = null,
                             )
                         } else {
-                            val enabled = loadRegistrationEnabled()
-                            _state.value = _state.value.copy(
-                                loading = false,
-                                isAuthenticated = false,
-                                authMode = AuthMode.LOGIN,
-                                apiBaseUrl = apiBaseUrl,
-                                registrationEnabled = enabled,
-                                errorMessage = PresentationText.resource(R.string.auth_session_lost),
-                            )
+                            showSignedOut(apiBaseUrl, PresentationText.resource(R.string.auth_session_lost))
                         }
                     }
                 }
@@ -129,14 +116,10 @@ class AuthViewModel @Inject constructor(
     }
 
     fun login(email: String, password: String, apiBaseUrl: String) {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(
-                loading = true,
-                errorMessage = null,
-                statusMessage = null,
-            )
-            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launch
-            when (val result = repository.login(email.trim(), password)) {
+        launchAuthAction {
+            _state.value = signedOutWhileLoading()
+            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
+            when (val result = awaitActive { repository.login(email.trim(), password) }) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
@@ -162,14 +145,10 @@ class AuthViewModel @Inject constructor(
             )
             return
         }
-        viewModelScope.launch {
-            _state.value = _state.value.copy(
-                loading = true,
-                errorMessage = null,
-                statusMessage = null,
-            )
-            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launch
-            when (val result = repository.register(email.trim(), password)) {
+        launchAuthAction {
+            _state.value = signedOutWhileLoading()
+            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
+            when (val result = awaitActive { repository.register(email.trim(), password) }) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
@@ -187,26 +166,22 @@ class AuthViewModel @Inject constructor(
     }
 
     fun logout() {
-        viewModelScope.launch {
-            repository.logout()
-            val enabled = loadRegistrationEnabled()
-            _state.value = AuthUiState(
-                loading = false,
-                apiBaseUrl = repository.getApiBaseUrl(),
-                registrationEnabled = enabled,
-            )
+        launchAuthAction {
+            _state.value = signedOutWhileLoading()
+            awaitActive { repository.logout() }
+            showSignedOut(repository.getApiBaseUrl())
         }
     }
 
     fun changePassword(currentPassword: String, newPassword: String) {
-        if (_state.value.passwordChangePending) return
-        viewModelScope.launch {
-            _state.value = _state.value.copy(
-                passwordChangePending = true,
-                errorMessage = null,
-                statusMessage = null,
-            )
-            when (val result = repository.changePassword(currentPassword, newPassword)) {
+        if (!_state.value.isAuthenticated || _state.value.passwordChangePending) return
+        _state.value = _state.value.copy(
+            passwordChangePending = true,
+            errorMessage = null,
+            statusMessage = null,
+        )
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            when (val result = awaitActive { repository.changePassword(currentPassword, newPassword) }) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     user = result.data,
                     passwordChangePending = false,
@@ -220,24 +195,17 @@ class AuthViewModel @Inject constructor(
                 )
             }
         }
+        passwordChangeJob = job
+        job.start()
     }
 
     fun switchServerForExternalAction(serverOrigin: String) {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, errorMessage = null)
-            // Revoke the old session when reachable. Changing the base URL
-            // still clears local credentials if that best-effort call fails.
-            repository.logout()
-            when (val result = repository.setApiBaseUrl(serverOrigin)) {
-                is AppResult.Success -> {
-                    val enabled = loadRegistrationEnabled()
-                    _state.value = AuthUiState(
-                        loading = false,
-                        apiBaseUrl = result.data,
-                        registrationEnabled = enabled,
-                    )
-                }
-
+        launchAuthAction {
+            _state.value = signedOutWhileLoading()
+            // The local logout completes before a new server can receive credentials.
+            awaitActive { repository.logout() }
+            when (val result = awaitActive { repository.setApiBaseUrl(serverOrigin) }) {
+                is AppResult.Success -> showSignedOut(result.data)
                 is AppResult.Error -> _state.value = _state.value.copy(
                     loading = false,
                     errorMessage = result.message.toApiBaseUrlPresentationText(),
@@ -246,18 +214,51 @@ class AuthViewModel @Inject constructor(
         }
     }
 
+    /** A newer account command revokes earlier work before either can resume. */
+    private fun launchAuthAction(block: suspend () -> Unit) {
+        initialized = true
+        authActionJob?.cancel()
+        passwordChangeJob?.cancel()
+        // Store before starting: an undispatched callback can synchronously issue another command.
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) { block() }
+        authActionJob = job
+        job.start()
+    }
+
+    private fun signedOutWhileLoading() = AuthUiState(
+        apiBaseUrl = _state.value.apiBaseUrl,
+        authMode = _state.value.authMode,
+        registrationEnabled = _state.value.registrationEnabled,
+    )
+
+    private suspend fun showSignedOut(apiBaseUrl: String, error: PresentationText? = null) {
+        val signedOut = AuthUiState(loading = false, apiBaseUrl = apiBaseUrl, errorMessage = error)
+        _state.value = signedOut
+        val enabled = loadRegistrationEnabled()
+        // awaitActive excludes a newer command; preserve edits to unrelated fields.
+        _state.value = _state.value.copy(registrationEnabled = enabled)
+    }
+
+    /** Non-cooperative dependencies still cannot dispatch or publish after cancellation. */
+    private suspend inline fun <T> awaitActive(block: () -> T): T {
+        currentCoroutineContext().ensureActive()
+        val value = block()
+        currentCoroutineContext().ensureActive()
+        return value
+    }
+
     fun clearMessages() {
         _state.value = _state.value.copy(statusMessage = null, errorMessage = null)
     }
 
     private suspend fun loadRegistrationEnabled(): Boolean =
-        when (val result = repository.registrationStatus()) {
+        when (val result = awaitActive { repository.registrationStatus() }) {
             is AppResult.Success -> result.data.registrationEnabled
             is AppResult.Error -> false
         }
 
     private suspend fun saveApiBaseUrlOrStop(rawApiBaseUrl: String): String? =
-        when (val result = repository.setApiBaseUrl(rawApiBaseUrl)) {
+        when (val result = awaitActive { repository.setApiBaseUrl(rawApiBaseUrl) }) {
             is AppResult.Success -> result.data.also { normalized ->
                 _state.value = _state.value.copy(apiBaseUrl = normalized)
             }

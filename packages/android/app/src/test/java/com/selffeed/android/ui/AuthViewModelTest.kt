@@ -11,6 +11,10 @@ import io.mockk.coVerify
 import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
@@ -320,6 +324,7 @@ class AuthViewModelTest {
     @Test
     fun `changePassword keeps the rotated session and reports success`() = runTest {
         val viewModel = AuthViewModel(repository)
+        viewModel.login("reader@example.com", "password123", DEFAULT_API_BASE_URL)
 
         viewModel.changePassword("password123", "new-password-123")
 
@@ -358,6 +363,191 @@ class AuthViewModelTest {
         val state = viewModel.state.value
         assertNull(state.errorMessage)
         assertNull(state.statusMessage)
+    }
+
+    @Test
+    fun `superseded login cannot send credentials after delayed server setup`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.setApiBaseUrl("old.example") } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            AppResult.Success("old.example")
+        }
+        coEvery { repository.login("new@example.com", any()) } returns
+            AppResult.Success(sampleUser().copy(id = "new-user"))
+        withViewModel { viewModel ->
+            try {
+                viewModel.login("old@example.com", "old-password", "old.example")
+                viewModel.login("new@example.com", "new-password", "new.example")
+                release.complete(Unit)
+                runCurrent()
+                coVerify(exactly = 0) { repository.login("old@example.com", any()) }
+                assertEquals("new-user", viewModel.state.value.user?.id)
+                assertEquals("new.example", viewModel.state.value.apiBaseUrl)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `server switch supersedes registration waiting for server setup`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.setApiBaseUrl("old.example") } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            AppResult.Success("old.example")
+        }
+        withViewModel { viewModel ->
+            try {
+                viewModel.bootstrap()
+                viewModel.register("old@example.com", "password", "old.example")
+                viewModel.switchServerForExternalAction("new.example")
+                release.complete(Unit)
+                runCurrent()
+                coVerify(exactly = 0) { repository.register(any(), any()) }
+                assertFalse(viewModel.state.value.isAuthenticated)
+                assertEquals("new.example", viewModel.state.value.apiBaseUrl)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `logout supersedes a delayed session restore`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        every { repository.isLoggedIn() } returns true
+        coEvery { repository.restoreSession() } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            AppResult.Success(sampleUser())
+        }
+        withViewModel { viewModel ->
+            try {
+                viewModel.bootstrap()
+                viewModel.logout()
+                release.complete(Unit)
+                runCurrent()
+                assertFalse(viewModel.state.value.isAuthenticated)
+                assertNull(viewModel.state.value.user)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `logout clears account state before registration metadata finishes`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        withViewModel { viewModel ->
+            try {
+                viewModel.login("reader@example.com", "password", DEFAULT_API_BASE_URL)
+                coEvery { repository.registrationStatus() } coAnswers {
+                    withContext(NonCancellable) { release.await() }
+                    AppResult.Success(RegistrationStatusResponse(true))
+                }
+                viewModel.logout()
+                assertFalse(viewModel.state.value.isAuthenticated)
+                assertNull(viewModel.state.value.user)
+                viewModel.login("next@example.com", "password", "next.example")
+                release.complete(Unit)
+                runCurrent()
+                assertTrue(viewModel.state.value.isAuthenticated)
+                assertEquals("next.example", viewModel.state.value.apiBaseUrl)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `delayed password response cannot restore user after logout`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.changePassword(any(), any()) } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            AppResult.Success(sampleUser())
+        }
+        withViewModel { viewModel ->
+            try {
+                viewModel.login("reader@example.com", "password", DEFAULT_API_BASE_URL)
+                viewModel.changePassword("password", "next-password")
+                viewModel.logout()
+                release.complete(Unit)
+                runCurrent()
+                assertNull(viewModel.state.value.user)
+                assertFalse(viewModel.state.value.passwordChangePending)
+                assertNull(viewModel.state.value.statusMessage)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `new login supersedes server switch waiting for logout`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.logout() } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            AppResult.Success(true)
+        }
+        withViewModel { viewModel ->
+            try {
+                viewModel.switchServerForExternalAction("old.example")
+                viewModel.login("reader@example.com", "password", "new.example")
+                release.complete(Unit)
+                runCurrent()
+                coVerify(exactly = 0) { repository.setApiBaseUrl("old.example") }
+                assertTrue(viewModel.state.value.isAuthenticated)
+                assertEquals("new.example", viewModel.state.value.apiBaseUrl)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `recreated route bootstrap does not restart authentication or cancel password change`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.changePassword(any(), any()) } coAnswers {
+            release.await()
+            AppResult.Success(sampleUser())
+        }
+        withViewModel { viewModel ->
+            try {
+                viewModel.bootstrap()
+                viewModel.login("reader@example.com", "password", DEFAULT_API_BASE_URL)
+                viewModel.changePassword("password", "next-password")
+                viewModel.bootstrap()
+                release.complete(Unit)
+                runCurrent()
+                assertTrue(viewModel.state.value.isAuthenticated)
+                assertFalse(viewModel.state.value.passwordChangePending)
+                assertEquals(1L, viewModel.state.value.passwordChangeGeneration)
+                coVerify(exactly = 1) { repository.registrationStatus() }
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun `password changes are rejected without an authenticated account`() = runTest {
+        withViewModel { viewModel ->
+            viewModel.changePassword("password", "next-password")
+            coVerify(exactly = 0) { repository.changePassword(any(), any()) }
+            assertFalse(viewModel.state.value.passwordChangePending)
+        }
+    }
+
+    @Test
+    fun `clearing an auth error preserves the eventual registration status`() = runTest {
+        val events = kotlinx.coroutines.flow.MutableSharedFlow<String>()
+        every { repository.authEvents() } returns events
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.registrationStatus() } coAnswers {
+            release.await()
+            AppResult.Success(RegistrationStatusResponse(true))
+        }
+        withViewModel { viewModel ->
+            try {
+                events.emit("Expired")
+                viewModel.setAuthMode(AuthMode.LOGIN)
+                release.complete(Unit)
+                runCurrent()
+                assertNull(viewModel.state.value.errorMessage)
+                assertTrue(viewModel.state.value.registrationEnabled)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    private suspend fun withViewModel(block: suspend (AuthViewModel) -> Unit) {
+        val viewModel = AuthViewModel(repository)
+        val owner = ViewModelStore().apply { put("auth", viewModel) }
+        try { block(viewModel) } finally { owner.clear() }
     }
 
     private fun sampleUser(): User = User(
