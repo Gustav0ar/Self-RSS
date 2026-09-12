@@ -2,7 +2,8 @@ package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import com.selffeed.android.ui.theme.SelfFeedTheme
@@ -28,6 +29,9 @@ class BenchmarkReaderScenarioTest {
             }
         }
 
+        composeRule.waitUntil(5_000) {
+            composeRule.onNodeWithContentDescription(BenchmarkArticleCardDescription).isDisplayed()
+        }
         composeRule
             .onNodeWithContentDescription(BenchmarkArticleCardDescription)
             .performClick()

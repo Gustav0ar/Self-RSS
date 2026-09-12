@@ -7,7 +7,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.isDisplayed
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -315,6 +316,7 @@ class ArticleReaderPaneNavigationTest {
             }
         }
 
+        composeRule.waitUntil(5_000) { composeRule.onNodeWithText(completeBody).isDisplayed() }
         composeRule.onNodeWithText(completeBody).assertIsDisplayed()
         composeRule.runOnUiThread { displayedArticle = partial }
         composeRule.onNodeWithText(completeBody).assertIsDisplayed()
@@ -345,6 +347,7 @@ class ArticleReaderPaneNavigationTest {
             }
         }
 
+        composeRule.waitUntil(5_000) { composeRule.onNodeWithTag("reader-text-content").isDisplayed() }
         composeRule.onNodeWithTag("reader-text-content").assertIsDisplayed()
         composeRule.onNodeWithText("Text mode body.").assertIsDisplayed()
         composeRule.onNodeWithText("Media").assertDoesNotExist()
@@ -375,6 +378,9 @@ class ArticleReaderPaneNavigationTest {
         }
 
         composeRule.onNodeWithText("Text").assertIsDisplayed().assertIsSelected()
+        composeRule.waitUntil(5_000) {
+            composeRule.onNodeWithText("HTML-only text remains available in Text mode.").isDisplayed()
+        }
         composeRule.onNodeWithText("HTML-only text remains available in Text mode.").assertIsDisplayed()
     }
 
