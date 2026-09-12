@@ -6,4 +6,4 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
-class LocalDatabaseMigrationTest : LocalDatabaseMigrationContract()
+class LocalOwnershipTest : LocalOwnershipContract()
