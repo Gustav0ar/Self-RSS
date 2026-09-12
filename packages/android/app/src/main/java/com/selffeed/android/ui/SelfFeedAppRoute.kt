@@ -10,10 +10,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.selffeed.android.R
-import com.selffeed.android.ui.components.shareOpmlContent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
@@ -132,7 +130,6 @@ private fun AuthenticatedAppRoute(
     performanceMetricsState: PerformanceMetricsState.Holder,
 ) {
     if (authState.session?.ownerId != accountOwnerId) return
-    val context = LocalContext.current
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
     val isOnline by appViewModel.isOnline.collectAsStateWithLifecycle()
     val feedsState by feedsViewModel.state.collectAsStateWithLifecycle()
@@ -189,13 +186,9 @@ private fun AuthenticatedAppRoute(
             }
         }
 
-        LaunchedEffect(feedsViewModel, accountOwnerId) {
-            feedsViewModel.opmlExports.collect { content ->
-                if (authState.session?.let(authViewModel::isCurrentSession) == true) {
-                    shareOpmlContent(context, content)
-                }
-            }
-        }
+        OpmlExportEffect(feedsViewModel, isCurrentSession = {
+            authState.session?.let(authViewModel::isCurrentSession) == true
+        })
 
         LaunchedEffect(authState.loading, authState.isAuthenticated, readingSessionKey) {
             if (authState.loading) return@LaunchedEffect

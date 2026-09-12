@@ -11,6 +11,7 @@ import coil3.SingletonImageLoader
 import com.selffeed.android.data.FeedSyncWorker
 import com.selffeed.android.data.ArticleStateSyncWorker
 import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.OpmlExportStore
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.di.AppModule
 import com.selffeed.android.di.ApplicationCoroutineScope
@@ -41,6 +42,9 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
     @ApplicationCoroutineScope
     lateinit var applicationScope: CoroutineScope
 
+    @Inject
+    lateinit var opmlExports: OpmlExportStore
+
     override val workManagerConfiguration: WorkConfiguration
         get() = WorkConfiguration.Builder()
             .setWorkerFactory(workerFactory)
@@ -48,7 +52,7 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
 
     override fun onCreate() {
         super.onCreate()
-        com.selffeed.android.ui.components.reapStaleOpmlExports(this)
+        applicationScope.launch { opmlExports.reapStaleExports() }
 
         FeedSyncWorker.schedule(this)
         applicationScope.launch {
