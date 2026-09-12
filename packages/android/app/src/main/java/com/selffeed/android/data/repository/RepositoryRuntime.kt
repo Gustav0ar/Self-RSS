@@ -132,6 +132,9 @@ class RepositoryRuntime(
     }
 
     fun snapshot(): Map<String, Long> = mapOf(
+        "memoryCacheEntries" to memoryCache.size.toLong(),
+        "memoryCacheLoadKeys" to memoryCache.loadKeyCount.toLong(),
+        "memoryCacheActiveLoads" to memoryCache.activeLoadCount.toLong(),
         "retryCount" to retryCount.get(),
         "retryExhaustedCount" to retryExhaustedCount.get(),
         "cacheHitCount" to cacheHitCount.get(),

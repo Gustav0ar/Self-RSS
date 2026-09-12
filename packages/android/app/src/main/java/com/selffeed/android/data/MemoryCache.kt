@@ -1,19 +1,27 @@
 package com.selffeed.android.data
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.ConcurrentHashMap
 
 internal class MemoryCache(
     private val maxEntries: Int,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
-    private val entries = ConcurrentHashMap<String, Entry<Any?>>()
-    private val locks = ConcurrentHashMap<String, Mutex>()
+    private val monitor = Any()
+    private val entries = LinkedHashMap<String, Entry>(16, 0.75f, true)
+    private val loads = mutableMapOf<String, Load>()
+    private var activeLoads = 0
 
-    val size: Int
-        get() = entries.size
+    init { require(maxEntries >= 0) }
 
+    val size: Int get() = synchronized(monitor) { entries.size }
+    /** Registered keys can be forgotten while their invalidated callers still finish. */
+    val loadKeyCount: Int get() = synchronized(monitor) { loads.size }
+    val activeLoadCount: Int get() = synchronized(monitor) { activeLoads }
+
+    @Suppress("UNCHECKED_CAST")
     suspend fun <T> getOrLoad(
         key: String,
         ttlMs: Long,
@@ -22,99 +30,106 @@ internal class MemoryCache(
         onStore: () -> Unit = {},
         loader: suspend () -> T,
     ): T {
-        get<T>(key)?.let {
-            onHit()
-            return it
-        }
-
-        onMiss()
-        val mutex = locks.getOrPut(key) { Mutex() }
-        return mutex.withLock {
-            get<T>(key)?.let {
+        val load = when (val lookup = synchronized(monitor) {
+            getEntry(key) ?: loads.getOrPut(key, ::Load).also { it.users++; activeLoads++ }
+        }) {
+            is Entry -> {
                 onHit()
-                return@withLock it
+                return lookup.value as T
             }
-
-            val loaded = loader()
-            put(key, ttlMs, loaded)
-            onStore()
-            loaded
+            is Load -> lookup
+        }
+        try {
+            onMiss()
+            return load.mutex.withLock {
+                // A waiter admitted before invalidation must not consume a replacement
+                // account's value. It can finish its own request but cannot cache it.
+                val cached = synchronized(monitor) { if (load.valid) getEntry(key) else null }
+                if (cached != null) {
+                    onHit()
+                    return@withLock cached.value as T
+                }
+                val value = loader()
+                currentCoroutineContext().ensureActive()
+                val stored = synchronized(monitor) {
+                    if (load.valid) {
+                        putEntry(key, ttlMs, value)
+                        true
+                    } else false
+                }
+                if (stored) onStore()
+                value
+            }
+        } finally {
+            synchronized(monitor) {
+                load.users--
+                activeLoads--
+                if (load.users == 0 && loads[key] === load) loads.remove(key)
+            }
         }
     }
 
     @Suppress("UNCHECKED_CAST")
-    fun <T> get(key: String): T? {
-        val entry = entries[key] ?: return null
-        val now = nowMs()
-        if (entry.expiresAtMs < now) {
-            entries.remove(key)
-            locks.remove(key)
-            return null
-        }
-        entry.lastAccessMs = now
-        return entry.value as? T
+    fun <T> get(key: String): T? = synchronized(monitor) { getEntry(key)?.value as? T }
+
+    fun put(key: String, ttlMs: Long, value: Any?) = synchronized(monitor) {
+        // An explicit write is newer than a load that started before it.
+        loads.remove(key)?.valid = false
+        putEntry(key, ttlMs, value)
     }
 
-    fun put(key: String, ttlMs: Long, value: Any?) {
-        val now = nowMs()
-        entries[key] = Entry(
-            value = value,
-            expiresAtMs = now + ttlMs,
-            lastAccessMs = now,
-        )
-        prune()
-    }
-
-    fun invalidateByPrefix(prefix: String): Int {
-        var removed = 0
-        entries.keys.removeIf { key ->
-            val shouldRemove =
-                if (prefix.endsWith(':')) {
-                    key == prefix.dropLast(1) || key.startsWith(prefix)
-                } else {
-                    key == prefix || key.startsWith("$prefix:")
-                }
-            if (shouldRemove) {
-                removed++
-                locks.remove(key)
+    fun invalidateByPrefix(prefix: String): Int = synchronized(monitor) {
+        val namespace = prefix.removeSuffix(":")
+        fun matches(key: String) = key == namespace || key.startsWith("$namespace:")
+        val before = entries.size
+        entries.keys.removeAll(::matches)
+        val iterator = loads.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (matches(entry.key)) {
+                entry.value.valid = false
+                iterator.remove()
             }
-            shouldRemove
         }
-        return removed
+        before - entries.size
     }
 
-    fun clear(): Int {
+    fun clear(): Int = synchronized(monitor) {
         val cleared = entries.size
         entries.clear()
-        locks.clear()
-        return cleared
+        loads.values.forEach { it.valid = false }
+        loads.clear()
+        cleared
     }
 
-    private fun prune() {
-        val now = nowMs()
-        val expiredKeys = entries.entries
-            .filter { (_, entry) -> entry.expiresAtMs < now }
-            .map { it.key }
-        expiredKeys.forEach { key ->
+    /** Only called with monitor held; no loader or callback runs under this lock. */
+    private fun getEntry(key: String): Entry? {
+        val entry = entries[key] ?: return null
+        if (entry.expiresAtMs < nowMs()) {
             entries.remove(key)
-            locks.remove(key)
+            return null
         }
-
-        if (entries.size <= maxEntries) return
-
-        val overflow = entries.size - maxEntries
-        entries.entries
-            .sortedBy { it.value.lastAccessMs }
-            .take(overflow)
-            .forEach { (key, _) ->
-                entries.remove(key)
-                locks.remove(key)
-            }
+        return entry
     }
 
-    private data class Entry<T>(
-        val value: T,
-        val expiresAtMs: Long,
-        var lastAccessMs: Long,
-    )
+    private fun putEntry(key: String, ttlMs: Long, value: Any?) {
+        val now = nowMs()
+        entries[key] = Entry(value, now + ttlMs)
+        entries.values.removeAll { it.expiresAtMs < now }
+        val oldest = entries.entries.iterator()
+        while (entries.size > maxEntries && oldest.hasNext()) {
+            oldest.next()
+            oldest.remove()
+        }
+    }
+
+    private sealed interface Lookup
+
+    private class Load : Lookup {
+        val mutex = Mutex()
+        var users = 0
+        var valid = true
+    }
+
+    private data class Entry(val value: Any?, val expiresAtMs: Long) : Lookup
 }
