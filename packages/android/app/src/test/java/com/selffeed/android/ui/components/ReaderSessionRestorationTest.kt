@@ -34,6 +34,9 @@ class ReaderSessionRestorationTest {
     @Test
     fun `reader scroll survives recreation while authentication and Room delay navigation composition`() {
         val tester = StateRestorationTester(composeRule)
+        val gate = ReaderPreparationGate()
+        val preparer = ReaderContentPreparer(gate)
+        var bodyReadyCount = 0
         var initialProcess = true
         var cacheReady by mutableStateOf(false)
         val detail = ArticleDetail(
@@ -49,29 +52,40 @@ class ReaderSessionRestorationTest {
                         onCloseArticle = {},
                         listContent = { Text("Article list") },
                         detailContent = { preferHtml, changeMode ->
-                            ArticleReaderPane(
-                                articles = emptyList(), selectedArticle = detail,
-                                onOpenOriginal = {}, onBackToList = {}, onArticleSelected = {},
-                                preferHtml = preferHtml, onPreferHtmlChanged = changeMode,
-                            )
+                            CompositionLocalProvider(LocalReaderContentPreparer provides preparer) {
+                                ArticleReaderPane(
+                                    articles = emptyList(), selectedArticle = detail,
+                                    onOpenOriginal = {}, onBackToList = {}, onArticleSelected = {},
+                                    preferHtml = preferHtml, onPreferHtmlChanged = changeMode,
+                                    onArticleBodyReady = { bodyReadyCount++ },
+                                )
+                            }
                         },
                     )
                 } else Text("Loading")
             }
         }
+        composeRule.waitUntil(5_000) { bodyReadyCount == 1 }
         val scroll = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
         composeRule.onNode(scroll).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 600f) }
         val offset = composeRule.onNode(scroll).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertTrue(offset > 0f)
 
-        // This plain flag changes only the newly-created composition. The
-        // tester saves the currently open reader before disposing its tree.
-        initialProcess = false
-        tester.emulateSavedInstanceStateRestore()
-        composeRule.onNode(scroll).assertDoesNotExist()
-        composeRule.runOnIdle { cacheReady = true }
-        val restoredOffset = composeRule.onNode(scroll).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
-        assertEquals(offset, restoredOffset, 1f)
+        // Save the open reader, then separately release the restored cache and body.
+        gate.pause()
+        try {
+            initialProcess = false
+            tester.emulateSavedInstanceStateRestore()
+            composeRule.onNode(scroll).assertDoesNotExist()
+            composeRule.runOnIdle { cacheReady = true }
+            composeRule.onNode(scroll).assertExists()
+            composeRule.waitUntil(5_000) { gate.pendingCount > 0 }
+            assertEquals("The restored shell is not a prepared body", 1, bodyReadyCount)
+            gate.release()
+            composeRule.waitUntil(5_000) { composeRule.runOnIdle { bodyReadyCount == 2 } }
+            val restoredOffset = composeRule.onNode(scroll).fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertEquals(offset, restoredOffset, 1f)
+        } finally { gate.release() }
     }
     @Test
     fun `rich restoration waits for measured body placement after visual readiness`() {
