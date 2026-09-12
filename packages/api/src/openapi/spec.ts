@@ -1,5 +1,5 @@
 import { adminPaths, adminSchemas } from './admin.spec';
-import { articleStateSchemas } from './article-state.spec';
+import { articleStatePaths, articleStateSchemas } from './article-state.spec';
 import { authPaths, authSchemas } from './auth.spec';
 import { durableFeedPaths, durableFeedSchemas } from './durable-feeds.spec';
 import { feedHistoryPaths } from './feed-history.spec';
@@ -429,6 +429,7 @@ export const openApiSpec = {
 		},
 	},
 	paths: {
+		...articleStatePaths,
 		...authPaths,
 		...adminPaths,
 		...durableFeedPaths,

@@ -18,6 +18,7 @@ import {
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
+import { RATE_LIMITS } from '../../src/utils/rate-limiter.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -1014,6 +1015,147 @@ describe('API integration', () => {
 			await firstFeedServer.stop();
 			await secondFeedServer.stop();
 		}
+	});
+
+	it('article state lookup returns paired current revisions after bulk changes without cached bodies', async () => {
+		const registered = await registerUser('state-lookup@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		const userId = registered.body.data.user.id;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'State lookup' }),
+		});
+		const feedId = crypto.randomUUID();
+		const articleId = crypto.randomUUID();
+		await db.insert(feeds).values({
+			id: feedId,
+			userId,
+			categoryId: category.body.data.id,
+			title: 'State lookup',
+			feedUrl: 'https://example.com/state-lookup.xml',
+		});
+		await db.insert(articles).values({
+			id: articleId,
+			feedId,
+			guid: articleId,
+			title: 'State lookup',
+			hash: 'state-lookup',
+			contentHtml: '<p>Large cached body</p>',
+		});
+		await deps.services.article.getArticle(userId, articleId);
+		await deps.services.article.markAllRead(userId, { feedId });
+		deps.repos.article.setReadState(userId, articleId, false, 'manual');
+		deps.repos.article.setSavedState(userId, articleId, true);
+		const lookup = await authedRequest('/api/v1/articles/states', token, {
+			method: 'POST',
+			body: JSON.stringify({ articleIds: [articleId, articleId] }),
+		});
+		expect(lookup.response.status).toBe(200);
+		expect(lookup.response.headers.get('Cache-Control')).toBe('no-store');
+		expect(lookup.body).toEqual({
+			data: {
+				states: [
+					{ id: articleId, isRead: false, isSaved: true, readRevision: 2, savedRevision: 1 },
+				],
+				missingIds: [],
+			},
+		});
+	});
+
+	it('article state lookup treats missing and unowned articles alike without changing stored data', async () => {
+		const owner = await registerUser('state-owner@example.com');
+		const stranger = await registerUser('state-stranger@example.com');
+		const token = owner.body.data.tokens.accessToken;
+		const category = await authedRequest('/api/v1/categories', token, {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Owned state' }),
+		});
+		const feedId = crypto.randomUUID();
+		const articleId = crypto.randomUUID();
+		const missingId = crypto.randomUUID();
+		await db.insert(feeds).values({
+			id: feedId,
+			userId: owner.body.data.user.id,
+			categoryId: category.body.data.id,
+			title: 'Owned state',
+			feedUrl: 'https://example.com/owned-state.xml',
+		});
+		await db.insert(articles).values({
+			id: articleId,
+			feedId,
+			guid: articleId,
+			title: 'Owned state',
+			hash: 'owned-state',
+			contentHtml: '<p>Preserved</p>',
+		});
+		deps.repos.article.setSavedState(owner.body.data.user.id, articleId, true);
+		const lookup = await authedRequest(
+			'/api/v1/articles/states',
+			stranger.body.data.tokens.accessToken,
+			{ method: 'POST', body: JSON.stringify({ articleIds: [articleId, missingId, missingId] }) },
+		);
+		expect(lookup.response.status).toBe(200);
+		expect(lookup.body).toEqual({ data: { states: [], missingIds: [articleId, missingId] } });
+		const stored = await deps.repos.article.findDetailForUser(owner.body.data.user.id, articleId);
+		expect(stored).toMatchObject({ contentHtml: '<p>Preserved</p>', savedRevision: 1 });
+		expect(Boolean(stored?.isSaved)).toBe(true);
+		await db.delete(articles).where(eq(articles.id, articleId));
+		const deleted = await authedRequest('/api/v1/articles/states', token, {
+			method: 'POST',
+			body: JSON.stringify({ articleIds: [articleId] }),
+		});
+		expect(deleted.body).toEqual({ data: { states: [], missingIds: [articleId] } });
+	});
+
+	it('article state lookup validates the submitted batch before deduplicating and accepts 100 IDs', async () => {
+		const registered = await registerUser('state-validation@example.com');
+		const token = registered.body.data.tokens.accessToken;
+		for (const body of [
+			{},
+			{ articleIds: [] },
+			{ articleIds: ['bad-id'] },
+			{ articleIds: crypto.randomUUID() },
+			{ articleIds: Array(101).fill(crypto.randomUUID()) },
+		]) {
+			const result = await authedRequest('/api/v1/articles/states', token, {
+				method: 'POST',
+				body: JSON.stringify(body),
+			});
+			expect(result.response.status).toBe(400);
+		}
+		const articleIds = Array.from({ length: 100 }, () => crypto.randomUUID());
+		const result = await authedRequest('/api/v1/articles/states', token, {
+			method: 'POST',
+			body: JSON.stringify({ articleIds }),
+		});
+		expect(result.response.status).toBe(200);
+		expect(result.body).toEqual({ data: { states: [], missingIds: articleIds } });
+	});
+
+	it('article state lookup requires authentication', async () => {
+		const result = await jsonRequest('/api/v1/articles/states', {
+			method: 'POST',
+			headers: JSON_HEADERS,
+			body: JSON.stringify({ articleIds: [crypto.randomUUID()] }),
+		});
+		expect(result.response.status).toBe(401);
+	});
+
+	it('article state lookup shares the article read rate limit', async () => {
+		const registered = await registerUser('state-rate-limit@example.com');
+		await redis.set(
+			CacheKeys.rateLimit(`articles-read:${registered.body.data.user.id}`),
+			RATE_LIMITS.articlesRead.maxRequests,
+			'PX',
+			60_000,
+		);
+		const result = await authedRequest(
+			'/api/v1/articles/states',
+			registered.body.data.tokens.accessToken,
+			{ method: 'POST', body: JSON.stringify({ articleIds: [crypto.randomUUID()] }) },
+		);
+		expect(result.response.status).toBe(429);
+		expect(result.response.headers.get('X-RateLimit-Remaining')).toBe('0');
 	});
 
 	it('returns 400 for malformed UUID route params', async () => {

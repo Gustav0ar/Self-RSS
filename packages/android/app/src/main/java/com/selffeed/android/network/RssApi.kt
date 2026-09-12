@@ -143,6 +143,12 @@ interface RssApi {
     @GET("articles/detail")
     suspend fun article(@Query("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<ArticleDetail>
 
+    @POST("articles/states")
+    suspend fun articleStates(
+        @Body request: ArticleStateLookupRequest,
+        @Tag session: ApiSession? = null,
+    ): ApiEnvelope<ArticleStateLookupResponse>
+
     @POST("articles/{id}/enrich")
     suspend fun enrichArticle(@Path("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<EnrichArticleResponse>
 

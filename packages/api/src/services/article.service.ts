@@ -1,3 +1,4 @@
+import type { ArticleStateLookupResponse } from '@self-feed/shared';
 import type Redis from 'ioredis';
 import { CacheKeys, CacheTTL } from '../db/redis.js';
 import { AppError } from '../middleware/errors.js';
@@ -50,6 +51,17 @@ export class ArticleService {
 		private categoryRepo?: CategoryRepository,
 		private cacheMetrics?: CacheMetrics,
 	) {}
+
+	/** Read only current owned flags. No content fetch, cache write or enrichment is needed. */
+	async getArticleStates(
+		userId: string,
+		articleIds: string[],
+	): Promise<ArticleStateLookupResponse> {
+		const ids = [...new Set(articleIds)];
+		const states = await this.articleRepo.findStatesForUser(userId, ids);
+		const found = new Set(states.map((state) => state.id));
+		return { states, missingIds: ids.filter((id) => !found.has(id)) };
+	}
 
 	async getArticles(
 		userId: string,

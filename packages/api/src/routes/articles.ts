@@ -1,6 +1,7 @@
 import {
 	articleDetailQuerySchema,
 	articleQuerySchema,
+	articleStateLookupSchema,
 	markAllReadSchema,
 	markReadSchema,
 	saveArticleSchema,
@@ -32,6 +33,13 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		const query = parseQuery(c, articleQuerySchema);
 		const result = await articleService.getArticles(userId, query);
 		return c.json(result);
+	});
+
+	routes.post('/states', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+		const { articleIds } = await parseBody(c, articleStateLookupSchema);
+		const result = await articleService.getArticleStates(c.get('userId'), articleIds);
+		return c.json({ data: result }, 200, { 'Cache-Control': 'no-store' });
 	});
 
 	// Keep the UUID out of the path used by first-party clients. CrowdSec's

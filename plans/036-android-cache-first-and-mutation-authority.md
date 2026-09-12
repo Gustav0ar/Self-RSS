@@ -275,3 +275,13 @@ The same follow-up adds a bounded reader publication check because delayed open,
 Remaining after this slice: versioned catch-up after bulk hints, replacing stale buffered flag-event publication with current local state, and actual process-death mutation recovery. Preserve these as explicit follow-up work; do not mark plan 036 complete based on count tests alone.
 
 Final action/count validation passes 566 JVM tests, Android lint, both isolated APK pairs and all 51 selected API 36.1 emulator checks. Shared count contracts run on real Android SQLite as well as Robolectric, including reopen, lost acknowledgment, zero-baseline rollback, metadata admission, rebase and foreground refresh behavior. Migration tests cover every supported history and clean creation; schemas 8 and 9 are unchanged. Evidence: `/tmp/android-actions-counts-final-build-2.log` and `/tmp/android-actions-counts-device.log`. Independent source review found no new blockers. Plan 036 remains in progress for the follow-ups above.
+
+### Bounded state lookup prerequisite
+
+The existing API `ArticleRepository.findStatesForUser` already selects current flags and paired revisions in one owned SQLite query without article bodies. Expose it through an authenticated `POST /articles/states` accepting 1 to 100 UUIDs, with the existing article-read rate limit. Deduplicate validated IDs and return owned rows plus `missingIds`; missing covers absent and unowned articles uniformly. Do not invent false flags, disclose ownership, or delete offline data from that result.
+
+Expand this separate PR to shared article validation/response contracts, the article service/routes, OpenAPI source/generated output and real HTTP/SQLite integration tests. No schema change is needed. Android consumption follows in its own PR, with one foreground-owned conflated refresh, actual cancellation and the existing account commit boundary. Refresh on bulk hints, reconnect/resume and newly visible IDs. Preserve a wake that arrives during a request and retain Room state on failure.
+
+The API prerequisite also adds the matching typed Retrofit transport and Moshi request/response models, plus OpenAPI contract mappings. This keeps Android endpoint coverage checked without an unsupported-operation exception. UI/repository consumption remains in the next slice.
+
+The bounded lookup passes 143 full API integration cases, 734 API unit cases, all package types, repository lint/architecture and Android/OpenAPI mapping. Android validation passes 567 JVM tests, lint and both isolated APK pairs. The endpoint is read-only and requires no persistent migration. Logs use `/tmp/article-state-lookup-`; independent source review found no blockers. Android UI consumption remains pending.

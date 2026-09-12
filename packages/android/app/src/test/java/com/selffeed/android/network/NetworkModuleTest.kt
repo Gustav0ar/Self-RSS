@@ -39,6 +39,22 @@ import java.util.concurrent.CountDownLatch
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class NetworkModuleTest {
+    @Test
+    fun `state lookup rejects missing revision metadata instead of inventing revision zero`() {
+        val adapter = NetworkModule.provideMoshi().adapter(ArticleStateLookupResponse::class.java)
+        val data = """{"states":[{"id":"article","isRead":false,"isSaved":true,"readRevision":2,"savedRevision":1}],"missingIds":["missing"]}"""
+        assertEquals(
+            ArticleStateLookupResponse(listOf(ArticleStateSnapshot("article", false, true, 2, 1)), listOf("missing")),
+            adapter.fromJson(data),
+        )
+        org.junit.Assert.assertThrows(com.squareup.moshi.JsonDataException::class.java) {
+            adapter.fromJson(data.replace(",\"readRevision\":2", ""))
+        }
+        assertEquals(ArticleStateLookupResponse(emptyList(), listOf("missing")), adapter.fromJson(
+            """{"states":[],"missingIds":["missing"]}""",
+        ))
+    }
+
     private fun stubSession(store: SessionStore) {
         every { store.currentSession() } answers {
             ApiSession(0, store.getApiBaseUrl(), "test-owner")
