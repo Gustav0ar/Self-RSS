@@ -275,6 +275,7 @@
     <string name="feeds_replacement_cancelled">Replacement cancelled · existing feed kept</string>
     <string name="feeds_import_status">OPML imported: %1$d feeds, %2$d categories</string>
     <string name="feeds_export_ready">OPML export is ready to share</string>
+    <string name="feeds_export_error">Unable to export OPML. Try again.</string>
     <plurals name="feeds_count">
         <item quantity="one">%d feed</item>
         <item quantity="other">%d feeds</item>

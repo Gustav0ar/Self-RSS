@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
 import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.OpmlExportStore
+import com.selffeed.android.data.PreparedOpmlExport
 import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.data.categoryMoveUpdates
 import com.selffeed.android.data.applyCategoryOrder
@@ -22,10 +24,7 @@ import com.selffeed.android.network.SyncRun
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
@@ -37,6 +36,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -78,11 +78,12 @@ data class FeedsUiState(
 class FeedsViewModel @Inject constructor(
     private val repository: FeedRepository,
     private val opmlReader: OpmlDocumentReader,
+    private val opmlExportStore: OpmlExportStore,
 ) : ViewModel() {
     private val _state = MutableStateFlow(FeedsUiState())
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
-    private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
+    private val _opmlExports = MutableStateFlow<PreparedOpmlExport?>(null)
+    val opmlExports: StateFlow<PreparedOpmlExport?> = _opmlExports.asStateFlow()
     private val syncMonitorRequests = Channel<Unit>(Channel.CONFLATED)
     private var syncSubmission: Job? = null
     private var syncSubmissionRevision = 0L
@@ -90,6 +91,7 @@ class FeedsViewModel @Inject constructor(
     private var categoryLoadRevision = 0L
     private var categoryReloadPending = false
     private var importJob: Job? = null
+    private var exportJob: Job? = null
 
     private var libraryCounts = LibraryCounts()
 
@@ -702,19 +704,67 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun exportOpml() {
-        viewModelScope.launch {
-            when (val result = repository.exportOpml()) {
-                is AppResult.Success -> {
-                    _opmlExports.emit(result.data)
-                    updateState {
-                        it.copy(statusMessage = PresentationText.resource(R.string.feeds_export_ready))
+        if (exportJob?.isActive == true || _opmlExports.value != null) return
+        exportJob = viewModelScope.launch {
+            var prepared: PreparedOpmlExport? = null
+            try {
+                val result = repository.exportOpml()
+                currentCoroutineContext().ensureActive()
+                when (result) {
+                    is AppResult.Success -> {
+                        prepared = opmlExportStore.prepare(result.data)
+                        currentCoroutineContext().ensureActive()
+                        _opmlExports.value = prepared
+                        prepared = null // Ownership transfers to the pending screen state.
+                    }
+                    is AppResult.Error -> updateState {
+                        it.copy(errorMessage = PresentationText.dynamic(result.message))
                     }
                 }
-                is AppResult.Error -> updateState {
-                    it.copy(errorMessage = PresentationText.dynamic(result.message))
-                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                showExportFailure()
+            } finally {
+                prepared?.let { opmlExportStore.release(it, shared = false) }
             }
         }
+    }
+
+    /** Refresh retention before a chooser can background the process. */
+    suspend fun prepareOpmlHandoff(export: PreparedOpmlExport): Boolean {
+        if (_opmlExports.value !== export) return false
+        return try {
+            opmlExportStore.renewRetention(export)
+            currentCoroutineContext().ensureActive()
+            _opmlExports.value === export
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            completeOpmlExport(export, shared = false)
+            false
+        }
+    }
+
+    /** The resumed screen acknowledges this exact file after its synchronous chooser launch. */
+    fun completeOpmlExport(export: PreparedOpmlExport, shared: Boolean) {
+        if (_opmlExports.value !== export) return
+        _opmlExports.value = null
+        opmlExportStore.release(export, shared)
+        if (shared) {
+            updateState { it.copy(statusMessage = PresentationText.resource(R.string.feeds_export_ready)) }
+        } else {
+            showExportFailure()
+        }
+    }
+
+    private fun showExportFailure() {
+        updateState { it.copy(errorMessage = PresentationText.resource(R.string.feeds_export_error)) }
+    }
+
+    override fun onCleared() {
+        _opmlExports.value?.let { opmlExportStore.release(it, shared = false) }
+        _opmlExports.value = null
     }
 
     fun dismissImportSummary() {
