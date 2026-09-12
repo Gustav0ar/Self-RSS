@@ -13,12 +13,11 @@ import com.selffeed.android.data.ArticleStateSyncWorker
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.di.AppModule
+import com.selffeed.android.di.ApplicationCoroutineScope
 import com.selffeed.android.network.NetworkMonitor
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -38,6 +37,10 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
+    @Inject
+    @ApplicationCoroutineScope
+    lateinit var applicationScope: CoroutineScope
+
     override val workManagerConfiguration: WorkConfiguration
         get() = WorkConfiguration.Builder()
             .setWorkerFactory(workerFactory)
@@ -48,11 +51,10 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
         com.selffeed.android.ui.components.reapStaleOpmlExports(this)
 
         FeedSyncWorker.schedule(this)
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            repository.prepareSession()
-            if (repository.isLoggedIn()) {
-                FeedSyncWorker.kickOnce(this@SelfFeedApplication)
-                ArticleStateSyncWorker.kickOnce(this@SelfFeedApplication)
+        applicationScope.launch {
+            repository.withAuthenticatedAccount {
+                FeedSyncWorker.ensureScheduled(this@SelfFeedApplication)
+                ArticleStateSyncWorker.ensureScheduled(this@SelfFeedApplication)
             }
         }
     }

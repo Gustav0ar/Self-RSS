@@ -19,8 +19,7 @@ class ArticleStateSyncWorkerTest {
     @Test
     fun `logged out work succeeds without touching the outbox`() = runBlocking {
         val repository = mockk<RssRepository>()
-        coEvery { repository.prepareSession() } returns Unit
-        coEvery { repository.isLoggedIn() } returns false
+        coEvery { repository.withAuthenticatedAccount<ListenableWorker.Result>(any()) } returns null
 
         val result = worker(repository).doWork()
 
@@ -31,8 +30,9 @@ class ArticleStateSyncWorkerTest {
     @Test
     fun `fully delivered outbox succeeds`() = runBlocking {
         val repository = mockk<RssRepository>()
-        coEvery { repository.prepareSession() } returns Unit
-        coEvery { repository.isLoggedIn() } returns true
+        coEvery { repository.withAuthenticatedAccount<ListenableWorker.Result>(any()) } coAnswers {
+            firstArg<suspend () -> ListenableWorker.Result>().invoke()
+        }
         coEvery { repository.flushPendingArticleStateMutations() } returns true
 
         assertEquals(ListenableWorker.Result.success(), worker(repository).doWork())
@@ -41,8 +41,9 @@ class ArticleStateSyncWorkerTest {
     @Test
     fun `transiently blocked outbox retries`() = runBlocking {
         val repository = mockk<RssRepository>()
-        coEvery { repository.prepareSession() } returns Unit
-        coEvery { repository.isLoggedIn() } returns true
+        coEvery { repository.withAuthenticatedAccount<ListenableWorker.Result>(any()) } coAnswers {
+            firstArg<suspend () -> ListenableWorker.Result>().invoke()
+        }
         coEvery { repository.flushPendingArticleStateMutations() } returns false
 
         assertEquals(ListenableWorker.Result.retry(), worker(repository).doWork())

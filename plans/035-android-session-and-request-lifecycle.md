@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IN PROGRESS; account features and foreground work verified; worker ownership pending
+- Status: IMPLEMENTED; integrated acceptance remains plan 049; account features and foreground work verified; worker ownership pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -100,6 +100,9 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/main/java/com/selffeed/android/ui/ResumeRefreshObserver.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/ui/articles/`
 - `packages/android/app/src/main/java/com/selffeed/android/data/RssRepository.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/FeedSyncWorker.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/ArticleStateSyncWorker.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/SelfFeedApplication.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/AccountSessionBoundary.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/remote/RemoteDataSources.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/network/RssApi.kt`
@@ -170,16 +173,16 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 ## Test and acceptance contract
 
 - [x] Delayed article success/failure cannot reopen a closed reader or overwrite a newly selected scope.
-- [ ] Old-account responses cannot publish state, credentials, replay cursor, or Room/cache entries after the new session starts.
-- [ ] Feeds, search, settings, admin data, selected article, and account-scoped work reset on logout/server change.
+- [x] Old-account responses cannot publish state, credentials, replay cursor, or Room/cache entries after the new session starts.
+- [x] Feeds, search, settings, admin data, selected article, and account-scoped work reset on logout/server change.
 - [x] Foreground subscriptions/polling stop while hidden and resume once; durable queued writes remain intact during ordinary backgrounding.
-- [ ] Existing auth, offline lease, paging, and fast-swipe tests remain green.
-- [ ] An old request cannot dispatch or retry with a replacement account's credentials or replacement server identity; a delayed 401 cannot sign out or authenticate as the new session.
+- [x] Existing auth, offline lease, paging, and fast-swipe tests remain green.
+- [x] An old request cannot dispatch or retry with a replacement account's credentials or replacement server identity; a delayed 401 cannot sign out or authenticate as the new session.
 - [x] A durable owner survives token refresh and process restart, changes at real account/server/session replacement, and is adopted by existing sessions without data loss.
-- [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
-- [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
-- [ ] `git diff --check` passes and scope review finds no unrelated changes.
-- [ ] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
+- [x] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
+- [x] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
+- [x] `git diff --check` passes and scope review finds no unrelated changes.
+- [x] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
 
 ## Specific stop conditions
 
@@ -273,3 +276,9 @@ Review exposed a required dependency on plan 036: the old cached category/feed m
 Failures were reproduced in `/tmp/android-foreground-{red,device-red,review-red,status-red,count-red}.log`. The cold-offline test initially matched article badges; a distinct stored-subscription label produces the valid missing-drawer failure in `/tmp/android-foreground-offline-red-final.log`. Focused fixes pass; full build/device/lint verification is in progress. Worker polling identity is a separate remaining slice.
 
 Final verification passes: 511 JVM tests and both isolated APK pairs (`/tmp/android-foreground-final-build.log`), 26 integrated API 36.1 emulator checks (`/tmp/android-foreground-device-final.log`), and lint (`/tmp/android-foreground-final-lint.log`). The blocked-request fixture waits for Compose foreground activation before waiting on its external gates. The independent source review completed with no remaining finding in this slice.
+
+## Worker execution and startup
+
+Both workers retain one account boundary across their complete execution. Account replacement ends obsolete work successfully; normal coroutine cancellation propagates and releases a blocked request. The feed poll previously recaptured a replacement account after its delay, reproduced in `/tmp/android-worker-owner-red.log`. The application uses the injected application scope and restores unique startup work with KEEP, retaining pending requests and retry history.
+
+The real WorkManager scheduling fixture checks repeated startup preserves pending request IDs. All 513 JVM tests, both isolated APK pairs and lint pass. The first full run encountered a host JBR C2 compiler crash; the fresh-process rerun passed with unchanged checks. Logs: `/tmp/android-worker-final-build-retry.log`, `/tmp/android-worker-final-lint.log`, `/tmp/android-worker-jbr-crash.log`. Actual production Application startup and Room/session recovery after process death pass in `/tmp/android-worker-process.log` on API 36.1. This fixture does not assert full production reader restoration, which remains plan 043. Independent read-only review found no new blocker. Plan 036 still owns per-mutation scheduling and a pre-existing confirmed outbox authentication rejection that bypasses the normal account-clear event.

@@ -21,16 +21,23 @@ class ArticleStateSyncWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val repository: RssRepository,
 ) : CoroutineWorker(appContext, workerParams) {
-    override suspend fun doWork(): Result {
-        repository.prepareSession()
-        if (!repository.isLoggedIn()) return Result.success()
-        return if (repository.flushPendingArticleStateMutations()) Result.success() else Result.retry()
+    override suspend fun doWork(): Result = try {
+        repository.withAuthenticatedAccount {
+            if (repository.flushPendingArticleStateMutations()) Result.success() else Result.retry()
+        } ?: Result.success()
+    } catch (_: SessionChangedException) {
+        Result.success()
     }
 
     companion object {
         private const val WORK_NAME = "article-state-outbox"
 
-        fun kickOnce(context: Context) {
+        fun kickOnce(context: Context) = enqueue(context, ExistingWorkPolicy.REPLACE)
+
+        /** Restore durable work on process start without resetting retry backoff. */
+        fun ensureScheduled(context: Context) = enqueue(context, ExistingWorkPolicy.KEEP)
+
+        private fun enqueue(context: Context, policy: ExistingWorkPolicy): androidx.work.Operation {
             val request = OneTimeWorkRequestBuilder<ArticleStateSyncWorker>()
                 .setConstraints(
                     Constraints.Builder()
@@ -39,9 +46,9 @@ class ArticleStateSyncWorker @AssistedInject constructor(
                 )
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(
+            return WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
+                policy,
                 request,
             )
         }

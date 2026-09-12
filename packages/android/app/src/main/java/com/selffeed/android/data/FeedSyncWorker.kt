@@ -13,7 +13,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.hilt.work.HiltWorker
-import com.selffeed.android.BuildConfig
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.delay
@@ -26,12 +25,13 @@ class FeedSyncWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val repository: RssRepository,
 ) : CoroutineWorker(appContext, workerParams) {
-    override suspend fun doWork(): Result {
-        repository.prepareSession()
-        if (!repository.isLoggedIn()) {
-            if (BuildConfig.DEBUG) Log.d(TAG, "Skipping sync — user is not logged in")
-            return Result.success()
-        }
+    override suspend fun doWork(): Result = try {
+        repository.withAuthenticatedAccount { syncFeeds() } ?: Result.success()
+    } catch (_: SessionChangedException) {
+        Result.success()
+    }
+
+    private suspend fun syncFeeds(): Result {
         return when (val result = repository.syncAllFeeds()) {
             is AppResult.Success -> awaitQueuedSync()
             is AppResult.Error -> {
@@ -95,14 +95,15 @@ class FeedSyncWorker @AssistedInject constructor(
             )
         }
 
-        fun kickOnce(context: Context) {
+        /** Restore durable work on process start without cancelling its current attempt. */
+        fun ensureScheduled(context: Context): androidx.work.Operation {
             val request = OneTimeWorkRequestBuilder<FeedSyncWorker>()
                 .setConstraints(syncConstraints())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.SECONDS)
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(
+            return WorkManager.getInstance(context).enqueueUniqueWork(
                 ONE_SHOT_WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
+                ExistingWorkPolicy.KEEP,
                 request,
             )
         }

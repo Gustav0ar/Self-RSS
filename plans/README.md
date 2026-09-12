@@ -14,7 +14,7 @@ These rules apply to **033–049**. Earlier branch, roadmap-wait, deployment, an
 | --- | --- | --- | --- | --- | --- |
 | [033](033-android-review-verification-foundation.md) | Establish isolated Android behavior and performance fixtures | P1 | M | none | IMPLEMENTED; hardware pending |
 | [034](034-android-design-and-motion-selection.md) | Select Android layout, loading, offline, and motion designs | P1 | M | none | TODO |
-| [035](035-android-session-and-request-lifecycle.md) | End account and reader sessions without accepting stale work | P1 | L | 033 | IN PROGRESS; account UI and foreground verified, worker ownership pending |
+| [035](035-android-session-and-request-lifecycle.md) | End account and reader sessions without accepting stale work | P1 | L | 033 | IMPLEMENTED; integrated acceptance pending |
 | [036](036-android-cache-first-and-mutation-authority.md) | Return cached content immediately and preserve the latest mutation | P1 | L | 033, 035 | TODO |
 | [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | TODO |
 | [038](038-android-loading-and-error-lifecycle.md) | Keep loading continuous and make failures recoverable | P1 | L | 033, 034, 035, 036, 037 | TODO |
