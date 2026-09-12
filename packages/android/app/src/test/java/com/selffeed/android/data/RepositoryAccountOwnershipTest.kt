@@ -404,7 +404,7 @@ class RepositoryAccountOwnershipTest {
         val repository = repository(mockk(relaxed = true))
         repository.prepareSession()
         val owner = store.currentSession()
-        assertEquals(AppResult.Success(true), repository.markRead("same-id", true))
+        assertTrue(repository.markRead("same-id", true) is AppResult.Success)
         val pending = local.readPendingReadStateMutations().single()
         assertTrue(repository.setApiBaseUrl("https://b.example/api/v1/") is AppResult.Success)
         assertEquals(listOf(pending), database.localStoreDao().readArchivedReadStateMutations(owner.ownerId).map { it.mutation })

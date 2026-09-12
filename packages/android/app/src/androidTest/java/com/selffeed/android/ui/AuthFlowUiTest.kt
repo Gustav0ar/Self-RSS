@@ -56,7 +56,6 @@ class AuthFlowUiTest {
                         settings = SettingsUiState(),
                         isOnline = true,
                     ),
-                    readStateOverrides = MutableStateFlow(emptyMap()),
                     actions = noOpAppActions(),
                     articlePagingData = flowOf(PagingData.empty<ArticleListItem>()),
                 )
@@ -90,7 +89,6 @@ class AuthFlowUiTest {
                         settings = SettingsUiState(),
                         isOnline = true,
                     ),
-                    readStateOverrides = MutableStateFlow(emptyMap()),
                     actions = noOpAppActions(),
                     articlePagingData = flowOf(PagingData.empty<ArticleListItem>()),
                 )
@@ -217,6 +215,53 @@ class AuthFlowUiTest {
         // The key security improvement: if the activity is recreated (e.g., after
         // configuration change or system-initiated save), the password field
         // will be empty rather than restored from saved instance state.
+    }
+
+    @Test
+    fun queueAndSearchUseObservedFlagsWithoutReplacingTheirMetadata() {
+        val row = ArticleListItem(id = "flags", feedId = "feed", feedTitle = "Feed", title = "Observed article", isRead = false)
+        val paging = flowOf(PagingData.from(listOf(row)))
+        var appState by mutableStateOf(SelfFeedAppState(
+            auth = AuthUiState(loading = false, isAuthenticated = true),
+            chrome = AppChromeState(),
+            feeds = FeedsUiState(),
+            articles = ArticlesUiState(items = listOf(row)),
+            search = SearchUiState(query = "Observed", results = listOf(row)),
+            settings = SettingsUiState(),
+            isOnline = true,
+        ))
+        var bookmarkRequest: Pair<String, Boolean>? = null
+        composeRule.setContent {
+            SelfFeedTheme {
+                SelfFeedApp(
+                    state = appState,
+                    actions = noOpAppActions().copy(onToggleSaved = { id, saved -> bookmarkRequest = id to saved }),
+                    articlePagingData = paging,
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Unread article: Observed article, from Feed").assertIsDisplayed()
+        composeRule.runOnIdle {
+            appState = appState.copy(articles = appState.articles.copy(
+                articleStates = mapOf("flags" to com.selffeed.android.ui.articles.ArticleFlags(true, true)),
+            ))
+        }
+        composeRule.onNodeWithContentDescription("Read article: Observed article, from Feed").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Remove from saved").assertIsDisplayed()
+        composeRule.runOnIdle { appState = appState.copy(chrome = appState.chrome.copy(activeTab = HomeTab.SEARCH)) }
+        composeRule.onNodeWithContentDescription("Remove from saved").performClick()
+        composeRule.runOnIdle {
+            assertEquals("flags" to false, bookmarkRequest)
+            assertEquals(false, appState.articles.items.single().isRead)
+            assertEquals(false, appState.search.results.single().isSaved)
+            appState = appState.copy(articles = appState.articles.copy(
+                articleStates = mapOf("flags" to com.selffeed.android.ui.articles.ArticleFlags(false, false)),
+            ))
+        }
+        composeRule.onNodeWithContentDescription("Save article").assertIsDisplayed()
+        composeRule.runOnIdle { appState = appState.copy(chrome = appState.chrome.copy(activeTab = HomeTab.ARTICLES)) }
+        composeRule.onNodeWithContentDescription("Unread article: Observed article, from Feed").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Save article").assertIsDisplayed()
     }
 
     private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.setAuthContent() {

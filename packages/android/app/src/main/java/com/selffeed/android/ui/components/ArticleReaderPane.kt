@@ -1,5 +1,8 @@
 package com.selffeed.android.ui.components
 
+import com.selffeed.android.ui.articles.ArticleFlags
+import com.selffeed.android.ui.articles.withArticleFlags
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -82,6 +85,7 @@ fun ArticleReaderPane(
     isVisible: Boolean = true,
     selectedArticle: ArticleDetail,
     prefetchedArticles: Map<String, ArticleDetail> = emptyMap(),
+    articleStates: Map<String, ArticleFlags> = emptyMap(),
     onOpenOriginal: (ArticleDetail) -> Unit,
     onBackToList: () -> Unit,
     onArticleSelected: (String) -> Unit,
@@ -192,8 +196,8 @@ fun ArticleReaderPane(
         key = { page -> readerArticles[page].id },
     ) { page ->
         if (readerArticles.isEmpty()) return@HorizontalPager
-        val articleItem = readerArticles[page]
-        val article = selectedDetails[articleItem.id]
+        val articleItem = readerArticles[page].withArticleFlags(articleStates[readerArticles[page].id])
+        val article = selectedDetails[articleItem.id]?.withArticleFlags(articleStates[articleItem.id])
         if (article != null) {
             ArticleDetailView(
                 observeOfflineText = observeOfflineText,

@@ -1,5 +1,7 @@
 package com.selffeed.android.ui.screens
 
+import com.selffeed.android.ui.articles.ArticleFlags
+
 import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthSession
@@ -56,6 +58,7 @@ data class FeedTabActions(
 
 data class ArticleTabState(
     val articles: List<ArticleListItem>,
+    val articleStates: Map<String, ArticleFlags> = emptyMap(),
     val selectedArticleId: String?,
     val isSyncingFeeds: Boolean,
     val isStartingFeedSync: Boolean = false,

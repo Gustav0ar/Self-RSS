@@ -79,6 +79,7 @@ import com.selffeed.android.ui.components.OfflineTextStatus
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
+import com.selffeed.android.ui.articles.withArticleFlags
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
@@ -96,13 +97,6 @@ fun ArticlesTab(
     val pullToRefreshState = rememberPullToRefreshState()
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
     var wasRefreshing by remember { mutableStateOf(false) }
-    val readStateOverrides = remember(state.articles) {
-        state.articles.associate { it.id to it.isRead }
-    }
-    val savedStateOverrides = remember(state.articles) {
-        state.articles.associate { it.id to it.isSaved }
-    }
-
     val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
     val articleCount = pagedArticles.itemCount
 
@@ -111,7 +105,7 @@ fun ArticlesTab(
             val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
             listState.layoutInfo.visibleItemsInfo
                 .mapNotNull { item -> loadedArticlesById[item.key as? String] }
-                .take(VISIBLE_ARTICLE_PREFETCH_LIMIT)
+                .take(100)
         }
             .distinctUntilChanged { previous, current ->
                 previous.map { it.id } == current.map { it.id }
@@ -265,14 +259,11 @@ fun ArticlesTab(
                 if (article == null) {
                     ArticlePlaceholderRow()
                 } else {
-                    val isRead = readStateOverrides[article.id] ?: article.isRead
-                    val displayedArticle = savedStateOverrides[article.id]
-                        ?.let { article.copy(isSaved = it) }
-                        ?: article
+                    val displayedArticle = article.withArticleFlags(state.articleStates[article.id])
                     ArticleListRow(
                         observeOfflineText = observeOfflineText,
                         article = displayedArticle,
-                        isRead = isRead,
+                        isRead = displayedArticle.isRead,
                         selected = state.selectedArticleId == article.id,
                         onClick = {
                             actions.onOpenArticleFromQueue(
@@ -413,7 +404,6 @@ private fun BackgroundFeedSyncIndicator(
     }
 }
 
-private const val VISIBLE_ARTICLE_PREFETCH_LIMIT = 4
 
 internal fun readerQueueForTappedArticle(
     snapshot: List<ArticleListItem>,

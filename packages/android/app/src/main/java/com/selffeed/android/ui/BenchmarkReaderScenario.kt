@@ -60,7 +60,6 @@ internal fun BenchmarkReaderScenario() {
     var selectedArticle by remember { mutableStateOf<ArticleDetail?>(null) }
     var readyArticleId by remember { mutableStateOf<String?>(null) }
     val pagingData = remember { flowOf(PagingData.from(listOf(benchmarkArticle))) }
-    val readStateOverrides = remember { MutableStateFlow<Map<String, Boolean>>(emptyMap()) }
     val state = SelfFeedAppState(
         auth = AuthUiState(loading = false, isAuthenticated = true),
         chrome = AppChromeState(activeTab = HomeTab.ARTICLES),
@@ -79,7 +78,6 @@ internal fun BenchmarkReaderScenario() {
         SelfFeedApp(
             onArticleBodyReady = { readyArticleId = it },
             state = state,
-            readStateOverrides = readStateOverrides,
             articlePagingData = pagingData,
             actions = SelfFeedAppActions(
                 onAuthModeChange = {},

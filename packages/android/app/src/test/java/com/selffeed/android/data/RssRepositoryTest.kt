@@ -357,6 +357,56 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `committed actions return their receipts while work scheduling is suspended`() = runTest {
+        onlineState.value = false
+        mockkObject(ArticleStateSyncWorker.Companion)
+        try {
+            for (saved in listOf(false, true)) {
+                val started = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                coEvery { ArticleStateSyncWorker.kickOnce(any()) } coAnswers {
+                    started.complete(Unit)
+                    release.await()
+                }
+                val action = async {
+                    if (saved) repository.setSaved("scheduled", false)
+                    else repository.markRead("scheduled", true)
+                }
+                try {
+                    started.await()
+                    runCurrent()
+                    assertTrue("The durable receipt must not wait for WorkManager", action.isCompleted)
+                    val receipt = (action.await() as AppResult.Success).data
+                    val pendingId = if (saved) localStore.readPendingSavedStateMutations().single().mutationId
+                        else localStore.readPendingReadStateMutations().single().mutationId
+                    assertEquals(pendingId, receipt.mutationId)
+                } finally {
+                    release.complete(Unit)
+                    action.join()
+                }
+            }
+        } finally { unmockkObject(ArticleStateSyncWorker.Companion) }
+    }
+
+    @Test
+    fun `optional image prefetch failure cannot reject a committed bookmark receipt`() = runTest {
+        val detail = sampleArticleDetail("bookmark-image-failure", false).copy(
+            heroImageUrl = "https://example.invalid/hero.jpg", isEnriched = true,
+        )
+        coEvery { api.article(detail.id, session = any()) } returns ApiEnvelope(detail)
+        assertTrue(repository.article(detail.id) is AppResult.Success)
+        every { imageLoader.enqueue(any()) } throws IllegalStateException("Image loader unavailable")
+        onlineState.value = false
+
+        val result = repository.setSaved(detail.id, true)
+
+        assertTrue(result is AppResult.Success)
+        assertEquals(localStore.readPendingSavedStateMutations().single().mutationId,
+            (result as AppResult.Success).data.mutationId)
+        assertEquals(true, localStore.readArticleDetail(detail.id)?.isSaved)
+    }
+
+    @Test
     fun `worker rejection restores saved state through the real ViewModel repository and Room`() = runTest {
         val articleId = "saved-rollback"
         val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)
@@ -369,6 +419,7 @@ class RssRepositoryTest {
         )
         val viewModelStore = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
+            backgroundScope.launch { viewModel.observeReadStateSync() }
             viewModel.openArticle(articleId)
             viewModel.state.first { it.selectedArticle?.contentHtml != null }
             viewModel.setSaved(articleId, true)
@@ -382,6 +433,9 @@ class RssRepositoryTest {
             assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
             assertEquals(false, localStore.readArticleDetail(articleId)?.isSaved)
             assertEquals(false, repository.cachedArticleDetail(articleId)?.isSaved)
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { viewModel.state.first { it.selectedArticle?.isSaved == false && it.errorMessage != null } }
+            }
             assertEquals(false, viewModel.state.value.selectedArticle?.isSaved)
             assertNotNull(viewModel.state.value.errorMessage)
         } finally {
@@ -510,10 +564,10 @@ class RssRepositoryTest {
             }
         }
 
-        assertEquals(AppResult.Success(true), repository.markRead(articleId, true))
+        assertTrue(repository.markRead(articleId, true) is AppResult.Success)
         val delivery = async { repository.flushPendingArticleStateMutations() }
         oldDeliveryStarted.await()
-        assertEquals(AppResult.Success(false), repository.markRead(articleId, false))
+        assertTrue(repository.markRead(articleId, false) is AppResult.Success)
         withContext(Dispatchers.Default) {
             withTimeout(5_000) {
                 localStore.invalidations.first {
@@ -556,10 +610,10 @@ class RssRepositoryTest {
             }
         }
 
-        assertEquals(AppResult.Success(true), repository.setSaved(articleId, true))
+        assertTrue(repository.setSaved(articleId, true) is AppResult.Success)
         val delivery = async { repository.flushPendingArticleStateMutations() }
         oldDeliveryStarted.await()
-        assertEquals(AppResult.Success(false), repository.setSaved(articleId, false))
+        assertTrue(repository.setSaved(articleId, false) is AppResult.Success)
         withContext(Dispatchers.Default) {
             withTimeout(5_000) {
                 localStore.invalidations.first {
@@ -726,7 +780,8 @@ class RssRepositoryTest {
 
         val queuedResult = repository.markRead(articleId, true)
 
-        assertTrue(queuedResult is AppResult.Success)
+        assertEquals(localStore.readPendingReadStateMutations().single().mutationId,
+            (queuedResult as AppResult.Success).data.mutationId)
         assertEquals(1, localStore.readPendingReadStateMutations().size)
         coVerify(exactly = 0) { api.markRead(any(), any(), session = any()) }
 
@@ -826,7 +881,8 @@ class RssRepositoryTest {
         )
 
         val queuedResult = repository.markRead(articleId, true)
-        assertTrue(queuedResult is AppResult.Success)
+        assertEquals(localStore.readPendingReadStateMutations().single().mutationId,
+            (queuedResult as AppResult.Success).data.mutationId)
         assertEquals(1, localStore.readPendingReadStateMutations().size)
 
         onlineState.value = true
@@ -979,7 +1035,6 @@ class RssRepositoryTest {
 
         assertEquals(AppResult.Success(Unit), repository.reorderCategories(updates))
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
-        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(4, localStore.readCategories().last().unreadCount)
         coVerify(exactly = 1) { api.reorderCategories(request, session = any()) }
     }
@@ -1012,7 +1067,6 @@ class RssRepositoryTest {
         pending.complete(Unit)
 
         assertEquals(AppResult.Success(updated), loading.await())
-        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         coVerify(exactly = 2) { api.categories(session = any()) }
     }
@@ -1065,7 +1119,6 @@ class RssRepositoryTest {
         assertEquals("f-network", feed.id)
         assertEquals("error", feed.syncStatus)
         assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
-        assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
         coVerify(exactly = 1) { api.feeds(null, session = any()) }
     }
 
@@ -1087,16 +1140,16 @@ class RssRepositoryTest {
         try {
             viewModel.updateArticleQueueSnapshot(listOf(article.copy(isRead = true)))
             backgroundScope.launch { viewModel.observeReadStateSync() }
-            val received = async { viewModel.events.first() }
             runCurrent()
             remoteEvents.emit(com.selffeed.android.network.ArticleReadStateChangedEvent(
                 eventId = "foreign-unread", articleId = article.id, feedId = article.feedId,
                 isRead = false, source = "manual", clientId = "another-device",
                 updatedAt = "2026-09-05T00:00:00Z", revision = 3,
             ))
-            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ArticleReadStateChanged
-            assertEquals(true, viewModel.state.value.items.single().isRead)
-            assertEquals(true, viewModel.readStateOverrides.value[article.id])
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { viewModel.state.first { it.articleStates[article.id]?.isRead == true } }
+            }
+            assertEquals(true, viewModel.state.value.articleStates[article.id]?.isRead)
             assertEquals(true, localStore.readPendingReadStateMutations().single().read)
 
             coEvery { api.markRead(article.id, any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
@@ -1105,7 +1158,7 @@ class RssRepositoryTest {
             onlineState.value = true
             assertTrue(repository.flushPendingArticleStateMutations())
             assertTrue(localStore.readPendingReadStateMutations().isEmpty())
-            assertEquals(true, viewModel.readStateOverrides.value[article.id])
+            assertEquals(true, viewModel.state.value.articleStates[article.id]?.isRead)
         } finally {
             store.clear()
         }
@@ -1144,8 +1197,8 @@ class RssRepositoryTest {
             viewModel.updateArticleQueueSnapshot(listOf(article))
             backgroundScope.launch { viewModel.observeReadStateSync() }
             val bulk = async {
-                viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead }
-                    as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
+                viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ArticleStateRefreshRequested }
+                    as com.selffeed.android.ui.ArticleFeatureEvent.ArticleStateRefreshRequested
             }
             runCurrent()
             remoteEvents.emit(com.selffeed.android.network.ArticlesMarkedReadEvent(
@@ -1154,20 +1207,18 @@ class RssRepositoryTest {
                 clientId = "another-device", updatedAt = "2026-09-07T00:00:00Z",
             ))
             reconciled.await()
-            val local = async {
-                viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ArticleReadStateChanged }
-            }
-            runCurrent()
             viewModel.markRead(article.id, !initiallyRead)
-            local.await()
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    localStore.observeArticleStates(setOf(article.id), sessionStore.currentSession().ownerId)
+                        .first { it[article.id]?.pendingReadMutationId != null }
+                }
+            }
             assertEquals(!initiallyRead, localStore.readPendingReadStateMutations().single().read)
             resumeReceipt.complete(Unit)
-            val event = bulk.await()
+            bulk.await()
             assertEquals(!initiallyRead, localStore.readPendingReadStateMutations().single().read)
-            assertEquals(!initiallyRead, viewModel.state.value.items.single().isRead)
-            assertEquals(!initiallyRead, viewModel.readStateOverrides.value[article.id])
-            assertEquals(if (initiallyRead) mapOf(article.id to article.feedId) else emptyMap<String, String>(),
-                event.retainedUnreadArticleFeeds)
+            assertEquals(!initiallyRead, viewModel.state.value.articleStates[article.id]?.isRead)
         } finally {
             resumeReceipt.complete(Unit)
             store.clear()
@@ -1205,11 +1256,13 @@ class RssRepositoryTest {
                 scope = com.selffeed.android.network.ReadStateScope(feedId = pending.feedId),
                 clientId = "another-device", updatedAt = "2026-09-05T00:00:00Z",
             ))
-            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
-            assertEquals(mapOf(pending.id to pending.feedId), event.retainedUnreadArticleFeeds)
+            val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ArticleStateRefreshRequested
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) { viewModel.state.first { state -> state.articleStates[unread.id]?.isRead == true } }
+            }
             assertEquals(mapOf(pending.id to false, unread.id to true, other.id to false),
-                viewModel.state.value.items.associate { it.id to it.isRead })
-            assertEquals(false, viewModel.readStateOverrides.value[pending.id])
+                viewModel.state.value.articleStates.mapValues { it.value.isRead })
+            assertEquals(false, viewModel.state.value.articleStates[pending.id]?.isRead)
             assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
             assertEquals(false, viewModel.state.value.readerDetails[pending.id]?.isRead)
             assertEquals(false, localStore.readArticleDetail(pending.id)?.isRead)
@@ -1356,7 +1409,6 @@ class RssRepositoryTest {
                 withTimeout(5_000) {
                     val expected = AppResult.Success(detail.copy(isRead = true, isSaved = true))
                     assertEquals(expected, repository.article(articleId))
-                    assertEquals(expected, repository.article(articleId))
                     assertEquals(expected, repository.prefetchArticle(articleId))
                     assertEquals(AppResult.Success(listOf(category)), repository.categories())
                     assertEquals(AppResult.Success(listOf(feed)), repository.feeds(null))
@@ -1391,8 +1443,8 @@ class RssRepositoryTest {
 
         withContext(Dispatchers.Default) {
             withTimeout(5_000) {
-                assertEquals(AppResult.Success(true), repository.markRead(articleId, true))
-                assertEquals(AppResult.Success(true), repository.setSaved(articleId, true))
+                assertTrue(repository.markRead(articleId, true) is AppResult.Success)
+                assertTrue(repository.setSaved(articleId, true) is AppResult.Success)
             }
         }
 

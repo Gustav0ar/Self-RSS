@@ -1,5 +1,7 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.ui.articles.withArticleFlags
+
 import com.selffeed.android.data.CategoryMoveDirection
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -192,7 +194,6 @@ data class SelfFeedAppActions(
 @Composable
 fun SelfFeedApp(
     state: SelfFeedAppState,
-    readStateOverrides: StateFlow<Map<String, Boolean>>,
     actions: SelfFeedAppActions,
     articlePagingData: Flow<PagingData<ArticleListItem>>,
     pendingArticleChanges: Flow<Int> = emptyFlow(),
@@ -210,7 +211,6 @@ fun SelfFeedApp(
     val selectedFeedId = state.articles.selectedFeedId
     val selectedCategoryId = state.articles.selectedCategoryId
     val readerFeedTitle = state.articles.currentReaderFeedTitle()
-    val readStateOverrides by readStateOverrides.collectAsStateWithLifecycle()
     var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
     val markedReadMessage = stringResource(R.string.article_marked_read)
     val markedUnreadMessage = stringResource(R.string.article_marked_unread)
@@ -324,16 +324,10 @@ fun SelfFeedApp(
         settledArticleSnapshot(articleSnapshot, articleRefreshState)
             ?.let(actions.onArticleSnapshot)
     }
-    val rawArticleQueue = if (selectedArticle != null && state.articles.readerQueue.isNotEmpty()) {
+    val articleQueue = if (selectedArticle != null && state.articles.readerQueue.isNotEmpty()) {
         state.articles.readerQueue
     } else {
         articleSnapshot
-    }
-    // Apply read state overrides to show articles as read without filtering them out
-    val articleQueue = remember(rawArticleQueue, readStateOverrides) {
-        rawArticleQueue.map { article ->
-            readStateOverrides[article.id]?.let { article.copy(isRead = it) } ?: article
-        }
     }
     val feedTabState = remember(
         state.feeds.categories,
@@ -372,6 +366,7 @@ fun SelfFeedApp(
     }
     val articleTabState = remember(
         articleQueue,
+        state.articles.articleStates,
         selectedArticle?.id,
         state.feeds.loading,
         state.feeds.syncInBackground,
@@ -390,6 +385,7 @@ fun SelfFeedApp(
             ?.let(::feedLifecyclePresentation)
         ArticleTabState(
             articles = articleQueue,
+            articleStates = state.articles.articleStates,
             selectedArticleId = selectedArticle?.id,
             isSyncingFeeds = state.feeds.syncInBackground,
             isStartingFeedSync = state.feeds.loading,
@@ -403,6 +399,7 @@ fun SelfFeedApp(
         )
     }
     val searchTabState = remember(
+        state.articles.articleStates,
         state.search.query,
         state.search.results,
         selectedArticle?.id,
@@ -417,7 +414,7 @@ fun SelfFeedApp(
     ) {
         SearchTabState(
             query = state.search.query,
-            results = state.search.results,
+            results = state.search.results.map { it.withArticleFlags(state.articles.articleStates[it.id]) },
             selectedArticleId = selectedArticle?.id,
             hasMoreResults = state.search.hasMore,
             loadingResults = state.search.loading,
@@ -531,6 +528,7 @@ fun SelfFeedApp(
                     isVisible = activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED),
                     onArticleBodyReady = onArticleBodyReady,
                     articles = articleQueue,
+                    articleStates = state.articles.articleStates,
                     selectedArticle = article,
                     prefetchedArticles = state.articles.readerDetails,
                     observeOfflineText = scopedOfflineText,

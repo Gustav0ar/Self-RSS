@@ -10,6 +10,8 @@ import kotlinx.coroutines.NonCancellable
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import com.selffeed.android.data.AppResult
 import androidx.paging.PagingData
+import com.selffeed.android.data.repository.ArticleMutationReceipt
+import kotlinx.coroutines.flow.map
 import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -59,22 +61,46 @@ class ArticlesViewModelTest {
     private lateinit var enrichmentManager: EnrichmentManager
     private lateinit var articleWarmingManager: ArticleWarmingManager
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val storedFlags = kotlinx.coroutines.flow.MutableStateFlow<Map<String, LocalArticleState>>(emptyMap())
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
+        storedFlags.value = emptyMap()
+        every { repository.observeArticleStates(any()) } answers {
+            val ids = firstArg<Set<String>>()
+            storedFlags.map { values -> AppResult.Success(values.filterKeys { it in ids }) }
+        }
+        coEvery { repository.refreshArticleStates(any()) } returns AppResult.Success(Unit)
         coEvery { repository.localArticleState(any()) } returns AppResult.Success(
             LocalArticleState(false, false),
         )
         coEvery { repository.article(any(), any()) } returns AppResult.Success(sampleDetail("a1"))
         coEvery { repository.markRead(any(), any(), any()) } coAnswers {
-            AppResult.Success(secondArg<Boolean>())
+            val id = firstArg<String>()
+            val receipt = ArticleMutationReceipt(java.util.UUID.randomUUID().toString())
+            val old = storedFlags.value[id] ?: LocalArticleState(null, null)
+            storedFlags.value += id to old.copy(isRead = secondArg(), lastReadMutationId = receipt.mutationId)
+            AppResult.Success(receipt)
         }
-        coEvery { repository.updateCachedReadState(any(), any(), any()) } answers { secondArg<Boolean>() }
-        coEvery { repository.updateCachedSavedState(any(), any()) } just runs
+        coEvery { repository.updateCachedReadState(any(), any(), any()) } answers {
+            val id = firstArg<String>()
+            val old = storedFlags.value[id] ?: LocalArticleState(null, null)
+            storedFlags.value += id to old.copy(isRead = secondArg())
+            secondArg<Boolean>()
+        }
+        coEvery { repository.updateCachedSavedState(any(), any(), any()) } answers {
+            val id = firstArg<String>()
+            val old = storedFlags.value[id] ?: LocalArticleState(null, null)
+            storedFlags.value += id to old.copy(isSaved = secondArg())
+        }
         coEvery { repository.setSaved(any(), any()) } coAnswers {
-            AppResult.Success(secondArg<Boolean>())
+            val id = firstArg<String>()
+            val receipt = ArticleMutationReceipt(java.util.UUID.randomUUID().toString())
+            val old = storedFlags.value[id] ?: LocalArticleState(null, null)
+            storedFlags.value += id to old.copy(isSaved = secondArg(), lastSavedMutationId = receipt.mutationId)
+            AppResult.Success(receipt)
         }
         coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
             MarkAllReadResponse(markedCount = 0),
@@ -87,7 +113,7 @@ class ArticlesViewModelTest {
         }
         coEvery { repository.refreshArticleDetail(any()) } returns AppResult.Success(sampleDetail("a2"))
         every { repository.cachedArticleDetail(any()) } returns null
-        every { repository.articlePagingData(any(), any()) } returns flowOf(PagingData.empty())
+        every { repository.articlePagingData(any()) } returns flowOf(PagingData.empty())
         every { repository.prefetchHeroImages(any()) } just runs
         every { repository.readStateRejections() } returns kotlinx.coroutines.flow.emptyFlow()
         every { repository.savedStateRejections() } returns kotlinx.coroutines.flow.emptyFlow()
@@ -120,6 +146,24 @@ class ArticlesViewModelTest {
             enrichmentManager,
             articleWarmingManager
         )
+    }
+
+    @Test
+    fun `foreground reader renders committed Room flags without a payload event`() = runTest {
+        val flags = kotlinx.coroutines.flow.MutableStateFlow<AppResult<Map<String, LocalArticleState>>>(
+            AppResult.Success(mapOf("a1" to LocalArticleState(false, false))),
+        )
+        every { repository.observeArticleStates(any()) } returns flags
+        coEvery { repository.refreshArticleStates(any()) } returns AppResult.Success(Unit)
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a1")))
+        val foreground = backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        flags.value = AppResult.Success(mapOf("a1" to LocalArticleState(true, true, readRevision = 8, savedRevision = 9)))
+        runCurrent()
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isSaved)
+        foreground.cancel()
     }
 
     @Test
@@ -171,7 +215,7 @@ class ArticlesViewModelTest {
     }
 
     private fun assertLateReadFailureKeepsSelection(navigate: (ArticlesViewModel) -> Unit, expectedId: String?) {
-        val response = CompletableDeferred<AppResult<Boolean>>()
+        val response = CompletableDeferred<AppResult<ArticleMutationReceipt>>()
         coEvery { repository.markRead("a1", true, any()) } coAnswers { response.await() }
         coEvery { repository.article(any(), any()) } answers { AppResult.Success(sampleDetail(firstArg())) }
         val viewModel = createViewModel()
@@ -234,7 +278,7 @@ class ArticlesViewModelTest {
         runCurrent()
 
         assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
-        verify(exactly = 1) { repository.articlePagingData(any(), any()) }
+        verify(exactly = 1) { repository.articlePagingData(any()) }
         collection.cancel()
     }
 
@@ -276,7 +320,7 @@ class ArticlesViewModelTest {
         viewModel.openArticle("a1")
         val s = viewModel.state.value
         assertNotNull(s.selectedArticle)
-        assertEquals(true, s.items.first().isRead)
+        assertEquals(true, s.articleStates["a1"]?.isRead)
         coVerify { repository.article("a1", false) }
         coVerify { repository.markRead("a1", true, "auto_open") }
     }
@@ -293,7 +337,7 @@ class ArticlesViewModelTest {
         runCurrent()
 
         val s = viewModel.state.value
-        assertEquals(true, s.items.first().isRead)
+        assertEquals(true, s.articleStates["a1"]?.isRead)
         assertEquals(true, s.selectedArticle?.isRead)
         coVerify { repository.markRead("a1", true, "auto_open") }
     }
@@ -609,8 +653,8 @@ class ArticlesViewModelTest {
         runCurrent()
 
         assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
-        assertEquals(true, viewModel.state.value.items.single().isRead)
-        verify(exactly = 1) { repository.articlePagingData(any(), any()) }
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        verify(exactly = 1) { repository.articlePagingData(any()) }
         collection.cancel()
     }
 
@@ -638,7 +682,7 @@ class ArticlesViewModelTest {
             runCurrent()
 
             assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
-            verify(exactly = 1) { repository.articlePagingData(any(), any()) }
+            verify(exactly = 1) { repository.articlePagingData(any()) }
             coVerify { repository.invalidateArticleContentCaches() }
             realtime.cancel()
             collection.cancel()
@@ -650,11 +694,11 @@ class ArticlesViewModelTest {
         primeArticleQueue(viewModel)
         viewModel.markRead("a1", true)
         val s = viewModel.state.value
-        assertTrue(s.items.first().isRead)
+        assertTrue(s.articleStates["a1"]?.isRead == true)
     }
 
     @Test
-    fun `markRead refreshes unread-only paging after server confirmation`() = runTest {
+    fun `markRead refreshes unread-only paging after durable acceptance`() = runTest {
         val viewModel = createViewModel()
         val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
         runCurrent()
@@ -665,7 +709,7 @@ class ArticlesViewModelTest {
         viewModel.markRead("a1", true)
         runCurrent()
 
-        verify(exactly = 3) { repository.articlePagingData(any(), any()) }
+        verify(exactly = 3) { repository.articlePagingData(any()) }
         collection.cancel()
     }
 
@@ -682,7 +726,7 @@ class ArticlesViewModelTest {
         runCurrent()
 
         assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
-        assertEquals(false, viewModel.readStateOverrides.value["a1"])
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
         coVerify(exactly = 0) { repository.markRead("a1", true, "auto_open") }
     }
 
@@ -695,23 +739,7 @@ class ArticlesViewModelTest {
         viewModel.markRead("a1", true)
         runCurrent()
 
-        assertEquals(false, viewModel.state.value.items.first().isRead)
-        assertEquals(false, viewModel.readStateOverrides.value["a1"])
-    }
-
-    @Test
-    fun `markRead emits unread and read deltas for sidebar and stats sync`() = runTest {
-        val viewModel = createViewModel()
-        primeArticleQueue(viewModel)
-
-        val event = backgroundScope.async { viewModel.events.first() }
-        runCurrent()
-        viewModel.markRead("a1", true)
-
-        val changed = event.await() as ArticleFeatureEvent.ArticleReadStateChanged
-        assertEquals("a1", changed.articleId)
-        assertEquals("f-1", changed.feedId)
-        assertEquals(true, changed.read)
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
     }
 
     @Test
@@ -736,8 +764,7 @@ class ArticlesViewModelTest {
         runCurrent()
         realtime.cancel()
 
-        assertEquals(true, viewModel.state.value.items.first().isRead)
-        assertEquals(true, viewModel.readStateOverrides.value["a1"])
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
         coVerify { repository.updateCachedReadState("a1", true) }
     }
 
@@ -759,61 +786,26 @@ class ArticlesViewModelTest {
         val realtime = backgroundScope.launch { viewModel.observeReadStateSync() }
         runCurrent()
         remoteEvents.emit(event)
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, false))
         runCurrent()
         realtime.cancel()
 
         assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
-        assertEquals(true, viewModel.state.value.items.first().isRead)
-        assertEquals(true, viewModel.readStateOverrides.value["a1"])
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
     }
 
     @Test
     fun `markAllRead marks loaded articles without reloading`() = runTest {
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
+        val foreground = backgroundScope.launch { viewModel.observeReadStateSync() }
         viewModel.markAllRead()
-        val s = viewModel.state.value
-        assertTrue(s.items.first().isRead)
-        coVerify { repository.markAllRead(null, null) }
-    }
-
-    @Test
-    fun `markAllRead emits empty feed set for all-feeds scope so consumers clear entire scope`() =
-        runTest {
-            coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
-                MarkAllReadResponse(markedCount = 4),
-            )
-            val viewModel = createViewModel()
-            primeArticleQueue(viewModel)
-
-            val event = backgroundScope.async { viewModel.events.first() }
-            runCurrent()
-            viewModel.markAllRead()
-
-            val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
-            assertNull(marked.feedId)
-            assertNull(marked.categoryId)
-            assertTrue(marked.affectedFeedIds.isEmpty())
-        }
-
-    @Test
-    fun `markAllRead emits affected feed ids returned by the API`() = runTest {
-        coEvery { repository.markAllRead(any(), any()) } returns AppResult.Success(
-            MarkAllReadResponse(markedCount = 2, feedIds = listOf("f-child")),
-        )
-        val viewModel = createViewModel()
-        viewModel.updateArticleQueueSnapshot(
-            listOf(sampleArticle("a1", feedId = "f-1"), sampleArticle("a2", feedId = "f-child")),
-        )
-
-        val event = backgroundScope.async { viewModel.events.first() }
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, false))
         runCurrent()
-        viewModel.markAllRead()
-
-        val marked = event.await() as ArticleFeatureEvent.ScopeMarkedRead
-        assertEquals(setOf("f-child"), marked.affectedFeedIds)
-        assertEquals(false, viewModel.state.value.items.first { it.id == "a1" }.isRead)
-        assertEquals(true, viewModel.state.value.items.first { it.id == "a2" }.isRead)
+        val s = viewModel.state.value
+        assertTrue(s.articleStates["a1"]?.isRead == true)
+        foreground.cancel()
+        coVerify { repository.markAllRead(null, null) }
     }
 
     @Test
@@ -837,7 +829,7 @@ class ArticlesViewModelTest {
         assertTrue(viewModel.state.value.savedOnly)
         assertNull(viewModel.state.value.selectedFeedId)
         assertNull(viewModel.state.value.selectedCategoryId)
-        verify { repository.articlePagingData(match { it.savedOnly }, any()) }
+        verify { repository.articlePagingData(match { it.savedOnly }) }
         collection.cancel()
     }
 
@@ -848,7 +840,7 @@ class ArticlesViewModelTest {
         coEvery { repository.markRead("a1", true, any()) } coAnswers {
             firstStarted.complete(Unit)
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { releaseFirst.await() }
-            AppResult.Success(true)
+            AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
@@ -859,8 +851,7 @@ class ArticlesViewModelTest {
         runCurrent()
         releaseFirst.complete(Unit)
         runCurrent()
-        assertEquals(false, viewModel.state.value.items.single().isRead)
-        assertEquals(false, viewModel.readStateOverrides.value["a1"])
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
         assertEquals(false, readStateManager.knownArticleReadStates()["a1"])
     }
 
@@ -872,7 +863,7 @@ class ArticlesViewModelTest {
             if (++saves == 1) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { releaseFirst.await() }
                 AppResult.Error("older failure")
-            } else AppResult.Success(true)
+            } else AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
@@ -884,7 +875,7 @@ class ArticlesViewModelTest {
         runCurrent()
         releaseFirst.complete(Unit)
         runCurrent()
-        assertEquals(true, viewModel.state.value.items.single().isSaved)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isSaved)
         assertEquals(0, failures)
         assertNull(viewModel.state.value.errorMessage)
     }
@@ -914,8 +905,7 @@ class ArticlesViewModelTest {
         runCurrent()
         release.complete(Unit)
         runCurrent()
-        assertEquals(false, viewModel.state.value.items.single().isRead)
-        assertEquals(false, viewModel.readStateOverrides.value["a1"])
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
         realtime.cancel()
     }
 
@@ -936,8 +926,7 @@ class ArticlesViewModelTest {
         viewModel.markRead("a1", false)
         release.complete(Unit)
         runCurrent()
-        assertEquals(false, viewModel.state.value.items.single().isRead)
-        assertEquals(false, viewModel.readStateOverrides.value["a1"])
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
     }
 
     @Test
@@ -957,6 +946,7 @@ class ArticlesViewModelTest {
             releaseReceipt.await()
             true
         }
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, false))
         val viewModel = createViewModel()
         viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a1").copy(isRead = true)))
         viewModel.markRead("a1", false)
@@ -969,11 +959,10 @@ class ArticlesViewModelTest {
         runCurrent()
         failAction.complete(Unit)
         runCurrent()
-        assertEquals(true, viewModel.state.value.items.single().isRead)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
         releaseReceipt.complete(Unit)
         runCurrent()
-        assertEquals(true, viewModel.state.value.items.single().isRead)
-        assertEquals(true, viewModel.readStateOverrides.value["a1"])
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
         realtime.cancel()
     }
 
@@ -1011,7 +1000,7 @@ class ArticlesViewModelTest {
         }
         coEvery { repository.setSaved("a1", true) } coAnswers {
             save.await()
-            AppResult.Success(true)
+            AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
@@ -1032,14 +1021,14 @@ class ArticlesViewModelTest {
         val release = CompletableDeferred<Unit>()
         coEvery { repository.markRead("a1", true, any()) } coAnswers {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
-            AppResult.Success(true)
+            AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
         val published = mutableListOf<Boolean>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            viewModel.events.collect { event ->
-                if (event is ArticleFeatureEvent.ArticleReadStateChanged) published += event.read
+            viewModel.state.collect { state ->
+                state.articleStates["a1"]?.isRead?.let { published += it }
             }
         }
         viewModel.markRead("a1", true)
@@ -1047,7 +1036,8 @@ class ArticlesViewModelTest {
         viewModel.markRead("a1", false)
         release.complete(Unit)
         runCurrent()
-        assertEquals(listOf(false), published)
+        assertEquals(false, published.last())
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
     }
 
     @Test
@@ -1060,10 +1050,12 @@ class ArticlesViewModelTest {
         }
         coEvery { repository.setSaved("a1", true) } coAnswers {
             storedSaved = true
-            AppResult.Success(true)
+            storedFlags.value = mapOf("a1" to LocalArticleState(false, true, lastSavedMutationId = "test-choice"))
+            AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
         viewModel.openArticle("a1")
         runCurrent()
         viewModel.setSaved("a1", true)
@@ -1073,6 +1065,7 @@ class ArticlesViewModelTest {
         assertEquals(true, viewModel.state.value.selectedArticle?.isSaved)
         assertEquals("Richer reader content", viewModel.state.value.selectedArticle?.contentText)
         storedSaved = false
+        storedFlags.value = mapOf("a1" to LocalArticleState(false, false, lastSavedMutationId = "test-choice"))
         coEvery { repository.article("a1", true) } returns AppResult.Success(sampleDetail("a1").copy(isSaved = false))
         viewModel.openArticle("a1", forceRefresh = true)
         runCurrent()
@@ -1090,7 +1083,7 @@ class ArticlesViewModelTest {
             if (reads++ == 0) { stateLookup.complete(Unit); release.await() }
             AppResult.Success(LocalArticleState(false, captured))
         }
-        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(true) }
+        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(ArticleMutationReceipt("test-choice")) }
         val viewModel = createViewModel()
         viewModel.openArticle("a1")
         stateLookup.await()
@@ -1128,7 +1121,7 @@ class ArticlesViewModelTest {
         coEvery { repository.localArticleState("a1") } coAnswers {
             AppResult.Success(LocalArticleState(false, storedSaved))
         }
-        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(true) }
+        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(ArticleMutationReceipt("test-choice")) }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
         viewModel.warmVisibleArticles(viewModel.state.value.items)
@@ -1150,7 +1143,7 @@ class ArticlesViewModelTest {
         coEvery { repository.localArticleState("a1") } coAnswers {
             AppResult.Success(LocalArticleState(false, storedSaved))
         }
-        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(true) }
+        coEvery { repository.setSaved("a1", true) } coAnswers { storedSaved = true; AppResult.Success(ArticleMutationReceipt("test-choice")) }
         val viewModel = createViewModel()
         viewModel.openArticle("a1")
         runCurrent()
@@ -1170,7 +1163,9 @@ class ArticlesViewModelTest {
         every { repository.savedStateRejections() } returns rejections
         var current = LocalArticleState(false, true, lastSavedMutationId = "new")
         coEvery { repository.localArticleState("a1") } coAnswers { AppResult.Success(current) }
+        storedFlags.value = mapOf("a1" to current)
         val viewModel = createViewModel()
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
         viewModel.openArticle("a1")
         runCurrent()
         rejections.emit(SavedStateRejection("a1", false, "old"))
@@ -1178,6 +1173,7 @@ class ArticlesViewModelTest {
         assertEquals(true, viewModel.state.value.selectedArticle?.isSaved)
         assertNull(viewModel.state.value.errorMessage)
         current = current.copy(isSaved = false)
+        storedFlags.value = mapOf("a1" to current)
         rejections.emit(SavedStateRejection("a1", true, "new"))
         runCurrent()
         assertEquals(false, viewModel.state.value.selectedArticle?.isSaved)
@@ -1199,7 +1195,7 @@ class ArticlesViewModelTest {
         }
         coEvery { repository.setSaved("a1", true) } coAnswers {
             current = current.copy(isSaved = true, lastSavedMutationId = "new")
-            AppResult.Success(true)
+            AppResult.Success(ArticleMutationReceipt("test-choice"))
         }
         val viewModel = createViewModel()
         val notification = backgroundScope.launch { rejections.emit(SavedStateRejection("a1", false, "old")) }
@@ -1219,16 +1215,23 @@ class ArticlesViewModelTest {
         every { repository.readStateRejections() } returns rejections
         var current = LocalArticleState(false, false, lastReadMutationId = "first")
         coEvery { repository.localArticleState("a1") } coAnswers { AppResult.Success(current) }
+        coEvery { repository.markRead("a1", true, any()) } coAnswers {
+            storedFlags.value = mapOf("a1" to current.copy(isRead = true))
+            AppResult.Success(ArticleMutationReceipt("first"))
+        }
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
         viewModel.markRead("a1", true)
         runCurrent()
+        storedFlags.value = mapOf("a1" to current)
         rejections.emit(ReadStateRejection("a1", "first"))
         runCurrent()
-        assertEquals(false, viewModel.state.value.items.single().isRead)
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
         assertEquals(PresentationText.resource(R.string.article_update_read_failed), viewModel.state.value.errorMessage)
         viewModel.clearMessages()
         current = current.copy(lastReadMutationId = "second")
+        storedFlags.value = mapOf("a1" to current)
         rejections.emit(ReadStateRejection("a1", "first"))
         runCurrent()
         assertNull(viewModel.state.value.errorMessage)
@@ -1288,7 +1291,7 @@ class ArticlesViewModelTest {
         viewModel.setSaved("a1", true)
         runCurrent()
 
-        assertTrue(viewModel.state.value.items.single().isSaved)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isSaved)
         assertTrue(viewModel.state.value.selectedArticle?.isSaved == true)
         coVerify { repository.setSaved("a1", true) }
     }
@@ -1298,6 +1301,231 @@ class ArticlesViewModelTest {
         val viewModel = createViewModel()
 
         viewModel.refreshArticles()
+    }
+
+    @Test
+    fun `manual refresh and reconnect reopen a failed observer without a retry loop`() = runTest {
+        val events = MutableSharedFlow<ReadStateSyncEvent>()
+        every { repository.readStateEvents() } returns events
+        var observations = 0
+        var available = false
+        every { repository.observeArticleStates(setOf("a1")) } answers {
+            observations++
+            if (available) flowOf(AppResult.Success(mapOf("a1" to LocalArticleState(true, true))))
+            else flowOf(AppResult.Error("Storage unavailable"))
+        }
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        assertEquals(1, observations)
+        testScheduler.advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(1, observations)
+        viewModel.refreshArticles()
+        runCurrent()
+        assertEquals(2, observations)
+        available = true
+        events.emit(com.selffeed.android.network.RealtimeConnectedEvent())
+        runCurrent()
+        assertEquals(3, observations)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isSaved)
+    }
+
+    @Test
+    fun `same account restoration retains observation and foreground restart catches missed state`() = runTest {
+        coEvery { repository.readCachedArticleDetail(any()) } returns null
+        val viewModel = createViewModel()
+        viewModel.restoreReadingSession("account")
+        primeArticleQueue(viewModel)
+        viewModel.updateSearchArticleIds(setOf("search-only"))
+        var foreground = backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        viewModel.restoreReadingSession("account")
+        viewModel.refreshArticles()
+        runCurrent()
+        verify(atLeast = 1) { repository.observeArticleStates(setOf("a1", "search-only")) }
+        storedFlags.value = mapOf("a1" to LocalArticleState(false, false))
+        runCurrent()
+        foreground.cancel()
+        runCurrent()
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, true))
+        runCurrent()
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
+        foreground = backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        foreground.cancel()
+    }
+
+    @Test
+    fun `refreshes coalesce while a lookup runs and the successor uses the latest bounded window`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val requests = mutableListOf<Set<String>>()
+        coEvery { repository.refreshArticleStates(any()) } coAnswers {
+            requests += firstArg<Set<String>>()
+            if (requests.size == 1) release.await()
+            AppResult.Success(Unit)
+        }
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        assertEquals(listOf(setOf("a1")), requests)
+        viewModel.updateArticleQueueSnapshot((1..2_000).map { sampleArticle("row-$it") })
+        viewModel.updateSearchArticleIds((1..90).map { "search-$it" }.toSet())
+        repeat(10) { viewModel.refreshArticles(); runCurrent() }
+        assertEquals(1, requests.size)
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(2, requests.size)
+        assertEquals(180, requests.last().size)
+        assertTrue("row-100" in requests.last())
+        assertTrue("row-101" !in requests.last())
+        assertTrue("search-80" in requests.last())
+        assertTrue("search-81" !in requests.last())
+    }
+
+    @Test
+    fun `late reader content cannot replace settled flags when its local lookup fails`() = runTest {
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, true))
+        coEvery { repository.localArticleState("a1") } returns AppResult.Error("Storage unavailable")
+        val viewModel = createViewModel()
+        viewModel.setAutoMarkReadMode("disabled")
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        viewModel.openArticle("a1")
+        runCurrent()
+        assertEquals(true, viewModel.state.value.selectedArticle?.isRead)
+        assertEquals(true, viewModel.state.value.selectedArticle?.isSaved)
+    }
+
+    @Test
+    fun `read acceptance during a delayed reader lookup cannot restore its captured old flags`() = runTest {
+        val lookup = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val choice = CompletableDeferred<Unit>()
+        coEvery { repository.localArticleState("a1") } coAnswers {
+            lookup.complete(Unit)
+            release.await()
+            AppResult.Success(LocalArticleState(false, false))
+        }
+        coEvery { repository.markRead("a1", true, any()) } coAnswers {
+            choice.await()
+            storedFlags.value = mapOf("a1" to LocalArticleState(true, false, lastReadMutationId = "choice"))
+            AppResult.Success(ArticleMutationReceipt("choice"))
+        }
+        val viewModel = createViewModel()
+        viewModel.setAutoMarkReadMode("disabled")
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        viewModel.markRead("a1", true)
+        viewModel.openArticle("a1")
+        lookup.await()
+        choice.complete(Unit)
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(true, viewModel.state.value.selectedArticle?.isRead)
+        assertEquals(true, viewModel.state.value.readerDetails["a1"]?.isRead)
+    }
+
+    @Test
+    fun `queue failure releases each optimistic field to a newer observed value without a rollback lookup`() = runTest {
+        val read = CompletableDeferred<AppResult<ArticleMutationReceipt>>()
+        val saved = CompletableDeferred<AppResult<ArticleMutationReceipt>>()
+        coEvery { repository.markRead("a1", true, any()) } coAnswers { read.await() }
+        coEvery { repository.setSaved("a1", true) } coAnswers { saved.await() }
+        storedFlags.value = mapOf("a1" to LocalArticleState(false, false))
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        viewModel.markRead("a1", true)
+        viewModel.setSaved("a1", true)
+        storedFlags.value = mapOf("a1" to LocalArticleState(true, true))
+        runCurrent()
+        read.complete(AppResult.Error("Read submission failed"))
+        saved.complete(AppResult.Error("Save submission failed"))
+        runCurrent()
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isSaved)
+        coVerify(exactly = 0) { repository.localArticleState(any()) }
+    }
+
+    @Test
+    fun `matching unknown rejections request fresh state without relying on another visible window`() = runTest {
+        val reads = MutableSharedFlow<ReadStateRejection>()
+        val saves = MutableSharedFlow<SavedStateRejection>()
+        every { repository.readStateRejections() } returns reads
+        every { repository.savedStateRejections() } returns saves
+        var unknown = LocalArticleState(null, null, lastReadMutationId = "read", lastSavedMutationId = "saved")
+        coEvery { repository.localArticleState("a1") } coAnswers { AppResult.Success(unknown) }
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        var lookups = 0
+        coEvery { repository.refreshArticleStates(setOf("a1")) } coAnswers {
+            lookups++
+            storedFlags.value = mapOf("a1" to unknown.copy(isRead = false, isSaved = false))
+            AppResult.Success(Unit)
+        }
+        reads.emit(ReadStateRejection("a1", "read"))
+        runCurrent()
+        assertEquals(1, lookups)
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
+        saves.emit(SavedStateRejection("a1", null, "saved"))
+        runCurrent()
+        assertEquals(2, lookups)
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isSaved)
+    }
+
+    @Test
+    fun `unversioned realtime flag is a catchup hint rather than authoritative state`() = runTest {
+        val events = MutableSharedFlow<ReadStateSyncEvent>()
+        every { repository.readStateEvents() } returns events
+        storedFlags.value = mapOf("a1" to LocalArticleState(false, false, readRevision = 3))
+        coEvery { repository.updateCachedReadState("a1", true, null) } returns false
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        backgroundScope.launch(testDispatcher) { viewModel.observeReadStateSync() }
+        runCurrent()
+        val release = CompletableDeferred<Unit>()
+        var refreshes = 0
+        coEvery { repository.refreshArticleStates(setOf("a1")) } coAnswers {
+            refreshes++
+            release.await()
+            storedFlags.value = mapOf("a1" to LocalArticleState(true, false, readRevision = 4))
+            AppResult.Success(Unit)
+        }
+        events.emit(ArticleReadStateChangedEvent(
+            eventId = "legacy", articleId = "a1", feedId = "f-1", isRead = true,
+            source = "manual", clientId = "another-client", updatedAt = "2026-09-12T00:00:00Z",
+        ))
+        runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(false, viewModel.state.value.articleStates["a1"]?.isRead)
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+    }
+
+    @Test
+    fun `manual unread survives leaving the observation window and revisiting`() = runTest {
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        viewModel.markRead("a1", false)
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a2")))
+        viewModel.warmVisibleArticles(listOf(sampleArticle("a2")))
+        runCurrent()
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a1")))
+        viewModel.warmVisibleArticles(listOf(sampleArticle("a1")))
+        viewModel.openArticle("a1")
+        runCurrent()
+        coVerify(exactly = 0) { repository.markRead("a1", true, "auto_open") }
+        assertEquals(false, viewModel.state.value.selectedArticle?.isRead)
     }
 
     private fun primeArticleQueue(viewModel: ArticlesViewModel) {

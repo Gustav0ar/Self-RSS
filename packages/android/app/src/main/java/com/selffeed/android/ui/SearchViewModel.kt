@@ -132,43 +132,6 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun applyArticleReadState(articleId: String, read: Boolean) {
-        _state.update { state ->
-            state.copy(
-                results = state.results.map { article ->
-                    if (article.id == articleId) article.copy(isRead = read) else article
-                },
-            )
-        }
-    }
-
-    fun applyScopeMarkedRead(feedIds: Set<String>) {
-        if (feedIds.isEmpty()) return
-        _state.update { state ->
-            state.copy(
-                results = state.results.map { article ->
-                    if (article.feedId in feedIds) article.copy(isRead = true) else article
-                },
-            )
-        }
-    }
-
-    fun applyAllMarkedRead() {
-        _state.update { state ->
-            state.copy(results = state.results.map { it.copy(isRead = true) })
-        }
-    }
-
-    fun updateSavedState(articleId: String, saved: Boolean) {
-        _state.update { state ->
-            state.copy(
-                results = state.results.map { article ->
-                    if (article.id == articleId) article.copy(isSaved = saved) else article
-                },
-            )
-        }
-    }
-
     private suspend fun runSearch(
         query: String,
         categoryId: String?,

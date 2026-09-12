@@ -125,7 +125,7 @@ class MainActivityHiltUiTest {
     }
 
     @Test
-    fun realtimeReconnectInvalidatesReadStateAndRefreshesEveryArticleSurface() {
+    fun realtimeReconnectRefreshesObservedFlagsAndCountsWithoutReplacingThePager() {
         repository.reset(authenticated = true)
         launchActivity()
         waitForText("Injected Article")
@@ -133,6 +133,7 @@ class MainActivityHiltUiTest {
         val categoriesBefore = repository.categoryRequests
         val feedsBefore = repository.feedRequests
         val articlesBefore = repository.articlePagingRequests
+        val articleStateBefore = repository.articleStateRefreshRequests
         val statsBefore = repository.statsRequests
 
         assertTrue(repository.emitRealtimeConnected())
@@ -141,9 +142,10 @@ class MainActivityHiltUiTest {
             repository.readStateInvalidations > 0 &&
                 repository.categoryRequests > categoriesBefore &&
                 repository.feedRequests > feedsBefore &&
-                repository.articlePagingRequests > articlesBefore &&
+                repository.articleStateRefreshRequests > articleStateBefore &&
                 repository.statsRequests > statsBefore
         }
+        assertEquals(articlesBefore, repository.articlePagingRequests)
         composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
     }
 

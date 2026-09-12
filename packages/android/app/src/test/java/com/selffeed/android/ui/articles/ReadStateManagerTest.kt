@@ -21,7 +21,7 @@ import org.junit.Test
 class ReadStateManagerTest {
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
-    fun `realtime reconnect flushes pending state clears session overlays and requests refresh`() = runTest {
+    fun `realtime reconnect requests bounded state refresh`() = runTest {
         val repository = mockk<ArticleRepository>(relaxed = true)
         val syncEvents = MutableSharedFlow<ReadStateSyncEvent>(extraBufferCapacity = 1)
         every { repository.readStateEvents() } returns syncEvents
@@ -29,7 +29,6 @@ class ReadStateManagerTest {
         coEvery { repository.invalidateReadStateCaches() } returns Unit
         val manager = ReadStateManager(repository)
         manager.setScope(backgroundScope)
-        manager.readStateStore.remember("article-1", true)
         val realtime = backgroundScope.launch { manager.observeReadStateSync() }
         val emittedEvent = async { manager.events.first() }
         runCurrent()
@@ -38,8 +37,7 @@ class ReadStateManagerTest {
         runCurrent()
 
         coVerify(exactly = 1) { repository.invalidateReadStateCaches() }
-        assertTrue(manager.knownArticleReadStates().isEmpty())
-        assertTrue(emittedEvent.await() is ArticleFeatureEvent.ArticlesChanged)
+        assertTrue(emittedEvent.await() is ArticleFeatureEvent.ArticleStateRefreshRequested)
         realtime.cancel()
     }
 }
