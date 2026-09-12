@@ -23,6 +23,7 @@ import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -57,6 +58,22 @@ class MainActivityHiltUiTest {
         launchActivity()
 
         composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun readerKeepsItsAccountAndArticleAcrossActivityRecreation() {
+        repository.reset(authenticated = true)
+        launchActivity()
+        waitForText("Injected Article 2")
+        composeRule.onNodeWithText("Injected Article 2").performClick()
+        waitForContentDescription("Back to list")
+        assertEquals(1, repository.restoreRequests)
+
+        scenario!!.recreate()
+
+        waitForContentDescription("Back to list")
+        composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
+        assertEquals("Recreation must retain the authenticated model", 1, repository.restoreRequests)
     }
 
     @Test

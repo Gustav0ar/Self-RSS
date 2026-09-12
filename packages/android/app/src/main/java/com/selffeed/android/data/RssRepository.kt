@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.di.ApplicationCoroutineScope
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import android.content.Context
@@ -143,7 +144,7 @@ class RssRepository @Inject constructor(
 
     private suspend fun authenticate(
         request: suspend (ApiSession) -> com.selffeed.android.network.AuthResponse,
-    ): AppResult<com.selffeed.android.network.User> = runtime.safeCall {
+    ): AppResult<AuthenticatedSession.Verified> = runtime.safeCall {
         val session = account.replace { sessionStore.beginAuthentication() }
         account.withSession(session) {
             val response = request(session)
@@ -154,7 +155,7 @@ class RssRepository @Inject constructor(
             }
             recordAppOpen(session)
             flushProductAnalyticsEvents(session)
-            response.user
+            AuthenticatedSession.Verified(session, response.user)
         }
     }
 
@@ -163,28 +164,49 @@ class RssRepository @Inject constructor(
         localStore.switchOwner(LocalOwnerEntity(ownerId = session.ownerId, apiBaseUrl = session.apiBaseUrl, userId = userId))
     }
 
-    override suspend fun restoreSession() = safeCall { session ->
+    override suspend fun restoreSession(): AppResult<AuthenticatedSession> = safeCall { session ->
         val (hasRefreshCookie, hasAccessToken) = account.commit(session) {
             !sessionStore.getRefreshCookie().isNullOrBlank() to !sessionStore.getAccessToken().isNullOrBlank()
         }
         check(hasRefreshCookie || hasAccessToken) { "No saved session" }
-        if (!hasAccessToken && hasRefreshCookie) {
-            when (withContext(Dispatchers.IO) { sessionRefreshCoordinator.refreshAccessToken(session) }) {
-                is SessionRefreshResult.Success -> Unit
-                SessionRefreshResult.Rejected -> throw AuthenticationLostException()
-                is SessionRefreshResult.Unavailable -> throw IllegalStateException(
-                    "Unable to refresh session. Please check your connection.",
-                )
+        val user = try {
+            if (!hasAccessToken && hasRefreshCookie) {
+                when (withContext(Dispatchers.IO) { sessionRefreshCoordinator.refreshAccessToken(session) }) {
+                    is SessionRefreshResult.Success -> Unit
+                    SessionRefreshResult.Rejected -> throw AuthenticationLostException()
+                    is SessionRefreshResult.Unavailable -> throw IllegalStateException(
+                        "Unable to refresh session. Please check your connection.",
+                    )
+                }
+            }
+            withRetry(session) { authRemote.me(session) }
+        } catch (error: Exception) {
+            return@safeCall restoreOfflineSession(session, error)
+        }
+        val renewalFailure = account.commit(session) {
+            // Identity violations must propagate, never become offline admission.
+            bindVerifiedUser(session, user.id)
+            try {
+                sessionStore.recordAuthenticated()
+                null
+            } catch (error: java.io.IOException) {
+                error
             }
         }
-        val user = withRetry(session) { authRemote.me(session) }
-        account.commit(session) {
-            bindVerifiedUser(session, user.id)
-            sessionStore.recordAuthenticated()
-        }
+        if (renewalFailure != null) return@safeCall restoreOfflineSession(session, renewalFailure)
         recordAppOpen(session)
         flushProductAnalyticsEvents(session)
-        user
+        AuthenticatedSession.Verified(session, user)
+    }
+
+    private suspend fun restoreOfflineSession(session: ApiSession, error: Exception): AuthenticatedSession.Offline {
+        if (error is CancellationException || isAuthenticationLost(error)) throw error
+        val allowed = account.commit(session) {
+            isLoggedIn() && sessionStore.hasValidOfflineAccessLease()
+        }
+        if (!allowed) throw error
+        recordOfflineRestore(session)
+        return AuthenticatedSession.Offline(session)
     }
 
     override suspend fun logout(): AppResult<Boolean> = runtime.safeCall {
@@ -901,15 +923,12 @@ class RssRepository @Inject constructor(
         !sessionStore.getRefreshCookie().isNullOrBlank() || !sessionStore.getAccessToken()
             .isNullOrBlank()
 
-    override fun canUseOfflineSession(): Boolean =
-        isLoggedIn() && sessionStore.hasValidOfflineAccessLease()
-
     override fun authEvents(): Flow<String> = authLostEvents.mapNotNull { event ->
         event.value.takeIf { sessionStore.isCurrentSession(event.session) }
     }
 
-    override suspend fun recordOfflineRestore() {
-        safePublicCall { session ->
+    private suspend fun recordOfflineRestore(session: ApiSession) {
+        runtime.safeCall {
             recordAppOpen(session)
             account.commit(session) { sessionStore.enqueueProductAnalyticsEvent("offline_restore") }
             flushProductAnalyticsEvents(session)
@@ -977,7 +996,7 @@ class RssRepository @Inject constructor(
         if (result is AppResult.Error) {
             val session = owner ?: return result
             account.requireCurrent(session)
-            if (isAuthenticationLost(result)) {
+            if (isAuthenticationLost(result.cause)) {
                 account.clearIfCurrent(session)?.let { cleared ->
                     authLostEvents.tryEmit(SessionEvent(cleared, AUTH_LOST_MESSAGE))
                 }
@@ -990,9 +1009,9 @@ class RssRepository @Inject constructor(
         return result
     }
 
-    private fun isAuthenticationLost(result: AppResult.Error): Boolean =
-        result.cause is AuthenticationLostException ||
-            ((result.cause as? HttpException)?.code() == 401 && sessionRefreshCoordinator.hasRecentRefreshRejection())
+    private fun isAuthenticationLost(cause: Throwable?): Boolean =
+        cause is AuthenticationLostException ||
+            ((cause as? HttpException)?.code() == 401 && sessionRefreshCoordinator.hasRecentRefreshRejection())
 
     private suspend fun <T> safePublicCall(
         expected: ApiSession? = sessionStore.loadedSession(),
@@ -1010,10 +1029,10 @@ class RssRepository @Inject constructor(
 
     private suspend fun flushProductAnalyticsEvents(expected: ApiSession? = sessionStore.loadedSession()) {
         if (!networkMonitor.online.value || !isLoggedIn()) return
-        safePublicCall(expected) { session ->
-            if (!networkMonitor.online.value || !isLoggedIn()) return@safePublicCall
+        safeCall(expected) { session ->
+            if (!networkMonitor.online.value || !isLoggedIn()) return@safeCall
             val pending = account.commit(session) { sessionStore.pendingProductAnalyticsEvents() }
-            if (pending.isEmpty()) return@safePublicCall
+            if (pending.isEmpty()) return@safeCall
             settingsRemote.recordProductAnalyticsEvents(RecordProductAnalyticsEventsRequest(pending), session)
             account.commit(session) { sessionStore.removeProductAnalyticsEvents(pending.mapTo(mutableSetOf()) { it.id }) }
         }

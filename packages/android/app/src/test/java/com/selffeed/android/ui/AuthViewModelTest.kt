@@ -2,6 +2,8 @@ package com.selffeed.android.ui
 
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ApiSession
+import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.network.normalizeApiServerHost
 import com.selffeed.android.network.RegistrationStatusResponse
@@ -34,28 +36,28 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class AuthViewModelTest {
     private lateinit var repository: RssRepository
+    private var configuredServer = DEFAULT_API_BASE_URL
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
-        every { repository.getApiBaseUrl() } returns DEFAULT_API_BASE_URL
+        every { repository.getApiBaseUrl() } answers { configuredServer }
         every { repository.isLoggedIn() } returns false
-        every { repository.canUseOfflineSession() } returns false
         every { repository.authEvents() } returns emptyFlow()
         coEvery { repository.setApiBaseUrl(any()) } answers {
-            AppResult.Success(normalizeApiServerHost(firstArg()))
+            configuredServer = normalizeApiServerHost(firstArg())
+            AppResult.Success(configuredServer)
         }
         coEvery { repository.registrationStatus() } returns AppResult.Success(
             RegistrationStatusResponse(registrationEnabled = true),
         )
-        coEvery { repository.login(any(), any()) } returns AppResult.Success(sampleUser())
-        coEvery { repository.register(any(), any()) } returns AppResult.Success(sampleUser())
-        coEvery { repository.restoreSession() } returns AppResult.Success(sampleUser())
+        coEvery { repository.login(any(), any()) } answers { AppResult.Success(verifiedSession()) }
+        coEvery { repository.register(any(), any()) } answers { AppResult.Success(verifiedSession()) }
+        coEvery { repository.restoreSession() } answers { AppResult.Success(verifiedSession()) }
         coEvery { repository.logout() } returns AppResult.Success(true)
         coEvery { repository.changePassword(any(), any()) } returns AppResult.Success(sampleUser())
-        coEvery { repository.recordOfflineRestore() } returns Unit
     }
 
     @After
@@ -150,9 +152,8 @@ class AuthViewModelTest {
     @Test
     fun `bootstrap with transient saved session restore failure keeps authenticated`() = runTest {
         every { repository.isLoggedIn() } returns true
-        every { repository.canUseOfflineSession() } returns true
-        coEvery { repository.restoreSession() } returns AppResult.Error(
-            "Unable to refresh session. Please check your connection.",
+        coEvery { repository.restoreSession() } returns AppResult.Success(
+            AuthenticatedSession.Offline(verifiedSession().session),
         )
         val viewModel = AuthViewModel(repository)
         viewModel.bootstrap()
@@ -161,7 +162,8 @@ class AuthViewModelTest {
         assertTrue(state.isAuthenticated)
         assertNull(state.errorMessage)
         assertEquals(DEFAULT_API_BASE_URL, state.apiBaseUrl)
-        coVerify { repository.recordOfflineRestore() }
+        assertEquals(verifiedSession().session, state.session)
+        assertNull(state.user)
     }
 
     @Test
@@ -183,6 +185,7 @@ class AuthViewModelTest {
         assertEquals(PresentationText.resource(R.string.auth_welcome_back), state.statusMessage)
         assertNull(state.errorMessage)
         assertEquals("10.0.22.22:3000", state.apiBaseUrl)
+        assertEquals(verifiedSession().session, state.session)
         coVerify { repository.setApiBaseUrl("10.0.22.22:3000") }
         coVerify { repository.login("reader@example.com", "password123") }
     }
@@ -373,7 +376,7 @@ class AuthViewModelTest {
             AppResult.Success("old.example")
         }
         coEvery { repository.login("new@example.com", any()) } returns
-            AppResult.Success(sampleUser().copy(id = "new-user"))
+            AppResult.Success(verifiedSession().copy(session = verifiedSession().session.copy(apiBaseUrl = "new.example"), user = sampleUser().copy(id = "new-user")))
         withViewModel { viewModel ->
             try {
                 viewModel.login("old@example.com", "old-password", "old.example")
@@ -414,7 +417,7 @@ class AuthViewModelTest {
         every { repository.isLoggedIn() } returns true
         coEvery { repository.restoreSession() } coAnswers {
             withContext(NonCancellable) { release.await() }
-            AppResult.Success(sampleUser())
+            AppResult.Success(verifiedSession())
         }
         withViewModel { viewModel ->
             try {
@@ -549,6 +552,10 @@ class AuthViewModelTest {
         val owner = ViewModelStore().apply { put("auth", viewModel) }
         try { block(viewModel) } finally { owner.clear() }
     }
+
+    private fun verifiedSession() = AuthenticatedSession.Verified(
+        ApiSession(0, configuredServer, "test-owner"), sampleUser(),
+    )
 
     private fun sampleUser(): User = User(
         id = "user-1",

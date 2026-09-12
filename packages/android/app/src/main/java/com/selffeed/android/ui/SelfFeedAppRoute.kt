@@ -47,9 +47,7 @@ fun SelfFeedAppRoute(
     val articlesState by articlesViewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val readingSessionKey = remember(authState.isAuthenticated, authState.apiBaseUrl, authState.user?.id) {
-        if (authState.isAuthenticated) appViewModel.readingSessionIdentity(authState.user?.id) else null
-    }
+    val readingSessionKey = authState.session?.ownerId.takeIf { authState.isAuthenticated }
     val themePreference = ThemePreference.fromApiValue(settingsState.preferences?.theme).apiValue
     val darkTheme = when (themePreference) {
         "light" -> false
@@ -182,7 +180,7 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(authState.loading, authState.isAuthenticated, authState.apiBaseUrl, authState.user?.id) {
+        LaunchedEffect(authState.loading, authState.isAuthenticated, readingSessionKey) {
             if (authState.loading) return@LaunchedEffect
             if (authState.isAuthenticated) {
                 appViewModel.bindReadingSession(readingSessionKey)

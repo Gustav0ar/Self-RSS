@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IN PROGRESS; reader, durable owner, storage, cache and repository boundaries implemented; authentication actions, feature lifetimes and foreground work pending
+- Status: IN PROGRESS; reader, durable owner, storage, cache and repository boundaries implemented; feature lifetimes and foreground work pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -247,3 +247,11 @@ This completes repository admission and publication ownership. UI actions queued
 Login, registration, restore, logout and external server changes now share one superseding job. Each asynchronous dependency is checked for cancellation before dispatch and after return, including dependencies that ignore cancellation. Password changes have a separate job revoked by account commands. Logout and replacement clear visible account state before optional registration metadata loads. Bootstrap runs once per retained AuthViewModel, so Activity recreation does not restart authentication or cancel an active password change.
 
 Nine focused cases were added. The full 490-test JVM suite and both isolated APK pairs pass in `/tmp/android-auth-actions-final-build.log`; 17 authentication/Activity emulator checks pass in `/tmp/android-auth-actions-device-final.log`. The form fixture now scrolls the submit button into view before its real click. Review reproduced a metadata update lost after the user cleared an error; the completion now updates only that field after checking cancellation. Final lint evidence is `/tmp/android-auth-actions-final-lint.log`.
+
+## Authenticated result and offline admission
+
+Login and registration return `AuthenticatedSession.Verified`; restore returns a verified or offline result containing the same immutable `ApiSession` admitted by the repository. AuthViewModel publishes the session, user and server together. Reading restoration uses its durable owner ID instead of decoding a JWT subject.
+
+Offline admission moved from the ViewModel into the original repository request. Confirmed rejection and cancellation cannot become offline success. A valid existing lease survives an I/O failure when renewing its timestamp, without extending its expiry. Verified-user binding errors still propagate. Analytics now uses the authenticated request boundary, so confirmed rejection clears the account and cancels an enclosing restore instead of being swallowed.
+
+The controlled JVM ownership tests keep real Room, DataStore, owner and lease persistence. Only the credential getter is synthetic because Robolectric has no AndroidKeyStore; encrypted credentials remain covered on Android. Review cases were reproduced in `/tmp/android-authenticated-owner-review-red.log` and pass in `/tmp/android-authenticated-owner-review-fixed.log`. All 497 JVM tests and isolated builds pass in `/tmp/android-authenticated-owner-reviewed-build.log`; 18 emulator authentication/Activity checks pass in `/tmp/android-authenticated-owner-device.log`, including real Activity recreation without re-authentication. Lint passes in `/tmp/android-authenticated-owner-lint.log`.

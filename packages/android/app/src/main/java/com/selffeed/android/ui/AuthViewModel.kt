@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ApiSession
+import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.AuthRepository
 import com.selffeed.android.network.User
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,6 +30,7 @@ data class AuthUiState(
     val apiBaseUrl: String = "",
     val registrationEnabled: Boolean = false,
     val user: User? = null,
+    val session: ApiSession? = null,
     val passwordChangePending: Boolean = false,
     val passwordChangeGeneration: Long = 0,
     val statusMessage: PresentationText? = null,
@@ -72,24 +75,16 @@ class AuthViewModel @Inject constructor(
                     is AppResult.Success -> _state.value = _state.value.copy(
                         loading = false,
                         isAuthenticated = true,
-                        user = result.data,
-                        apiBaseUrl = apiBaseUrl,
+                        user = (result.data as? AuthenticatedSession.Verified)?.user,
+                        session = result.data.session,
+                        apiBaseUrl = result.data.session.apiBaseUrl,
                         errorMessage = null,
                     )
 
-                    is AppResult.Error -> {
-                        if (result.message != AUTH_LOST_MESSAGE && repository.canUseOfflineSession()) {
-                            awaitActive { repository.recordOfflineRestore() }
-                            _state.value = _state.value.copy(
-                                loading = false,
-                                isAuthenticated = true,
-                                apiBaseUrl = apiBaseUrl,
-                                errorMessage = null,
-                            )
-                        } else {
-                            showSignedOut(apiBaseUrl, PresentationText.resource(R.string.auth_session_lost))
-                        }
-                    }
+                    is AppResult.Error -> showSignedOut(
+                        apiBaseUrl,
+                        PresentationText.resource(R.string.auth_session_lost),
+                    )
                 }
             } else {
                 val enabled = loadRegistrationEnabled()
@@ -118,13 +113,14 @@ class AuthViewModel @Inject constructor(
     fun login(email: String, password: String, apiBaseUrl: String) {
         launchAuthAction {
             _state.value = signedOutWhileLoading()
-            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
+            saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
             when (val result = awaitActive { repository.login(email.trim(), password) }) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
-                    user = result.data,
-                    apiBaseUrl = normalizedApiBaseUrl,
+                    user = result.data.user,
+                    session = result.data.session,
+                    apiBaseUrl = result.data.session.apiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_welcome_back),
                 )
 
@@ -147,13 +143,14 @@ class AuthViewModel @Inject constructor(
         }
         launchAuthAction {
             _state.value = signedOutWhileLoading()
-            val normalizedApiBaseUrl = saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
+            saveApiBaseUrlOrStop(apiBaseUrl) ?: return@launchAuthAction
             when (val result = awaitActive { repository.register(email.trim(), password) }) {
                 is AppResult.Success -> _state.value = _state.value.copy(
                     loading = false,
                     isAuthenticated = true,
-                    user = result.data,
-                    apiBaseUrl = normalizedApiBaseUrl,
+                    user = result.data.user,
+                    session = result.data.session,
+                    apiBaseUrl = result.data.session.apiBaseUrl,
                     statusMessage = PresentationText.resource(R.string.auth_account_created),
                 )
 
@@ -283,10 +280,6 @@ class AuthViewModel @Inject constructor(
     }
 
     private companion object {
-        // Protocol sentinel returned by the API. Compare the wire value here,
-        // then present localized app copy through auth_session_lost.
-        const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
-
         // Local validation sentinels emitted by ApiBaseUrl. They stay
         // context-free here and are converted to localized presentation copy.
         const val INVALID_API_BASE_URL_MESSAGE = "Enter a valid server URL."

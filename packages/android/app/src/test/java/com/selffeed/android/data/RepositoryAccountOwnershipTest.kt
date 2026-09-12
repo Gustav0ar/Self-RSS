@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.selffeed.android.data.repository.AuthenticatedSession
+import com.selffeed.android.network.User
 import com.selffeed.android.data.local.LocalDatabase
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.network.NetworkModule
@@ -34,6 +36,8 @@ import com.selffeed.android.network.UserPreferences
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.spyk
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.ResponseBody.Companion.toResponseBody
 import kotlinx.coroutines.launch
@@ -73,7 +77,7 @@ class RepositoryAccountOwnershipTest {
         val preferences = PreferenceDataStoreFactory.create(
             scope = CoroutineScope(preferencesJob + Dispatchers.IO), produceFile = { file },
         )
-        store = SessionStore(context, dataStore = preferences)
+        store = spyk(SessionStore(context, dataStore = preferences))
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
         local = LocalStore(database, NetworkModule.provideMoshi())
         boundary = AccountSessionBoundary(store, local) {}
@@ -98,6 +102,177 @@ class RepositoryAccountOwnershipTest {
             refreshCoordinator, okhttp3.OkHttpClient(), moshi, local, local, context,
             mockk(relaxed = true), monitor, CoroutineScope(backgroundJob + Dispatchers.IO),
         )
+    }
+
+    // AndroidKeyStore encryption is covered on-device. These ownership tests keep
+    // real session/lease persistence and supply only a synthetic credential getter.
+    private fun provideTestCredential(token: String) {
+        val owner = store.currentSession()
+        every { store.getAccessToken() } answers { token.takeIf { store.isCurrentSession(owner) } }
+    }
+
+    @Test
+    fun `offline restore admits the original owner without renewing its lease`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("offline-token")
+        val now = System.currentTimeMillis()
+        val day = 24L * 60 * 60 * 1000
+        store.recordAuthenticated(now - 6 * day)
+        val owner = store.currentSession()
+        coEvery { api.me(session = owner) } throws java.io.IOException("Offline")
+
+        val result = repository.restoreSession()
+
+        assertTrue("Valid cached credentials should restore offline: $result", result is AppResult.Success)
+        assertEquals(AppResult.Success(AuthenticatedSession.Offline(owner)), result)
+        assertEquals(owner, store.currentSession())
+        assertFalse("Offline restore must not extend the lease", store.hasValidOfflineAccessLease(now + 2 * day))
+    }
+
+    @Test
+    fun `verified restore keeps its original identity after a later replacement`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("original-token")
+        val owner = store.currentSession()
+        val user = User("original-user", "original@example.com", "reader", true)
+        coEvery { api.me(session = owner) } returns ApiEnvelope(user)
+
+        val result = repository.restoreSession()
+        assertTrue(repository.setApiBaseUrl("replacement.example") is AppResult.Success)
+
+        assertNotEquals(owner.ownerId, store.currentSession().ownerId)
+        assertEquals(AppResult.Success(AuthenticatedSession.Verified(owner, user)), result)
+    }
+
+    @Test
+    fun `expired offline lease stays expired after failed restoration`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("expired-token")
+        store.recordAuthenticated(System.currentTimeMillis() - 8L * 24 * 60 * 60 * 1000)
+        val owner = store.currentSession()
+        coEvery { api.me(session = owner) } throws java.io.IOException("Offline")
+
+        assertTrue(repository.restoreSession() is AppResult.Error)
+        assertFalse(store.hasValidOfflineAccessLease())
+        assertEquals(owner, store.currentSession())
+    }
+
+    @Test
+    fun `confirmed authentication rejection cannot use an otherwise valid offline lease`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("rejected-token")
+        store.recordAuthenticated()
+        every { refreshCoordinator.hasRecentRefreshRejection() } returns true
+        coEvery { api.me(session = any()) } throws retrofit2.HttpException(
+            retrofit2.Response.error<Any>(401, "Rejected".toResponseBody()),
+        )
+
+        assertTrue(repository.restoreSession() is AppResult.Error)
+        assertFalse(repository.isLoggedIn())
+    }
+
+    @Test
+    fun `failed lease renewal preserves a valid offline session`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("cached-token")
+        store.recordAuthenticated(System.currentTimeMillis() - 60_000)
+        val owner = store.currentSession()
+        coEvery { api.me(session = owner) } returns ApiEnvelope(
+            User("original-user", "original@example.com", "reader", true),
+        )
+        coEvery { store.recordAuthenticated(any()) } throws java.io.IOException("Disk full")
+
+        assertEquals(AppResult.Success(AuthenticatedSession.Offline(owner)), repository.restoreSession())
+        assertEquals(owner, store.currentSession())
+        assertTrue(store.hasValidOfflineAccessLease())
+    }
+
+    @Test
+    fun `confirmed rejection during offline analytics prevents offline admission`() = runBlocking {
+        val rejected = java.util.concurrent.atomic.AtomicBoolean(false)
+        every { refreshCoordinator.hasRecentRefreshRejection() } answers { rejected.get() }
+        val api = mockk<RssApi>(relaxed = true)
+        coEvery { api.me(session = any()) } throws java.io.IOException("Offline")
+        coEvery { api.recordProductAnalyticsEvents(any(), session = any()) } coAnswers {
+            rejected.set(true)
+            throw retrofit2.HttpException(retrofit2.Response.error<Any>(401, "Rejected".toResponseBody()))
+        }
+        online.value = true
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("rejected-token")
+        store.recordAuthenticated()
+
+        val authLost = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.authEvents().first()
+        }
+        val restore = async { repository.restoreSession() }
+        try {
+            restore.join()
+            assertTrue("The analytics request must exercise rejection", rejected.get())
+            assertTrue("Confirmed rejection must cancel the enclosing restore", restore.isCancelled)
+            assertFalse(repository.isLoggedIn())
+            assertEquals("Authentication was lost. Please sign in again.", withTimeout(5_000) { authLost.await() })
+        } finally { restore.cancelAndJoin(); authLost.cancelAndJoin() }
+    }
+
+    @Test
+    fun `incompatible verified user cannot become offline admission`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("original-token")
+        store.recordAuthenticated()
+        val owner = store.currentSession()
+        val localOwner = com.selffeed.android.data.local.LocalOwnerEntity(
+            ownerId = owner.ownerId, apiBaseUrl = owner.apiBaseUrl, userId = "original-user",
+        )
+        local.switchOwner(localOwner)
+        coEvery { api.me(session = owner) } returns ApiEnvelope(
+            User("different-user", "different@example.com", "reader", true),
+        )
+
+        val result = repository.restoreSession()
+
+        assertTrue(result is AppResult.Error)
+        assertTrue((result as AppResult.Error).cause is IllegalArgumentException)
+        assertEquals(localOwner, local.readOwner())
+    }
+
+    @Test
+    fun `old restore cannot borrow a replacement account offline lease`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        provideTestCredential("old-token")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { api.me(session = any()) } coAnswers {
+            entered.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            throw java.io.IOException("Offline")
+        }
+        val restore = async { repository.restoreSession() }
+        try {
+            entered.await()
+            repository.setApiBaseUrl("new.example")
+            provideTestCredential("new-token")
+            store.recordAuthenticated()
+            release.complete(Unit)
+            restore.join()
+            assertTrue(restore.isCancelled)
+            assertEquals("new-token", store.getAccessToken())
+        } finally { release.complete(Unit); restore.cancelAndJoin() }
     }
 
     @Test
