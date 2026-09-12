@@ -403,9 +403,13 @@ class RssRepositoryTest {
                 placeholdersEnabled = false,
             ),
         )
+        val invalidated = CompletableDeferred<Unit>()
+        pagingSource.registerInvalidatedCallback { invalidated.complete(Unit) }
         repository.updateCachedReadState(articleId, read = true)
         repository.invalidateReadStateCaches(articleId)
 
+        // Room notifies Paging from its executor after the transaction commits.
+        withContext(Dispatchers.Default) { withTimeout(5_000) { invalidated.await() } }
         assertEquals(true, pagingSource.invalid)
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         val page = localStore.articlePagingSource(queryKey).load(
