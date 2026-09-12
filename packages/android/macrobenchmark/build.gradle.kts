@@ -42,6 +42,7 @@ baselineProfile {
 }
 
 dependencies {
+    implementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
     implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0-alpha07")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.test.ext:junit:1.3.0")

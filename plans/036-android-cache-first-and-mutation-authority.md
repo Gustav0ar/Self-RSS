@@ -1,6 +1,6 @@
 # Plan 036: Return cached content immediately and preserve the latest mutation
 
-- Status: IN PROGRESS
+- Status: DONE, implementation and scoped acceptance; integrated release evidence remains plan 049
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -193,13 +193,13 @@ Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestU
 
 - [x] Cached content returns while mutation transport is suspended.
 - [x] At most one session drain delivers mutations at a time; queued work cannot become stranded in the enqueue/worker-completion race.
-- [ ] A newer local mutation wins over an older acknowledgement or remote receipt until reconciliation completes.
-- [ ] Read/save UI, cached detail, Room, and counts converge to the same effective state.
-- [ ] Process restart preserves mutation IDs, ordering, and retryability without changing the server contract.
-- [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
-- [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
-- [ ] `git diff --check` passes and scope review finds no unrelated changes.
-- [ ] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
+- [x] A newer local mutation wins over an older acknowledgement or remote receipt until reconciliation completes.
+- [x] Read/save UI, cached detail, Room, and counts converge to the same effective state.
+- [x] Process restart preserves mutation IDs, ordering, and retryability without changing the server contract.
+- [x] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
+- [x] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
+- [x] `git diff --check` passes and scope review finds no unrelated changes.
+- [x] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
 
 ## Specific stop conditions
 
@@ -313,3 +313,9 @@ Scope includes existing Room/repository/remote/facade sources, `LocalArticleObse
 - Guidance checked against [Android lifecycle-aware coroutine collection](https://developer.android.com/topic/libraries/architecture/coroutines), [offline-first architecture](https://developer.android.com/topic/architecture/data-layer/offline-first) and [asynchronous Room queries](https://developer.android.com/training/data-storage/room/async-queries). Foreground structured collection and observable local authority follow those contracts; source inspection alone does not prove native memory stability.
 
 - Final presentation validation passes 582 JVM tests, lint, both isolated APK pairs and 34 affected API 35 device cases. The complete 117-case device suite passed before the final scheduling/prefetch boundary changes. Durable receipts now return after Room admission; optional image prefetch and WorkManager enqueue run in the injected application scope and cannot turn an accepted edit into a UI failure. Startup KEEP scheduling recovers the persistence-to-enqueue crash window. Two controlled tests reproduced the old boundary failures, and independent read-only review found no new ownership/enqueue race. Evidence and the two unexplained earlier JVM stalls are recorded in the progress log. Actual queued mutation process-death acceptance remains unchecked.
+
+### External outbox recovery acceptance
+
+Base `5ca7ed1` (#66). Extend the existing performance-only Room fixture and external process runner to queue real repository read/save actions against a server bound only to 127.0.0.1 in the runner process. Keep acknowledgments unavailable before and immediately after confirmed background process death, verify persisted owner/content/mutation IDs, then allow production WorkManager delivery and verify confirmed revisions plus empty queues. The fixture server models a lost read acknowledgment using idempotent mutation IDs; it never contacts the API service. Scope adds the performance-only Activity/manifest/network security resource, macrobenchmark test server/runner/dependency and this execution record. The normal/release network policy remains unchanged. No production code or schema change is planned.
+
+Final external recovery passes both cases on the isolated API 35 emulator in `/tmp/android-outbox-process-final.log`, including exact body bytes, a changed target PID, unchanged account owner/receipts, original WorkManager retry recovery and confirmed Room state. The server applies each logical mutation once and records the retried read ID. Independent review found fixture-readiness, missing body assertions and teardown gaps; all are corrected. Performance-target lint passes in `/tmp/android-outbox-process-final-lint.log`; the runner test module has no lint task, as verified by its task list. No production source/schema changed in this acceptance slice. Plan 036 scoped behavior is complete; the unexplained WebView failures and physical performance/memory acceptance remain plan 049.
