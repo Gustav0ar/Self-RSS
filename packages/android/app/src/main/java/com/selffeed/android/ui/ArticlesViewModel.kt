@@ -18,6 +18,9 @@ import com.selffeed.android.ui.articles.ReadStateManager
 import com.selffeed.android.ui.components.withNonRegressiveReaderContent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -30,6 +33,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -59,15 +65,12 @@ sealed interface ArticleFeatureEvent {
         val articleId: String,
         val feedId: String?,
         val read: Boolean,
-        val unreadDelta: Int,
-        val readDelta: Int,
     ) : ArticleFeatureEvent
 
     data class ScopeMarkedRead(
         val feedId: String?,
         val categoryId: String?,
         val affectedFeedIds: Set<String>,
-        val markedCount: Int,
         val retainedUnreadArticleFeeds: Map<String, String> = emptyMap(),
     ) : ArticleFeatureEvent
 
@@ -120,6 +123,10 @@ class ArticlesViewModel @Inject constructor(
 
     private val openArticleSequence = AtomicLong(0)
     private var openArticleJob: Job? = null
+    private data class SavedAction(val job: Job, val saved: Boolean)
+    private val savedActions = mutableMapOf<String, SavedAction>()
+    private val readerPublicationMutex = Mutex()
+    private var savedStateEpoch = 0L
     private var articlePagingGeneration = 0L
 
     init {
@@ -127,17 +134,12 @@ class ArticlesViewModel @Inject constructor(
         readStateManager.setScope(viewModelScope)
         enrichmentManager.setScope(viewModelScope)
         enrichmentManager.setOnArticleRefreshed { refreshed ->
-            _state.update { current ->
-                val retainedDetails = retainReaderDetails(current, listOf(refreshed))
-                if (current.selectedArticle?.id == refreshed.id) {
-                    val displayed =
-                        current.selectedArticle.withNonRegressiveReaderContent(refreshed)
+            publishReaderDetails(listOf(refreshed), isCurrent = { _state.value.selectedArticle?.id == refreshed.id }) { details ->
+                _state.update { current ->
                     current.copy(
-                        selectedArticle = displayed.withReadState(knownArticleReadStates()[refreshed.id]),
-                        readerDetails = retainedDetails,
+                        selectedArticle = current.selectedArticle?.withNonRegressiveReaderContent(details.single()),
+                        readerDetails = retainReaderDetails(current, details),
                     )
-                } else {
-                    current.copy(readerDetails = retainedDetails)
                 }
             }
         }
@@ -146,14 +148,28 @@ class ArticlesViewModel @Inject constructor(
 
         viewModelScope.launch {
             repository.savedStateRejections().collect { rejection ->
-                rejection.restoredSaved?.let { restored ->
-                    applyArticleSavedState(rejection.articleId, restored)
-                    _events.emit(ArticleFeatureEvent.ArticleSavedStateChanged(rejection.articleId, restored))
+                while (true) {
+                    val action = savedActions[rejection.articleId]
+                    if (action != null) { action.job.join(); continue }
+                    val epoch = savedStateEpoch
+                    val local = (repository.localArticleState(rejection.articleId) as? AppResult.Success)?.data
+                    if (epoch != savedStateEpoch) continue
+                    if (local?.lastSavedMutationId != rejection.mutationId) break
+                    local.isSaved?.let { restored ->
+                        applyArticleSavedState(rejection.articleId, restored)
+                        _events.tryEmit(ArticleFeatureEvent.ArticleSavedStateChanged(rejection.articleId, restored))
+                    }
+                    _state.update { it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed)) }
+                    if (local.isSaved == null) _events.tryEmit(ArticleFeatureEvent.ArticlesChanged(rejection.articleId))
+                    break
                 }
-                _state.update {
-                    it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed))
+            }
+        }
+        viewModelScope.launch {
+            repository.readStateRejections().collect { rejection ->
+                if (readStateManager.applyReadRejection(rejection)) {
+                    _state.update { it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed)) }
                 }
-                if (rejection.restoredSaved == null) _events.emit(ArticleFeatureEvent.ArticlesChanged(rejection.articleId))
             }
         }
 
@@ -386,15 +402,16 @@ class ArticlesViewModel @Inject constructor(
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
-                    val article = result.data.withReadState(knownArticleReadStates()[id])
-                    selectArticle(article)
-
-                    if (article.isRead) {
-                        readStateManager.readStateStore.remember(id, article.isRead)
-                        publishReadStateOverrides(id to article.isRead)
+                    publishReaderDetails(listOf(result.data), isCurrent = { openRequestId == openArticleSequence.get() }) { details ->
+                        val article = details.single()
+                        selectArticle(article)
+                        if (article.isRead) {
+                            readStateManager.readStateStore.remember(id, article.isRead)
+                            publishReadStateOverrides(id to article.isRead)
+                        }
+                        enrichmentManager.maybeEnrichSelectedArticle(article)
+                        articleWarmingManager.warmAdjacentArticles(id, _state.value.readerQueue)
                     }
-                    enrichmentManager.maybeEnrichSelectedArticle(article)
-                    articleWarmingManager.warmAdjacentArticles(id, _state.value.readerQueue)
                 }
 
                 is AppResult.Error -> {
@@ -489,23 +506,36 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun setSaved(articleId: String, saved: Boolean, onFailure: () -> Unit = {}) {
-        val previous = _state.value.savedState(articleId) ?: !saved
         applyArticleSavedState(articleId, saved)
-        viewModelScope.launch {
-            when (val result = repository.setSaved(articleId, saved)) {
-                is AppResult.Success -> {
-                    if (_state.value.savedOnly && !saved) refreshArticlePager()
-                }
-
-                is AppResult.Error -> {
-                    applyArticleSavedState(articleId, previous)
-                    onFailure()
-                    _state.update {
-                        it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed))
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = repository.setSaved(articleId, saved)
+                if (!currentCoroutineContext().isActive || savedActions[articleId]?.job !== currentCoroutineContext()[Job]) return@launch
+                when (result) {
+                    is AppResult.Success -> {
+                        applyArticleSavedState(articleId, result.data)
+                        if (_state.value.savedOnly && !result.data) refreshArticlePager()
                     }
+                    is AppResult.Error -> {
+                        val local = repository.localArticleState(articleId)
+                        if (!currentCoroutineContext().isActive || savedActions[articleId]?.job !== currentCoroutineContext()[Job]) return@launch
+                        (local as? AppResult.Success)?.data?.isSaved?.let { applyArticleSavedState(articleId, it) }
+                        onFailure()
+                        _state.update {
+                            it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed))
+                        }
+                    }
+                }
+            } finally {
+                if (savedActions[articleId]?.job === currentCoroutineContext()[Job]) {
+                    savedActions.remove(articleId)
+                    savedStateEpoch++
                 }
             }
         }
+        savedActions.remove(articleId)?.job?.cancel()
+        savedActions[articleId] = SavedAction(job, saved)
+        job.start()
     }
 
     private fun markReadAutomatically(articleId: String) {
@@ -560,8 +590,7 @@ class ArticlesViewModel @Inject constructor(
         readStateManager.markAllRead(
             selectedFeedId = snapshot.selectedFeedId,
             selectedCategoryId = snapshot.selectedCategoryId,
-            onSuccess = { feedId, categoryId, affectedFeedIds, markedCount ->
-                applyScopeReadState(affectedFeedIds)
+            onSuccess = { _, _, _, markedCount ->
                 _state.update {
                     it.copy(
                         statusMessage = PresentationText.plural(
@@ -570,17 +599,9 @@ class ArticlesViewModel @Inject constructor(
                         ),
                     )
                 }
-                _events.tryEmit(
-                    ArticleFeatureEvent.ScopeMarkedRead(
-                        feedId = feedId,
-                        categoryId = categoryId,
-                        affectedFeedIds = affectedFeedIds,
-                        markedCount = markedCount,
-                    ),
-                )
             },
-            onError = { message ->
-                _state.update { it.copy(errorMessage = PresentationText.dynamic(message)) }
+            onError = { _ ->
+                _state.update { it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed)) }
             },
         )
     }
@@ -623,6 +644,7 @@ class ArticlesViewModel @Inject constructor(
     }
 
     private fun applyArticleSavedState(articleId: String, saved: Boolean) {
+        savedStateEpoch++
         _state.update { state ->
             state.copy(
                 items = state.items.map { article ->
@@ -667,14 +689,11 @@ class ArticlesViewModel @Inject constructor(
         isRead: Boolean,
         previousReadState: Boolean?,
     ) {
-        val (unreadDelta, readDelta) = readDelta(previousReadState, isRead)
         _events.tryEmit(
             ArticleFeatureEvent.ArticleReadStateChanged(
                 articleId = articleId,
                 feedId = feedId,
                 read = isRead,
-                unreadDelta = unreadDelta,
-                readDelta = readDelta,
             ),
         )
         // The unread-only Paging query is server-backed. Once a mutation is
@@ -823,7 +842,10 @@ class ArticlesViewModel @Inject constructor(
         )
 
     private fun List<ArticleListItem>.withReadStates(readStates: Map<String, Boolean>): List<ArticleListItem> =
-        map { article -> readStates[article.id]?.let { article.copy(isRead = it) } ?: article }
+        map { article -> article.copy(
+            isRead = readStates[article.id] ?: article.isRead,
+            isSaved = savedActions[article.id]?.saved ?: article.isSaved,
+        ) }
 
     /**
      * Extends an open reader session as Paging materializes more rows. Existing
@@ -840,16 +862,48 @@ class ArticlesViewModel @Inject constructor(
                 snapshot.filterNot { it.id in existingIds }
     }
 
-    private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail =
-        isRead?.let { copy(isRead = it) } ?: this
+    private fun ArticleDetail.withReadState(isRead: Boolean?): ArticleDetail = copy(
+        isRead = isRead ?: this.isRead,
+        isSaved = savedActions[id]?.saved ?: this.isSaved,
+    )
 
-    private fun retainWarmedArticles(articles: List<ArticleDetail>) {
-        _state.update { current ->
-            val retained = retainReaderDetails(current, articles)
-            val selected = current.selectedArticle?.let { displayed ->
-                retained[displayed.id]?.let(displayed::withNonRegressiveReaderContent) ?: displayed
+    private suspend fun retainWarmedArticles(articles: List<ArticleDetail>) {
+        publishReaderDetails(articles) { projected ->
+            _state.update { current ->
+                val retained = retainReaderDetails(current, projected)
+                val selected = current.selectedArticle?.let { displayed ->
+                    retained[displayed.id]?.let(displayed::withNonRegressiveReaderContent) ?: displayed
+                }
+                current.copy(readerDetails = retained, selectedArticle = selected)
             }
-            current.copy(readerDetails = retained, selectedArticle = selected)
+        }
+    }
+
+    /** Content fetches can outlive a completed bookmark edit. Reconcile stored state at publication. */
+    private suspend fun publishReaderDetails(
+        incoming: List<ArticleDetail>,
+        isCurrent: () -> Boolean = { true },
+        publish: (List<ArticleDetail>) -> Unit,
+    ) = readerPublicationMutex.withLock {
+        while (isCurrent()) {
+            currentCoroutineContext().ensureActive()
+            val epoch = savedStateEpoch
+            val projected = incoming.map { detail ->
+                val result = repository.localArticleState(detail.id)
+                val saved = when (result) {
+                    is AppResult.Success -> result.data.isSaved ?: detail.isSaved
+                    is AppResult.Error -> _state.value.savedState(detail.id) ?: detail.isSaved
+                }
+                detail.copy(isSaved = saved)
+                    .withReadState(knownArticleReadStates()[detail.id])
+            }
+            currentCoroutineContext().ensureActive()
+            if (epoch != savedStateEpoch) continue
+            if (isCurrent()) {
+                publish(projected)
+                savedStateEpoch++
+            }
+            return@withLock
         }
     }
 
@@ -903,12 +957,6 @@ class ArticlesViewModel @Inject constructor(
             contentStatus = contentStatus,
             contentVersion = contentVersion,
         )
-
-    private fun readDelta(previousReadState: Boolean?, newReadState: Boolean): Pair<Int, Int> {
-        val changed = previousReadState?.let { it != newReadState } ?: false
-        if (!changed) return 0 to 0
-        return if (newReadState) -1 to 1 else 1 to -1
-    }
 
     private data class ArticleQuery(
         val feedId: String?,

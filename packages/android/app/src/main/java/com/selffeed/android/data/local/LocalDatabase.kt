@@ -31,6 +31,7 @@ object LocalTables {
     const val ARCHIVED_READ_STATE_MUTATIONS = "archived_read_state_mutations"
     const val ARCHIVED_SAVED_STATE_MUTATIONS = "archived_saved_state_mutations"
     const val LEGACY_OFFLINE_ARTICLES = "legacy_offline_articles"
+    const val LOCAL_COUNT_STATE = "local_count_state"
 }
 
 @Entity(
@@ -125,6 +126,7 @@ data class PendingReadStateMutationEntity(
     val baseRevision: Int?,
     val previousState: Boolean?,
     val updatedAt: Long,
+    val countScopeJson: String? = null,
 )
 
 @Entity(tableName = LocalTables.PENDING_SAVED_STATE_MUTATIONS)
@@ -177,6 +179,18 @@ data class ArticleStateRevisionEntity(
     val savedRevision: Int?,
     val confirmedReadState: Boolean? = null,
     val confirmedSavedState: Boolean? = null,
+    val lastReadMutationId: String? = null,
+    val lastSavedMutationId: String? = null,
+    val articleFeedId: String? = null,
+)
+
+@Entity(tableName = LocalTables.LOCAL_COUNT_STATE)
+data class LocalCountStateEntity(
+    @PrimaryKey val key: String = "current",
+    val readEpoch: Long = 0,
+    val statsJson: String? = null,
+    val totalRead: Int? = null,
+    val totalUnread: Int? = null,
 )
 
 @Entity(tableName = LocalTables.PREFERENCES)
@@ -219,13 +233,31 @@ interface LocalStoreDao {
     @Query("SELECT * FROM current_local_owner WHERE `key` = 'current'")
     suspend fun readOwner(): LocalOwnerEntity?
 
+    @Query("SELECT * FROM local_count_state WHERE `key` = 'current'")
+    suspend fun readCountState(): LocalCountStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCountState(state: LocalCountStateEntity)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM pending_read_state_mutations)")
+    suspend fun hasPendingReadStateMutations(): Boolean
+
+    @Query("SELECT * FROM feeds WHERE id = :feedId")
+    suspend fun readFeed(feedId: String): FeedEntity?
+
+    @Query("UPDATE feeds SET unreadCount = unreadCount + :delta WHERE id = :feedId")
+    suspend fun applyFeedUnreadDelta(feedId: String, delta: Int)
+
+    @Query("DELETE FROM local_count_state")
+    suspend fun clearCountState()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertOwner(owner: LocalOwnerEntity)
 
     @Query("""
         INSERT INTO archived_read_state_mutations
-            (ownerId, apiBaseUrl, userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt)
-        SELECT :ownerId, :apiBaseUrl, :userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt
+            (ownerId, apiBaseUrl, userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt, countScopeJson)
+        SELECT :ownerId, :apiBaseUrl, :userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt, countScopeJson
         FROM pending_read_state_mutations
     """)
     suspend fun archiveReadStateMutations(ownerId: String, apiBaseUrl: String, userId: String?)
@@ -385,15 +417,16 @@ interface LocalStoreDao {
     suspend fun readArticleStateRevision(articleId: String): ArticleStateRevisionEntity?
 
     @Query("""
-        SELECT items.id AS articleId, items.feedId, articles.isRead AS cachedReadState,
+        SELECT items.id AS articleId, COALESCE(items.feedId, state.articleFeedId) AS feedId, articles.isRead AS cachedReadState,
             state.articleId IS NOT NULL AS hasStateRecord,
-            state.readRevision, state.savedRevision, state.confirmedReadState, state.confirmedSavedState
+            state.readRevision, state.savedRevision, state.confirmedReadState, state.confirmedSavedState,
+            state.lastReadMutationId, state.lastSavedMutationId, state.articleFeedId
         FROM (
             SELECT id, feedId FROM articles
             UNION ALL
             SELECT id, feedId FROM article_details WHERE id NOT IN (SELECT id FROM articles)
             UNION ALL
-            SELECT articleId AS id, NULL AS feedId FROM pending_read_state_mutations
+            SELECT articleId AS id, articleFeedId AS feedId FROM article_state_revisions
             WHERE articleId NOT IN (SELECT id FROM articles)
               AND articleId NOT IN (SELECT id FROM article_details)
         ) items
@@ -529,6 +562,7 @@ interface LocalStoreDao {
         PendingReadStateMutationEntity::class,
         PendingSavedStateMutationEntity::class,
         ArticleStateRevisionEntity::class,
+        LocalCountStateEntity::class,
         ArticleReadOverrideEntity::class,
         ArticleDetailEntity::class,
         PreferencesEntity::class,

@@ -1,6 +1,6 @@
 package com.selffeed.android.data
 
-import com.selffeed.android.data.repository.SubscriptionSnapshot
+import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.AccountAccess
 import com.selffeed.android.di.ApplicationCoroutineScope
@@ -22,6 +22,7 @@ import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.ReadStateStreamClient
 import com.selffeed.android.data.repository.RepositoryRuntime
 import com.selffeed.android.data.repository.SavedStateRejection
+import com.selffeed.android.data.repository.ReadStateRejection
 import com.selffeed.android.data.repository.SelfFeedRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
@@ -55,6 +56,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -92,6 +94,9 @@ class RssRepository @Inject constructor(
     @param:ApplicationCoroutineScope private val refreshScope: CoroutineScope,
 ) : SelfFeedRepository {
     private val preferencesMutex = Mutex()
+    private val feedReadMutex = Mutex()
+    private val categoryReadMutex = Mutex()
+    private val statsReadMutex = Mutex()
     private val runtime = RepositoryRuntime(
         moshi = moshi,
         maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
@@ -105,6 +110,7 @@ class RssRepository @Inject constructor(
     )
 
     private val savedStateRejectionEvents = MutableSharedFlow<SessionEvent<SavedStateRejection>>(extraBufferCapacity = 32)
+    private val readStateRejectionEvents = MutableSharedFlow<SessionEvent<ReadStateRejection>>(extraBufferCapacity = 32)
     private val authLostEvents = MutableSharedFlow<SessionEvent<String>>(extraBufferCapacity = 1)
     private val analyticsSessionLock = Any()
     private val categoryCacheMutex = Mutex()
@@ -260,35 +266,53 @@ class RssRepository @Inject constructor(
         response.user
     }
 
-    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = cachedReadUpdates(
+    override fun categoryUpdates(): Flow<AppResult<List<CategoryWithCounts>>> = cachedReadUpdates(
         readCached = { session -> account.commit(session) { offlineReadStore.readCategories().takeIf { it.isNotEmpty() } } },
         fetch = ::fetchCategories,
     )
 
-    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = cachedReadUpdates(
+    override fun feedUpdates(): Flow<AppResult<List<FeedWithCounts>>> = cachedReadUpdates(
         readCached = { session -> account.commit(session) { offlineReadStore.readFeeds().takeIf { it.isNotEmpty() } } },
-        fetch = { session ->
-            withRetry(session) { feedRemote.feeds(null, session) }.also { feeds ->
-                persistFeedSnapshot(null, feeds, session)
-                account.commit(session) { runtime.putCached("feeds:", FEEDS_TTL_MS, feeds) }
-            }
-        },
+        fetch = { session -> fetchFeeds(null, session) },
     )
+
+    override fun libraryCounts(): Flow<LibraryCounts> = flow {
+        account.withSession { session ->
+            localStore.observeLibraryCounts().collect { counts ->
+                account.requireCurrent(session)
+                emit(counts)
+            }
+        }
+    }.catch { error ->
+        if (error is CancellationException) throw error
+        runtime.debugLog("Stored count observation unavailable")
+    }
+
+    override fun countRefreshRequests(): Flow<Unit> = flow {
+        account.withSession { session ->
+            localStore.observeCountRefreshRequests().collect {
+                account.requireCurrent(session)
+                emit(Unit)
+            }
+        }
+    }.catch { error ->
+        if (error is CancellationException) throw error
+        runtime.debugLog("Stored count freshness unavailable")
+        emit(Unit)
+    }
 
     /** Stored content is usable while the collector awaits or cancels freshness work. */
     private fun <T : Any> cachedReadUpdates(
         readCached: suspend (ApiSession) -> T?,
         fetch: suspend (ApiSession) -> T,
-    ): Flow<AppResult<SubscriptionSnapshot<T>>> = flow {
+    ): Flow<AppResult<T>> = flow {
         account.withSession { session ->
             val stored = (safeReadCall(session, readCached) as? AppResult.Success)?.data
-            if (stored != null) emit(AppResult.Success(SubscriptionSnapshot(stored, mayReplaceUnreadCounts = false)))
-            val pendingBefore = account.commit(session) { localStore.readPendingReadStateMutations().isNotEmpty() }
+            if (stored != null) emit(AppResult.Success(stored))
             val fresh = safeReadCall(session, fetch)
             when (fresh) {
                 is AppResult.Success -> {
-                    val pendingAfter = account.commit(session) { localStore.readPendingReadStateMutations().isNotEmpty() }
-                    emit(AppResult.Success(SubscriptionSnapshot(fresh.data, !pendingBefore && !pendingAfter)))
+                    emit(AppResult.Success(fresh.data))
                 }
                 is AppResult.Error -> if (stored == null) emit(fresh)
             }
@@ -299,7 +323,7 @@ class RssRepository @Inject constructor(
         categoryCacheMutex.withLock {
             runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
                 runtime.recordCacheHit()
-                return@safeReadCall it
+                return@safeReadCall account.commit(session) { offlineReadStore.readCategories() }
             }
 
             val cachedCategories = account.commit(session) { offlineReadStore.readCategories() }
@@ -319,19 +343,24 @@ class RssRepository @Inject constructor(
         }
     }
 
-    private suspend fun fetchCategories(session: ApiSession): List<CategoryWithCounts> {
+    private suspend fun fetchCategories(session: ApiSession): List<CategoryWithCounts> = categoryReadMutex.withLock {
+        fetchCategorySnapshot(session)
+    }
+
+    private suspend fun fetchCategorySnapshot(session: ApiSession): List<CategoryWithCounts> {
         while (true) {
             val revision = categoryOrderRevision.get()
+            val ticket = account.commit(session) { localStore.captureCountSnapshot() }
             val categories = withRetry(session) { feedRemote.categories(session = session) }
             categoryCacheMutex.withLock {
                 // A reorder completed while this snapshot was in flight. Fetch
                 // again rather than putting the old order back into either cache.
                 if (revision == categoryOrderRevision.get()) {
-                    account.commit(session) {
-                        offlineReadStore.writeCategories(categories)
-                        runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                    return account.commit(session) {
+                        localStore.writeRemoteCategories(categories, ticket).also {
+                            runtime.putCached("categories", CATEGORIES_TTL_MS, it)
+                        }
                     }
-                    return categories
                 }
             }
         }
@@ -342,9 +371,6 @@ class RssRepository @Inject constructor(
             account.commit(session) {
                 runtime.invalidateByPrefix("categories")
                 runtime.invalidateByPrefix("feeds")
-                runtime.invalidateByPrefix("stats")
-                offlineReadStore.clearCategories()
-                offlineReadStore.clearFeeds()
             }
         }
     }
@@ -361,10 +387,8 @@ class RssRepository @Inject constructor(
         categoryCacheMutex.withLock {
             account.commit(session) {
                 categoryOrderRevision.incrementAndGet()
-                val reordered = applyCategoryOrder(offlineReadStore.readCategories(), updates)
-                offlineReadStore.writeCategories(reordered)
+                localStore.reorderCategories(updates)
                 runtime.invalidateByPrefix("categories")
-                runtime.invalidateByPrefix("stats")
             }
         }
     }
@@ -379,7 +403,7 @@ class RssRepository @Inject constructor(
         val key = "feeds:${categoryId.orEmpty()}"
         runtime.getCached<List<FeedWithCounts>>(key)?.let {
             runtime.recordCacheHit()
-            return@safeReadCall it
+            return@safeReadCall filterCachedFeeds(account.commit(session) { offlineReadStore.readFeeds() }, categoryId, session)
         }
 
         val cachedFeeds = account.commit(session) { offlineReadStore.readFeeds() }
@@ -394,9 +418,7 @@ class RssRepository @Inject constructor(
 
         try {
             runtime.cachedGet(key = key, ttlMs = FEEDS_TTL_MS) {
-                withRetry(session) { feedRemote.feeds(categoryId, session = session) }.also { feeds ->
-                    persistFeedSnapshot(categoryId, feeds, session)
-                }
+                fetchFeeds(categoryId, session)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -408,10 +430,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun refreshFeeds(categoryId: String?) = safeReadCall { session ->
-        withRetry(session) { feedRemote.feeds(categoryId, session = session) }.also { feeds ->
-            account.commit(session) { runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds) }
-            persistFeedSnapshot(categoryId, feeds, session)
-        }
+        fetchFeeds(categoryId, session)
     }
 
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) =
@@ -657,6 +676,10 @@ class RssRepository @Inject constructor(
         }
     }
 
+    override suspend fun localArticleState(articleId: String) = safeReadCall { session ->
+        account.commit(session) { localStore.readArticleState(articleId) }
+    }
+
     suspend fun article(articleId: String): AppResult<ArticleDetail> =
         article(articleId, forceRefresh = false)
 
@@ -670,28 +693,13 @@ class RssRepository @Inject constructor(
     }
 
     private fun refreshCategoriesInBackground(session: ApiSession) {
-        val orderRevision = categoryOrderRevision.get()
-        refreshScope.launch {
-            safeReadCall(session) {
-                val categories = withRetry(session) { feedRemote.categories(session) }
-                categoryCacheMutex.withLock {
-                    account.commit(session) {
-                        if (orderRevision == categoryOrderRevision.get()) {
-                            offlineReadStore.writeCategories(categories)
-                            runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
-                        }
-                    }
-                }
-            }
-        }
+        refreshScope.launch { safeReadCall(session) { fetchCategories(session) } }
     }
 
     private fun refreshFeedsInBackground(categoryId: String?, session: ApiSession) {
         refreshScope.launch {
             safeReadCall(session) {
-                val feeds = withRetry(session) { feedRemote.feeds(categoryId, session) }
-                persistFeedSnapshot(categoryId, feeds, session)
-                account.commit(session) { runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds) }
+                fetchFeeds(categoryId, session)
             }
         }
     }
@@ -776,7 +784,6 @@ class RssRepository @Inject constructor(
             if (it.success || it.reason == "already_enriched") {
                 if (invalidateCaches) {
                     invalidateArticleDetailCache(articleId, session)
-                    account.commit(session) { runtime.invalidateByPrefix("stats") }
                 } else {
                     invalidateArticleDetailCache(articleId, session)
                 }
@@ -801,7 +808,6 @@ class RssRepository @Inject constructor(
                     }
                 }
             }
-            account.commit(session) { runtime.invalidateByPrefix("stats") }
             // The durable Room write is the success boundary. WorkManager may be
             // temporarily unavailable during process initialization, so scheduling
             // must never turn an already-persisted user action into an error.
@@ -816,16 +822,20 @@ class RssRepository @Inject constructor(
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall { session ->
         articleRemote.markAllRead(feedId, categoryId, session = session).also {
             account.commit(session) {
+                localStore.invalidateCountSnapshots()
                 localStore.clearAcknowledgedReadStateOverrides()
                 runtime.invalidateByPrefix("feeds")
                 runtime.invalidateByPrefix("categories")
-                runtime.invalidateByPrefix("stats")
                 runtime.invalidateByPrefix("search")
             }
         }
     }
 
     override fun savedStateRejections(): Flow<SavedStateRejection> = savedStateRejectionEvents.mapNotNull { event ->
+        event.value.takeIf { sessionStore.isCurrentSession(event.session) }
+    }
+
+    override fun readStateRejections(): Flow<ReadStateRejection> = readStateRejectionEvents.mapNotNull { event ->
         event.value.takeIf { sessionStore.isCurrentSession(event.session) }
     }
 
@@ -932,11 +942,20 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun stats() = safeReadCall { session ->
-        runtime.cachedGet(
-            key = "stats",
-            ttlMs = STATS_TTL_MS
-        ) { withRetry(session) { settingsRemote.stats(session = session) } }
+    override suspend fun stats() = safeReadCall { session -> statsReadMutex.withLock {
+        val stored = account.commit(session) { localStore.readStats() }
+        val ticket = account.commit(session) { localStore.captureCountSnapshot() }
+        try {
+            val remote = withRetry(session) { settingsRemote.stats(session = session) }
+            account.commit(session) { localStore.writeRemoteStats(remote, ticket) }
+                ?: throw IllegalStateException("Stats will be available after pending changes are synchronized")
+        } catch (error: Exception) {
+            if (error is CancellationException || isAuthenticationLost(error)) throw error
+            account.requireCurrent(session)
+            account.commit(session) { localStore.readStats() } ?: stored ?: throw error
+        }
+    }
+
     }
 
     override suspend fun authSessions() = safeReadCall { session ->
@@ -1128,7 +1147,6 @@ class RssRepository @Inject constructor(
         // the article detail and the stats aggregate; feeds/categories
         // are refreshed lazily on the next unread-count read.
         invalidateArticleDetailCache(articleId, session)
-        account.commit(session) { runtime.invalidateByPrefix("stats") }
     }
 
     private suspend fun invalidateArticleDetailCache(articleId: String, session: ApiSession) {
@@ -1144,7 +1162,6 @@ class RssRepository @Inject constructor(
         account.commit(session) {
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("categories")
-            runtime.invalidateByPrefix("stats")
         }
     }
 
@@ -1159,7 +1176,6 @@ class RssRepository @Inject constructor(
             runtime.invalidateByPrefix("search")
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("categories")
-            runtime.invalidateByPrefix("stats")
         }
         // Realtime availability is a hint for the next explicit refresh.
         // Clearing Room here invalidates the active PagingSource and briefly
@@ -1219,7 +1235,8 @@ class RssRepository @Inject constructor(
         invalidateFeedAndArticleRuntimeCaches(session)
         account.commit(session) {
             runtime.invalidateByPrefix("article:")
-            offlineReadStore.clearFeedAndArticleData()
+            // Keep count baselines while invalidating membership affected by feed/category edits.
+            offlineReadStore.clearArticleLists()
         }
     }
 
@@ -1233,7 +1250,6 @@ class RssRepository @Inject constructor(
             runtime.invalidateByPrefix("feeds")
             runtime.invalidateByPrefix("articles")
             runtime.invalidateByPrefix("search")
-            runtime.invalidateByPrefix("stats")
             runtime.invalidateByPrefix("categories")
         }
     }
@@ -1331,8 +1347,11 @@ class RssRepository @Inject constructor(
                     if (read != null && (saved == null || read.updatedAt <= saved.updatedAt)) {
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
-                                localStore.discardReadStateMutation(read)
-                                projectCachedArticleState(read.articleId)
+                                val rejected = localStore.discardReadStateMutation(read)
+                                if (rejected.removedMatchingIntent) {
+                                    projectCachedArticleState(read.articleId)
+                                    readStateRejectionEvents.tryEmit(SessionEvent(session, ReadStateRejection(read.articleId, read.mutationId)))
+                                }
                             }
                         }
                     } else if (saved != null) {
@@ -1343,7 +1362,7 @@ class RssRepository @Inject constructor(
                                     projectCachedArticleState(saved.articleId)
                                     runtime.invalidateByPrefix("search")
                                     savedStateRejectionEvents.tryEmit(
-                                        SessionEvent(session, SavedStateRejection(saved.articleId, rejected.effectiveState)),
+                                        SessionEvent(session, SavedStateRejection(saved.articleId, rejected.effectiveState, saved.mutationId)),
                                     )
                                 }
                             }
@@ -1363,11 +1382,13 @@ class RssRepository @Inject constructor(
     private fun isRetriableMutationStatus(status: Int): Boolean =
         status == 408 || status == 425 || status == 429 || status >= 500
 
-    private suspend fun persistFeedSnapshot(categoryId: String?, feeds: List<FeedWithCounts>, session: ApiSession) {
-        if (categoryId == null) {
-            account.commit(session) { offlineReadStore.writeFeeds(feeds) }
-        } else {
-            account.commit(session) { offlineReadStore.mergeFeeds(feeds) }
+    private suspend fun fetchFeeds(categoryId: String?, session: ApiSession): List<FeedWithCounts> = feedReadMutex.withLock {
+        val ticket = account.commit(session) { localStore.captureCountSnapshot() }
+        val feeds = withRetry(session) { feedRemote.feeds(categoryId, session) }
+        return account.commit(session) {
+            localStore.writeRemoteFeeds(feeds, ticket, merge = categoryId != null).also {
+                runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, it)
+            }
         }
     }
 
@@ -1415,7 +1436,6 @@ class RssRepository @Inject constructor(
         const val ARTICLE_DETAIL_TTL_MS = 24L * 60 * 60 * 1000
         const val SEARCH_TTL_MS = 30_000L
         const val PREFERENCES_TTL_MS = 60_000L
-        const val STATS_TTL_MS = 30_000L
         const val AUTH_SESSIONS_TTL_MS = 15_000L
         const val ADMIN_SETTINGS_TTL_MS = 60_000L
         const val OPML_EXPORT_TTL_MS = 30_000L

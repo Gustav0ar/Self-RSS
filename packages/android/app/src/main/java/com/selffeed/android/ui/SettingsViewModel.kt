@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.R
+import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,20 +51,37 @@ class SettingsViewModel @Inject constructor(
     private val preferenceSaveMutex = Mutex()
     private var preferenceEditVersion = 0L
 
+    private var libraryCounts = LibraryCounts()
+
+    suspend fun observeLibraryCounts() {
+        repository.libraryCounts().collect {
+            libraryCounts = it
+            _state.update { state -> state.withLibraryCounts(libraryCounts) }
+        }
+    }
+
+    private inline fun updateState(transform: (SettingsUiState) -> SettingsUiState) {
+        _state.update { current ->
+            val updated = transform(current)
+            if (current.stats === updated.stats) updated
+            else updated.withLibraryCounts(libraryCounts)
+        }
+    }
+
     fun loadPreferences() {
         if (_state.value.preferencesLoading) return
-        _state.update { it.copy(preferencesLoading = true, preferencesLoadError = null) }
+        updateState { it.copy(preferencesLoading = true, preferencesLoadError = null) }
         val editVersion = preferenceEditVersion
         viewModelScope.launch {
             val result = repository.preferences()
             if (editVersion != preferenceEditVersion) {
-                _state.update { it.copy(preferencesLoading = false) }
+                updateState { it.copy(preferencesLoading = false) }
                 return@launch
             }
             when (result) {
                 is AppResult.Success -> {
                     val normalized = result.data.withNormalizedTheme()
-                    _state.update {
+                    updateState {
                         it.copy(
                             preferences = normalized,
                             preferencesLoading = false,
@@ -76,7 +94,7 @@ class SettingsViewModel @Inject constructor(
                         updatePreferences(UpdatePreferencesRequest(theme = "dark"))
                     }
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(
                         preferencesLoading = false,
                         preferencesLoadError = PresentationText.dynamic(result.message),
@@ -92,13 +110,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             preferenceSaveMutex.withLock {
                 when (val result = repository.updatePreferences(request)) {
-                    is AppResult.Success -> _state.update {
+                    is AppResult.Success -> updateState {
                         it.copy(
                             preferences = result.data.withNormalizedTheme(),
                             statusMessage = PresentationText.resource(R.string.settings_saved),
                         )
                     }
-                    is AppResult.Error -> _state.update {
+                    is AppResult.Error -> updateState {
                         it.copy(errorMessage = PresentationText.dynamic(result.message))
                     }
                 }
@@ -125,10 +143,10 @@ class SettingsViewModel @Inject constructor(
     suspend fun refreshStats() {
         when (val result = repository.stats()) {
             is AppResult.Success -> {
-                _state.update { it.copy(stats = result.data) }
+                updateState { it.copy(stats = result.data) }
                 loadDebugSnapshot()
             }
-            is AppResult.Error -> _state.update {
+            is AppResult.Error -> updateState {
                 it.copy(errorMessage = PresentationText.dynamic(result.message))
             }
         }
@@ -137,8 +155,8 @@ class SettingsViewModel @Inject constructor(
     fun loadAuthSessions() {
         viewModelScope.launch {
             when (val result = repository.authSessions()) {
-                is AppResult.Success -> _state.update { it.copy(authSessions = result.data) }
-                is AppResult.Error -> _state.update {
+                is AppResult.Success -> updateState { it.copy(authSessions = result.data) }
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -149,7 +167,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.revokeAuthSession(id)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             authSessions = it.authSessions.filterNot { session -> session.id == id },
                             statusMessage = PresentationText.resource(R.string.settings_session_revoked),
@@ -157,32 +175,17 @@ class SettingsViewModel @Inject constructor(
                     }
                     loadAuthSessions()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
         }
     }
 
-    fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
-        if (unreadDelta == 0 && readDelta == 0) return
-        _state.update { state ->
-            state.copy(
-                stats = state.stats?.let {
-                    UnreadStateReducer.applyStatsDelta(
-                        stats = it,
-                        unreadDelta = unreadDelta,
-                        readDelta = readDelta,
-                    )
-                },
-            )
-        }
-    }
-
     fun loadAdminSettings() {
         viewModelScope.launch {
             when (val result = repository.adminSettings()) {
-                is AppResult.Success -> _state.update { it.copy(adminRegistrationLocked = result.data.registrationLocked) }
+                is AppResult.Success -> updateState { it.copy(adminRegistrationLocked = result.data.registrationLocked) }
                 is AppResult.Error -> { /* admin not available; leave state alone */ }
             }
             loadAdminUsers()
@@ -192,8 +195,8 @@ class SettingsViewModel @Inject constructor(
     fun loadAdminUsers() {
         viewModelScope.launch {
             when (val result = repository.adminUsers()) {
-                is AppResult.Success -> _state.update { it.copy(adminUsers = result.data) }
-                is AppResult.Error -> _state.update {
+                is AppResult.Success -> updateState { it.copy(adminUsers = result.data) }
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -204,14 +207,14 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.adminCreateUser(email.trim(), password, role)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             adminUsers = listOf(result.data) + it.adminUsers,
                             statusMessage = PresentationText.resource(R.string.settings_admin_user_created),
                         )
                     }
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -221,7 +224,7 @@ class SettingsViewModel @Inject constructor(
     fun updateAdminUser(id: String, role: String? = null, isActive: Boolean? = null) {
         viewModelScope.launch {
             when (val result = repository.adminUpdateUser(id, role, isActive)) {
-                is AppResult.Success -> _state.update { state ->
+                is AppResult.Success -> updateState { state ->
                     state.copy(
                         adminUsers = state.adminUsers.map { user ->
                             if (user.id == id) result.data else user
@@ -229,7 +232,7 @@ class SettingsViewModel @Inject constructor(
                         statusMessage = PresentationText.resource(R.string.settings_admin_user_updated),
                     )
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -239,10 +242,10 @@ class SettingsViewModel @Inject constructor(
     fun resetAdminPassword(id: String, password: String) {
         viewModelScope.launch {
             when (val result = repository.adminResetPassword(id, password)) {
-                is AppResult.Success -> _state.update {
+                is AppResult.Success -> updateState {
                     it.copy(statusMessage = PresentationText.resource(R.string.settings_admin_password_reset))
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -252,7 +255,7 @@ class SettingsViewModel @Inject constructor(
     fun toggleRegistrationLock(locked: Boolean) {
         viewModelScope.launch {
             when (val result = repository.updateAdminSettings(locked)) {
-                is AppResult.Success -> _state.update {
+                is AppResult.Success -> updateState {
                     it.copy(
                         adminRegistrationLocked = result.data.registrationLocked,
                         statusMessage = PresentationText.resource(
@@ -264,7 +267,7 @@ class SettingsViewModel @Inject constructor(
                         ),
                     )
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -273,7 +276,7 @@ class SettingsViewModel @Inject constructor(
 
     fun loadDebugSnapshot() {
         if (!BuildConfig.DEBUG) return
-        _state.update { it.copy(debugSnapshot = repository.getDebugResilienceSnapshot()) }
+        updateState { it.copy(debugSnapshot = repository.getDebugResilienceSnapshot()) }
     }
 
     fun resetDebugResilienceMetrics() {
@@ -283,7 +286,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun clearMessages() {
-        _state.update { it.copy(errorMessage = null, statusMessage = null) }
+        updateState { it.copy(errorMessage = null, statusMessage = null) }
     }
 
     private fun UserPreferences.withNormalizedTheme(): UserPreferences {

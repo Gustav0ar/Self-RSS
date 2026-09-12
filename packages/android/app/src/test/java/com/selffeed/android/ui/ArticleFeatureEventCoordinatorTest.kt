@@ -9,7 +9,7 @@ class ArticleFeatureEventCoordinatorTest {
     private val coordinator = ArticleFeatureEventCoordinator()
 
     @Test
-    fun `article read-state event updates feed stats and search result`() {
+    fun `article read-state event updates search result`() {
         val sink = RecordingSink()
 
         coordinator.handle(
@@ -17,15 +17,11 @@ class ArticleFeatureEventCoordinatorTest {
                 articleId = "a-1",
                 feedId = "f-1",
                 read = true,
-                unreadDelta = -1,
-                readDelta = 1,
             ),
             latestFeedsState = FeedsUiState(),
             sink = sink,
         )
 
-        assertEquals(listOf("f-1" to -1), sink.unreadDeltas)
-        assertEquals(listOf(-1 to 1), sink.statsDeltas)
         assertEquals(listOf("a-1" to true), sink.articleReadStates)
     }
 
@@ -47,7 +43,6 @@ class ArticleFeatureEventCoordinatorTest {
                 feedId = null,
                 categoryId = "c-1",
                 affectedFeedIds = emptySet(),
-                markedCount = 3,
             ),
             latestFeedsState = FeedsUiState(
                 feeds = listOf(
@@ -59,8 +54,6 @@ class ArticleFeatureEventCoordinatorTest {
             sink = sink,
         )
 
-        assertEquals(listOf(Triple(null, "c-1", emptySet<String>())), sink.scopeMarkedRead)
-        assertEquals(listOf(-3 to 3), sink.statsDeltas)
         assertEquals(listOf(setOf("f-1", "f-3")), sink.searchScopeMarkedRead)
         assertTrue(sink.allSearchMarkedRead.isEmpty())
     }
@@ -74,14 +67,11 @@ class ArticleFeatureEventCoordinatorTest {
                 feedId = null,
                 categoryId = null,
                 affectedFeedIds = emptySet(),
-                markedCount = 5,
             ),
             latestFeedsState = FeedsUiState(feeds = listOf(sampleFeed("f-1", "c-1"))),
             sink = sink,
         )
 
-        assertEquals(listOf(Triple(null, null, emptySet<String>())), sink.scopeMarkedRead)
-        assertEquals(listOf(-5 to 5), sink.statsDeltas)
         assertEquals(listOf(Unit), sink.allSearchMarkedRead)
         assertTrue(sink.searchScopeMarkedRead.isEmpty())
     }
@@ -95,7 +85,6 @@ class ArticleFeatureEventCoordinatorTest {
                 feedId = null,
                 categoryId = "c-1",
                 affectedFeedIds = setOf("f-explicit"),
-                markedCount = 1,
             ),
             latestFeedsState = FeedsUiState(feeds = listOf(sampleFeed("f-derived", "c-1"))),
             sink = sink,
@@ -105,22 +94,18 @@ class ArticleFeatureEventCoordinatorTest {
     }
 
     @Test
-    fun `bulk reconciliation restores unread badges and search overrides after clearing the scope`() {
+    fun `bulk reconciliation restores search overrides after clearing the scope`() {
         val sink = RecordingSink()
         coordinator.handle(
             ArticleFeatureEvent.ScopeMarkedRead(
                 feedId = null,
                 categoryId = null,
                 affectedFeedIds = emptySet(),
-                markedCount = 1,
                 retainedUnreadArticleFeeds = mapOf("a-1" to "f-1", "a-2" to "f-1", "a-3" to "f-2"),
             ),
             FeedsUiState(),
             sink,
         )
-        assertEquals(listOf(Triple(null, null, emptySet<String>())), sink.scopeMarkedRead)
-        assertEquals(listOf("f-1" to 2, "f-2" to 1), sink.unreadDeltas)
-        assertEquals(listOf(-1 to 1), sink.statsDeltas)
         assertEquals(listOf(Unit), sink.allSearchMarkedRead)
         assertEquals(listOf("a-1" to false, "a-2" to false, "a-3" to false), sink.articleReadStates)
     }
@@ -136,21 +121,10 @@ class ArticleFeatureEventCoordinatorTest {
     )
 
     private class RecordingSink : ArticleFeatureEventSink {
-        val unreadDeltas = mutableListOf<Pair<String?, Int>>()
-        val statsDeltas = mutableListOf<Pair<Int, Int>>()
         val articleSavedStates = mutableListOf<Pair<String, Boolean>>()
         val articleReadStates = mutableListOf<Pair<String, Boolean>>()
-        val scopeMarkedRead = mutableListOf<Triple<String?, String?, Set<String>>>()
         val searchScopeMarkedRead = mutableListOf<Set<String>>()
         val allSearchMarkedRead = mutableListOf<Unit>()
-
-        override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
-            unreadDeltas += feedId to unreadDelta
-        }
-
-        override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
-            statsDeltas += unreadDelta to readDelta
-        }
 
         override fun applyArticleReadState(articleId: String, read: Boolean) {
             articleReadStates += articleId to read
@@ -158,14 +132,6 @@ class ArticleFeatureEventCoordinatorTest {
 
         override fun applyArticleSavedState(articleId: String, saved: Boolean) {
             articleSavedStates += articleId to saved
-        }
-
-        override fun applyScopeMarkedRead(
-            feedId: String?,
-            categoryId: String?,
-            affectedFeedIds: Set<String>,
-        ) {
-            scopeMarkedRead += Triple(feedId, categoryId, affectedFeedIds)
         }
 
         override fun applySearchScopeMarkedRead(feedIds: Set<String>) {

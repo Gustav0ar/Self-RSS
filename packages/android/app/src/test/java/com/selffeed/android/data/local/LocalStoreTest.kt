@@ -684,7 +684,7 @@ class LocalStoreTest {
     }
 
     @Test
-    fun `bulk receipt keeps queued choices and only counts pending server unread once`() = runBlocking {
+    fun `repeated bulk receipts keep queued choices`() = runBlocking {
         val pendingRead = sampleArticle("pending-read", feedId = "f-1").copy(isRead = false)
         val pendingUnread = sampleArticle("pending-unread", feedId = "f-1").copy(isRead = true)
         val other = sampleArticle("other", feedId = "f-2")
@@ -694,12 +694,10 @@ class LocalStoreTest {
 
         val first = store.markArticlesReadByFeeds(setOf("f-1"))
         assertEquals(mapOf(pendingUnread.id to "f-1"), first.unreadArticleFeeds)
-        assertEquals(1, first.locallyHandledCount)
         assertEquals(mapOf(pendingRead.id to true, pendingUnread.id to false), store.readArticleReadOverrides())
         assertTrue(store.readPendingReadStateMutations().all { it.previousState == true })
 
         val repeated = store.markArticlesReadByFeeds(setOf("f-1"))
-        assertEquals(0, repeated.locallyHandledCount)
         assertEquals(first.unreadArticleFeeds, repeated.unreadArticleFeeds)
 
         val allFeeds = store.markArticlesReadByFeeds(emptySet())

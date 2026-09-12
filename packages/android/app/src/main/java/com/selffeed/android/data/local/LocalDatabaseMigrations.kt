@@ -3,7 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-const val LOCAL_DATABASE_VERSION = 9
+const val LOCAL_DATABASE_VERSION = 10
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -155,6 +155,36 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pending_read_state_mutations ADD COLUMN countScopeJson TEXT")
+        db.execSQL("ALTER TABLE archived_read_state_mutations ADD COLUMN countScopeJson TEXT")
+        db.execSQL("ALTER TABLE article_state_revisions ADD COLUMN articleFeedId TEXT")
+        db.execSQL("""
+            UPDATE article_state_revisions SET articleFeedId = COALESCE(
+                (SELECT feedId FROM articles WHERE articles.id = article_state_revisions.articleId),
+                (SELECT feedId FROM article_details WHERE article_details.id = article_state_revisions.articleId)
+            )
+        """.trimIndent())
+        db.execSQL("ALTER TABLE article_state_revisions ADD COLUMN lastReadMutationId TEXT")
+        db.execSQL("ALTER TABLE article_state_revisions ADD COLUMN lastSavedMutationId TEXT")
+        db.execSQL("""
+            UPDATE article_state_revisions SET
+                lastReadMutationId = (SELECT mutationId FROM pending_read_state_mutations p WHERE p.articleId = article_state_revisions.articleId),
+                lastSavedMutationId = (SELECT mutationId FROM pending_saved_state_mutations p WHERE p.articleId = article_state_revisions.articleId)
+        """.trimIndent())
+        db.execSQL("""
+            CREATE TABLE local_count_state (
+                `key` TEXT NOT NULL PRIMARY KEY,
+                readEpoch INTEGER NOT NULL,
+                statsJson TEXT,
+                totalRead INTEGER,
+                totalUnread INTEGER
+            )
+        """.trimIndent())
+    }
+}
+
 private fun SupportSQLiteDatabase.createOwnershipTables() {
     execSQL("""
         CREATE TABLE IF NOT EXISTS current_local_owner (
@@ -211,4 +241,5 @@ val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
         MIGRATION_6_8,
         MIGRATION_7_8,
         MIGRATION_8_9,
+        MIGRATION_9_10,
     )

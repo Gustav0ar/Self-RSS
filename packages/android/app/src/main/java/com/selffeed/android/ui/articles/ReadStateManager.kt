@@ -3,6 +3,7 @@ package com.selffeed.android.ui.articles
 import android.util.Log
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.repository.ArticleRepository
+import com.selffeed.android.data.repository.ReadStateRejection
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.ArticleReadStateChangedEvent
@@ -15,6 +16,8 @@ import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.ui.ArticleReadStateStore
 import com.selffeed.android.ui.ArticleFeatureEvent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.currentCoroutineContext
@@ -27,6 +30,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 /**
@@ -47,9 +52,13 @@ class ReadStateManager @Inject constructor(
     val readStateStore = ArticleReadStateStore()
     private val manuallyUnread = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    private var bulkLocalEdits: MutableMap<String, LocalReadEdit>? = null
+    private var incomingLocalEdits: MutableMap<String, LocalReadEdit>? = null
 
-    private data class LocalReadEdit(val feedId: String?, val previousRead: Boolean?, val read: Boolean)
+    private data class LocalReadEdit(val feedId: String?, val read: Boolean, val actionId: Any = Any())
+    private data class ReadAction(val job: Job, val edit: LocalReadEdit)
+    private val readActions = mutableMapOf<String, ReadAction>()
+    private var readActionEpoch = 0L
+    private val incomingReadMutex = Mutex()
 
     // Internal state holders
     private var currentFeedId: String? = null
@@ -96,43 +105,84 @@ class ReadStateManager @Inject constructor(
             if (!read) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
         }
 
-        scope?.launch {
-            val previousReadState = currentArticleReadState(articleId)
-            val feedId = currentFeedId(articleId)
+        val actionScope = scope ?: return
+        readActionEpoch++
+        val previousReadState = currentArticleReadState(articleId)
+        val feedId = currentFeedId(articleId)
+        val actionEdit = LocalReadEdit(feedId, read)
+        val job = actionScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val receiptEdits = incomingLocalEdits
+                val edit = actionEdit
+                receiptEdits?.set(articleId, edit)
 
-            val receiptEdits = bulkLocalEdits
-            val previousEdit = receiptEdits?.get(articleId)
-            val edit = previousEdit?.copy(read = read) ?: LocalReadEdit(feedId, previousReadState, read)
-            receiptEdits?.set(articleId, edit)
+                // Apply optimistic update
+                items = items.withReadState(articleId, read)
+                selectedArticle = selectedArticle?.withReadState(articleId, read)
+                onOptimisticUpdate(articleId, feedId, read)
 
-            // Apply optimistic update
-            items = items.withReadState(articleId, read)
-            selectedArticle = selectedArticle?.withReadState(articleId, read)
-            onOptimisticUpdate(articleId, feedId, read)
-
-            when (val result = repository.markRead(articleId, read, source.apiValue)) {
-                is AppResult.Success -> {
-                    val confirmed = result.data
-                    rememberArticleReadState(articleId, confirmed)
-                    onConfirm(articleId, feedId, confirmed, previousReadState)
+                val result = repository.markRead(articleId, read, source.apiValue)
+                if (!currentCoroutineContext().isActive || readActions[articleId]?.job !== currentCoroutineContext()[Job]) return@launch
+                when (result) {
+                    is AppResult.Success -> {
+                        val confirmed = result.data
+                        rememberArticleReadState(articleId, confirmed)
+                        onConfirm(articleId, feedId, confirmed, previousReadState)
+                    }
+                    is AppResult.Error -> {
+                        val local = repository.localArticleState(articleId)
+                        if (!currentCoroutineContext().isActive || readActions[articleId]?.job !== currentCoroutineContext()[Job]) return@launch
+                        val restored = (local as? AppResult.Success)?.data?.isRead
+                        val currentEdits = incomingLocalEdits
+                        if (currentEdits?.get(articleId)?.actionId === actionEdit.actionId) {
+                            if (restored == null) currentEdits.remove(articleId)
+                            else currentEdits[articleId] = edit.copy(read = restored)
+                        }
+                        if (source == ReadStateChangeSource.Manual) {
+                            if (wasManuallyUnread) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
+                        }
+                        restored?.let { previous ->
+                            items = items.withReadState(articleId, previous)
+                            selectedArticle = selectedArticle?.withReadState(articleId, previous)
+                            rememberArticleReadState(articleId, previous)
+                        }
+                        onError(articleId, restored)
+                    }
                 }
-                is AppResult.Error -> {
-                    if (receiptEdits != null && receiptEdits[articleId] === edit) {
-                        if (previousEdit == null) receiptEdits.remove(articleId)
-                        else receiptEdits[articleId] = previousEdit
-                    }
-                    if (source == ReadStateChangeSource.Manual) {
-                        if (wasManuallyUnread) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
-                    }
-                    previousReadState?.let { previous ->
-                        items = items.withReadState(articleId, previous)
-                        selectedArticle = selectedArticle?.withReadState(articleId, previous)
-                        rememberArticleReadState(articleId, previous)
-                    }
-                    // Revert optimistic update
-                    onError(articleId, previousReadState)
+            } finally {
+                if (readActions[articleId]?.job === currentCoroutineContext()[Job]) {
+                    readActions.remove(articleId)
+                    readActionEpoch++
                 }
             }
+        }
+        readActions.remove(articleId)?.job?.cancel()
+        readActions[articleId] = ReadAction(job, actionEdit)
+        job.start()
+    }
+
+    suspend fun applyReadRejection(rejection: ReadStateRejection): Boolean = incomingReadMutex.withLock {
+        reconcileReadRejection(rejection)
+    }
+
+    private suspend fun reconcileReadRejection(rejection: ReadStateRejection): Boolean {
+        while (true) {
+            val action = readActions[rejection.articleId]
+            if (action != null) { action.job.join(); continue }
+            val epoch = readActionEpoch
+            val local = (repository.localArticleState(rejection.articleId) as? AppResult.Success)?.data
+            if (epoch != readActionEpoch) continue
+            if (local?.lastReadMutationId != rejection.mutationId) return false
+            val read = local.isRead
+            if (read != null) {
+                rememberArticleReadState(rejection.articleId, read)
+                items = items.withReadState(rejection.articleId, read)
+                selectedArticle = selectedArticle?.withReadState(rejection.articleId, read)
+                _events.tryEmit(ArticleFeatureEvent.ArticleReadStateChanged(rejection.articleId, currentFeedId(rejection.articleId), read))
+            } else {
+                _events.tryEmit(ArticleFeatureEvent.ArticlesChanged(rejection.articleId))
+            }
+            return true
         }
     }
 
@@ -154,7 +204,18 @@ class ReadStateManager @Inject constructor(
                         selectedFeedId != null -> setOf(selectedFeedId)
                         else -> emptySet()
                     }
-                    onSuccess(selectedFeedId, selectedCategoryId, affectedFeedIds, marked.markedCount)
+                    try {
+                        reconcileMarkedRead(
+                            affectedFeedIds,
+                            com.selffeed.android.network.ReadStateScope(feedId = selectedFeedId, categoryId = selectedCategoryId),
+                        )
+                        onSuccess(selectedFeedId, selectedCategoryId, affectedFeedIds, marked.markedCount)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Cannot reconcile completed mark-all action", error)
+                        onError(error.message.orEmpty())
+                    }
                 }
                 is AppResult.Error -> onError(result.message)
             }
@@ -197,7 +258,7 @@ class ReadStateManager @Inject constructor(
                 repository.updateCachedSavedState(event.articleId, event.isSaved, event.revision)
                 _events.emit(ArticleFeatureEvent.ArticlesChanged(event.articleId))
             }
-            is ArticlesMarkedReadEvent -> applyArticlesMarkedRead(event)
+            is ArticlesMarkedReadEvent -> reconcileMarkedRead(event.feedIds.toSet(), event.scope)
             is ArticlesNewEvent -> {
                 repository.invalidateArticleContentCaches()
                 _events.emit(ArticleFeatureEvent.ArticlesChanged())
@@ -214,85 +275,81 @@ class ReadStateManager @Inject constructor(
         }
     }
 
-    private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) {
-        val previous = currentArticleReadState(event.articleId)
-        val read = repository.updateCachedReadState(event.articleId, event.isRead, event.revision) ?: return
+    private suspend fun applyArticleReadStateChanged(event: ArticleReadStateChangedEvent) = withIncomingReadEdits { localEdits ->
+        val reconciled = repository.updateCachedReadState(event.articleId, event.isRead, event.revision)
+        val read = localEdits[event.articleId]?.read ?: reconciled ?: return@withIncomingReadEdits
         rememberArticleReadState(event.articleId, read)
         items = items.withReadState(event.articleId, read)
         selectedArticle = selectedArticle?.withReadState(event.articleId, read)
 
-        val changed = previous?.let { it != read } ?: (read == event.isRead)
-        val unreadDelta = if (!changed) 0 else if (read) -1 else 1
         _events.emit(
             ArticleFeatureEvent.ArticleReadStateChanged(
                 articleId = event.articleId,
                 feedId = event.feedId,
                 read = read,
-                unreadDelta = unreadDelta,
-                readDelta = -unreadDelta,
             ),
         )
         repository.invalidateReadStateCaches(event.articleId)
     }
 
-    private suspend fun applyArticlesMarkedRead(event: ArticlesMarkedReadEvent) {
-        val feedIds = event.feedIds.toSet()
-        val localEdits = mutableMapOf<String, LocalReadEdit>()
-        bulkLocalEdits = localEdits
-        try {
-            val reconciliation = repository.markCachedArticlesReadByFeeds(feedIds)
-            val affectedArticles = items.filter { articleMatchesAffectedFeeds(it, feedIds) }
-                .associate { it.id to it.feedId }.toMutableMap()
-            selectedArticle?.takeIf { articleMatchesAffectedFeeds(it, feedIds) }?.let {
-                affectedArticles[it.id] = it.feedId
-            }
-            val retainedUnread = reconciliation.unreadArticleFeeds.toMutableMap()
-            for ((articleId, feedId) in affectedArticles) {
-                when (repository.updateCachedReadState(articleId, true)) {
-                    true -> retainedUnread.remove(articleId)
-                    false -> retainedUnread[articleId] = feedId
-                    null -> if (currentArticleReadState(articleId) == false) retainedUnread[articleId] = feedId
-                }
-            }
-
-            // Local edits can run during either Room call. Merge them after the
-            // last suspension so the receipt cannot overwrite a newer choice.
-            val scopedEdits = localEdits.filterValues { feedIds.isEmpty() || it.feedId in feedIds }
-            scopedEdits.forEach { (articleId, edit) ->
-                if (edit.read) retainedUnread.remove(articleId)
-                else edit.feedId?.let { retainedUnread[articleId] = it }
-            }
-            val newlyHandledCount = scopedEdits.count { (articleId, edit) ->
-                edit.previousRead == false && articleId !in reconciliation.pendingArticleIds
-            }
-            items = items.map { article ->
-                if (articleMatchesAffectedFeeds(article, feedIds)) {
-                    val read = article.id !in retainedUnread
-                    rememberArticleReadState(article.id, read)
-                    article.copy(isRead = read)
-                } else article
-            }
-            selectedArticle = selectedArticle?.let { article ->
-                if (articleMatchesAffectedFeeds(article, feedIds)) {
-                    val read = article.id !in retainedUnread
-                    rememberArticleReadState(article.id, read)
-                    article.copy(isRead = read)
-                } else article
-            }
-            _events.emit(
-                ArticleFeatureEvent.ScopeMarkedRead(
-                    feedId = event.scope.feedId,
-                    categoryId = event.scope.categoryId,
-                    affectedFeedIds = feedIds,
-                    markedCount = (event.markedCount - reconciliation.locallyHandledCount - newlyHandledCount)
-                        .coerceAtLeast(0),
-                    retainedUnreadArticleFeeds = retainedUnread,
-                ),
-            )
-        } finally {
-            bulkLocalEdits = null
+    private suspend fun reconcileMarkedRead(
+        feedIds: Set<String>,
+        readScope: com.selffeed.android.network.ReadStateScope,
+    ) = withIncomingReadEdits { localEdits ->
+        if (feedIds.isEmpty() && (readScope.feedId != null || readScope.categoryId != null)) return@withIncomingReadEdits
+        val reconciliation = repository.markCachedArticlesReadByFeeds(feedIds)
+        val affectedArticles = items.filter { articleMatchesAffectedFeeds(it, feedIds) }
+            .associate { it.id to it.feedId }.toMutableMap()
+        selectedArticle?.takeIf { articleMatchesAffectedFeeds(it, feedIds) }?.let {
+            affectedArticles[it.id] = it.feedId
         }
+        val retainedUnread = reconciliation.unreadArticleFeeds.toMutableMap()
+        for ((articleId, feedId) in affectedArticles) {
+            when (repository.updateCachedReadState(articleId, true)) {
+                true -> retainedUnread.remove(articleId)
+                false -> retainedUnread[articleId] = feedId
+                null -> if (currentArticleReadState(articleId) == false) retainedUnread[articleId] = feedId
+            }
+        }
+
+        // Local edits can run during either Room call. Merge them after the
+        // last suspension so the receipt cannot overwrite a newer choice.
+        val scopedEdits = localEdits.filterValues { feedIds.isEmpty() || it.feedId in feedIds }
+        scopedEdits.forEach { (articleId, edit) ->
+            if (edit.read) retainedUnread.remove(articleId)
+            else edit.feedId?.let { retainedUnread[articleId] = it }
+        }
+        items = items.map { article ->
+            if (articleMatchesAffectedFeeds(article, feedIds)) {
+                val read = article.id !in retainedUnread
+                rememberArticleReadState(article.id, read)
+                article.copy(isRead = read)
+            } else article
+        }
+        selectedArticle = selectedArticle?.let { article ->
+            if (articleMatchesAffectedFeeds(article, feedIds)) {
+                val read = article.id !in retainedUnread
+                rememberArticleReadState(article.id, read)
+                article.copy(isRead = read)
+            } else article
+        }
+        _events.emit(
+            ArticleFeatureEvent.ScopeMarkedRead(
+                feedId = readScope.feedId,
+                categoryId = readScope.categoryId,
+                affectedFeedIds = feedIds,
+                retainedUnreadArticleFeeds = retainedUnread,
+            ),
+        )
         repository.invalidateReadStateCaches()
+    }
+
+    private suspend fun withIncomingReadEdits(block: suspend (MutableMap<String, LocalReadEdit>) -> Unit) {
+        incomingReadMutex.withLock {
+            val edits = readActions.mapValues { it.value.edit }.toMutableMap()
+            incomingLocalEdits = edits
+            try { block(edits) } finally { incomingLocalEdits = null }
+        }
     }
 
     private fun currentArticleReadState(articleId: String): Boolean? =

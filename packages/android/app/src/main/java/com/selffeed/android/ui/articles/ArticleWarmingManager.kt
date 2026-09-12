@@ -23,13 +23,13 @@ class ArticleWarmingManager @Inject constructor(
     private var scope: CoroutineScope? = null
     private val warmingJobs = mutableMapOf<String, Job>()
     private var lastVisibleArticleIds: List<String> = emptyList()
-    private var onArticlesWarmed: (List<ArticleDetail>) -> Unit = {}
+    private var onArticlesWarmed: suspend (List<ArticleDetail>) -> Unit = {}
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
     }
 
-    fun setOnArticlesWarmed(callback: (List<ArticleDetail>) -> Unit) {
+    fun setOnArticlesWarmed(callback: suspend (List<ArticleDetail>) -> Unit) {
         onArticlesWarmed = callback
     }
 
@@ -83,22 +83,22 @@ class ArticleWarmingManager @Inject constructor(
         repository.prefetchHeroImages(candidates.map { it.heroImageUrl })
 
         val cached = candidates.mapNotNull { repository.cachedArticleDetail(it.id) }
-        publishWarmed(cached)
 
         val activeScope = scope ?: return
         candidates.forEach { article ->
-            if (cached.any { it.id == article.id } || warmingJobs[article.id]?.isActive == true) return@forEach
+            if (warmingJobs[article.id]?.isActive == true) return@forEach
 
             val job = activeScope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    val detail = when (val prefetched = repository.prefetchArticle(article.id)) {
+                    val cachedDetail = cached.firstOrNull { it.id == article.id }
+                    val detail = cachedDetail ?: when (val prefetched = repository.prefetchArticle(article.id)) {
                         is AppResult.Success -> prefetched.data
                         is AppResult.Error -> null
                     }
                     coroutineContext.ensureActive()
                     if (detail != null) {
                         publishWarmed(listOf(detail))
-                        if (enrichPending && detail.contentStatus == "enrichment_pending") {
+                        if (cachedDetail == null && enrichPending && detail.contentStatus == "enrichment_pending") {
                             repository.enrichArticle(detail.id, invalidateCaches = false)
                         }
                     }
@@ -111,9 +111,10 @@ class ArticleWarmingManager @Inject constructor(
         }
     }
 
-    private fun publishWarmed(details: List<ArticleDetail>) {
+    private suspend fun publishWarmed(details: List<ArticleDetail>) {
         if (details.isEmpty()) return
         onArticlesWarmed(details)
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
         repository.prefetchHeroImages(
             details.flatMap { detail ->
                 buildList {

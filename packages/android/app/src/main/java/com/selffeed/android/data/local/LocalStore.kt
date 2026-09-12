@@ -6,6 +6,11 @@ import androidx.core.text.HtmlCompat
 import androidx.room.Room
 import androidx.room.withTransaction
 import com.selffeed.android.data.repository.BulkReadReconciliation
+import com.selffeed.android.data.repository.LibraryCounts
+import com.selffeed.android.data.repository.LocalArticleState
+import com.selffeed.android.network.StatsResponse
+import com.selffeed.android.data.applyCategoryOrder
+import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -22,6 +27,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
@@ -45,6 +51,7 @@ class LocalStore internal constructor(
         moshi,
     )
     private val dao = database.localStoreDao()
+    private val counts = LocalCountStore(dao, moshi)
 
     private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
         Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
@@ -60,6 +67,99 @@ class LocalStore internal constructor(
     private val invalidationSeq = AtomicLong(0)
 
     suspend fun readOwner(): LocalOwnerEntity? = dao.readOwner()
+
+    suspend fun captureCountSnapshot(): CountSnapshotTicket = database.withTransaction { counts.capture() }
+
+    suspend fun invalidateCountSnapshots() = database.withTransaction { counts.invalidateCountSnapshot() }
+
+    suspend fun readStats(): StatsResponse? = database.withTransaction { counts.readStats() }
+
+    fun observeLibraryCounts(): Flow<LibraryCounts> = database.invalidationTracker
+        .createFlow(LocalTables.FEEDS, LocalTables.CATEGORIES, LocalTables.LOCAL_COUNT_STATE)
+        .map {
+            database.withTransaction {
+                val categoryCounts = buildMap {
+                    fun append(categories: List<CategoryWithCounts>) {
+                        categories.forEach { category ->
+                            put(category.id, category.unreadCount)
+                            category.children?.let(::append)
+                        }
+                    }
+                    append(readCategories())
+                }
+                val totals = dao.readCountState()
+                LibraryCounts(
+                    feedUnread = dao.readFeeds().associate { it.id to it.unreadCount.coerceAtLeast(0) },
+                    categoryUnread = categoryCounts,
+                    totalRead = totals?.totalRead?.coerceAtLeast(0),
+                    totalUnread = totals?.totalUnread?.coerceAtLeast(0),
+                )
+            }
+        }.distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /** A durable generation coalesces local edits, delivery, and remote read hints without a polling loop. */
+    fun observeCountRefreshRequests(): Flow<Unit> = flow {
+        var initial = true
+        database.invalidationTracker
+            .createFlow(LocalTables.LOCAL_COUNT_STATE, LocalTables.PENDING_READ_STATE_MUTATIONS)
+            .map { captureCountSnapshot() }.distinctUntilChanged().collect { ticket ->
+                if (initial || !ticket.hadPendingReads) emit(Unit)
+                initial = false
+            }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun writeRemoteStats(stats: StatsResponse, ticket: CountSnapshotTicket) =
+        database.withTransaction { counts.writeStats(stats, ticket) }
+
+    /** Metadata remains fresh while existing count projections await settled read delivery. */
+    suspend fun writeRemoteFeeds(feeds: List<FeedWithCounts>, ticket: CountSnapshotTicket, merge: Boolean = false): List<FeedWithCounts> =
+        database.withTransaction {
+            val previous = dao.readFeeds().associateBy { it.id }
+            val acceptCounts = counts.mayAccept(ticket)
+            val incoming = feeds.map { feed ->
+                if (acceptCounts) feed else feed.copy(unreadCount = previous[feed.id]?.unreadCount ?: feed.unreadCount)
+            }
+            if (merge) mergeFeeds(incoming) else writeFeeds(incoming)
+            incoming.map { it.copy(unreadCount = it.unreadCount.coerceAtLeast(0)) }
+        }
+
+    suspend fun writeRemoteCategories(categories: List<CategoryWithCounts>, ticket: CountSnapshotTicket): List<CategoryWithCounts> =
+        database.withTransaction {
+            val existingCounts = mutableMapOf<String, Int>()
+            fun remember(nodes: List<CategoryWithCounts>) {
+                nodes.forEach { category ->
+                    existingCounts[category.id] = category.unreadCount
+                    category.children?.let(::remember)
+                }
+            }
+            fun project(nodes: List<CategoryWithCounts>): List<CategoryWithCounts> = nodes.map { category ->
+                category.copy(
+                    unreadCount = existingCounts[category.id] ?: category.unreadCount,
+                    children = category.children?.let(::project),
+                )
+            }
+            val incoming = if (counts.mayAccept(ticket)) categories else {
+                remember(dao.readCategories().map { it.toModel() })
+                project(categories)
+            }
+            writeCategories(incoming)
+            incoming.map { it.withVisibleCounts() }
+        }
+
+    suspend fun readArticleState(articleId: String): LocalArticleState =
+        database.withTransaction {
+            val state = stateRecord(articleId)
+            val read = dao.readPendingReadStateMutation(articleId)
+            val saved = dao.readPendingSavedStateMutation(articleId)
+            LocalArticleState(
+                read?.read ?: state.confirmedReadState,
+                saved?.saved ?: state.confirmedSavedState,
+                read?.mutationId,
+                saved?.mutationId,
+                state.lastReadMutationId,
+                state.lastSavedMutationId,
+            )
+        }
 
     /**
      * Adopts an existing snapshot without deleting data, or archives the previous
@@ -102,7 +202,15 @@ class LocalStore internal constructor(
     }
 
     override suspend fun readCategories(): List<CategoryWithCounts> =
-        dao.readCategories().map { it.toModel() }
+        dao.readCategories().map { it.toModel().withVisibleCounts() }
+
+    suspend fun reorderCategories(updates: List<CategoryOrderUpdate>) = database.withTransaction {
+        writeCategories(applyCategoryOrder(dao.readCategories().map { it.toModel() }, updates))
+    }
+
+    private fun CategoryWithCounts.withVisibleCounts(): CategoryWithCounts = copy(
+        unreadCount = unreadCount.coerceAtLeast(0), children = children?.map { it.withVisibleCounts() },
+    )
 
     override suspend fun writeFeeds(feeds: List<FeedWithCounts>) {
         database.withTransaction {
@@ -115,12 +223,12 @@ class LocalStore internal constructor(
     }
 
     override suspend fun readFeeds(): List<FeedWithCounts> =
-        dao.readFeeds().map { it.toModel() }
+        dao.readFeeds().map { it.toModel().copy(unreadCount = it.unreadCount.coerceAtLeast(0)) }
 
     override suspend fun mergeFeeds(feeds: List<FeedWithCounts>) {
         if (feeds.isEmpty()) return
         val replacements = feeds.associateBy(FeedWithCounts::id)
-        val existing = readFeeds()
+        val existing = dao.readFeeds().map { it.toModel() }
         writeFeeds(buildList {
             existing.forEach { add(replacements[it.id] ?: it) }
             feeds.filterNot { incoming -> existing.any { it.id == incoming.id } }.forEach(::add)
@@ -215,6 +323,7 @@ class LocalStore internal constructor(
     private suspend fun mergeArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
         articles.map { article ->
             val state = stateRecord(article.id)
+            if (state.articleFeedId != article.feedId) dao.upsertArticleStateRevision(state.copy(articleFeedId = article.feedId))
             val read = ConfirmedArticleState(state.confirmedReadState, state.readRevision)
             val saved = ConfirmedArticleState(state.confirmedSavedState, state.savedRevision)
             // Repeated and stale metadata pages must not traverse full reader bodies.
@@ -254,6 +363,9 @@ class LocalStore internal constructor(
             articleId, null, null,
             confirmedReadState = if (read != null) read.previousState else article?.isRead ?: detail?.isRead,
             confirmedSavedState = if (saved != null) saved.previousState else article?.isSaved ?: detail?.isSaved,
+            lastReadMutationId = read?.mutationId,
+            lastSavedMutationId = saved?.mutationId,
+            articleFeedId = article?.feedId ?: detail?.feedId,
         )
         dao.upsertArticleStateRevision(recovered)
         return recovered
@@ -265,6 +377,7 @@ class LocalStore internal constructor(
     private suspend fun mergeReadState(articleId: String, read: Boolean, revision: Int?): Boolean? {
         val existing = stateRecord(articleId)
         val confirmed = ConfirmedArticleState(existing.confirmedReadState, existing.readRevision).merge(read, revision)
+        if (confirmed != ConfirmedArticleState(existing.confirmedReadState, existing.readRevision)) counts.invalidateCountSnapshot()
         dao.upsertArticleStateRevision(existing.copy(readRevision = confirmed.revision, confirmedReadState = confirmed.value))
         val pending = dao.readPendingReadStateMutation(articleId)
         if (pending != null && pending.previousState != confirmed.value) {
@@ -326,6 +439,7 @@ class LocalStore internal constructor(
                 baseRevision = listOfNotNull(previous?.baseRevision, revision).maxOrNull(),
                 previousState = state.confirmedReadState,
                 updatedAt = System.currentTimeMillis(),
+                countScopeJson = if (previous == null && state.confirmedReadState != null) counts.captureReadScope(articleFeedId(articleId)) else previous?.countScopeJson,
             )
             dao.upsertArticleReadOverride(articleId.toReadOverride(read))
             dao.updateArticleReadState(articleId, read)
@@ -335,6 +449,8 @@ class LocalStore internal constructor(
                 )
             }
             dao.upsertPendingReadStateMutation(queued)
+            dao.upsertArticleStateRevision(state.copy(lastReadMutationId = queued.mutationId))
+            counts.recordLocalReadChange(queued.countScopeJson, previous?.read ?: state.confirmedReadState, read)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return queued
@@ -374,6 +490,7 @@ class LocalStore internal constructor(
                 )
             }
             dao.upsertPendingSavedStateMutation(queued)
+            dao.upsertArticleStateRevision(state.copy(lastSavedMutationId = queued.mutationId))
         }
         notifyInvalidation(TABLE_ARTICLES)
         return queued
@@ -396,11 +513,10 @@ class LocalStore internal constructor(
 
     suspend fun markArticlesReadByFeeds(feedIds: Collection<String>): BulkReadReconciliation {
         val result = database.withTransaction {
+            counts.invalidateCountSnapshot()
             val pending = dao.readPendingReadStateMutations().associateBy { it.articleId }
             val scoped = dao.readArticleStatesByFeeds(feedIds.distinct(), feedIds.isEmpty())
             val unreadArticleFeeds = mutableMapOf<String, String>()
-            val pendingArticleIds = mutableSetOf<String>()
-            var locallyHandledCount = 0
             val states = ArrayList<ArticleStateRevisionEntity>(scoped.size)
             val overrides = ArrayList<ArticleReadOverrideEntity>(scoped.size)
             val affectedArticleIds = mutableSetOf<String>()
@@ -415,8 +531,6 @@ class LocalStore internal constructor(
                 states += state.copy(confirmedReadState = confirmed.value)
                 val mutation = pending[state.articleId]
                 if (mutation != null) {
-                    pendingArticleIds += state.articleId
-                    if (mutation.previousState == false) locallyHandledCount++
                     dao.upsertPendingReadStateMutation(mutation.copy(previousState = confirmed.value))
                 }
                 val visible = mutation?.read ?: confirmed.value ?: cachedReadState
@@ -425,7 +539,7 @@ class LocalStore internal constructor(
             }
             dao.upsertArticleStateRevisions(states)
             dao.upsertArticleReadOverrides(overrides)
-            BulkReadReconciliation(unreadArticleFeeds, locallyHandledCount, pendingArticleIds, affectedArticleIds)
+            BulkReadReconciliation(unreadArticleFeeds, affectedArticleIds)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return result
@@ -456,9 +570,13 @@ class LocalStore internal constructor(
     ): ArticleStateMutationResult {
         val result = database.withTransaction {
             // Recover the old baseline before removing its pending overlay.
-            stateRecord(mutation.articleId)
+            val state = stateRecord(mutation.articleId)
+            val pending = dao.readPendingReadStateMutation(mutation.articleId)
+            val before = pending?.read ?: state.confirmedReadState
             val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
-            ArticleStateMutationResult(removed, mergeReadState(mutation.articleId, read, revision))
+            val effective = mergeReadState(mutation.articleId, read, revision)
+            counts.recordLocalReadChange(pending?.countScopeJson, before, effective)
+            ArticleStateMutationResult(removed, effective)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return result
@@ -484,9 +602,9 @@ class LocalStore internal constructor(
             val current = dao.readPendingReadStateMutation(mutation.articleId) ?: return@withTransaction
             if (current.mutationId != mutation.mutationId) return@withTransaction
             val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.readRevision ?: 0)
-            dao.upsertPendingReadStateMutation(
-                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base),
-            )
+            val rebased = current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base)
+            dao.upsertPendingReadStateMutation(rebased)
+            dao.upsertArticleStateRevision(stateRecord(mutation.articleId).copy(lastReadMutationId = rebased.mutationId))
         }
     }
 
@@ -496,9 +614,9 @@ class LocalStore internal constructor(
             val current = dao.readPendingSavedStateMutation(mutation.articleId) ?: return@withTransaction
             if (current.mutationId != mutation.mutationId) return@withTransaction
             val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.savedRevision ?: 0)
-            dao.upsertPendingSavedStateMutation(
-                current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base),
-            )
+            val rebased = current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base)
+            dao.upsertPendingSavedStateMutation(rebased)
+            dao.upsertArticleStateRevision(stateRecord(mutation.articleId).copy(lastSavedMutationId = rebased.mutationId))
         }
     }
 
@@ -511,12 +629,17 @@ class LocalStore internal constructor(
                     mergeReadState(mutation.articleId, confirmed, state.readRevision)
                 }
                 dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
+                counts.recordLocalReadChange(mutation.countScopeJson, mutation.read, state.confirmedReadState)
             }
             ArticleStateMutationResult(removed, state.confirmedReadState)
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return result
     }
+
+    private suspend fun articleFeedId(articleId: String): String? =
+        dao.readArticleStateRevision(articleId)?.articleFeedId ?: dao.readArticle(articleId)?.feedId
+            ?: dao.readArticleDetail(articleId)?.let { it.feedId ?: decodeDetail(it)?.feedId }
 
     suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): ArticleStateMutationResult {
         val result = database.withTransaction {
@@ -660,6 +783,7 @@ class LocalStore internal constructor(
         dao.clearAllArticleDetails()
         dao.clearPreferences()
         dao.clearLegacyOfflineArticles()
+        dao.clearCountState()
     }
 
     override suspend fun clearCategories() = clearTable(TABLE_CATEGORIES)

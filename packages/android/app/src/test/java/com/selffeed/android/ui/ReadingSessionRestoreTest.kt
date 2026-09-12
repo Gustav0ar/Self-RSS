@@ -59,6 +59,7 @@ class ReadingSessionRestoreTest {
     fun setup() {
         every { repository.observeOnline() } returns MutableStateFlow(true)
         every { repository.articlePagingData(any(), any()) } returns emptyFlow()
+        every { repository.readStateRejections() } returns kotlinx.coroutines.flow.emptyFlow()
         every { repository.savedStateRejections() } returns emptyFlow()
         every { repository.cachedArticleDetail(any()) } returns null
         coEvery { repository.article(detail.id, any()) } returns AppResult.Success(detail)

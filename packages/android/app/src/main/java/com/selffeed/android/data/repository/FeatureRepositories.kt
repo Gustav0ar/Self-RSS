@@ -61,8 +61,10 @@ class FeedRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
     private val access: AccountAccess,
 ) : FeedRepository {
-    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = access.observe { source.categoryUpdates() }
-    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = access.observe { source.feedUpdates() }
+    override fun countRefreshRequests(): Flow<Unit> = access.observe { source.countRefreshRequests() }
+    override fun libraryCounts(): Flow<LibraryCounts> = access.observe { source.libraryCounts() }
+    override fun categoryUpdates(): Flow<AppResult<List<CategoryWithCounts>>> = access.observe { source.categoryUpdates() }
+    override fun feedUpdates(): Flow<AppResult<List<FeedWithCounts>>> = access.observe { source.feedUpdates() }
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> = access.withAccount { source.categories() }
     override suspend fun createCategory(
         name: String,
@@ -135,6 +137,9 @@ class ArticleRepositoryImpl @Inject constructor(
     private val delegate: SelfFeedRepository,
     private val access: AccountAccess,
 ) : ArticleRepository {
+    override suspend fun localArticleState(articleId: String) =
+        access.withAccount { delegate.localArticleState(articleId) }
+
     override fun observePendingArticleChanges(): Flow<Int> =
         access.observe { delegate.observePendingArticleChanges() }
     override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
@@ -185,6 +190,7 @@ class ArticleRepositoryImpl @Inject constructor(
         access.withAccount { delegate.setSaved(articleId, saved) }
 
     override fun savedStateRejections(): Flow<SavedStateRejection> = access.observe { delegate.savedStateRejections() }
+    override fun readStateRejections(): Flow<ReadStateRejection> = access.observe { delegate.readStateRejections() }
 
     override suspend fun markAllRead(
         feedId: String?,
@@ -228,6 +234,7 @@ class SettingsRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
     private val access: AccountAccess,
 ) : SettingsRepository {
+    override fun libraryCounts(): Flow<LibraryCounts> = access.observe { source.libraryCounts() }
     override suspend fun preferences(): AppResult<UserPreferences> = access.withAccount { source.preferences() }
     override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> =
         access.withAccount { source.updatePreferences(request) }
