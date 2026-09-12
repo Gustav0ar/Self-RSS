@@ -1330,21 +1330,21 @@ class RssRepositoryTest {
         val result = repository.restoreSession()
 
         assertTrue(result is AppResult.Success)
-        io.mockk.verify(exactly = 0) { sessionRefreshCoordinator.refreshAccessToken(any()) }
+        coVerify(exactly = 0) { sessionRefreshCoordinator.refresh(any()) }
     }
 
     @Test
     fun `restoreSession refreshes through the shared coordinator when only a refresh cookie exists`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns
+        coEvery { sessionRefreshCoordinator.refresh(any()) } returns
             SessionRefreshResult.Success("new-access-token")
         coEvery { api.me(session = any()) } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
 
         val result = repository.restoreSession()
 
         assertTrue(result is AppResult.Success)
-        io.mockk.verify(exactly = 1) { sessionRefreshCoordinator.refreshAccessToken(any()) }
+        coVerify(exactly = 1) { sessionRefreshCoordinator.refresh(any()) }
         coVerify(exactly = 1) { api.me(session = any()) }
     }
 
@@ -1352,7 +1352,7 @@ class RssRepositoryTest {
     fun `restoreSession clears the local session when refresh session is rejected`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns SessionRefreshResult.Rejected
+        coEvery { sessionRefreshCoordinator.refresh(any()) } returns SessionRefreshResult.Rejected
 
         val result = repository.restoreSession()
 
@@ -1366,7 +1366,7 @@ class RssRepositoryTest {
     fun `restoreSession keeps the local session when refresh is temporarily unavailable`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns
+        coEvery { sessionRefreshCoordinator.refresh(any()) } returns
             SessionRefreshResult.Unavailable(java.io.IOException("network unavailable"))
 
         val result = repository.restoreSession()

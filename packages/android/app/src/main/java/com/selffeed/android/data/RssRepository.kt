@@ -196,7 +196,7 @@ class RssRepository @Inject constructor(
         check(hasRefreshCookie || hasAccessToken) { "No saved session" }
         val user = try {
             if (!hasAccessToken && hasRefreshCookie) {
-                when (withContext(Dispatchers.IO) { sessionRefreshCoordinator.refreshAccessToken(session) }) {
+                when (sessionRefreshCoordinator.refresh(session)) {
                     is SessionRefreshResult.Success -> Unit
                     SessionRefreshResult.Rejected -> throw AuthenticationLostException()
                     is SessionRefreshResult.Unavailable -> throw IllegalStateException(
