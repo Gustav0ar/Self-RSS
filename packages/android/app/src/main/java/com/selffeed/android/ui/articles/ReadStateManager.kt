@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Manages article read/unread state, including:
@@ -37,7 +36,6 @@ import javax.inject.Singleton
  * - SSE event handling
  * - Manually unread tracking
  */
-@Singleton
 class ReadStateManager @Inject constructor(
     private val repository: ArticleRepository,
 ) {
@@ -87,7 +85,7 @@ class ReadStateManager @Inject constructor(
         read: Boolean,
         source: ReadStateChangeSource,
         onOptimisticUpdate: (String, String?, Boolean) -> Unit,
-        onError: (String, Boolean?, ArticleDetail?) -> Unit,
+        onError: (String, Boolean?) -> Unit,
         onConfirm: (String, String?, Boolean, Boolean?) -> Unit,
     ) {
         if (source.isAutomatic && read && articleId in manuallyUnread) {
@@ -101,10 +99,7 @@ class ReadStateManager @Inject constructor(
 
         scope?.launch {
             val previousReadState = currentArticleReadState(articleId)
-            val previousArticle = selectedArticle?.takeIf { it.id == articleId }
             val feedId = currentFeedId(articleId)
-            val previousItems = items
-            val previousSelectedArticle = selectedArticle
 
             val receiptEdits = bulkLocalEdits
             val previousEdit = receiptEdits?.get(articleId)
@@ -130,11 +125,13 @@ class ReadStateManager @Inject constructor(
                     if (source == ReadStateChangeSource.Manual) {
                         if (wasManuallyUnread) manuallyUnread.add(articleId) else manuallyUnread.remove(articleId)
                     }
-                    items = previousItems
-                    selectedArticle = previousSelectedArticle
-                    previousReadState?.let { rememberArticleReadState(articleId, it) }
+                    previousReadState?.let { previous ->
+                        items = items.withReadState(articleId, previous)
+                        selectedArticle = selectedArticle?.withReadState(articleId, previous)
+                        rememberArticleReadState(articleId, previous)
+                    }
                     // Revert optimistic update
-                    onError(articleId, previousReadState, previousArticle)
+                    onError(articleId, previousReadState)
                 }
             }
         }

@@ -112,6 +112,78 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `closing reader rejects an article response even when cancellation is ignored`() = runTest {
+        assertReaderRequestInvalidated({ it.closeArticle() }, AppResult.Success(sampleDetail("a1")))
+    }
+
+    @Test
+    fun `changing feed rejects a late detail response`() = runTest {
+        assertReaderRequestInvalidated({ it.setScope("another-feed", null) }, AppResult.Success(sampleDetail("a1")))
+    }
+
+    @Test
+    fun `changing to saved rejects a late detail error`() = runTest {
+        assertReaderRequestInvalidated({ it.setSavedOnly(true) }, AppResult.Error("Old request failed"))
+    }
+
+    @Test
+    fun `late automatic read failure cannot reopen reader after Back`() = runTest {
+        assertLateReadFailureKeepsSelection({ it.closeArticle() }, null)
+    }
+
+    @Test
+    fun `late automatic read failure cannot restore the previous feed reader`() = runTest {
+        assertLateReadFailureKeepsSelection({ it.setScope("another-feed", null) }, null)
+    }
+
+    @Test
+    fun `late automatic read failure cannot replace the next article`() = runTest {
+        assertLateReadFailureKeepsSelection({ it.openArticle("a2") }, "a2")
+    }
+
+    private fun assertLateReadFailureKeepsSelection(navigate: (ArticlesViewModel) -> Unit, expectedId: String?) {
+        val response = CompletableDeferred<AppResult<Boolean>>()
+        coEvery { repository.markRead("a1", true, any()) } coAnswers { response.await() }
+        coEvery { repository.article(any(), any()) } answers { AppResult.Success(sampleDetail(firstArg())) }
+        val viewModel = createViewModel()
+        viewModel.updateArticleQueueSnapshot(listOf(sampleArticle("a1"), sampleArticle("a2")))
+        viewModel.openArticle("a1")
+        navigate(viewModel)
+
+        response.complete(AppResult.Error("Read failed"))
+
+        assertEquals(expectedId, viewModel.state.value.selectedArticle?.id)
+    }
+
+    private suspend fun assertReaderRequestInvalidated(
+        invalidate: (ArticlesViewModel) -> Unit,
+        result: AppResult<ArticleDetail>,
+    ) {
+        val response = CompletableDeferred<AppResult<ArticleDetail>>()
+        val cancelled = CompletableDeferred<Unit>()
+        coEvery { repository.article("a1", any()) } coAnswers {
+            try {
+                response.await()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                cancelled.complete(Unit)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { response.await() }
+            }
+        }
+        val viewModel = createViewModel()
+        primeArticleQueue(viewModel)
+        viewModel.openArticle("a1")
+        assertNotNull(viewModel.state.value.selectedArticle)
+
+        invalidate(viewModel)
+        response.complete(result)
+
+        assertNull(viewModel.state.value.selectedArticle)
+        assertNull(viewModel.state.value.errorMessage)
+        assertTrue(viewModel.state.value.readerQueue.isEmpty())
+        assertTrue("The active network coroutine must also be cancelled", cancelled.isCompleted)
+    }
+
+    @Test
     fun `setScope clears the retained visible queue`() = runTest {
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)

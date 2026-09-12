@@ -7,17 +7,16 @@ import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.job
 import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Manages adjacent article prefetching for instant navigation.
  * Warms up article details and hero images for nearby articles
  * to provide instant navigation experience.
  */
-@Singleton
 class ArticleWarmingManager @Inject constructor(
     private val repository: ArticleRepository,
 ) {
@@ -74,8 +73,9 @@ class ArticleWarmingManager @Inject constructor(
      * Cancels any pending warming job.
      */
     fun cancelWarming() {
-        warmingJobs.values.forEach(Job::cancel)
+        val jobs = warmingJobs.values.toList()
         warmingJobs.clear()
+        jobs.forEach(Job::cancel)
         lastVisibleArticleIds = emptyList()
     }
 
@@ -95,6 +95,7 @@ class ArticleWarmingManager @Inject constructor(
                         is AppResult.Success -> prefetched.data
                         is AppResult.Error -> null
                     }
+                    coroutineContext.ensureActive()
                     if (detail != null) {
                         publishWarmed(listOf(detail))
                         if (enrichPending && detail.contentStatus == "enrichment_pending") {

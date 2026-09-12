@@ -9,11 +9,12 @@ The implementation starts from `cd802e5`, the current `origin/main` fetched on 2
 | Roadmap and execution record | 033–049 | docs/android-experience-roadmap | [#46](https://github.com/Gustav0ar/Self-RSS/pull/46) | Open; CI passed after one test rerun |
 | Production-aligned fixtures and isolated verification | 033 | test/android-reader-fixtures | [#48](https://github.com/Gustav0ar/Self-RSS/pull/48) | Open; 420 JVM tests, lint, APK builds, real WebView and process/Room checks passed; physical measurements pending |
 | Design alternatives and selection | 034 | design/android-reading-experience | [#47](https://github.com/Gustav0ar/Self-RSS/pull/47) | Open; three mocks prepared, selection pending |
-| Session ownership and foreground lifecycle | 035 | fix/android-session-lifecycle | pending | Reconcile existing PR #41 |
+| Reader request ownership | 035, first slice | fix/android-reader-requests | pending | 432 JVM tests, lint, APK builds and four device checks pass; opening PR |
+| Account ownership and foreground lifecycle | 035, remaining | fix/android-session-lifecycle | pending | Requires data-preserving ownership migration and shared request/commit boundary |
 | Cache-first reads and mutation authority | 036 | fix/android-cache-mutation-authority | pending | Reconcile existing PRs #38 and #42 |
 | Main-safe I/O | 037 | perf/android-main-safe-io | pending | Reconcile existing PR #40 |
 | Loading and error lifecycle | 038 | fix/android-loading-lifecycle | pending | Pending |
-| Media and renderer lifetime | 039 | fix/android-reader-media-lifecycle | pending | 423 JVM tests, lint/minified build and nine device tests passed; opening PR |
+| Media and renderer lifetime | 039 | fix/android-reader-media-lifecycle | [#49](https://github.com/Gustav0ar/Self-RSS/pull/49) | Open; CI green, 423 JVM tests, lint/minified build and nine device tests passed |
 | Reader readiness and fallback | 040 | fix/android-reader-readiness | pending | Pending |
 | Retention metadata and budgets | 041 | perf/android-cache-retention | pending | Pending |
 | Durable offline preparation and resource resolver | 042 | feat/android-durable-offline | pending | Pending |
@@ -50,3 +51,7 @@ Dependencies will use stacked PRs when required. Each PR names its base and the 
 
 - PR #48 Android CI passed all three required jobs. Copilot could not review because its requester quota was exhausted; the independent source review completed and both findings were fixed.
 - Plan 039 verified real audio/video pause, fullscreen restoration, renderer-loss recovery after enrichment, bounded views, trim and close on WebView 134.0.6998.135. Physical memory evidence remains pending.
+
+- PR #49 Android instrumentation, JVM tests and lint/build passed. Copilot's quota still prevented its review; independent review findings were reproduced and resolved locally.
+- Plan 035 is split into a reader-request PR and the remaining account/foreground work. Two review findings were reproduced and fixed, including a warming cancellation crash. Account transitions need durable queue ownership before replacing the current destructive clear.
+- Reader-request slice: `/tmp/android-session-reader-device-final.log` passes Back with delayed detail/read responses, opening another article, latest resume callback and disposal, plus both fast-swipe cases. Tested on dedicated API 36.1 emulator, WebView 134.0.6998.135. `/tmp/android-session-reader-lint-isolated.log` passes lint in a fresh worker after a reused Kotlin lint process crashed; no check was disabled.
