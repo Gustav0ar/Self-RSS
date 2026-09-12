@@ -1,7 +1,5 @@
 package com.selffeed.android.ui
 
-import android.util.Base64
-import org.json.JSONObject
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -57,18 +55,6 @@ class AppViewModel @Inject constructor(
     }
 
     private var readingSessionKey: String? = null
-
-    /** Called only after authentication, including the validated offline lease. */
-    fun readingSessionIdentity(userId: String?): String? {
-        // Offline bootstrap has no /me response. The stored token subject is
-        // only a cache namespace here, never a substitute for authentication.
-        val subject = userId ?: runCatching {
-            val payload = sessionStore.getAccessToken()?.split('.')?.getOrNull(1) ?: return@runCatching null
-            JSONObject(String(Base64.decode(payload, Base64.URL_SAFE), Charsets.UTF_8))
-                .optString("sub").takeIf { it.isNotBlank() }
-        }.getOrNull()
-        return subject?.let { "${sessionStore.getApiBaseUrl()}\n$it" }
-    }
 
     fun bindReadingSession(sessionKey: String?) {
         if (sessionKey != null && readingSessionKey == sessionKey) return

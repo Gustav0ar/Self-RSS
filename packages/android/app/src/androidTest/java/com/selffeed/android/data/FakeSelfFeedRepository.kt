@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import androidx.paging.PagingData
 import com.selffeed.android.data.repository.SelfFeedRepository
@@ -41,6 +42,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private val online = MutableStateFlow(true)
     private val readStateSyncEvents = MutableSharedFlow<ReadStateSyncEvent>(extraBufferCapacity = 1)
     private var apiBaseUrl = "10.0.2.2:3000"
+    private var session = ApiSession(0, apiBaseUrl, java.util.UUID.randomUUID().toString())
     private var authenticated = true
     private var preferences = defaultPreferences
     private var preferenceFailuresRemaining = 0
@@ -48,6 +50,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     private val articleReadStates = mutableMapOf<String, Boolean>()
     private val articleSavedStates = mutableMapOf<String, Boolean>()
     private val articleDetailOverrides = mutableMapOf<String, ArticleDetail>()
+    var restoreRequests = 0
+        private set
     var categoryRequests = 0
         private set
     var feedRequests = 0
@@ -92,7 +96,11 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override fun getApiBaseUrl(): String = apiBaseUrl
     override suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String> {
-        apiBaseUrl = normalizeApiServerHost(rawBaseUrl)
+        val normalized = normalizeApiServerHost(rawBaseUrl)
+        if (normalized != apiBaseUrl) {
+            apiBaseUrl = normalized
+            replaceSession()
+        }
         return AppResult.Success(apiBaseUrl)
     }
 
@@ -102,11 +110,13 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         preferenceFailures: Int = 0,
     ) {
         this.authenticated = authenticated
+        restoreRequests = 0
         online.value = true
         detailGate = null
         readGate = null
         savedGate = null
         apiBaseUrl = "10.0.2.2:3000"
+        replaceSession()
         preferences = defaultPreferences.copy(hideRead = hideRead)
         preferenceFailuresRemaining = preferenceFailures
         articleDetailDelayMs = 0L
@@ -143,15 +153,18 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         )
     }
 
-    override suspend fun login(email: String, password: String): AppResult<User> {
-        authenticated = true
-        return AppResult.Success(fakeUser)
+    private fun replaceSession() {
+        session = ApiSession(session.generation + 1, apiBaseUrl, java.util.UUID.randomUUID().toString())
     }
 
-    override suspend fun register(email: String, password: String): AppResult<User> {
+    override suspend fun login(email: String, password: String): AppResult<AuthenticatedSession.Verified> {
+        replaceSession()
         authenticated = true
-        return AppResult.Success(fakeUser)
+        return AppResult.Success(AuthenticatedSession.Verified(session, fakeUser))
     }
+
+    override suspend fun register(email: String, password: String): AppResult<AuthenticatedSession.Verified> =
+        login(email, password)
 
     override suspend fun changePassword(
         currentPassword: String,
@@ -159,10 +172,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     ): AppResult<User> =
         AppResult.Success(fakeUser)
 
-    override suspend fun restoreSession(): AppResult<User> =
-        if (authenticated) AppResult.Success(fakeUser) else AppResult.Error("No saved session")
+    override suspend fun restoreSession(): AppResult<AuthenticatedSession> {
+        restoreRequests++
+        return if (authenticated) AppResult.Success(AuthenticatedSession.Verified(session, fakeUser))
+        else AppResult.Error("No saved session")
+    }
 
     override suspend fun logout(): AppResult<Boolean> {
+        replaceSession()
         authenticated = false
         return AppResult.Success(true)
     }

@@ -231,16 +231,6 @@ class ReadingSessionRestoreTest {
         nextOwner.destroy()
     }
 
-    @Test
-    fun `offline identity uses token subject without persisting credentials`() {
-        every { sessionStore.getApiBaseUrl() } returns "reader.example"
-        val payload = android.util.Base64.encodeToString("{\"sub\":\"user-1\"}".toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
-        every { sessionStore.getAccessToken() } returns "header.$payload.signature"
-        val owner = Owner()
-        assertEquals(session, app(owner).readingSessionIdentity(null))
-        owner.destroy()
-    }
-
     private fun app(owner: Owner): AppViewModel = owner.model("app", AppViewModel::class.java) {
         AppViewModel(repository, sessionStore, it)
     }

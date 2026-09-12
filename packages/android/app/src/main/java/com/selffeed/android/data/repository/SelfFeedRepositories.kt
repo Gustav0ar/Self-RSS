@@ -3,6 +3,7 @@ package com.selffeed.android.data.repository
 import com.selffeed.android.network.CategoryOrderUpdate
 import androidx.paging.PagingData
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ApiSession
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
@@ -26,20 +27,26 @@ import com.selffeed.android.network.UserPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
+/** An authentication result keeps its account identity even after that account ends. */
+sealed interface AuthenticatedSession {
+    val session: ApiSession
+
+    data class Verified(override val session: ApiSession, val user: User) : AuthenticatedSession
+    data class Offline(override val session: ApiSession) : AuthenticatedSession
+}
+
 interface AuthRepository {
     fun getApiBaseUrl(): String
     suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String>
     suspend fun registrationStatus(): AppResult<RegistrationStatusResponse>
-    suspend fun login(email: String, password: String): AppResult<User>
-    suspend fun register(email: String, password: String): AppResult<User>
-    suspend fun restoreSession(): AppResult<User>
+    suspend fun login(email: String, password: String): AppResult<AuthenticatedSession.Verified>
+    suspend fun register(email: String, password: String): AppResult<AuthenticatedSession.Verified>
+    suspend fun restoreSession(): AppResult<AuthenticatedSession>
     suspend fun logout(): AppResult<Boolean>
     suspend fun me(): AppResult<User>
     suspend fun changePassword(currentPassword: String, newPassword: String): AppResult<User>
     fun isLoggedIn(): Boolean
-    fun canUseOfflineSession(): Boolean = isLoggedIn()
     fun authEvents(): Flow<String>
-    suspend fun recordOfflineRestore() = Unit
 }
 
 interface FeedRepository {

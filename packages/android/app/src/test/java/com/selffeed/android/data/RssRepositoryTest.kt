@@ -12,6 +12,7 @@ import com.selffeed.android.data.remote.AuthRemoteDataSource
 import com.selffeed.android.data.remote.FeedRemoteDataSource
 import com.selffeed.android.data.remote.SearchRemoteDataSource
 import com.selffeed.android.data.remote.SettingsRemoteDataSource
+import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
@@ -162,7 +163,8 @@ class RssRepositoryTest {
             com.selffeed.android.network.AuthResponse(sampleUser(), com.selffeed.android.network.AccessTokenOnly("new-token")),
         )
         coEvery { sessionStore.enqueueProductAnalyticsEvent(any()) } throws java.io.IOException("storage unavailable")
-        assertEquals(AppResult.Success(sampleUser()), repository.login("reader@example.com", "password"))
+        val result = repository.login("reader@example.com", "password")
+        assertEquals(AppResult.Success(AuthenticatedSession.Verified(sessionStore.currentSession(), sampleUser())), result)
         coVerify { sessionStore.recordAuthenticated(any()) }
     }
 

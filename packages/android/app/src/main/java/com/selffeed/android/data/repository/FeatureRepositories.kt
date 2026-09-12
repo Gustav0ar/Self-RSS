@@ -36,13 +36,13 @@ class AuthRepositoryImpl @Inject constructor(
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> =
         source.registrationStatus()
 
-    override suspend fun login(email: String, password: String): AppResult<User> =
+    override suspend fun login(email: String, password: String): AppResult<AuthenticatedSession.Verified> =
         source.login(email, password)
 
-    override suspend fun register(email: String, password: String): AppResult<User> =
+    override suspend fun register(email: String, password: String): AppResult<AuthenticatedSession.Verified> =
         source.register(email, password)
 
-    override suspend fun restoreSession(): AppResult<User> = source.restoreSession()
+    override suspend fun restoreSession(): AppResult<AuthenticatedSession> = source.restoreSession()
     override suspend fun logout(): AppResult<Boolean> = source.logout()
     override suspend fun me(): AppResult<User> = source.me()
     override suspend fun changePassword(
@@ -52,9 +52,7 @@ class AuthRepositoryImpl @Inject constructor(
         source.changePassword(currentPassword, newPassword)
 
     override fun isLoggedIn(): Boolean = source.isLoggedIn()
-    override fun canUseOfflineSession(): Boolean = source.canUseOfflineSession()
     override fun authEvents(): Flow<String> = source.authEvents()
-    override suspend fun recordOfflineRestore() = source.recordOfflineRestore()
 }
 
 class FeedRepositoryImpl @Inject constructor(
