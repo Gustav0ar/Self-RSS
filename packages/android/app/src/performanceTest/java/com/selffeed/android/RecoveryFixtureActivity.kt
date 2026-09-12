@@ -51,6 +51,8 @@ class RecoveryFixtureActivity : ComponentActivity() {
                     ),
                 )
             }
+            check(sessionStore.getAccessToken() == "isolated-review-fixture") { "Fixture credential was not restored" }
+            val sessionOwner = sessionStore.currentSession().ownerId
             val result = repository.article(articleId)
             check(result is AppResult.Success) { "Production repository could not recover the cached body" }
             setContent {
@@ -58,6 +60,7 @@ class RecoveryFixtureActivity : ComponentActivity() {
                     var confirmed by rememberSaveable { mutableStateOf(false) }
                     Column(Modifier.safeDrawingPadding()) {
                         Text(result.data.title)
+                        Text("Owner: $sessionOwner")
                         Text(if (savedInstanceState != null) "Restored process" else "Initial process")
                         Text(if (confirmed) "Fixture confirmed" else "Fixture not confirmed")
                         Button(onClick = { confirmed = true }) { Text("Confirm fixture") }

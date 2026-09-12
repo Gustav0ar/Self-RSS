@@ -19,6 +19,7 @@ import androidx.security.crypto.MasterKey
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.network.ProductAnalyticsEvent
 import com.selffeed.android.network.normalizeApiServerHost
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -33,8 +34,8 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** Identifies one local session without retaining its credentials. */
-data class ApiSession(val generation: Long, val apiBaseUrl: String)
+/** Generation is process-local; ownerId persists across process death and token refresh. */
+data class ApiSession(val generation: Long, val apiBaseUrl: String, val ownerId: String)
 
 /**
  * Persists the user's session (access token, refresh cookie, install-scoped
@@ -42,10 +43,8 @@ data class ApiSession(val generation: Long, val apiBaseUrl: String)
  *
  * Implementation: [DataStore]<[Preferences]> (the modern, non-deprecated
  * storage primitive) with per-value AES256/GCM encryption backed by an
- * AndroidKeyStore-wrapped master key. The `EncryptedSharedPreferences`
- * API is fully removed from this file (the `androidx.security.crypto`
- * module is kept only for the `MasterKey` type and the AES256/GCM
- * primitives it wraps).
+ * AndroidKeyStore-wrapped master key. `EncryptedSharedPreferences`
+ * remains only as a reader for migrating the previous session format.
  *
  * Encryption model:
  * - The `client_id` is a UUID with no security boundary; stored
@@ -55,6 +54,9 @@ data class ApiSession(val generation: Long, val apiBaseUrl: String)
  * - The `access_token` and `refresh_cookie` are encrypted
  *   value-by-value with AES256/GCM. The 12-byte IV is prepended to
  *   the ciphertext so each read is self-contained.
+ * - The `session_owner_id` is a non-secret UUID identifying the current
+ *   local account session. Schema version 1 adopts existing sessions without
+ *   rewriting their stored values.
  * - The DataStore file itself is plaintext (the file format is the
  *   standard `PreferencesMapCompat` proto, public) but every
  *   security-sensitive value is opaque to anyone reading the file.
@@ -73,13 +75,14 @@ class SessionStore internal constructor(
     context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val legacyPreferencesFactory: LegacyPreferencesFactory? = null,
+    private val dataStore: DataStore<Preferences> = context.applicationContext.sessionDataStore,
 ) {
     private val appContext = context.applicationContext
-    private val dataStore: DataStore<Preferences> = appContext.sessionDataStore
 
     private val cacheLock = Any()
     private val sessionMutationMutex = Mutex()
     private var sessionGeneration = 0L
+    private var sessionOwnerId = UUID.randomUUID().toString()
 
     // Cached session values. `preload()` is the single disk-read boundary;
     // synchronous networking callbacks only consult these in-memory values.
@@ -106,12 +109,32 @@ class SessionStore internal constructor(
      * All getter methods return cached values after this is called.
      */
     suspend fun preload() = withContext(ioDispatcher) {
+        sessionMutationMutex.withLock { preloadLocked() }
+    }
+
+    private suspend fun preloadLocked() {
         if (preloaded && accessTokenLoaded && refreshCookieLoaded && apiBaseUrlLoaded) {
-            return@withContext
+            return
         }
-        runCatching { migrateLegacyIfPresent() }
-            .onFailure { Log.w(TAG, "Legacy session migration failed", it) }
-        val prefs = dataStore.data.first()
+        val storedVersion = dataStore.data.first()[KEY_SCHEMA_VERSION] ?: 0L
+        check(storedVersion in 0..SESSION_SCHEMA_VERSION) { "Unsupported session schema version: $storedVersion" }
+        try {
+            migrateLegacyIfPresent()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "Legacy session migration failed", error)
+        }
+        val prefs = dataStore.edit { prefs ->
+            val version = prefs[KEY_SCHEMA_VERSION] ?: 0L
+            check(version in 0..SESSION_SCHEMA_VERSION) { "Unsupported session schema version: $version" }
+            if (version == 0L) {
+                // Version 1 adds ownership metadata without rewriting credentials or queued events.
+                prefs[KEY_OWNER_ID] = UUID.randomUUID().toString()
+                prefs[KEY_SCHEMA_VERSION] = SESSION_SCHEMA_VERSION
+            }
+            check(!prefs[KEY_OWNER_ID].isNullOrBlank()) { "Missing session owner" }
+        }
         val accessToken = decrypt(prefs[KEY_ACCESS_TOKEN])
         val refreshCookie = decrypt(prefs[KEY_REFRESH_COOKIE])
         val clientId = cachedClientId
@@ -122,6 +145,7 @@ class SessionStore internal constructor(
             dataStore.edit { it[KEY_CLIENT_ID] = clientId }
         }
         synchronized(cacheLock) {
+            sessionOwnerId = requireNotNull(prefs[KEY_OWNER_ID])
             if (!accessTokenLoaded) {
                 cachedAccessToken = accessToken
                 accessTokenLoaded = true
@@ -147,30 +171,35 @@ class SessionStore internal constructor(
 
     /** Starts a login/register attempt without allowing the previous account's requests to authenticate it. */
     suspend fun beginAuthentication(): ApiSession = withContext(ioDispatcher) {
+        preload()
         sessionMutationMutex.withLock {
+            val ownerId = UUID.randomUUID().toString()
             dataStore.edit { prefs ->
                 prefs.remove(KEY_ACCESS_TOKEN)
                 prefs.remove(KEY_REFRESH_COOKIE)
                 prefs.remove(KEY_LAST_AUTHENTICATED_AT)
+                prefs[KEY_OWNER_ID] = ownerId
             }
             synchronized(cacheLock) {
                 sessionGeneration += 1
+                sessionOwnerId = ownerId
                 cachedAccessToken = null
                 cachedRefreshCookie = null
                 cachedLastAuthenticatedAt = null
                 accessTokenLoaded = true
                 refreshCookieLoaded = true
-                ApiSession(sessionGeneration, getApiBaseUrl())
+                ApiSession(sessionGeneration, getApiBaseUrl(), sessionOwnerId)
             }
         }
     }
 
     fun currentSession(): ApiSession = synchronized(cacheLock) {
-        ApiSession(sessionGeneration, getApiBaseUrl())
+        ApiSession(sessionGeneration, getApiBaseUrl(), sessionOwnerId)
     }
 
     fun isCurrentSession(session: ApiSession): Boolean = synchronized(cacheLock) {
-        session.generation == sessionGeneration && session.apiBaseUrl == getApiBaseUrl()
+        preloaded && session.generation == sessionGeneration && session.apiBaseUrl == getApiBaseUrl() &&
+            session.ownerId == sessionOwnerId
     }
 
     fun getAccessTokenIfCurrent(session: ApiSession): String? = synchronized(cacheLock) {
@@ -178,10 +207,12 @@ class SessionStore internal constructor(
     }
 
     suspend fun setAccessToken(token: String?) {
+        preload()
         setAccessTokenIfCurrent(currentSession(), token)
     }
 
     suspend fun setAccessTokenIfCurrent(session: ApiSession, token: String?): Boolean = withContext(ioDispatcher) {
+        preload()
         sessionMutationMutex.withLock {
             if (!isCurrentSession(session)) return@withLock false
             val encrypted = token?.let(::encrypt)
@@ -203,10 +234,12 @@ class SessionStore internal constructor(
     }
 
     suspend fun setRefreshCookie(rawCookie: String?) {
+        preload()
         setRefreshCookieIfCurrent(currentSession(), rawCookie)
     }
 
     suspend fun setRefreshCookieIfCurrent(session: ApiSession, rawCookie: String?): Boolean = withContext(ioDispatcher) {
+        preload()
         sessionMutationMutex.withLock {
             if (!isCurrentSession(session)) return@withLock false
             val encrypted = rawCookie?.let(::encrypt)
@@ -237,11 +270,13 @@ class SessionStore internal constructor(
         } == true
 
     suspend fun recordAuthenticated(now: Long = System.currentTimeMillis()) = withContext(ioDispatcher) {
+        preload()
         dataStore.edit { it[KEY_LAST_AUTHENTICATED_AT] = now }
         cachedLastAuthenticatedAt = now
     }
 
     suspend fun setFeedRefreshRequestId(requestId: String?) = withContext(ioDispatcher) {
+        preload()
         dataStore.edit { prefs ->
             if (requestId.isNullOrBlank()) {
                 prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
@@ -254,6 +289,7 @@ class SessionStore internal constructor(
 
     suspend fun enqueueProductAnalyticsEvent(type: String): ProductAnalyticsEvent =
         withContext(ioDispatcher) {
+            preload()
             val event = ProductAnalyticsEvent(
                 id = UUID.randomUUID().toString(),
                 type = type,
@@ -275,6 +311,7 @@ class SessionStore internal constructor(
         }
 
     suspend fun removeProductAnalyticsEvents(ids: Set<String>) = withContext(ioDispatcher) {
+        preload()
         if (ids.isEmpty()) return@withContext
         dataStore.edit { prefs ->
             val remaining = decodeProductAnalyticsEvents(prefs[KEY_PRODUCT_ANALYTICS_EVENTS])
@@ -288,12 +325,15 @@ class SessionStore internal constructor(
     }
 
     suspend fun setApiBaseUrl(rawBaseUrl: String): String = withContext(ioDispatcher) {
+        preload()
         sessionMutationMutex.withLock {
             val normalized = normalizeApiServerHost(rawBaseUrl)
             val previous = getApiBaseUrl()
             val changed = previous != normalized
+            val ownerId = if (changed) UUID.randomUUID().toString() else sessionOwnerId
             dataStore.edit { prefs ->
                 prefs[KEY_API_BASE_URL] = normalized
+                prefs[KEY_OWNER_ID] = ownerId
                 if (changed) {
                     prefs.remove(KEY_ACCESS_TOKEN)
                     prefs.remove(KEY_REFRESH_COOKIE)
@@ -307,6 +347,7 @@ class SessionStore internal constructor(
                 apiBaseUrlLoaded = true
                 if (changed) {
                     sessionGeneration += 1
+                    sessionOwnerId = ownerId
                     cachedAccessToken = null
                     cachedRefreshCookie = null
                     cachedFeedRefreshRequestId = null
@@ -320,7 +361,9 @@ class SessionStore internal constructor(
     }
 
     suspend fun clear() = withContext(ioDispatcher) {
+        preload()
         sessionMutationMutex.withLock {
+            val ownerId = UUID.randomUUID().toString()
             val clientId = cachedClientId ?: getClientId()
             val apiBaseUrl = getApiBaseUrl()
             val legacyMigrationMarker = dataStore.data.first()[KEY_LEGACY_SESSION_MIGRATED]
@@ -328,12 +371,15 @@ class SessionStore internal constructor(
                 prefs.clear()
                 prefs[KEY_CLIENT_ID] = clientId
                 prefs[KEY_API_BASE_URL] = apiBaseUrl
+                prefs[KEY_OWNER_ID] = ownerId
+                prefs[KEY_SCHEMA_VERSION] = SESSION_SCHEMA_VERSION
                 if (legacyMigrationMarker != null) {
                     prefs[KEY_LEGACY_SESSION_MIGRATED] = legacyMigrationMarker
                 }
             }
             synchronized(cacheLock) {
                 sessionGeneration += 1
+                sessionOwnerId = ownerId
                 cachedAccessToken = null
                 cachedRefreshCookie = null
                 cachedClientId = clientId
@@ -472,7 +518,6 @@ class SessionStore internal constructor(
             cachedClientId = clientId
             accessTokenLoaded = true
             refreshCookieLoaded = true
-            preloaded = true
         }
         legacy.edit().clear().apply()
     }
@@ -509,6 +554,9 @@ class SessionStore internal constructor(
         private val PRODUCT_ANALYTICS_EVENT_TYPES =
             setOf("app_opened", "offline_restore", "article_completed")
 
+        private const val SESSION_SCHEMA_VERSION = 1L
+        private val KEY_SCHEMA_VERSION = longPreferencesKey("session_schema_version")
+        private val KEY_OWNER_ID = stringPreferencesKey("session_owner_id")
         private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         private val KEY_REFRESH_COOKIE = stringPreferencesKey("refresh_cookie")
         private val KEY_CLIENT_ID = stringPreferencesKey("client_id")

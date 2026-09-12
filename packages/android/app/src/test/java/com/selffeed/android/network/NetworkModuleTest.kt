@@ -41,7 +41,7 @@ import java.util.concurrent.CountDownLatch
 class NetworkModuleTest {
     private fun stubSession(store: SessionStore) {
         every { store.currentSession() } answers {
-            ApiSession(0, store.getApiBaseUrl())
+            ApiSession(0, store.getApiBaseUrl(), "test-owner")
         }
         every { store.isCurrentSession(any()) } answers {
             firstArg<ApiSession>().apiBaseUrl == store.getApiBaseUrl()
