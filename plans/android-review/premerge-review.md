@@ -17,7 +17,7 @@ Fresh CI runs `34703218677` and `34703294671` exposed a second timing assumption
 
 Combining PR #47 exposed existing mock JS/CSS lint errors. Formatting, statement callbacks and equivalent template strings fix them. A timestamp class replaces an inline float plus its overriding CSS. All six before/after phone/tablet screenshots are pixel-identical, and search, text size, download removal and bookmark preservation pass in `/tmp/android-premerge-design-comparison.log`. Repository Biome checks pass in `/tmp/android-premerge-design-fixed.log`. The design choice remains pending.
 
-All 28 GitHub review records were inspected, including discussion and inline threads. Each has only a Copilot quota notice; there are no inline findings or unresolved threads. This is not automated-review approval. Main's ruleset requires one approving GitHub review and provides an administrator bypass. Merge authorization does not fabricate an approving review.
+All 28 GitHub review records were inspected, including discussion and inline threads. Each has only a Copilot quota notice; there are no inline findings or unresolved threads. This is not automated-review approval. Main's ruleset requires one approving GitHub review and provides an administrator bypass. A normal merge of #46 at verified head `3fedeb14ce7e9010a6ab424727e4afcbcd4e9a03` was rejected by GitHub's branch policy. No PR was merged. An independent approving review or Gustavo's explicit authorization to use the administrator override is still needed. Protection rules and production approvals remain unchanged.
 
 ## Data migration contract
 
@@ -29,7 +29,7 @@ The shared migration contract checks populated upgrades from versions 1 through 
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Android JVM suite | 614 passed, zero failures or skips | `/tmp/android-premerge-final-build.log` and Gradle XML reports |
+| Android JVM suite | 614 passed again after both fixture corrections, zero failures or skips | `/tmp/android-premerge-combined-final-unit.log` and Gradle XML reports |
 | Isolated device and minified performance APK pairs | Passed | `/tmp/android-premerge-final-build.log` |
 | Complete API 35 device suite | 132 passed, zero failures or skips | `/tmp/android-premerge-full-device.log` |
 | External process recovery | Both cases passed | `/tmp/android-premerge-process.log` |
@@ -41,9 +41,9 @@ The shared migration contract checks populated upgrades from versions 1 through 
 | Cross-package type checks | Passed | `/tmp/android-premerge-types.log` |
 | API/web builds | Passed | `/tmp/android-premerge-repo-build.log` |
 | Generated OpenAPI and Android contract mapping | Passed, no generated diff | `/tmp/android-premerge-openapi.log` |
-| Security | All four jobs passed at `5cc2ad7` | Run `34702966192` |
-| Repository CI | All five jobs passed at `5cc2ad7`; final design tree pending | Run `34702960705` |
-| Latest combined Android CI | All required jobs passed at `5cc2ad7` | Run `34701826679` |
+| Security | All four jobs passed on the combined design tree at `7909493` | Run `34704026973`; current checks are linked from [PR #47](https://github.com/Gustav0ar/Self-RSS/pull/47) |
+| Repository CI | All five jobs passed at `5cc2ad7`; current combined-tree checks are linked from PR #47 | Run `34702960705` and [PR #47](https://github.com/Gustav0ar/Self-RSS/pull/47) |
+| Combined Android CI | All required jobs passed at `5cc2ad7`; latest branches pass hosted JVM tests and are running device/build checks | Run `34701826679`; current [PR #73](https://github.com/Gustav0ar/Self-RSS/pull/73) run `34703983630` |
 
 The disposable device is emulator-5568, API 35, WebView 124.0.6367.219, 320 × 640 at density 160, with animations disabled. Only isolated test package IDs are installed. Main pushes trigger container publication and queue the production deployment workflow; the production job requires Gustavo's explicit environment approval. No deployment approval is part of this review.
 
@@ -53,6 +53,6 @@ Physical frame, battery and native/WebView memory measurements remain in plans 0
 
 ## Merge record
 
-No PR has been merged during this review yet. Record final head checks, review findings, merge commits and post-merge validation here before declaring the merge task complete.
+No PR has been merged during this review. GitHub rejected the first normal merge because an approving review is required. [PR #47](https://github.com/Gustav0ar/Self-RSS/pull/47) records the final check results and merge disposition after this review snapshot. A merge must use the reviewed head, preserve the dependency chain and leave production approval untouched.
 
-PR #69 receives the restoration correction as `aa53fa9` and the outbox assertion correction as `04131a1`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-unit.log`. PRs #70–73 are rebased on that correction. Their production package tree matches the combined candidate tested locally. The only package difference from `f394bd4` is the outbox assertion correction in `RssRepositoryTest.kt`. No production code or persistent schema changed during this further review. Fresh PR CI is required on the rewritten branches.
+PR #69 receives the restoration correction as `aa53fa9` and the outbox assertion correction as `04131a1`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-unit.log`. PRs #70–73 are rebased on that correction. Their production package tree matches the combined candidate tested locally. The only package difference from `f394bd4` is the outbox assertion correction in `RssRepositoryTest.kt`. No production code or persistent schema changed during this further review. Fresh PR CI runs are #69 `34703984314`, #70 `34703984051`, #71 `34703982996`, #72 `34703984308` and #73 `34703983630`. Four duplicate runs caused by simultaneous stacked base/head updates were cancelled; each branch retains its complete fresh run. Required jobs must pass before merging. The baseline-profile job is intentionally conditional and was skipped; physical performance acceptance remains open.
