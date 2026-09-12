@@ -93,7 +93,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         private set
     var readStateInvalidations = 0
         private set
-    private val fakeArticles = listOf(
+    private val initialArticles = listOf(
         ArticleListItem(
             id = "article-1",
             feedId = "feed-1",
@@ -119,6 +119,12 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             isRead = false,
         ),
     )
+
+    private var fakeArticles = initialArticles
+
+    fun addArticleWithoutRealtimeEvent(article: ArticleListItem) {
+        fakeArticles = listOf(article) + fakeArticles
+    }
 
     override fun isCurrentSession(session: ApiSession): Boolean = session == this.session
 
@@ -152,6 +158,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         preferenceFailures: Int = 0,
     ) {
         this.authenticated = authenticated
+        fakeArticles = initialArticles
         restoreRequests = 0
         online.value = true
         detailGate = null
