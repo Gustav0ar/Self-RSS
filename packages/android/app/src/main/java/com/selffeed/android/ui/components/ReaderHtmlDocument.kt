@@ -380,7 +380,7 @@ internal fun buildReaderHtmlDocument(
                         iframe.setAttribute('allowfullscreen', '');
                         iframe.setAttribute(
                             'allow',
-                            'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share'
+                            'accelerometer; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share'
                         );
                         iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
                     });
@@ -465,7 +465,10 @@ internal fun buildReaderHtmlDocument(
                     resizeObserver.observe(contentContainer);
                 }
 
-                const mutationObserver = new MutationObserver(scheduleReaderUpdate);
+                const mutationObserver = new MutationObserver(() => {
+                    if (!readerActive) pauseReaderMedia();
+                    scheduleReaderUpdate();
+                });
                 if (contentContainer) {
                     mutationObserver.observe(contentContainer, {
                         attributes: true,
@@ -489,9 +492,55 @@ internal fun buildReaderHtmlDocument(
                     }
                 }, 250);
 
-                // Expose cleanup function to prevent memory leaks
+                let readerActive = false;
+                const suspendedFrames = new Map();
+                function pauseReaderMedia() {
+                    suspendedFrames.forEach((_, frame) => {
+                        if (!frame.isConnected) suspendedFrames.delete(frame);
+                    });
+                    document.querySelectorAll('audio, video').forEach(media => {
+                        media.autoplay = false;
+                        media.removeAttribute('autoplay');
+                        media.pause();
+                    });
+                    // Cross-origin DOM access is unavailable. Unloading the
+                    // frame stops every provider, even one without a pause API.
+                    document.querySelectorAll('iframe').forEach(frame => {
+                        const src = frame.getAttribute('src');
+                        if (src && src !== 'about:blank') {
+                            suspendedFrames.set(frame, src);
+                            frame.src = 'about:blank';
+                        }
+                    });
+                }
+                function setReaderActive(active) {
+                    readerActive = active === true;
+                    if (!readerActive) {
+                        pauseReaderMedia();
+                    } else {
+                        suspendedFrames.forEach((src, frame) => {
+                            if (!frame.isConnected) return;
+                            const url = new URL(src, document.baseURI);
+                            url.searchParams.set('autoplay', '0');
+                            frame.src = url.href;
+                        });
+                        suspendedFrames.clear();
+                    }
+                }
+                function guardPlayback(event) {
+                    if (!readerActive && event.target && typeof event.target.pause === 'function') event.target.pause();
+                }
+                document.addEventListener('play', guardPlayback, true);
+                pauseReaderMedia();
+
+                // The view owns this lifetime; disposal removes every listener.
                 window.SelfFeedApp = {
+                    setActive: setReaderActive,
                     cleanup: function() {
+                        setReaderActive(false);
+                        suspendedFrames.clear();
+                        document.removeEventListener('play', guardPlayback, true);
+                        window.removeEventListener('message', handleEmbedMessage);
                         window.removeEventListener('load', handleLoad);
                         window.removeEventListener('resize', handleResize);
                         document.removeEventListener('DOMContentLoaded', handleDomContentLoaded);
@@ -545,7 +594,7 @@ internal fun buildReaderHtmlDocument(
                     return true;
                 }
 
-                window.addEventListener('message', function(e) {
+                function handleEmbedMessage(e) {
                     const data = parseMessageData(e.data);
                     if (applyTwitterResize(data, e.source)) {
                         postHeight();
@@ -561,7 +610,8 @@ internal fun buildReaderHtmlDocument(
                             }
                         });
                     }
-                });
+                }
+                window.addEventListener('message', handleEmbedMessage);
 
                 postHeight();
             </script>

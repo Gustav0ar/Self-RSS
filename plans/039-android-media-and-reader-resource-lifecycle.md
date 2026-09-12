@@ -1,6 +1,6 @@
 # Plan 039: Pause inactive media and release reader resources predictably
 
-- Status: TODO
+- Status: IMPLEMENTED (device verified; account integration and physical memory evidence pending)
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -116,6 +116,11 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/test/java/com/selffeed/android/ui/ArticleListDetailNavigationTest.kt`
 - `packages/android/app/src/androidTest/java/com/selffeed/android/ui/ArticleMediaLifecycleUiTest.kt`
 - `packages/android/app/src/androidTest/assets/android-review/`
+- `packages/android/app/src/main/java/com/selffeed/android/ui/components/ReaderWebView.kt` for one renderer resource owner.
+- `packages/android/app/src/main/java/com/selffeed/android/ui/SelfFeedApp.kt` for immediate tab visibility.
+- `packages/android/app/src/test/java/com/selffeed/android/ui/components/ReaderWebViewTest.kt` for failure-safe disposal.
+- `packages/android/app/src/test/java/com/selffeed/android/ui/components/ReaderHtmlDocumentTest.kt` for the changed observer callback.
+- `plans/android-review/progress.md` for tracking.
 - This plan and its row in `plans/README.md`.
 
 Keep API/web production behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
@@ -164,14 +169,14 @@ Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestU
 
 ## Test and acceptance contract
 
-- [ ] A loses playback permission as soon as B becomes primary, even if B's detail fetch is delayed.
+- [x] A loses playback permission as soon as B becomes primary, even if B's detail fetch is delayed.
 - [ ] Background, tab switch, reader close, and account switch pause all reader media; returning does not autoplay.
-- [ ] Fullscreen views and callbacks release exactly once; late callbacks cannot mutate a destroyed renderer.
+- [x] Fullscreen views and callbacks release exactly once; late callbacks cannot mutate a destroyed renderer.
 - [ ] Repeated open/swipe/close cycles do not monotonically grow live renderer count or retain old Activity instances.
-- [ ] Renderer-process loss is recoverable without crashing the app or clearing persistent data.
-- [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
-- [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
-- [ ] `git diff --check` passes and scope review finds no unrelated changes.
+- [x] Renderer-process loss is recoverable without crashing the app or clearing persistent data.
+- [x] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
+- [x] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
+- [x] `git diff --check` passes and scope review finds no unrelated changes.
 - [ ] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
 
 ## Specific stop conditions
@@ -192,8 +197,13 @@ Reference documentation to verify against the installed versions:
 
 ## Execution notes
 
-- Reconciled commit: pending
-- Reproduction and checks: pending
-- Device/performance evidence: pending where applicable
-- Design selection: pending where applicable
-- Remaining limitations: pending
+- Based on foundation `6a88a72`, PR #48. The visible page and Activity lifecycle are available independently of plan 035, so media ownership lands first. The account-switch integration remains in 035. No selected visual design or new copy was implemented.
+- Reproduced the original bug with real local WAV playback. After swiping A to B while holding selectedArticle at A, the native test timed out waiting for the HTML5 element to pause. `/tmp/android-media-red.log` records that failure.
+- A single Activity-bound ReaderWebView now owns document bridges, queued height callbacks, current fullscreen media and disposal. It uses the primary pager page plus RESUMED state, pauses audio/video, requires a fresh gesture, and blanks cross-origin frames when inactive. Returning reloads an iframe with autoplay disabled; provider playback position is not preserved. This unload policy avoids relying on an unacknowledged provider pause message or accessing a cross-origin DOM.
+- The renderer window is bounded to the current page and one adjacent page each side. An actual Android memory-trim signal releases adjacent renderers. Data warming remains separate. Closing or switching to Text releases the views without deleting persisted content.
+- A renderer crash releases the affected view and permits one replacement per document. A second crash shows retained text. Crash recovery after a live enrichment update is covered, including current callbacks after remembered document state changes.
+- Fullscreen disposal is idempotent, releases its callback and view, and restores orientation. Cleanup failures cannot skip native destroy. A callback that immediately rejects fullscreen does not retain the closed owner.
+- Validation passed: all 423 JVM tests, deviceTest lint, minified benchmarkPerformanceTest build, and nine device checks covering real audio/video navigation, background, hidden tab, Text mode, fullscreen, two Chromium crashes after enrichment, eight-page renderer bounds, memory trim, close, rich readiness and existing fast swipes. The separate reviewer rechecked both reported defects after their fixes and found neither remained.
+- Device: dedicated small_phone, API 36.1, 720×1280, density 320, SwiftShader, Google WebView 134.0.6998.135. No normal app or user data was touched.
+- Evidence: `/tmp/android-media-verification.log`, `/tmp/android-media-regression.log`, `/tmp/android-media-device-final.log`, and standard Gradle XML/HTML reports. The pre-fix failure is in `/tmp/android-media-red.log`.
+- Remaining acceptance: plan 035 verifies complete account/server transitions; plan 040 owns user-facing failure/loading treatment; plan 044 owns idle/layout cost; plan 049 measures native/WebView memory on physical hardware. A bounded number of live views does not prove absence of every native or Activity leak.

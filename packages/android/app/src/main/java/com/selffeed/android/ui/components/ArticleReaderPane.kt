@@ -1,18 +1,13 @@
-@file:SuppressLint("SetJavaScriptEnabled")
 package com.selffeed.android.ui.components
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.ComponentCallbacks2
+import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -36,6 +31,11 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -70,15 +70,16 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.formatPublishedAt
-import com.selffeed.android.ui.utils.isTrustedEmbedUrl
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArticleReaderPane(
     articles: List<ArticleListItem>,
+    isVisible: Boolean = true,
     selectedArticle: ArticleDetail,
     prefetchedArticles: Map<String, ArticleDetail> = emptyMap(),
     onOpenOriginal: (ArticleDetail) -> Unit,
@@ -93,6 +94,21 @@ fun ArticleReaderPane(
     onPreferHtmlChanged: (Boolean) -> Unit = {},
     observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val foreground = isVisible && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    var retainAdjacentRenderers by remember { mutableStateOf(true) }
+    val appContext = LocalContext.current.applicationContext
+    DisposableEffect(appContext) {
+        val callbacks = object : ComponentCallbacks2 {
+            override fun onConfigurationChanged(config: Configuration) = Unit
+            override fun onLowMemory() { retainAdjacentRenderers = false }
+            override fun onTrimMemory(level: Int) {
+                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) retainAdjacentRenderers = false
+            }
+        }
+        appContext.registerComponentCallbacks(callbacks)
+        onDispose { appContext.unregisterComponentCallbacks(callbacks) }
+    }
     val readerArticles = remember(articles, selectedArticle) {
         articles.withSelectedArticle(selectedArticle)
     }
@@ -106,7 +122,7 @@ fun ArticleReaderPane(
         ArticleDetailView(
             observeOfflineText = observeOfflineText,
             article = selectedArticle,
-            isActive = true,
+            isActive = foreground,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
             onCompleted = { onArticleCompleted(selectedArticle.id) },
@@ -172,7 +188,7 @@ fun ArticleReaderPane(
     HorizontalPager(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
-        beyondViewportPageCount = 2,
+        beyondViewportPageCount = 1,
         key = { page -> readerArticles[page].id },
     ) { page ->
         if (readerArticles.isEmpty()) return@HorizontalPager
@@ -182,7 +198,9 @@ fun ArticleReaderPane(
             ArticleDetailView(
                 observeOfflineText = observeOfflineText,
                 article = article,
-                isActive = articleItem.id == selectedArticle.id,
+                isActive = foreground && page == pagerState.currentPage,
+                allowRenderer = page == pagerState.currentPage ||
+                    (retainAdjacentRenderers && abs(page - pagerState.currentPage) <= 1),
                 onOpenOriginal = { onOpenOriginal(article) },
                 onDisplayed = { onArticleDisplayed(article.id) },
                 onCompleted = { onArticleCompleted(article.id) },
@@ -203,6 +221,7 @@ fun ArticleReaderPane(
 private fun ArticleDetailView(
     article: ArticleDetail,
     isActive: Boolean,
+    allowRenderer: Boolean = true,
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
     onCompleted: () -> Unit = {},
@@ -222,7 +241,7 @@ private fun ArticleDetailView(
     val scrollState = rememberSaveable(article.id, saver = ScrollState.Saver) {
         ScrollState(initial = 0)
     }
-    var fullscreenMedia by remember { mutableStateOf<FullscreenMediaView?>(null) }
+    var fullscreenMedia by remember { mutableStateOf<ReaderFullscreenMedia?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
 
     LaunchedEffect(article.id, isActive) {
@@ -245,22 +264,6 @@ private fun ArticleDetailView(
     val mutedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
     val textScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
-    val showFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit = { view, callback ->
-        val currentMedia = fullscreenMedia
-        if (currentMedia?.view !== view) {
-            currentMedia?.callback?.onCustomViewHidden()
-            currentMedia?.view?.detachFromParent()
-        }
-        view.detachFromParent()
-        fullscreenMedia = FullscreenMediaView(view = view, callback = callback)
-    }
-    val hideFullscreenMedia: (View?) -> Unit = { view ->
-        val currentMedia = fullscreenMedia
-        if (currentMedia != null && (view == null || currentMedia.view === view)) {
-            currentMedia.view.detachFromParent()
-            fullscreenMedia = null
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -327,7 +330,7 @@ private fun ArticleDetailView(
 
         Column(modifier = Modifier.fillMaxWidth()) {
             val html = retainedContent.html
-            if (preferHtml && html != null) {
+            if (preferHtml && html != null && allowRenderer) {
                 // Show a skeleton placeholder first so the reader opens
                 // instantly. The WebView (which does the HTML load +
                 // layout + JS height callback) swaps in once it has a
@@ -337,7 +340,7 @@ private fun ArticleDetailView(
                 if (!htmlReady) {
                     ArticleHtmlSkeleton()
                 }
-                SecureHtmlContent(
+                ReaderHtmlContent(
                     html = html,
                     backgroundColor = backgroundColor,
                     textColor = textColor,
@@ -347,12 +350,13 @@ private fun ArticleDetailView(
                     appearance = appearance,
                     textScale = textScale,
                     documentBaseUrl = documentBaseUrl,
-                    onShowFullscreenMedia = showFullscreenMedia,
-                    onHideFullscreenMedia = hideFullscreenMedia,
+                    isActive = isActive,
+                    onFullscreen = { fullscreenMedia = it },
                     onReady = {
                         htmlReady = true
                         onBodyReady()
                     },
+                    onRendererFailure = { htmlReady = false },
                 )
             } else if (preferHtml && article.isRichContentPending()) {
                 // Keep Rich selected while the next article's detail request
@@ -378,11 +382,8 @@ private fun ArticleDetailView(
     FullscreenMediaHost(
         media = fullscreenMedia,
         onDismiss = { media ->
-            media.callback?.onCustomViewHidden()
-            if (fullscreenMedia == media) {
-                media.view.detachFromParent()
-                fullscreenMedia = null
-            }
+            media.close()
+            if (fullscreenMedia === media) fullscreenMedia = null
         },
     )
 }
@@ -436,8 +437,8 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
  * Lightweight shimmer-style placeholder for the article body. Renders
  * a stack of rounded grey blocks sized to look like paragraphs so the
  * reader pane doesn't show a blank gap while the WebView is loading
- * the full HTML. Replaced the moment `onPageFinished` fires on the
- * WebView (see [SecureHtmlContent]'s `onReady` callback).
+ * the full HTML. The renderer's visual-state callback signals when the
+ * rich document can replace it (see [ReaderHtmlContent]).
  */
 @Composable
 private fun ArticleHtmlSkeleton(modifier: Modifier = Modifier) {
@@ -465,19 +466,21 @@ private fun ArticleHtmlSkeleton(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SecureHtmlContent(
+internal fun ReaderHtmlContent(
     html: String,
     backgroundColor: Color,
     textColor: Color,
     surfaceColor: Color,
     mutedTextColor: Color,
     linkColor: Color,
-    appearance: ReaderAppearance,
-    textScale: Float,
+    appearance: ReaderAppearance = ReaderAppearance(),
+    textScale: Float = 1f,
     documentBaseUrl: String,
-    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
-    onHideFullscreenMedia: (View?) -> Unit,
-    onReady: (() -> Unit)? = null,
+    isActive: Boolean = true,
+    fixedHeightDp: Int? = null,
+    onFullscreen: (ReaderFullscreenMedia?) -> Unit = { it?.close() },
+    onReady: () -> Unit = {},
+    onRendererFailure: () -> Unit = {},
 ) {
     var webViewHeightDp by remember(html) { mutableIntStateOf(600) }
 
@@ -505,119 +508,56 @@ private fun SecureHtmlContent(
         )
     }
 
-    AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(webViewHeightDp.dp),
-        factory = { factoryContext ->
-            WebView(factoryContext).apply {
-                settings.javaScriptEnabled = true
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.domStorageEnabled = true
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.mediaPlaybackRequiresUserGesture = false
-
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = true
-                setBackgroundColor(backgroundColor.toArgb())
-                webChromeClient = readerWebChromeClient(
-                    onShowFullscreenMedia = onShowFullscreenMedia,
-                    onHideFullscreenMedia = onHideFullscreenMedia,
-                )
-
-                addJavascriptInterface(object {
-                    @android.webkit.JavascriptInterface
-                    fun updateHeight(height: Float) {
-                        post {
-                            val newHeightDp = height.toInt()
-                            // Clamp to a sane range: 0 is "not loaded yet" (the
-                            // default 600dp is used), and anything beyond
-                            // 50_000dp is almost certainly a measurement bug
-                            // (e.g. an element with an unbounded height in the
-                            // HTML). Without the upper bound, a runaway value
-                            // can produce constraints Compose refuses to
-                            // satisfy ("Can't represent a width of 0 and
-                            // height of N in Constraints").
-                            val clampedDp = newHeightDp.coerceIn(0, 50_000)
-                            if (clampedDp > 0 && clampedDp != webViewHeightDp) {
-                                webViewHeightDp = clampedDp
-                            }
-                        }
-                    }
-                }, "Android")
-
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val url = request?.url?.toString() ?: return true
-                        if (isTrustedEmbedUrl(url)) return false
-                        openExternalUrl(factoryContext, url)
-                        return true
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
-                        val document = view?.tag ?: return
-                        view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
-                            override fun onComplete(requestId: Long) {
-                                if (view.tag == document) onReady?.invoke()
-                            }
-                        })
-                    }
+    var view by remember { mutableStateOf<ReaderWebView?>(null) }
+    var failures by remember(html, documentBaseUrl) { mutableIntStateOf(0) }
+    val ready by rememberUpdatedState(onReady)
+    val fullscreen by rememberUpdatedState(onFullscreen)
+    val failed by rememberUpdatedState(onRendererFailure)
+    ReaderViewLifecycle(view, isActive)
+    // One automatic replacement tolerates a renderer killed under pressure.
+    // A second failure keeps the retained text instead of a crash/recreate loop.
+    if (failures > 1) {
+        ReaderTextContent(html = html, text = null, fallback = null, appearance = appearance)
+        return
+    }
+    key(failures) {
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().height((fixedHeightDp ?: webViewHeightDp).dp),
+            factory = { context ->
+                ReaderWebView(context).also { view = it }
+            },
+            update = { renderer ->
+                // Enrichment can replace remembered document state without
+                // replacing this view. Every callback must target that state.
+                renderer.onHeight = { height -> if (height != webViewHeightDp) webViewHeightDp = height }
+                renderer.onReady = { ready() }
+                renderer.onFullscreen = { fullscreen(it) }
+                renderer.onRendererGone = {
+                    view = null
+                    failures += 1
+                    failed()
                 }
-            }
-        },
-        update = { webView ->
-            val contentKey = "$documentBaseUrl\n$processedHtml"
-            if (webView.tag != contentKey) {
-                webView.tag = contentKey
-                webView.loadDataWithBaseURL(
-                    documentBaseUrl,
-                    processedHtml,
-                    "text/html",
-                    "utf-8",
-                    documentBaseUrl,
-                )
-            }
-        },
-        onRelease = { webView ->
-            webView.releaseReaderResources()
-        },
-    )
-}
-
-internal fun WebView.releaseReaderResources() {
-    runCatching {
-        stopLoading()
-        // Call cleanup function to remove event listeners and disconnect observers
-        evaluateJavascript("if (window.SelfFeedApp && typeof window.SelfFeedApp.cleanup === 'function') { window.SelfFeedApp.cleanup(); }", null)
-        loadUrl("about:blank")
-        removeJavascriptInterface("Android")
-        webChromeClient = WebChromeClient()
-        webViewClient = WebViewClient()
-        destroy()
+                renderer.loadDocument(documentBaseUrl, processedHtml, backgroundColor.toArgb())
+            },
+            onRelease = { renderer ->
+                renderer.releaseReaderResources()
+                if (view === renderer) view = null
+            },
+        )
     }
 }
 
-private data class FullscreenMediaView(
-    val view: View,
-    val callback: WebChromeClient.CustomViewCallback?,
-)
-
 @Composable
 private fun FullscreenMediaHost(
-    media: FullscreenMediaView?,
-    onDismiss: (FullscreenMediaView) -> Unit,
+    media: ReaderFullscreenMedia?,
+    onDismiss: (ReaderFullscreenMedia) -> Unit,
 ) {
     if (media == null) return
 
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
 
-    androidx.compose.runtime.DisposableEffect(media, activity) {
+    DisposableEffect(media, activity) {
         val previousOrientation = activity?.requestedOrientation
         val window = activity?.window
         val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
@@ -629,7 +569,7 @@ private fun FullscreenMediaHost(
         insetsController?.hide(WindowInsetsCompat.Type.systemBars())
 
         onDispose {
-            media.view.detachFromParent()
+            runCatching { media.close() }
             previousOrientation?.let { activity?.requestedOrientation = it }
             previousBarsBehavior?.let { insetsController?.systemBarsBehavior = it }
             insetsController?.show(WindowInsetsCompat.Type.systemBars())
@@ -657,37 +597,6 @@ private fun FullscreenMediaHost(
                 },
             )
         }
-    }
-}
-
-private fun readerWebChromeClient(
-    onShowFullscreenMedia: (View, WebChromeClient.CustomViewCallback?) -> Unit,
-    onHideFullscreenMedia: (View?) -> Unit,
-): WebChromeClient = object : WebChromeClient() {
-    private var customView: View? = null
-
-    override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
-        if (view == null || customView != null) {
-            callback?.onCustomViewHidden()
-            return
-        }
-
-        customView = view
-        onShowFullscreenMedia(view, callback)
-    }
-
-    override fun onShowCustomView(
-        view: View?,
-        requestedOrientation: Int,
-        callback: CustomViewCallback?,
-    ) {
-        onShowCustomView(view, callback)
-    }
-
-    override fun onHideCustomView() {
-        val view = customView
-        customView = null
-        onHideFullscreenMedia(view)
     }
 }
 
