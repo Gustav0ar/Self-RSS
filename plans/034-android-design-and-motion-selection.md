@@ -1,6 +1,6 @@
 # Plan 034: Select Android layout, loading, offline, and motion designs
 
-- Status: TODO
+- Status: AWAITING SELECTION
 - Priority: P1
 - Effort: M
 - Implementation risk: LOW
@@ -144,8 +144,8 @@ Use design-selection.md as the design decision record, with explicit amendments.
 
 ## Execution notes
 
-- Reconciled commit: pending
-- Reproduction and checks: pending
+- Reconciled commit: `cd802e5` with roadmap commit `3fedeb1`
+- Reproduction and checks: Playwright 1.60.0, Chromium 148; all three directions passed phone 390×844 and tablet 1024×900 overflow checks, navigation, pause-on-next simulation, and failed-draft retention. No browser runtime errors. JavaScript syntax check passed.
 - Device/performance evidence: pending where applicable
 - Design selection: pending where applicable
-- Remaining limitations: pending
+- Remaining limitations: Native Android media, gestures, lifecycle and accessibility remain Android verification work. Hosting substitute and concrete layout choice were requested; no answer yet.

@@ -13,7 +13,7 @@ These rules apply to **033–049**. Earlier branch, roadmap-wait, deployment, an
 | Plan | Work package | Priority | Effort | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | [033](033-android-review-verification-foundation.md) | Establish isolated Android behavior and performance fixtures | P1 | M | none | IMPLEMENTED; hardware pending |
-| [034](034-android-design-and-motion-selection.md) | Select Android layout, loading, offline, and motion designs | P1 | M | none | TODO |
+| [034](034-android-design-and-motion-selection.md) | Select Android layout, loading, offline, and motion designs | P1 | M | none | AWAITING SELECTION |
 | [035](035-android-session-and-request-lifecycle.md) | End account and reader sessions without accepting stale work | P1 | L | 033 | IMPLEMENTED; integrated acceptance pending |
 | [036](036-android-cache-first-and-mutation-authority.md) | Return cached content immediately and preserve the latest mutation | P1 | L | 033, 035 | DONE; scoped JVM/device/process acceptance passes, integrated gate 049 pending |
 | [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | IMPLEMENTED; scoped Main-thread acceptance passes, physical frame comparison pending |
