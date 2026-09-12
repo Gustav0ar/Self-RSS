@@ -105,16 +105,18 @@ class ArticleMediaLifecycleUiTest {
         val fixture = showReader("video", count = 1)
         val reader = mediaReader(fixture)
         val orientation = composeRule.activity.requestedOrientation
-        play(reader)
-        tapDocumentButton(reader, "document.getElementById('fixture-media').requestFullscreen()", fullscreen = true)
-        composeRule.waitUntil(5_000) { javascript(reader, "!!document.fullscreenElement") == "true" }
-        composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
-        composeRule.waitUntil(3_000) { paused(reader) }
-        composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
-        composeRule.waitUntil(5_000) { javascript(reader, "!!document.fullscreenElement") == "false" }
-        assertTrue(paused(reader))
-        composeRule.waitUntil(3_000) { composeRule.activity.requestedOrientation == orientation }
-        assertEquals(orientation, composeRule.activity.requestedOrientation)
+        repeat(10) {
+            play(reader)
+            tapDocumentButton(reader, "document.getElementById('fixture-media').requestFullscreen()", fullscreen = true)
+            composeRule.waitUntil(5_000) { javascript(reader, "!!document.fullscreenElement") == "true" }
+            composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+            composeRule.waitUntil(3_000) { paused(reader) }
+            composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+            composeRule.waitUntil(5_000) { javascript(reader, "!!document.fullscreenElement") == "false" }
+            assertTrue(paused(reader))
+            composeRule.waitUntil(3_000) { composeRule.activity.requestedOrientation == orientation }
+            assertEquals(orientation, composeRule.activity.requestedOrientation)
+        }
     }
 
     @Test
