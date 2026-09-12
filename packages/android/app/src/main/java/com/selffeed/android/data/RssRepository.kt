@@ -241,6 +241,11 @@ class RssRepository @Inject constructor(
 
     suspend fun prepareSession() { account.prepare() }
 
+    /** Keeps one account owner across worker admission, delivery and polling. */
+    internal suspend fun <T> withAuthenticatedAccount(block: suspend () -> T): T? = account.withSession {
+        if (isLoggedIn()) block() else null
+    }
+
     override suspend fun me() = safeReadCall { session ->
         runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { withRetry(session) { authRemote.me(session = session) } }
     }

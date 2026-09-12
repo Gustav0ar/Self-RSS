@@ -16,6 +16,7 @@ import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.network.ApiEnvelope
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
@@ -48,6 +49,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -161,6 +163,58 @@ class RssRepositoryTest {
             networkMonitor = networkMonitor,
             refreshScope = backgroundScope,
         )
+    }
+
+    @Test
+    fun `worker cancellation releases a blocked poll without reporting success`() = runTest {
+        every { sessionStore.getAccessToken() } returns "worker-access-token"
+        val polling = CompletableDeferred<Unit>()
+        val released = CompletableDeferred<Unit>()
+        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } returns ApiEnvelope(SyncResponse(status = "queued"))
+        coEvery { api.syncAllFeedsStatus(any(), any()) } coAnswers {
+            polling.complete(Unit)
+            try { awaitCancellation() } finally { released.complete(Unit) }
+        }
+        var completed = false
+        val running = launch {
+            FeedSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository).doWork()
+            completed = true
+        }
+        polling.await()
+        running.cancelAndJoin()
+        released.await()
+        assertTrue(running.isCancelled)
+        assertEquals(false, completed)
+        coVerify(exactly = 1) { api.syncAllFeedsStatus(any(), any()) }
+    }
+
+    @Test
+    fun `feed worker cannot adopt a replacement account between status polls`() = runTest {
+        every { sessionStore.getAccessToken() } returns "worker-access-token"
+        val firstOwner = sessionStore.currentSession()
+        val firstPoll = CompletableDeferred<Unit>()
+        val owners = mutableListOf<ApiSession>()
+        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } returns
+            com.selffeed.android.network.ApiEnvelope(SyncResponse(status = "queued"))
+        coEvery { api.syncAllFeedsStatus(any(), any()) } coAnswers {
+            val owner = secondArg<ApiSession>()
+            owners += owner
+            firstPoll.complete(Unit)
+            com.selffeed.android.network.ApiEnvelope(FeedSyncAllStatus(
+                queued = false, running = owner == firstOwner, active = owner == firstOwner, stale = false,
+            ))
+        }
+        val worker = FeedSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
+        val running = async { worker.doWork() }
+        firstPoll.await()
+        runCurrent()
+
+        repository.setApiBaseUrl("https://replacement.example/api/v1/")
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(ListenableWorker.Result.success(), running.await())
+        assertEquals(listOf(firstOwner), owners)
     }
 
     @Test

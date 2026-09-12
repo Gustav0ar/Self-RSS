@@ -14,17 +14,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import retrofit2.HttpException
 
-/**
- * Unit tests for [FeedSyncWorker.doWork] that exercise the success/failure
- * matrix. We don't boot WorkManager here — that requires Robolectric or
- * instrumentation — because the worker's *behavior* is independent of the
- * scheduling layer. The schedule itself is covered by an integration smoke
- * test.
- *
- * The production worker is constructed by Hilt through WorkManager. These
- * unit tests construct it directly with a mocked repository so the
- * behavior matrix stays fast and deterministic.
- */
+/** Worker result classification; account ownership is exercised with real Room in RssRepositoryTest. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class FeedSyncWorkerTest {
@@ -105,22 +95,14 @@ class FeedSyncWorkerTest {
         assertEquals(androidx.work.ListenableWorker.Result.retry(), result)
     }
 
-    @Test
-    fun `constraints require network connectivity`() {
-        val constraints = androidx.work.Constraints.Builder()
-            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-            .setRequiresBatteryNotLow(true)
-            .build()
-        assertEquals(androidx.work.NetworkType.CONNECTED, constraints.requiredNetworkType)
-    }
-
     private fun buildWorker(
         loggedIn: Boolean,
         syncResult: AppResult<SyncResponse>?,
     ): FeedSyncWorker {
         val repo = mockk<RssRepository>()
-        coEvery { repo.prepareSession() } returns Unit
-        coEvery { repo.isLoggedIn() } returns loggedIn
+        coEvery { repo.withAuthenticatedAccount<androidx.work.ListenableWorker.Result>(any()) } coAnswers {
+            if (loggedIn) firstArg<suspend () -> androidx.work.ListenableWorker.Result>().invoke() else null
+        }
         if (syncResult != null) {
             coEvery { repo.syncAllFeeds() } returns syncResult
             coEvery { repo.syncAllFeedsStatus() } returns AppResult.Success(
