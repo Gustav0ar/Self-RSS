@@ -1,5 +1,88 @@
 # Implementation Plans
 
+## 2026-09-11 Android experience and resilience batch
+
+Start here for the current Android work. Plans 033–049 turn the Android review and Gustavo's follow-up requirements into implementation handoffs, based on commit `74d5c11`. Implementation and separate review PRs are now authorized. Track current work and validation in [the execution record](android-review/progress.md). The original review was read-only.
+
+The review traced source and test behavior. It did not measure real-device performance or reproduce every visual symptom. Each defect plan requires a focused reproduction, and performance plans require measured evidence before claiming improvement.
+
+These rules apply to **033–049**. Earlier branch, roadmap-wait, deployment, and release instructions below belong to completed historical batches. This request explicitly includes Android offline support and UX planning; it does not authorize executing an old deployment gate.
+
+### Execution order and status
+
+| Plan | Work package | Priority | Effort | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| [033](033-android-review-verification-foundation.md) | Establish isolated Android behavior and performance fixtures | P1 | M | none | TODO |
+| [034](034-android-design-and-motion-selection.md) | Select Android layout, loading, offline, and motion designs | P1 | M | none | TODO |
+| [035](035-android-session-and-request-lifecycle.md) | End account and reader sessions without accepting stale work | P1 | L | 033 | TODO |
+| [036](036-android-cache-first-and-mutation-authority.md) | Return cached content immediately and preserve the latest mutation | P1 | L | 033, 035 | TODO |
+| [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | TODO |
+| [038](038-android-loading-and-error-lifecycle.md) | Keep loading continuous and make failures recoverable | P1 | L | 033, 034, 035, 036, 037 | TODO |
+| [039](039-android-media-and-reader-resource-lifecycle.md) | Pause inactive media and release reader resources predictably | P1 | L | 033, 035 | TODO |
+| [040](040-android-reader-readiness-and-fallback.md) | Show usable reader content without placeholder loops or layout jumps | P1 | M | 033, 034, 037, 038, 039 | TODO |
+| [041](041-android-cache-retention-and-budgets.md) | Bound cache maintenance and protect retained offline content | P1 | L | 033, 035, 036, 037 | TODO |
+| [042](042-android-durable-offline-downloads.md) | Resume offline downloads and serve cached media to the reader | P1 | L | 033, 034, 035, 036, 037, 039, 040, 041 | TODO |
+| [043](043-android-reading-session-restoration.md) | Restore reading context after process recreation | P2 | M | 033, 035, 040, 042 | TODO |
+| [044](044-android-reader-idle-and-long-article-performance.md) | Stop idle HTML work and bound long-article rendering cost | P2 | L | 033, 037, 039, 040, 043 | TODO |
+| [045](045-android-dense-queue-and-search.md) | Make article queues and search dense, truthful, and accessible | P2 | L | 033, 034, 038, 042, 043 | TODO |
+| [046](046-android-adaptive-reader-and-motion.md) | Implement the selected adaptive reader layout and finite motion | P2 | L | 033, 034, 038, 039, 040, 043, 044, 045 | TODO |
+| [047](047-android-feed-settings-and-draft-resilience.md) | Simplify management navigation and preserve unfinished edits | P2 | L | 033, 034, 035, 037, 038, 042, 043, 045 | TODO |
+| [048](048-android-realtime-gap-recovery.md) | Recover realtime delivery gaps without losing local intent | P2 | M | 033, 035, 036, 038 | TODO |
+| [049](049-android-final-ux-resilience-performance-gate.md) | Validate the complete Android experience on isolated targets | P1 | L | 033, 034, 035, 036, 037, 038, 039, 040, 041, 042, 043, 044, 045, 046, 047, 048 | TODO |
+
+Effort is relative scope, not a delivery estimate. P1 protects correctness, access, or core reading behavior; P2 improves usability or efficiency. Status values are `TODO`, `IN PROGRESS`, `AWAITING SELECTION`, `DONE`, and `BLOCKED: <concrete reason>`. Do not mark a hardware-dependent claim verified without its evidence.
+
+### How to execute
+
+1. Start [033](033-android-review-verification-foundation.md) to establish fixtures that match production Room bindings, actual rich-reader readiness, safe device targeting, and an isolated performance build. Record the fixture-only baseline commit.
+2. Prepare the distinct design options in [034](034-android-design-and-motion-selection.md). Publish and inspect them, then record Gustavo's explicit choice before changing real layout or copy. Mechanical fixes that preserve existing presentation can proceed while the choice is pending.
+3. Establish account/request lifetime in [035](035-android-session-and-request-lifecycle.md). Complete cache-first reads and mutation authority in [036](036-android-cache-first-and-mutation-authority.md), main-safe work in [037](037-android-main-safe-io.md), and inactive-media/resource ownership in [039](039-android-media-and-reader-resource-lifecycle.md) against that contract.
+4. Implement the selected loading lifecycle [038](038-android-loading-and-error-lifecycle.md) and reader readiness/fallback [040](040-android-reader-readiness-and-fallback.md). Introduce bounded retention [041](041-android-cache-retention-and-budgets.md) before durable offline acquisition [042](042-android-durable-offline-downloads.md). Apply Room schema migrations in that order, each with its own new version.
+5. Build restoration [043](043-android-reading-session-restoration.md), measured reader performance [044](044-android-reader-idle-and-long-article-performance.md), shared queue/search UX [045](045-android-dense-queue-and-search.md), adaptive layout/motion [046](046-android-adaptive-reader-and-motion.md), and resilient management/settings [047](047-android-feed-settings-and-draft-resilience.md). Realtime recovery [048](048-android-realtime-gap-recovery.md) can follow its own listed dependencies.
+6. Finish [049](049-android-final-ux-resilience-performance-gate.md) against the integrated result. It records actual behavior, migrations, accessibility, physical performance, and remaining limits.
+
+Dependencies identify required contracts. A completed deterministic fixture can support downstream tests while a separate physical measurement remains pending in 033; that does not make 033 or the final gate DONE. If baseline hardware is unavailable initially, preserve the fixture-only commit and compare it later using the same device/configuration.
+
+Use an isolated checkout and reconcile source drift before each plan. Sequence work on overlapping files. If parallel execution is later authorized, assign non-overlapping file ownership up front; repository, ViewModel, reader, and schema changes must not race. Plans 041 and 042 must never allocate schema versions independently.
+
+### Coverage of the review and requested behavior
+
+| Requirement or finding | Owning plans | Required evidence |
+| --- | --- | --- |
+| Loading appears/disappears repeatedly during one refresh | [038](038-android-loading-and-error-lifecycle.md), [040](040-android-reader-readiness-and-fallback.md) | Reproduced visibility trace; one operation through final visible reconciliation and terminal success/failure |
+| Cached reads blocked by slow pending writes | [036](036-android-cache-first-and-mutation-authority.md) | Cached body/queue available while mutation transport is held indefinitely |
+| Back followed by late article reopening; account data or credentials crossing sessions | [035](035-android-session-and-request-lifecycle.md) | Delayed success, error, dispatch, and 401 across close/account/server changes |
+| Read/save acknowledgement or realtime event overwrites newer local intent | [036](036-android-cache-first-and-mutation-authority.md), [048](048-android-realtime-gap-recovery.md) | Adversarial acknowledgement/revision order and durable outbox convergence |
+| Main-thread cookie refresh, OPML reads, JSON/HTML parsing | [037](037-android-main-safe-io.md) | Controlled dispatcher tests and device StrictMode/responsiveness checks |
+| Media continues on inactive retained pages or in background | [039](039-android-media-and-reader-resource-lifecycle.md) | Actual local HTML5 playback paused on swipe/tab/background/close; no autoplay on return |
+| Leaked reader/context/fullscreen callbacks; renderer process loss | [039](039-android-media-and-reader-resource-lifecycle.md), [040](040-android-reader-readiness-and-fallback.md) | Bounded live views, idempotent teardown, recoverable renderer replacement |
+| Permanent placeholders, wrong ready marker, anchor jump, false completion | [040](040-android-reader-readiness-and-fallback.md) | Failed/partial/cached states, actual document readiness and preserved reading anchor |
+| Cache growth and full saved-archive scans during detail writes | [041](041-android-cache-retention-and-budgets.md) | Bounded maintenance, byte budgets, pressure/corruption tests and data-preserving migrations |
+| Offline text/images unavailable after save or process death | [042](042-android-durable-offline-downloads.md) | Durable intent, restart/resume and actual rich-reader image rendering with network rejected |
+| Truthful offline status, local search/filter, storage/removal controls | [042](042-android-durable-offline-downloads.md), [045](045-android-dense-queue-and-search.md) | Text/media availability matches persisted resources; clear partial/failure/removal behavior |
+| Reading position, scope and query lost after recreation | [043](043-android-reading-session-restoration.md) | Separate-process test runner survives target death; durable owner, stable anchors and paused media |
+| Reader observer work at idle; expensive or truncated long content | [044](044-android-reader-idle-and-long-article-performance.md) | Real generated HTML observer test and release measurements of long articles/idle behavior |
+| Dense readable article rows; consistent Search; accessible read states | [045](045-android-dense-queue-and-search.md) | Selected layout, query identity, contrast, actual hit targets and TalkBack actions |
+| Focused reader; adaptive Back/layout; links, selection and large text | [046](046-android-adaptive-reader-and-motion.md) | Actual pane-state matrix, 200% text, safe links, selection, keyboard and TalkBack |
+| Useful animations without endless repainting | [034](034-android-design-and-motion-selection.md), [038](038-android-loading-and-error-lifecycle.md), [045](045-android-dense-queue-and-search.md), [046](046-android-adaptive-reader-and-motion.md), [047](047-android-feed-settings-and-draft-resilience.md) | Selected finite transitions, interruption/zero-scale checks, no app-controlled idle motion |
+| Lost editor drafts, premature dismissal, out-of-order preferences | [047](047-android-feed-settings-and-draft-resilience.md) | Failed/retried/recreated edits; late GET cannot overwrite a newer PATCH in storage or UI |
+| Silent realtime delivery gaps and reconnect churn | [048](048-android-realtime-gap-recovery.md) | Burst larger than channel capacity, slow consumer, safe replay/reconciliation |
+| Tests and benchmarks miss actual production reader behavior | [033](033-android-review-verification-foundation.md), [049](049-android-final-ux-resilience-performance-gate.md) | Production binding, real rich-ready signal, isolated minified physical measurements |
+
+### Acceptance boundaries
+
+- Preserve existing user data, saved bodies, sessions and queued read/save changes. Every schema change needs a fresh version, explicit forward migration, exported schema, clean-creation coverage and every supported historical upgrade path, including both version-6 layouts. No destructive fallback.
+- Separate disposable cache from retained downloads. Separate renderer lifetime from retained content. Ordinary backgrounding pauses interactive work; account transitions invalidate ownership; durable workers resume only for the right owner. Durable owner identity survives token refresh/process restart and is distinct from the in-memory request generation.
+- Follow the selected black #000, white-text, dense design. Use finite, interruptible animation at meaningful transitions. Long-running synchronization needs stable state/progress and a terminal outcome, without a decorative endless spinner, pulse or shimmer.
+- Plan 034 must locate the requested `html-communication` skill at execution. It was unavailable during planning. If still unavailable, prepare the mocks and seek approval for a concrete alternate publishing method before publication. No UI implementation is blocked by that missing skill during this planning task.
+- Implementation, feature-branch pushes, and separate real PRs are authorized. No API/web redesign, unrelated dependency upgrade, production access, normal-app install, merge or deployment is included. The final gate produces a local acceptance record.
+- The device, benchmark and process-recovery wrapper scripts named in these plans are **proposed deliverables of 033**, not existing commands already run. Behavior instrumentation uses `com.selffeed.android.devicetest`; performance/recovery uses a separate verified target application ID. Recovery tests run in a separate test process that survives target death. Never invoke the existing release-startup installer against Gustavo's normal app.
+- Verification failures stay visible. Missing measurements and deferred requirements remain incomplete unless Gustavo explicitly changes scope. Do not claim leading performance from source inspection alone.
+
+## Historical batches
+
+The sections below record completed earlier work. Their execution and deployment instructions do not apply to plans 033–049.
+
 Generated by the improve skill on 2026-06-19. Planned at commit `b14d79b`.
 
 These plans cover every finding from the API/web review plus a final e2e release and deployment gate. Execute them in order on a single integration branch unless a plan's STOP conditions require escalation. Each executor must read the relevant plan fully before editing code, run every verification command, and update the status row here when the plan is complete.
