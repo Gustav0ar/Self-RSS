@@ -35,6 +35,9 @@ import javax.inject.Singleton
 
 @Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
+    var detailGate: ReviewRequestGate<String, AppResult<ArticleDetail>>? = null
+    var readGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
+    var savedGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
     private val online = MutableStateFlow(true)
     private val readStateSyncEvents = MutableSharedFlow<ReadStateSyncEvent>(extraBufferCapacity = 1)
     private var apiBaseUrl = "10.0.2.2:3000"
@@ -99,6 +102,10 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         preferenceFailures: Int = 0,
     ) {
         this.authenticated = authenticated
+        online.value = true
+        detailGate = null
+        readGate = null
+        savedGate = null
         apiBaseUrl = "10.0.2.2:3000"
         preferences = defaultPreferences.copy(hideRead = hideRead)
         preferenceFailuresRemaining = preferenceFailures
@@ -117,6 +124,10 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     fun delayArticleDetailsBy(delayMs: Long) {
         articleDetailDelayMs = delayMs
     }
+
+    fun setOnline(value: Boolean) { online.value = value }
+
+    suspend fun emitReadState(event: ReadStateSyncEvent) { readStateSyncEvents.emit(event) }
 
     fun overrideArticleDetail(
         articleId: String,
@@ -278,6 +289,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         articleId: String,
         forceRefresh: Boolean
     ): AppResult<ArticleDetail> {
+        detailGate?.let { return it.await(articleId) }
         if (articleDetailDelayMs > 0L) {
             delay(articleDetailDelayMs)
         }
@@ -305,11 +317,21 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         read: Boolean,
         source: String
     ): AppResult<Boolean> {
+        readGate?.let { gate ->
+            val result = gate.await(articleId to read)
+            if (result is AppResult.Success) articleReadStates[articleId] = result.data
+            return result
+        }
         articleReadStates[articleId] = read
         return AppResult.Success(read)
     }
 
     override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> {
+        savedGate?.let { gate ->
+            val result = gate.await(articleId to saved)
+            if (result is AppResult.Success) articleSavedStates[articleId] = result.data
+            return result
+        }
         articleSavedStates[articleId] = saved
         return AppResult.Success(saved)
     }

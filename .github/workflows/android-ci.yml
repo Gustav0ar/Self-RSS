@@ -8,16 +8,18 @@ on:
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
       - 'scripts/android-check.sh'
+      - 'scripts/android-review-*.sh'
       - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
   pull_request:
-    branches: [main, master]
+    # Android changes in stacked review PRs need the same checks as main PRs.
     paths:
       - 'packages/android/**'
       - 'packages/api/openapi.json'
       - 'packages/shared/**'
       - 'scripts/android-check.sh'
+      - 'scripts/android-review-*.sh'
       - 'scripts/check-android-release-r8.sh'
       - 'scripts/verify-android-release-startup.sh'
       - '.github/workflows/android-ci.yml'
@@ -47,6 +49,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
+      - name: Verify isolated device execution guards
+        run: bash scripts/android-review-device-test.sh
       - name: Run Android unit tests
         run: ./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest
 
@@ -96,6 +100,7 @@ jobs:
           script: |
             ./packages/android/gradlew -p packages/android :app:connectedDeviceTestAndroidTest
             SELF_FEED_API_BASE_URL=https://example.invalid/api/v1/ ./scripts/verify-android-release-startup.sh
+            ANDROID_REVIEW_SERIAL=$(adb get-serialno) bash scripts/android-review-process.sh com.selffeed.android.macrobenchmark.AndroidProcessHarnessTest
 
   android-baseline-profile:
     name: Android Baseline Profile

@@ -1,6 +1,6 @@
 # Plan 033: Establish isolated Android behavior and performance fixtures
 
-- Status: TODO
+- Status: IMPLEMENTED (physical performance evidence pending)
 - Priority: P1
 - Effort: M
 - Implementation risk: LOW
@@ -77,7 +77,9 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/androidTest/java/com/selffeed/android/ui/ArticleTabTestHarness.kt`
 - `packages/android/app/src/androidTest/assets/android-review/`
 - `packages/android/app/src/test/java/com/selffeed/android/data/RssRepositoryTest.kt`
-- `packages/android/app/src/test/java/com/selffeed/android/ui/AndroidReviewFixtureTest.kt`
+- `packages/android/app/src/androidTest/java/com/selffeed/android/data/ReviewRequestGate.kt`
+- `packages/android/app/src/androidTest/java/com/selffeed/android/data/ReviewRequestGateTest.kt`
+- `scripts/android-review-common.sh`
 - `packages/android/app/src/main/java/com/selffeed/android/ui/BenchmarkReaderScenario.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/MainActivity.kt`
 - `packages/android/app/build.gradle.kts`
@@ -93,6 +95,8 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/test/java/com/selffeed/android/ui/BenchmarkReaderScenarioTest.kt`
 - `scripts/android-review-device-test.sh`
 - `scripts/android-review-process.sh`
+- `.github/workflows/android-ci.yml` for the required stacked-PR verification and isolated process test.
+- `plans/android-review/progress.md` for execution tracking.
 - This plan and its row in `plans/README.md`.
 
 Keep API/web production behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
@@ -107,7 +111,7 @@ Commands below are execution gates, not claims that they ran during planning. De
 
 | Purpose | Command | Expected result |
 | --- | --- | --- |
-| unit | `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.ui.AndroidReviewFixtureTest' --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'` | All selected tests pass. |
+| unit | `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'` | All selected tests pass. |
 | device | `bash scripts/android-review-device.sh 'com.selffeed.android.ui.AndroidReviewFixtureUiTest'` | On the designated isolated test target, every selected instrumentation test passes. |
 | benchmark | `bash scripts/android-review-benchmark.sh --serial "$ANDROID_REVIEW_SERIAL" --output packages/android/build/review-performance` | Release-equivalent physical-device results and metadata are written; inspect the predeclared comparison and memory limits. |
 | process | `bash scripts/android-review-process.sh 'com.selffeed.android.macrobenchmark.AndroidProcessHarnessTest'` | The separately hosted test runner survives target death; all selected recovery journeys pass with verified old/new target PIDs and persisted state. |
@@ -120,13 +124,13 @@ Commands below are execution gates, not claims that they ran during planning. De
 
 Update production-path repository fixtures to use LocalStore as OfflineReadStore. Retain dedicated legacy-store tests where compatibility is intentional. Add controllable request gates and network state to the existing fake; avoid real credentials, publisher URLs, or copying a user database.
 
-Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.ui.AndroidReviewFixtureTest' --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'`. All selected tests pass.
+Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'`. All selected tests pass.
 
 ### 2. Add deterministic reader fixtures
 
 Use local content for short text, long text, images, summary blocks, tables, malformed HTML, and playable local audio/video. Expose delayed detail, repeated sync revisions, failure, and acknowledgement ordering through the fake. Signal reader readiness from an actual body-render callback, not non-null selection. Keep all fixture routes inaccessible to normal debug/release users. Carry the readiness callback through the production reader and root call sites, and update BenchmarkReaderScenarioTest so selection alone is explicitly insufficient. Extend the existing assets source-set configuration without replacing schema fixtures: it currently overrides the default androidTest asset directory. Share the synthetic fixture files with the isolated performanceTest assets. Where the boundary under test is persistence/worker recovery, exercise production RssRepository and real Room with a controlled local transport, rather than replacing the repository with an in-memory fake.
 
-Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.ui.AndroidReviewFixtureTest' --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'`. All selected tests pass.
+Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest --tests 'com.selffeed.android.data.RssRepositoryTest' --tests 'com.selffeed.android.ui.BenchmarkReaderScenarioTest'`. All selected tests pass.
 
 ### 3. Provide guarded device execution
 
@@ -148,16 +152,16 @@ Verify with `bash scripts/android-review-process.sh 'com.selffeed.android.macrob
 
 ## Test and acceptance contract
 
-- [ ] Repository behavior tests use the production offline-store binding.
-- [ ] Local rich-reader readiness is observed from the renderer; Text-only success cannot satisfy it.
-- [ ] All three execution wrappers reject a missing/ambiguous target before adb mutation and reject the daily-driver application ID.
-- [ ] TESTING.md contains exact runnable device and benchmark commands, fixture names, output locations, and baseline measurements or an explicit unmeasured status.
-- [ ] New fixture tests pass; subsequent behavioral defects are recorded, not silently redefined as expected behavior.
-- [ ] The isolated performance target and its test APK both assemble, use the intended package/component identities, and complete a guarded fixture benchmark on designated hardware, or the hardware-dependent evidence remains explicitly pending.
-- [ ] A guarded separate-process recovery fixture survives target process death, records distinct old/new target PIDs, and restores the backgrounded task without force-stop or normal-app access.
-- [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
-- [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
-- [ ] `git diff --check` passes and scope review finds no unrelated changes.
+- [x] Repository behavior tests use the production offline-store binding.
+- [x] Local rich-reader readiness is observed from the renderer; Text-only success cannot satisfy it.
+- [x] All three execution wrappers reject a missing/ambiguous target before adb mutation and reject the daily-driver application ID.
+- [x] TESTING.md contains exact runnable device and benchmark commands, fixture names, output locations, and baseline measurements or an explicit unmeasured status.
+- [x] New fixture tests pass; subsequent behavioral defects are recorded, not silently redefined as expected behavior.
+- [x] The isolated performance target and its test APK both assemble, use the intended package/component identities, and complete a guarded fixture benchmark on designated hardware, or the hardware-dependent evidence remains explicitly pending.
+- [x] A guarded separate-process recovery fixture survives target process death, records distinct old/new target PIDs, and restores the backgrounded task without force-stop or normal-app access.
+- [x] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
+- [x] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
+- [x] `git diff --check` passes and scope review finds no unrelated changes.
 - [ ] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
 
 ## Specific stop conditions
@@ -173,8 +177,17 @@ Keep fixture readiness coupled to production renderer readiness. Test hooks must
 
 ## Execution notes
 
-- Reconciled commit: pending
-- Reproduction and checks: pending
-- Device/performance evidence: pending where applicable
-- Design selection: pending where applicable
-- Remaining limitations: pending
+- Reconciled against main `cd802e5` and roadmap `3fedeb1`. Existing `BenchmarkReaderScenarioTest` covers the proposed JVM fixture assertions; no duplicate `AndroidReviewFixtureTest` was added. Added a shared wrapper library and typed request gate to avoid copying test orchestration.
+- Repository tests now use the exact production `LocalStore` binding. Legacy compatibility tests remain separate.
+- The old readiness condition was selection-only. JVM assertions now require no ready marker after selection; a real Chromium callback makes the rich-reader instrumentation test pass.
+- Guard refusal tests pass for missing, ambiguous and unauthorized targets, normal-app package mismatch, class filters, external runner and emulator performance rejection.
+- Both isolated APK pairs build, including the minified performance target and self-instrumented runner. The actual generated task names and component identities are recorded in TESTING.md.
+- The first recovery test failed to find its initial fixture. The fixture now uses system-bar insets, unique article IDs per run and an explicit new initial task; restoration uses the existing task. Real background process death now passes without force-stop, with real Room and saved UI state.
+- Basic fixture readiness and recovery passed on the dedicated API 36.1 `small_phone` emulator at `emulator-5566`. All 420 JVM tests across 52 classes pass, lint passes, both isolated APK pairs assemble, both device fixture tests pass, and the external process test passes. It recorded target PID 8771 -> 8833 with runner PID 8755 surviving.
+- Rich corpus assets and delayed/reordered request gates are available for later feature-specific tests. Durable worker/outbox and production navigation restoration are deliberately verified in their owning plans, not reimplemented in a fake app here.
+- Physical release timing, native/WebView memory and repeated-cycle measurements remain pending. This plan does not claim performance or absence of leaks.
+
+- Review found that startup benchmarks launched authentication and inherited a configurable real server. The performance target now always uses example.invalid; the benchmark opens and checks the synthetic reader queue. Review also found inconsistent state after successful gated mutations; the fake now applies successful responses and its test reads the resulting article state.
+- Android CI previously filtered PRs to main/master, leaving stacked Android reviews without checks. Its Android-path filter now accepts any PR base, verifies wrapper guards, and runs the isolated real-process test on the disposable CI emulator. No deployment workflow changed.
+
+- Local evidence: `/tmp/android-foundation-full.log`, `/tmp/android-foundation-device-final.log`, `/tmp/android-foundation-process-final.log`, `/tmp/android-foundation-gate-final.log` and `/tmp/android-foundation-benchmark-final.log`. Standard Gradle XML/HTML reports are in the paths documented in TESTING.md. Fixture-only baseline is the implementation commit in this PR; physical comparisons must retain that commit.

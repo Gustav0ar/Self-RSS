@@ -21,7 +21,7 @@ class BenchmarkReaderScenarioTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun benchmarkReaderJourneyOpensTheProductionReader() {
+    fun selectingArticleDoesNotClaimTheWebViewHasRendered() {
         composeRule.setContent {
             SelfFeedTheme {
                 BenchmarkReaderScenario()
@@ -34,7 +34,7 @@ class BenchmarkReaderScenarioTest {
 
         composeRule
             .onNodeWithContentDescription(BenchmarkReaderReadyDescription)
-            .assertIsDisplayed()
+            .assertDoesNotExist()
         composeRule
             .onNodeWithContentDescription("Back to list")
             .assertIsDisplayed()
@@ -51,6 +51,18 @@ class BenchmarkReaderScenarioTest {
         assertEquals(
             BenchmarkScenario.READER,
             benchmarkScenarioFor("nonMinifiedRelease", BenchmarkReaderScenarioName),
+        )
+        assertEquals(
+            BenchmarkScenario.READER,
+            benchmarkScenarioFor("performanceTest", BenchmarkReaderScenarioName),
+        )
+        assertEquals(
+            BenchmarkScenario.READER,
+            benchmarkScenarioFor("benchmarkPerformanceTest", BenchmarkReaderScenarioName),
+        )
+        assertEquals(
+            BenchmarkScenario.READER,
+            benchmarkScenarioFor("nonMinifiedPerformanceTest", BenchmarkReaderScenarioName),
         )
     }
 }

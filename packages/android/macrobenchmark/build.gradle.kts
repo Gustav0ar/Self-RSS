@@ -11,6 +11,16 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "TARGET_PACKAGE", "\"com.selffeed.android\"")
+    }
+
+    buildFeatures.buildConfig = true
+    buildTypes {
+        create("performanceTest") {
+            isDebuggable = true
+            matchingFallbacks += listOf("release")
+            buildConfigField("String", "TARGET_PACKAGE", "\"com.selffeed.android.performancetest\"")
+        }
     }
 
     targetProjectPath = ":app"

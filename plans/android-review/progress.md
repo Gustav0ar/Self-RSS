@@ -6,9 +6,9 @@ The implementation starts from `cd802e5`, the current `origin/main` fetched on 2
 
 | Change | Plan | Branch | PR | State |
 | --- | --- | --- | --- | --- |
-| Roadmap and execution record | 033–049 | docs/android-experience-roadmap | pending | Preparing |
-| Production-aligned fixtures and isolated verification | 033 | test/android-reader-fixtures | pending | In progress |
-| Design alternatives and selection | 034 | design/android-reading-experience | pending | Preparing mocks |
+| Roadmap and execution record | 033–049 | docs/android-experience-roadmap | [#46](https://github.com/Gustav0ar/Self-RSS/pull/46) | Open; CI passed after one test rerun |
+| Production-aligned fixtures and isolated verification | 033 | test/android-reader-fixtures | pending | 420 JVM tests, lint, APK builds, real WebView and process/Room checks passed; opening PR |
+| Design alternatives and selection | 034 | design/android-reading-experience | [#47](https://github.com/Gustav0ar/Self-RSS/pull/47) | Open; three mocks prepared, selection pending |
 | Session ownership and foreground lifecycle | 035 | fix/android-session-lifecycle | pending | Reconcile existing PR #41 |
 | Cache-first reads and mutation authority | 036 | fix/android-cache-mutation-authority | pending | Reconcile existing PRs #38 and #42 |
 | Main-safe I/O | 037 | perf/android-main-safe-io | pending | Reconcile existing PR #40 |
@@ -30,9 +30,9 @@ Dependencies will use stacked PRs when required. Each PR names its base and the 
 ## Environment and evidence
 
 - GitHub authentication works with network access; no open PR existed at reconciliation.
-- API 37 platform and API 35 emulator image installation are in progress. Platform-tools are installed.
-- No physical device or accelerated emulator has been verified. Physical performance, native/WebView memory, and actual process-death evidence are pending.
-- `html-communication` is absent from installed skills. Prepare local design alternatives before requesting the required publishing fallback and design selection.
+- Isolated SDK/build tools and Gradle are working. The dedicated `small_phone` API 36.1 emulator is booted at `emulator-5566`; normal app packages remain untouched.
+- Rich WebView readiness and basic Room/task recovery after actual background process death pass on the dedicated emulator. All 420 JVM tests, lint, both APK pairs and final fixture checks pass. Physical performance and native/WebView memory evidence remain pending.
+- `html-communication` is absent. Three local design alternatives and screenshots are in PR #47; Gustavo’s selection and optional private Sites publication reply are pending.
 - No production service, user database, daily-driver app, or release channel has been changed.
 
 ## Completion rules
