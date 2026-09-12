@@ -19,6 +19,9 @@ import com.selffeed.android.ui.components.withNonRegressiveReaderContent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -80,6 +83,24 @@ class ArticlesViewModel @Inject constructor(
     private val articleWarmingManager: ArticleWarmingManager,
     private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
 ) : ViewModel() {
+    // These subscriptions belong to this account, not the Activity's global chrome.
+    val pendingArticleChanges: Flow<Int> = flow { emitAll(repository.observePendingArticleChanges()) }
+
+    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        repository.observeArticleTextAvailability(articleId)
+
+    fun retryPendingArticleChanges() {
+        viewModelScope.launch {
+            try {
+                repository.retryPendingArticleChanges()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update { it.copy(errorMessage = error.message?.let(PresentationText::dynamic)) }
+            }
+        }
+    }
+
     private val _state = MutableStateFlow(ArticlesUiState())
     val state: StateFlow<ArticlesUiState> = _state.asStateFlow()
 

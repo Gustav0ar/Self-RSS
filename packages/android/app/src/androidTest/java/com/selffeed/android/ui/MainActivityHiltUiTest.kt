@@ -1,5 +1,13 @@
 package com.selffeed.android.ui
 
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
@@ -28,6 +36,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import javax.inject.Inject
+import kotlinx.coroutines.job
+import java.util.concurrent.atomic.AtomicInteger
 
 @HiltAndroidTest
 class MainActivityHiltUiTest {
@@ -74,6 +84,44 @@ class MainActivityHiltUiTest {
         waitForContentDescription("Back to list")
         composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
         assertEquals("Recreation must retain the authenticated model", 1, repository.restoreRequests)
+    }
+
+    @Test
+    fun signingOutWhileStoppedThenRecreatingClearsEveryAccountModel() {
+        repository.reset(authenticated = true)
+        launchActivity()
+        waitForText("Injected Article")
+        lateinit var auth: AuthViewModel
+        var models = emptyList<ViewModel>()
+        scenario!!.onActivity { activity ->
+            auth = ViewModelProvider(activity)[AuthViewModel::class.java]
+            // Capture the production Hilt models in the same account entry. Recreation returns
+            // to MainActivity's normal content with an already signed-out authentication model.
+            activity.setContent {
+                val state by auth.state.collectAsStateWithLifecycle()
+                AccountScreenScope(state.session?.ownerId) { owner ->
+                    val feeds = accountViewModel<FeedsViewModel>(owner)
+                    val articles = accountViewModel<ArticlesViewModel>(owner)
+                    val search = accountViewModel<SearchViewModel>(owner)
+                    val settings = accountViewModel<SettingsViewModel>(owner)
+                    SideEffect { models = listOf(feeds, articles, search, settings) }
+                }
+            }
+        }
+        composeRule.waitUntil { models.size == 4 }
+        val cleared = AtomicInteger()
+        val jobs = models.map { it.viewModelScope.coroutineContext.job }
+        models.forEach { it.addCloseable(AutoCloseable { cleared.incrementAndGet() }) }
+
+        scenario!!.moveToState(Lifecycle.State.CREATED)
+        scenario!!.onActivity { auth.logout() }
+        composeRule.waitUntil { !auth.state.value.isAuthenticated && !auth.state.value.loading }
+        scenario!!.recreate()
+        scenario!!.moveToState(Lifecycle.State.RESUMED)
+
+        waitForText("Email")
+        composeRule.waitUntil { cleared.get() == 4 }
+        assertTrue(jobs.all { it.isCancelled })
     }
 
     @Test

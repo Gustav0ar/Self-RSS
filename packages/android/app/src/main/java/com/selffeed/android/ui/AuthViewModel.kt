@@ -66,6 +66,8 @@ class AuthViewModel @Inject constructor(
         }
     }
 
+    fun isCurrentSession(session: ApiSession): Boolean = repository.isCurrentSession(session)
+
     fun bootstrap() {
         if (initialized) return
         launchAuthAction {

@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.AccountAccess
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import androidx.paging.PagingData
@@ -90,6 +91,19 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             isRead = false,
         ),
     )
+
+    override fun isCurrentSession(session: ApiSession): Boolean = session == this.session
+
+    override fun accountAccess(ownerId: String): AccountAccess = object : AccountAccess {
+        override val ownerId = ownerId
+        override fun isCurrent() = ownerId == session.ownerId
+        override suspend fun <T> withAccount(block: suspend () -> T): T = kotlinx.coroutines.coroutineScope {
+            if (!isCurrent()) throw kotlinx.coroutines.CancellationException("Account changed")
+            block().also {
+                if (!isCurrent()) throw kotlinx.coroutines.CancellationException("Account changed")
+            }
+        }
+    }
 
     override suspend fun registrationStatus(): AppResult<RegistrationStatusResponse> =
         AppResult.Success(RegistrationStatusResponse(registrationEnabled = true))

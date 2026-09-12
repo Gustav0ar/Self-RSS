@@ -112,6 +112,24 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `pending changes remain unknown until durable count arrives and retry keeps the count`() = runTest {
+        val counts = MutableSharedFlow<Int>()
+        every { repository.observePendingArticleChanges() } returns counts
+        coEvery { repository.retryPendingArticleChanges() } returns Unit
+        val viewModel = createViewModel()
+        val observed = mutableListOf<Int>()
+        backgroundScope.launch(testDispatcher) { viewModel.pendingArticleChanges.collect { observed += it } }
+        runCurrent()
+        assertTrue(observed.isEmpty())
+        counts.emit(3)
+        viewModel.retryPendingArticleChanges()
+        coVerify(exactly = 1) { repository.retryPendingArticleChanges() }
+        assertEquals(listOf(3), observed)
+        counts.emit(0)
+        assertEquals(listOf(3, 0), observed)
+    }
+
+    @Test
     fun `closing reader rejects an article response even when cancellation is ignored`() = runTest {
         assertReaderRequestInvalidated({ it.closeArticle() }, AppResult.Success(sampleDetail("a1")))
     }

@@ -3,6 +3,7 @@ package com.selffeed.android.data.repository
 import com.selffeed.android.network.CategoryOrderUpdate
 import androidx.paging.PagingData
 import com.selffeed.android.data.AppResult
+import com.selffeed.android.data.ApiSession
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.AppSettingsResponse
@@ -29,6 +30,7 @@ import javax.inject.Inject
 class AuthRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AuthRepository {
+    override fun isCurrentSession(session: ApiSession): Boolean = source.isCurrentSession(session)
     override fun getApiBaseUrl(): String = source.getApiBaseUrl()
     override suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String> =
         source.setApiBaseUrl(rawBaseUrl)
@@ -57,36 +59,37 @@ class AuthRepositoryImpl @Inject constructor(
 
 class FeedRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
+    private val access: AccountAccess,
 ) : FeedRepository {
-    override suspend fun categories(): AppResult<List<CategoryWithCounts>> = source.categories()
+    override suspend fun categories(): AppResult<List<CategoryWithCounts>> = access.withAccount { source.categories() }
     override suspend fun createCategory(
         name: String,
         parentCategoryId: String?
     ): AppResult<CategoryWithCounts> =
-        source.createCategory(name, parentCategoryId)
+        access.withAccount { source.createCategory(name, parentCategoryId) }
 
     override suspend fun updateCategory(
         id: String,
         name: String?,
         parentCategoryId: String?,
-    ): AppResult<CategoryWithCounts> = source.updateCategory(id, name, parentCategoryId)
+    ): AppResult<CategoryWithCounts> = access.withAccount { source.updateCategory(id, name, parentCategoryId) }
 
     override suspend fun reorderCategories(updates: List<CategoryOrderUpdate>): AppResult<Unit> =
-        source.reorderCategories(updates)
+        access.withAccount { source.reorderCategories(updates) }
 
-    override suspend fun deleteCategory(id: String): AppResult<Boolean> = source.deleteCategory(id)
+    override suspend fun deleteCategory(id: String): AppResult<Boolean> = access.withAccount { source.deleteCategory(id) }
     override suspend fun feeds(categoryId: String?): AppResult<List<FeedWithCounts>> =
-        source.feeds(categoryId)
+        access.withAccount { source.feeds(categoryId) }
 
     override suspend fun refreshFeeds(categoryId: String?): AppResult<List<FeedWithCounts>> =
-        source.refreshFeeds(categoryId)
+        access.withAccount { source.refreshFeeds(categoryId) }
 
     override suspend fun createFeed(
         feedUrl: String,
         categoryId: String,
         title: String?
     ): AppResult<FeedWithCounts> =
-        source.createFeed(feedUrl, categoryId, title)
+        access.withAccount { source.createFeed(feedUrl, categoryId, title) }
 
     override suspend fun updateFeed(
         id: String,
@@ -95,152 +98,163 @@ class FeedRepositoryImpl @Inject constructor(
         title: String?,
         pollingIntervalMinutes: Int?,
     ): AppResult<FeedWithCounts> =
-        source.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes)
+        access.withAccount { source.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes) }
 
-    override suspend fun deleteFeed(id: String): AppResult<Boolean> = source.deleteFeed(id)
-    override suspend fun syncFeed(id: String): AppResult<SyncResponse> = source.syncFeed(id)
+    override suspend fun deleteFeed(id: String): AppResult<Boolean> = access.withAccount { source.deleteFeed(id) }
+    override suspend fun syncFeed(id: String): AppResult<SyncResponse> = access.withAccount { source.syncFeed(id) }
     override suspend fun syncAllFeeds(
         feedId: String?,
         categoryId: String?
     ): AppResult<SyncResponse> =
-        source.syncAllFeeds(feedId, categoryId)
+        access.withAccount { source.syncAllFeeds(feedId, categoryId) }
 
     override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> =
-        source.syncAllFeedsStatus(requestId)
+        access.withAccount { source.syncAllFeedsStatus(requestId) }
 
     override suspend fun feedSyncHistory(feedId: String): AppResult<FeedSyncHistoryResponse> =
-        source.feedSyncHistory(feedId)
+        access.withAccount { source.feedSyncHistory(feedId) }
 
     override suspend fun selectDiscoveryCandidate(candidateId: String): AppResult<FeedWithCounts> =
-        source.selectDiscoveryCandidate(candidateId)
+        access.withAccount { source.selectDiscoveryCandidate(candidateId) }
 
     override suspend fun cancelFeedReplacement(feedId: String): AppResult<FeedWithCounts> =
-        source.cancelFeedReplacement(feedId)
+        access.withAccount { source.cancelFeedReplacement(feedId) }
 
     override suspend fun importOpml(
         fileName: String,
         fileBytes: ByteArray
     ): AppResult<OpmlImportSummary> =
-        source.importOpml(fileName, fileBytes)
+        access.withAccount { source.importOpml(fileName, fileBytes) }
 
-    override suspend fun exportOpml(): AppResult<String> = source.exportOpml()
+    override suspend fun exportOpml(): AppResult<String> = access.withAccount { source.exportOpml() }
 }
 
 class ArticleRepositoryImpl @Inject constructor(
     private val delegate: SelfFeedRepository,
+    private val access: AccountAccess,
 ) : ArticleRepository {
+    override fun observePendingArticleChanges(): Flow<Int> =
+        access.observe { delegate.observePendingArticleChanges() }
+    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
+        access.observe { delegate.observeArticleTextAvailability(articleId) }
+    override suspend fun retryPendingArticleChanges() =
+        access.withAccount { delegate.retryPendingArticleChanges() }
+
     override fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean>,
-    ): Flow<PagingData<ArticleListItem>> = delegate.articlePagingData(query, readStateOverrides)
+    ): Flow<PagingData<ArticleListItem>> = access.observe { delegate.articlePagingData(query, readStateOverrides) }
 
     override suspend fun article(
         articleId: String,
         forceRefresh: Boolean
     ): AppResult<ArticleDetail> =
-        delegate.article(articleId, forceRefresh)
+        access.withAccount { delegate.article(articleId, forceRefresh) }
 
     override fun cachedArticleDetail(articleId: String): ArticleDetail? =
-        delegate.cachedArticleDetail(articleId)
+        access.read { delegate.cachedArticleDetail(articleId) }
 
     override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? =
-        delegate.readCachedArticleDetail(articleId)
+        access.withAccount { delegate.readCachedArticleDetail(articleId) }
 
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
-        delegate.prefetchArticle(articleId)
+        access.withAccount { delegate.prefetchArticle(articleId) }
 
     override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> =
-        delegate.refreshArticleDetail(articleId)
+        access.withAccount { delegate.refreshArticleDetail(articleId) }
 
-    override fun prefetchHeroImages(imageUrls: Iterable<String?>) =
-        delegate.prefetchHeroImages(imageUrls)
+    override fun prefetchHeroImages(imageUrls: Iterable<String?>) {
+        if (access.isCurrent()) delegate.prefetchHeroImages(imageUrls)
+    }
 
     override suspend fun enrichArticle(
         articleId: String,
         invalidateCaches: Boolean,
-    ): AppResult<EnrichArticleResponse> = delegate.enrichArticle(articleId, invalidateCaches)
+    ): AppResult<EnrichArticleResponse> = access.withAccount { delegate.enrichArticle(articleId, invalidateCaches) }
 
     override suspend fun markRead(
         articleId: String,
         read: Boolean,
         source: String
     ): AppResult<Boolean> =
-        delegate.markRead(articleId, read, source)
+        access.withAccount { delegate.markRead(articleId, read, source) }
 
     override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> =
-        delegate.setSaved(articleId, saved)
+        access.withAccount { delegate.setSaved(articleId, saved) }
 
-    override fun savedStateRejections(): Flow<SavedStateRejection> = delegate.savedStateRejections()
+    override fun savedStateRejections(): Flow<SavedStateRejection> = access.observe { delegate.savedStateRejections() }
 
     override suspend fun markAllRead(
         feedId: String?,
         categoryId: String?
     ): AppResult<MarkAllReadResponse> =
-        delegate.markAllRead(feedId, categoryId)
+        access.withAccount { delegate.markAllRead(feedId, categoryId) }
 
     override fun clientId(): String = delegate.clientId()
-    override fun readStateEvents(): Flow<ReadStateSyncEvent> = delegate.readStateEvents()
+    override fun readStateEvents(): Flow<ReadStateSyncEvent> = access.observe { delegate.readStateEvents() }
     override suspend fun invalidateReadStateCaches(articleId: String?) =
-        delegate.invalidateReadStateCaches(articleId)
+        access.withAccount { delegate.invalidateReadStateCaches(articleId) }
 
     override suspend fun invalidateArticleContentCaches(articleId: String?) =
-        delegate.invalidateArticleContentCaches(articleId)
+        access.withAccount { delegate.invalidateArticleContentCaches(articleId) }
 
     override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?) =
-        delegate.updateCachedReadState(articleId, read, revision)
+        access.withAccount { delegate.updateCachedReadState(articleId, read, revision) }
 
     override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) =
-        delegate.updateCachedSavedState(articleId, saved, revision)
+        access.withAccount { delegate.updateCachedSavedState(articleId, saved, revision) }
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>) =
-        delegate.markCachedArticlesReadByFeeds(feedIds)
+        access.withAccount { delegate.markCachedArticlesReadByFeeds(feedIds) }
 
     override suspend fun recordArticleCompletion(articleId: String) =
-        delegate.recordArticleCompletion(articleId)
+        access.withAccount { delegate.recordArticleCompletion(articleId) }
 }
 
 class SearchRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
+    private val access: AccountAccess,
 ) : SearchRepository {
     override suspend fun search(
         query: String,
         categoryId: String?,
         cursor: String?,
-    ): AppResult<ApiListResponse<ArticleListItem>> = source.search(query, categoryId, cursor)
+    ): AppResult<ApiListResponse<ArticleListItem>> = access.withAccount { source.search(query, categoryId, cursor) }
 }
 
 class SettingsRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
+    private val access: AccountAccess,
 ) : SettingsRepository {
-    override suspend fun preferences(): AppResult<UserPreferences> = source.preferences()
+    override suspend fun preferences(): AppResult<UserPreferences> = access.withAccount { source.preferences() }
     override suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences> =
-        source.updatePreferences(request)
+        access.withAccount { source.updatePreferences(request) }
 
-    override suspend fun stats(): AppResult<StatsResponse> = source.stats()
-    override suspend fun authSessions(): AppResult<List<AuthSession>> = source.authSessions()
+    override suspend fun stats(): AppResult<StatsResponse> = access.withAccount { source.stats() }
+    override suspend fun authSessions(): AppResult<List<AuthSession>> = access.withAccount { source.authSessions() }
     override suspend fun revokeAuthSession(id: String): AppResult<Boolean> =
-        source.revokeAuthSession(id)
+        access.withAccount { source.revokeAuthSession(id) }
 
-    override suspend fun adminSettings(): AppResult<AppSettingsResponse> = source.adminSettings()
+    override suspend fun adminSettings(): AppResult<AppSettingsResponse> = access.withAccount { source.adminSettings() }
     override suspend fun updateAdminSettings(registrationLocked: Boolean): AppResult<AppSettingsResponse> =
-        source.updateAdminSettings(registrationLocked)
+        access.withAccount { source.updateAdminSettings(registrationLocked) }
 
-    override suspend fun adminUsers(): AppResult<List<User>> = source.adminUsers()
+    override suspend fun adminUsers(): AppResult<List<User>> = access.withAccount { source.adminUsers() }
     override suspend fun adminCreateUser(
         email: String,
         password: String,
         role: String
     ): AppResult<User> =
-        source.adminCreateUser(email, password, role)
+        access.withAccount { source.adminCreateUser(email, password, role) }
 
     override suspend fun adminUpdateUser(
         id: String,
         role: String?,
         isActive: Boolean?,
-    ): AppResult<User> = source.adminUpdateUser(id, role, isActive)
+    ): AppResult<User> = access.withAccount { source.adminUpdateUser(id, role, isActive) }
 
     override suspend fun adminResetPassword(id: String, password: String): AppResult<User> =
-        source.adminResetPassword(id, password)
+        access.withAccount { source.adminResetPassword(id, password) }
 
     override fun getDebugResilienceSnapshot(): Map<String, Long> =
         source.getDebugResilienceSnapshot()
@@ -251,10 +265,6 @@ class SettingsRepositoryImpl @Inject constructor(
 class AppStatusRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
 ) : AppStatusRepository {
-    override fun observePendingArticleChanges(): Flow<Int> = source.observePendingArticleChanges()
-    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
-        source.observeArticleTextAvailability(articleId)
-    override fun retryPendingArticleChanges() = source.retryPendingArticleChanges()
     override fun isOnline(): Boolean = source.isOnline()
     override fun observeOnline(): Flow<Boolean> = source.observeOnline()
 }

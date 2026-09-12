@@ -34,6 +34,11 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dagger.hilt.android.components.ViewModelComponent
+import dagger.hilt.android.scopes.ViewModelScoped
+import androidx.lifecycle.SavedStateHandle
+import com.selffeed.android.data.repository.AccountAccess
+import com.selffeed.android.ui.ACCOUNT_OWNER_ID_ARGUMENT
 import okhttp3.OkHttpClient
 import okio.Path.Companion.toOkioPath
 import java.io.File
@@ -139,6 +144,13 @@ abstract class RepositoryBindingModule {
     abstract fun bindAuthRepository(repository: AuthRepositoryImpl): AuthRepository
 
     @Binds
+    abstract fun bindAppStatusRepository(repository: AppStatusRepositoryImpl): AppStatusRepository
+}
+
+@Module
+@InstallIn(ViewModelComponent::class)
+abstract class FeatureRepositoryBindingModule {
+    @Binds
     abstract fun bindFeedRepository(repository: FeedRepositoryImpl): FeedRepository
 
     @Binds
@@ -150,6 +162,14 @@ abstract class RepositoryBindingModule {
     @Binds
     abstract fun bindSettingsRepository(repository: SettingsRepositoryImpl): SettingsRepository
 
-    @Binds
-    abstract fun bindAppStatusRepository(repository: AppStatusRepositoryImpl): AppStatusRepository
+    companion object {
+        @Provides
+        @ViewModelScoped
+        fun provideAccountAccess(handle: SavedStateHandle, source: SelfFeedRepository): AccountAccess {
+            val ownerId = checkNotNull(handle.get<String>(ACCOUNT_OWNER_ID_ARGUMENT)) {
+                "Account features require an explicit account owner"
+            }
+            return source.accountAccess(ownerId)
+        }
+    }
 }

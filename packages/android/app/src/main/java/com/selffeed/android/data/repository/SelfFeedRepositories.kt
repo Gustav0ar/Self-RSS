@@ -36,6 +36,7 @@ sealed interface AuthenticatedSession {
 }
 
 interface AuthRepository {
+    fun isCurrentSession(session: ApiSession): Boolean
     fun getApiBaseUrl(): String
     suspend fun setApiBaseUrl(rawBaseUrl: String): AppResult<String>
     suspend fun registrationStatus(): AppResult<RegistrationStatusResponse>
@@ -101,6 +102,9 @@ interface FeedRepository {
 data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean)
 
 interface ArticleRepository {
+    fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
+    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> = emptyFlow()
+    suspend fun retryPendingArticleChanges() = Unit
     fun articlePagingData(
         query: ArticlePageQuery,
         readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },
@@ -170,9 +174,6 @@ interface SettingsRepository {
 }
 
 interface AppStatusRepository {
-    fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
-    fun observeArticleTextAvailability(articleId: String): Flow<Boolean> = emptyFlow()
-    fun retryPendingArticleChanges() = Unit
     fun isOnline(): Boolean
     fun observeOnline(): Flow<Boolean>
 }
@@ -184,6 +185,7 @@ interface SelfFeedRepository :
     SearchRepository,
     SettingsRepository,
     AppStatusRepository {
+    fun accountAccess(ownerId: String): AccountAccess
     fun trimMemoryCaches()
 }
 
