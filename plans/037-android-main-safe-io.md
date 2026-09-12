@@ -1,6 +1,6 @@
 # Plan 037: Keep networking, document reads, and body preparation off Main
 
-- Status: IN PROGRESS
+- Status: IMPLEMENTED; physical frame comparison pending
 - Priority: P1
 - Effort: M
 - Implementation risk: MED
@@ -174,11 +174,11 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 - [x] The cookie-only restore reaches the real refresh implementation without synchronous networking on Main.
 - [x] ContentResolver reads and full cached-body decoding occur off Main; all streams close after failure/cancellation.
 - [x] Preparing long reader documents does not run inside composition and obsolete prepared results cannot replace the current article/version.
-- [ ] No StrictMode disk/network Main violation occurs for the scoped fixture journeys.
-- [ ] Existing auth retry, OPML size limit, HTML sanitation, text extraction, and swipe tests pass.
-- [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
-- [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
-- [ ] `git diff --check` passes and scope review finds no unrelated changes.
+- [x] No StrictMode disk/network Main violation occurs for the scoped fixture journeys.
+- [x] Existing auth retry, OPML size limit, HTML sanitation, text extraction, and swipe tests pass.
+- [x] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
+- [x] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
+- [x] `git diff --check` passes and scope review finds no unrelated changes.
 - [ ] Update this status and the index row only after the criteria are satisfied. A missing design pick or required device evidence remains pending, not DONE.
 
 ## Specific stop conditions
@@ -272,3 +272,13 @@ The blocked-body and cancelled-waiter checks also pass in `/tmp/android-cookie-b
 Final refresh validation: all 614 JVM tests and both isolated APK pairs pass in `/tmp/android-session-refresh-final-build.log`. Both isolated lint variants pass in `/tmp/android-session-refresh-final-lint.log`. All 30 selected API 35 device cases pass in `/tmp/android-session-refresh-final-device.log`, including the two actual socket cases, account/Activity recreation, authentication, and OPML import/export. `/tmp/android-cookie-bootstrap-device.log` also passes the two standalone socket cases. Their StrictMode checks report no Main disk/network violations; cancellation finishes while the fixture server still withholds headers/body. The JVM AuthViewModel fixture reaches the real coordinator and HTTP transport; only AndroidKeyStore lookup is substituted there, while the Android test uses the real encrypted SessionStore.
 
 Independent source review found no new blocker. Its two additional recommendations, stalled body and cancelled mutex waiter, pass. The waiter test also proves the synchronous adapter and suspend path share the same coordinator and permit a later refresh. No persistent schema, application network policy or configured production timeout changes. Test cleartext permission is restricted to loopback in the isolated device-test variant. Reader StrictMode journeys and physical frame comparison remain pending, so plan 037 is still IN PROGRESS.
+
+
+### Cached reader StrictMode acceptance
+
+Base `2d5a6c0` (#72). Add a scoped actual Room-to-`ReaderHtmlContent` journey to `AndroidMainThreadUiTest.kt`. Prepopulate only a uniquely named test database, then enforce Main-thread disk/network StrictMode during cache acquisition, rich-reader preparation/placement, rapid document replacement and closing while preparation is held. Use the production renderer/preparer and existing preparation gate, with no network bypass or alternate document renderer. This is a component-level correctness check alongside the existing full-app Hilt and reader tests; it is not a physical frame benchmark or heap measurement.
+
+
+The scoped reader journey passes in `/tmp/android-reader-strictmode-device.log`; all six preparation/Main-thread cases pass again after teardown hardening in `/tmp/android-reader-strictmode-final-device.log`. The test restores Main's previous StrictMode policy and closes only its named database even if UI cleanup fails. Cached first/third documents render, the superseded second document cannot publish, and closing during held preparation leaves no active renderer or late readiness callback. No Main disk/network violations were recorded.
+
+Debug and device-test lint pass in `/tmp/android-reader-strictmode-lint.log`; final device-test lint also passes after the teardown-only change in `/tmp/android-reader-strictmode-final-lint.log`. This slice changes only instrumentation and documentation. The inherited production implementation passed all 614 JVM tests, both isolated APK pairs and both isolated lint variants at `2d5a6c0`, with 30 affected device cases. Physical frame comparison is still pending in plans 033/049; it is not inferred from dispatchers or StrictMode. Plan 037's implementation and scoped correctness checks are complete, allowing dependent work to continue without marking the physical gate done.

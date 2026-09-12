@@ -16,7 +16,7 @@ These rules apply to **033–049**. Earlier branch, roadmap-wait, deployment, an
 | [034](034-android-design-and-motion-selection.md) | Select Android layout, loading, offline, and motion designs | P1 | M | none | TODO |
 | [035](035-android-session-and-request-lifecycle.md) | End account and reader sessions without accepting stale work | P1 | L | 033 | IMPLEMENTED; integrated acceptance pending |
 | [036](036-android-cache-first-and-mutation-authority.md) | Return cached content immediately and preserve the latest mutation | P1 | L | 033, 035 | DONE; scoped JVM/device/process acceptance passes, integrated gate 049 pending |
-| [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | IN PROGRESS; storage, reader and OPML slices implemented |
+| [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | IMPLEMENTED; scoped Main-thread acceptance passes, physical frame comparison pending |
 | [038](038-android-loading-and-error-lifecycle.md) | Keep loading continuous and make failures recoverable | P1 | L | 033, 034, 035, 036, 037 | TODO |
 | [039](039-android-media-and-reader-resource-lifecycle.md) | Pause inactive media and release reader resources predictably | P1 | L | 033, 035 | IMPLEMENTED; integration pending |
 | [040](040-android-reader-readiness-and-fallback.md) | Show usable reader content without placeholder loops or layout jumps | P1 | M | 033, 034, 037, 038, 039 | TODO |
