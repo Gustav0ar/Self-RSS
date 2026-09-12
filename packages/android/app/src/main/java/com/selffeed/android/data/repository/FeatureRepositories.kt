@@ -137,6 +137,11 @@ class ArticleRepositoryImpl @Inject constructor(
     private val delegate: SelfFeedRepository,
     private val access: AccountAccess,
 ) : ArticleRepository {
+    override fun observeArticleStates(articleIds: Set<String>) =
+        access.observe { delegate.observeArticleStates(articleIds) }
+    override suspend fun refreshArticleStates(articleIds: Set<String>) =
+        access.withAccount { delegate.refreshArticleStates(articleIds) }
+
     override suspend fun localArticleState(articleId: String) =
         access.withAccount { delegate.localArticleState(articleId) }
 

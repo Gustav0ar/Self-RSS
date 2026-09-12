@@ -40,6 +40,9 @@ import javax.inject.Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun countRefreshRequests(): Flow<Unit> = flowOf(Unit)
     override fun libraryCounts(): Flow<com.selffeed.android.data.repository.LibraryCounts> = emptyFlow()
+    // This fixture does not yet drive Room observation; state integration tests use the real store.
+    override fun observeArticleStates(articleIds: Set<String>): Flow<AppResult<Map<String, com.selffeed.android.data.repository.LocalArticleState>>> = emptyFlow()
+    override suspend fun refreshArticleStates(articleIds: Set<String>) = AppResult.Success(Unit)
     override suspend fun localArticleState(articleId: String) = AppResult.Success(
         com.selffeed.android.data.repository.LocalArticleState(articleReadStates[articleId], articleSavedStates[articleId]),
     )

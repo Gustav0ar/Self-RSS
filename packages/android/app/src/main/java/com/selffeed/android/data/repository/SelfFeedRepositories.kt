@@ -125,9 +125,13 @@ data class LocalArticleState(
     val pendingSavedMutationId: String? = null,
     val lastReadMutationId: String? = null,
     val lastSavedMutationId: String? = null,
+    val readRevision: Int? = null,
+    val savedRevision: Int? = null,
 )
 
 interface ArticleRepository {
+    fun observeArticleStates(articleIds: Set<String>): Flow<AppResult<Map<String, LocalArticleState>>>
+    suspend fun refreshArticleStates(articleIds: Set<String>): AppResult<Unit>
     suspend fun localArticleState(articleId: String): AppResult<LocalArticleState>
     fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
     fun observeArticleTextAvailability(articleId: String): Flow<Boolean> = emptyFlow()

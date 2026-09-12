@@ -12,6 +12,7 @@ import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.data.applyCategoryOrder
 import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.network.ArticleStateSnapshot
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
@@ -146,6 +148,43 @@ class LocalStore internal constructor(
             incoming.map { it.withVisibleCounts() }
         }
 
+    /** Every emission is one owner-filtered transaction, including inputs larger than SQLite's bind limit. */
+    fun observeArticleStates(articleIds: Set<String>, ownerId: String): Flow<Map<String, LocalArticleState>> {
+        val batches = articleIds.toList().chunked(100)
+        if (batches.isEmpty()) return flowOf(emptyMap())
+        return database.invalidationTracker.createFlow(
+            LocalTables.ARTICLE_STATE_REVISIONS, LocalTables.PENDING_READ_STATE_MUTATIONS,
+            LocalTables.PENDING_SAVED_STATE_MUTATIONS, LocalTables.ARTICLES, LocalTables.CURRENT_LOCAL_OWNER,
+        ).map {
+            database.withTransaction {
+                buildMap {
+                    batches.forEach { ids ->
+                        dao.readObservedArticleStates(ids, ownerId).forEach { put(it.articleId, it.state) }
+                    }
+                }
+            }
+        }.distinctUntilChanged().flowOn(Dispatchers.IO)
+    }
+
+    /** Merge one validated network batch atomically; pending choices remain the visible values. */
+    suspend fun reconcileArticleStates(states: List<ArticleStateSnapshot>): Set<String> = database.withTransaction {
+        buildSet {
+            states.forEach { snapshot ->
+                val state = stateRecord(snapshot.id)
+                val read = ConfirmedArticleState(state.confirmedReadState, state.readRevision)
+                val saved = ConfirmedArticleState(state.confirmedSavedState, state.savedRevision)
+                if (read.merge(snapshot.isRead, snapshot.readRevision) != read) {
+                    mergeReadState(snapshot.id, snapshot.isRead, snapshot.readRevision)
+                    add(snapshot.id)
+                }
+                if (saved.merge(snapshot.isSaved, snapshot.savedRevision) != saved) {
+                    mergeSavedState(snapshot.id, snapshot.isSaved, snapshot.savedRevision)
+                    add(snapshot.id)
+                }
+            }
+        }
+    }
+
     suspend fun readArticleState(articleId: String): LocalArticleState =
         database.withTransaction {
             val state = stateRecord(articleId)
@@ -158,6 +197,8 @@ class LocalStore internal constructor(
                 saved?.mutationId,
                 state.lastReadMutationId,
                 state.lastSavedMutationId,
+                state.readRevision,
+                state.savedRevision,
             )
         }
 
@@ -602,9 +643,13 @@ class LocalStore internal constructor(
             val current = dao.readPendingReadStateMutation(mutation.articleId) ?: return@withTransaction
             if (current.mutationId != mutation.mutationId) return@withTransaction
             val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.readRevision ?: 0)
+            // Recover legacy intent identity before rotating only the transport request ID.
+            val state = stateRecord(mutation.articleId)
+            if (state.lastReadMutationId == null) {
+                dao.upsertArticleStateRevision(state.copy(lastReadMutationId = current.mutationId))
+            }
             val rebased = current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base)
             dao.upsertPendingReadStateMutation(rebased)
-            dao.upsertArticleStateRevision(stateRecord(mutation.articleId).copy(lastReadMutationId = rebased.mutationId))
         }
     }
 
@@ -614,13 +659,17 @@ class LocalStore internal constructor(
             val current = dao.readPendingSavedStateMutation(mutation.articleId) ?: return@withTransaction
             if (current.mutationId != mutation.mutationId) return@withTransaction
             val base = maxOf(revision, current.baseRevision ?: 0, dao.readArticleStateRevision(mutation.articleId)?.savedRevision ?: 0)
+            // Recover legacy intent identity before rotating only the transport request ID.
+            val state = stateRecord(mutation.articleId)
+            if (state.lastSavedMutationId == null) {
+                dao.upsertArticleStateRevision(state.copy(lastSavedMutationId = current.mutationId))
+            }
             val rebased = current.copy(mutationId = UUID.randomUUID().toString(), baseRevision = base)
             dao.upsertPendingSavedStateMutation(rebased)
-            dao.upsertArticleStateRevision(stateRecord(mutation.articleId).copy(lastSavedMutationId = rebased.mutationId))
         }
     }
 
-    suspend fun discardReadStateMutation(mutation: PendingReadStateMutationEntity): ArticleStateMutationResult {
+    suspend fun discardReadStateMutation(mutation: PendingReadStateMutationEntity): RejectedArticleMutation? {
         val result = database.withTransaction {
             val state = stateRecord(mutation.articleId)
             val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
@@ -631,7 +680,7 @@ class LocalStore internal constructor(
                 dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
                 counts.recordLocalReadChange(mutation.countScopeJson, mutation.read, state.confirmedReadState)
             }
-            ArticleStateMutationResult(removed, state.confirmedReadState)
+            if (removed) RejectedArticleMutation(state.lastReadMutationId ?: mutation.mutationId, state.confirmedReadState) else null
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
         return result
@@ -641,7 +690,7 @@ class LocalStore internal constructor(
         dao.readArticleStateRevision(articleId)?.articleFeedId ?: dao.readArticle(articleId)?.feedId
             ?: dao.readArticleDetail(articleId)?.let { it.feedId ?: decodeDetail(it)?.feedId }
 
-    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): ArticleStateMutationResult {
+    suspend fun discardSavedStateMutation(mutation: PendingSavedStateMutationEntity): RejectedArticleMutation? {
         val result = database.withTransaction {
             val state = stateRecord(mutation.articleId)
             val removed = dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0
@@ -650,7 +699,7 @@ class LocalStore internal constructor(
                     mergeSavedState(mutation.articleId, confirmed, state.savedRevision)
                 }
             }
-            ArticleStateMutationResult(removed, state.confirmedSavedState)
+            if (removed) RejectedArticleMutation(state.lastSavedMutationId ?: mutation.mutationId, state.confirmedSavedState) else null
         }
         notifyInvalidation(TABLE_ARTICLES)
         return result

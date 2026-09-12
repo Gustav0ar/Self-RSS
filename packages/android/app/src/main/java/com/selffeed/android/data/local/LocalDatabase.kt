@@ -12,8 +12,12 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.paging.PagingSource
+import com.selffeed.android.data.repository.LocalArticleState
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.flow.Flow
+
+/** Joined projection only. It does not add a persistent schema or decode reader bodies. */
+data class LocalArticleStateRow(val articleId: String, @Embedded val state: LocalArticleState)
 
 object LocalTables {
     const val CATEGORIES = "categories"
@@ -415,6 +419,31 @@ interface LocalStoreDao {
 
     @Query("SELECT * FROM article_state_revisions WHERE articleId = :articleId LIMIT 1")
     suspend fun readArticleStateRevision(articleId: String): ArticleStateRevisionEntity?
+
+    @Query("""
+        SELECT ids.articleId,
+            COALESCE(pendingRead.read, CASE WHEN state.articleId IS NOT NULL
+                THEN state.confirmedReadState ELSE articles.isRead END) AS isRead,
+            COALESCE(pendingSaved.saved, CASE WHEN state.articleId IS NOT NULL
+                THEN state.confirmedSavedState ELSE articles.isSaved END) AS isSaved,
+            pendingRead.mutationId AS pendingReadMutationId,
+            pendingSaved.mutationId AS pendingSavedMutationId,
+            COALESCE(state.lastReadMutationId, pendingRead.mutationId) AS lastReadMutationId,
+            COALESCE(state.lastSavedMutationId, pendingSaved.mutationId) AS lastSavedMutationId,
+            state.readRevision, state.savedRevision
+        FROM (
+            SELECT articleId FROM article_state_revisions WHERE articleId IN (:articleIds)
+            UNION SELECT articleId FROM pending_read_state_mutations WHERE articleId IN (:articleIds)
+            UNION SELECT articleId FROM pending_saved_state_mutations WHERE articleId IN (:articleIds)
+            UNION SELECT id AS articleId FROM articles WHERE id IN (:articleIds)
+        ) ids
+        LEFT JOIN article_state_revisions state ON state.articleId = ids.articleId
+        LEFT JOIN pending_read_state_mutations pendingRead ON pendingRead.articleId = ids.articleId
+        LEFT JOIN pending_saved_state_mutations pendingSaved ON pendingSaved.articleId = ids.articleId
+        LEFT JOIN articles ON articles.id = ids.articleId
+        WHERE EXISTS (SELECT 1 FROM current_local_owner WHERE ownerId = :ownerId)
+    """)
+    suspend fun readObservedArticleStates(articleIds: List<String>, ownerId: String): List<LocalArticleStateRow>
 
     @Query("""
         SELECT items.id AS articleId, COALESCE(items.feedId, state.articleFeedId) AS feedId, articles.isRead AS cachedReadState,

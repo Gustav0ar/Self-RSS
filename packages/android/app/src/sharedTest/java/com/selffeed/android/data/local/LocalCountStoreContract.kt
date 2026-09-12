@@ -154,13 +154,14 @@ abstract class LocalCountStoreContract {
         assertCounts(10)
     }
 
-    @Test fun aRebasedReadRetainsTheReversibleCountScopeAndExposesItsCurrentMutationId() = runBlocking {
+    @Test fun aRebasedReadRetainsTheReversibleCountScopeAndOriginalIntentId() = runBlocking {
         seed()
         val pending = store.queueReadStateMutation(article.id, true)
         store.rebaseReadStateMutation(pending, 5, false)
         val rebased = store.readPendingReadStateMutations().single()
         assertEquals(pending.countScopeJson, rebased.countScopeJson)
-        assertEquals(rebased.mutationId, store.readArticleState(article.id).lastReadMutationId)
+        assertTrue(pending.mutationId != rebased.mutationId)
+        assertEquals(pending.mutationId, store.readArticleState(article.id).lastReadMutationId)
         store.discardReadStateMutation(rebased)
         assertCounts(10)
     }

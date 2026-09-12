@@ -10,6 +10,9 @@ internal data class ConfirmedArticleState(val value: Boolean?, val revision: Int
     }
 }
 
+/** A matching rejected delivery identifies the original local choice even after transport retries. */
+data class RejectedArticleMutation(val mutationId: String, val effectiveState: Boolean?)
+
 /** Removing an outbox entry and learning server state are independent facts. */
 data class ArticleStateMutationResult(
     val removedMatchingIntent: Boolean,

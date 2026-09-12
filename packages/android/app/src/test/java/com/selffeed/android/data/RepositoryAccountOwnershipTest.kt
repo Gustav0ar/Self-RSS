@@ -163,6 +163,50 @@ class RepositoryAccountOwnershipTest {
     }
 
     @Test
+    fun `state observation is cancelled on replacement and cold old features cannot read new rows`() = runBlocking<Unit> {
+        val repository = repository(mockk(relaxed = true))
+        repository.prepareSession()
+        val feature = ArticleRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
+        val values = kotlinx.coroutines.channels.Channel<AppResult<Map<String, com.selffeed.android.data.repository.LocalArticleState>>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val observing = launch { feature.observeArticleStates(setOf("same-id")).collect { values.send(it) } }
+        withTimeout(5_000) { assertEquals(AppResult.Success(emptyMap<String, com.selffeed.android.data.repository.LocalArticleState>()), values.receive()) }
+        assertTrue(repository.setApiBaseUrl("replacement.example") is AppResult.Success)
+        observing.join()
+        assertTrue(observing.isCancelled)
+        local.reconcileArticleStates(listOf(com.selffeed.android.network.ArticleStateSnapshot("same-id", true, true, 8, 8)))
+        val oldCollection = async { feature.observeArticleStates(setOf("same-id")).first() }
+        oldCollection.join()
+        assertTrue(oldCollection.isCancelled)
+        assertTrue(values.tryReceive().isFailure)
+        values.close()
+    }
+
+    @Test
+    fun `account replacement cancels a lookup before commit or the next batch`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        val feature = ArticleRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { api.articleStates(any(), session = any()) } coAnswers {
+            val ids = firstArg<com.selffeed.android.network.ArticleStateLookupRequest>().articleIds
+            withContext(NonCancellable) { started.complete(Unit); release.await() }
+            ApiEnvelope(com.selffeed.android.network.ArticleStateLookupResponse(
+                ids.map { com.selffeed.android.network.ArticleStateSnapshot(it, true, true, 8, 8) }, emptyList(),
+            ))
+        }
+        val refreshing = async { feature.refreshArticleStates((0 until 205).map { "article-$it" }.toSet()) }
+        withTimeout(5_000) { started.await() }
+        assertTrue(repository.setApiBaseUrl("replacement.example") is AppResult.Success)
+        release.complete(Unit)
+        withTimeout(5_000) { refreshing.join() }
+        assertTrue(refreshing.isCancelled)
+        assertNull(database.localStoreDao().readArticleStateRevision("article-0"))
+        coVerify(exactly = 1) { api.articleStates(any(), session = any()) }
+    }
+
+    @Test
     fun `offline restore admits the original owner without renewing its lease`() = runBlocking {
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
