@@ -19,22 +19,32 @@ Combining PR #47 exposed existing mock JS/CSS lint errors. Formatting, statement
 
 All 28 GitHub review records were inspected, including discussion and inline threads. Each has only a Copilot quota notice; there are no inline findings or unresolved threads. This is not automated-review approval. Main's ruleset requires one approving GitHub review and provides an administrator bypass. A normal merge of #46 at verified head `3fedeb14ce7e9010a6ab424727e4afcbcd4e9a03` was rejected by GitHub's branch policy. Gustavo then confirmed merging in response to the explicit administrator-override question. The existing override is authorized for this reviewed stack. Protection rules and production approvals remain unchanged.
 
+## Post-merge corrections
+
+The first merged Android run `34707188916` exposed a Compose fixture threading defect. Its legacy unconfined test dispatcher resumed a reader effect on a preparation worker, causing wrong-thread view access. PR #74 uses the queued v2 Compose rule factories already available in Compose 1.11.2 across JVM and device fixtures. The focused return-thread test fails deterministically with the legacy rule and passes with the queued rule. Existing content assertions now await visible asynchronous content. All 615 local JVM cases, both isolated APK pairs, device/performance lint and all 132 API 35 device cases pass. Production Android source, background preparation and dependencies are unchanged.
+
+Two local JBR 21 C2 compiler crashes occurred while compiling Robolectric SQLite code. Reports remain in `/tmp/android-postmerge-jbr-crashes`. A temporary local Gradle init script selected installed Temurin 17 for test workers; the daemon remains JBR 21 and repository JVM settings are unchanged. Hosted CI validates the default repository runtime. No compiler or test assertion was disabled.
+
+Repository CI `34707234196` also found a registration 500 while an ingestion worker wrote SQLite. A two-connection test reproduces `SQLITE_BUSY_SNAPSHOT` when registration upgrades its deferred validation snapshot. PR #75 reserves the writer before validation using an immediate transaction. The regression verifies registration, preferences, role selection and the other writer's success after commit. All 144 API integration cases, 734 API unit cases, types and repository lint pass. API schema and migration files are unchanged.
+
+The final integration includes #74 and #75 before #47. Their required checks and final merge commits are linked from [PR #47](https://github.com/Gustav0ar/Self-RSS/pull/47).
+
 ## Data migration contract
 
 Android Room advances from version 7 on the original main branch to version 10. Forward migrations and exported schemas are committed for 8, 9 and 10. The production registry includes every supported upgrade path. The direct 6-to-8 path retains historical offline pins before applying the existing version-7 repair. Version-8 and version-9 upgrades retain cached payload bytes, queued mutation IDs and existing ownership metadata. Session preference schema 1 adds persistent ownership without rewriting existing encrypted credentials or queued events.
 
-The shared migration contract checks populated upgrades from versions 1 through 9, both historical version-6 layouts, clean creation, reopening, and the actual production migration registry. JVM migration checks pass as part of the complete 614-case suite. The same migration contract passes on real API 35 Android SQLite in the complete 132-case device run. No destructive fallback or production database clearing is added. API schema and Drizzle migration files are unchanged by this stack; API tests use temporary SQLite files and disposable loopback Redis.
+The shared migration contract checks populated upgrades from versions 1 through 9, both historical version-6 layouts, clean creation, reopening, and the actual production migration registry. JVM migration checks pass as part of the complete 615-case suite. The same migration contract passes on real API 35 Android SQLite in the complete 132-case device run. No destructive fallback or production database clearing is added. API schema and Drizzle migration files are unchanged by this stack; API tests use temporary SQLite files and disposable loopback Redis.
 
 ## Verification
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Android JVM suite | 614 passed again after both fixture corrections, zero failures or skips | `/tmp/android-premerge-combined-final-unit.log` and Gradle XML reports |
+| Android JVM suite | 615 passed after the queued-dispatch fixture correction, zero failures or skips | `/tmp/android-postmerge-dispatch-temurin-verified.log` and Gradle XML reports |
 | Isolated device and minified performance APK pairs | Passed | `/tmp/android-premerge-final-build.log` |
-| Complete API 35 device suite | 132 passed, zero failures or skips | `/tmp/android-premerge-full-device.log` |
+| Complete API 35 device suite | 132 passed, zero failures or skips | `/tmp/android-postmerge-dispatch-device.log` |
 | External process recovery | Both cases passed | `/tmp/android-premerge-process.log` |
 | Android lint | Debug, device-test and minified performance variants passed | `/tmp/android-premerge-final-lint.log` |
-| API integration | 143 passed, zero failures | `/tmp/android-premerge-api-integration.log` |
+| API integration | 144 passed, zero failures | `/tmp/registration-contention-integration.log` |
 | API unit | 734 passed | `/tmp/android-premerge-web-api-unit.log` |
 | Web unit | 403 passed | `/tmp/android-premerge-web-api-unit.log` |
 | Repository lint and architecture | Passed | `/tmp/android-premerge-repo-lint.log` |
@@ -84,6 +94,8 @@ The roadmap and all 26 implementation/testing PRs are merged into main in depend
 | [#71](https://github.com/Gustav0ar/Self-RSS/pull/71) | `a87b9ade` | `a12e57b0ceb76befae2bd34aa4ef2d8187935211` |
 | [#72](https://github.com/Gustav0ar/Self-RSS/pull/72) | `fea614cb` | `b524e07dcb1bececed81fe21671e69ac6dafa317` |
 | [#73](https://github.com/Gustav0ar/Self-RSS/pull/73) | `76793558` | `a0279a638f9fbb6772dfb702e7d7b60e53735bf1` |
+| [#74](https://github.com/Gustav0ar/Self-RSS/pull/74) | `0c0551bc` | Recorded in PR #47 |
+| [#75](https://github.com/Gustav0ar/Self-RSS/pull/75) | `29209080` | Recorded in PR #47 |
 | [#47](https://github.com/Gustav0ar/Self-RSS/pull/47) | Final documentation integration | Recorded in PR #47 |
 
-PR #69 receives the restoration correction as `aa53fa9` and the outbox assertion correction as `04131a1`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-final-unit.log`. PRs #70–73 are rebased on that correction. Their production package tree matches the combined candidate tested locally. The only package difference from `f394bd4` is the outbox assertion correction in `RssRepositoryTest.kt`. No production code or persistent schema changed during this further review. Fresh PR CI runs are #69 `34703984314`, #70 `34703984051`, #71 `34703982996`, #72 `34703984308` and #73 `34703983630`. Four duplicate runs caused by simultaneous stacked base/head updates were cancelled; each branch retains its complete fresh run. All required jobs in those runs passed before merging. The baseline-profile job is intentionally conditional and was skipped; physical performance acceptance remains open.
+PR #69 receives the restoration correction as `aa53fa9` and the outbox assertion correction as `04131a1`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-final-unit.log`. PRs #70–73 are rebased on that correction. Their production package tree matches the combined candidate tested locally. The only package difference from `f394bd4` is the outbox assertion correction in `RssRepositoryTest.kt`. The initial review changed no production code or persistent schema. The later registration transaction correction changes locking behavior without changing schema. Fresh PR CI runs are #69 `34703984314`, #70 `34703984051`, #71 `34703982996`, #72 `34703984308` and #73 `34703983630`. Four duplicate runs caused by simultaneous stacked base/head updates were cancelled; each branch retains its complete fresh run. All required jobs in those runs passed before merging. The baseline-profile job is intentionally conditional and was skipped; physical performance acceptance remains open.
