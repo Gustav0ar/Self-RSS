@@ -193,9 +193,14 @@ class AuthFlowUiTest {
 
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
-        composeRule.onNodeWithText("Continue").performClick()
+        composeRule.onNodeWithText("Continue")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
 
-        assert(capturedServers.last() == "rss.example.test") { "Blank server field should submit configured server" }
+        composeRule.runOnIdle {
+            assertEquals(listOf("rss.example.test"), capturedServers)
+        }
     }
 
     @Test
