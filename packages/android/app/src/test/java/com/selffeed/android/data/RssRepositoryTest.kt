@@ -128,7 +128,7 @@ class RssRepositoryTest {
 
     @Test
     fun `login response after logout cannot restore the access token`() = runTest {
-        val session = ApiSession(0, "rss.example.com")
+        val session = ApiSession(0, "rss.example.com", "test-owner")
         val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.AuthResponse>>()
         coEvery { sessionStore.beginAuthentication() } returns session
         coEvery { sessionStore.setAccessTokenIfCurrent(session, any()) } returns false
@@ -403,9 +403,13 @@ class RssRepositoryTest {
                 placeholdersEnabled = false,
             ),
         )
+        val invalidated = CompletableDeferred<Unit>()
+        pagingSource.registerInvalidatedCallback { invalidated.complete(Unit) }
         repository.updateCachedReadState(articleId, read = true)
         repository.invalidateReadStateCaches(articleId)
 
+        // Room notifies Paging from its executor after the transaction commits.
+        withContext(Dispatchers.Default) { withTimeout(5_000) { invalidated.await() } }
         assertEquals(true, pagingSource.invalid)
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         val page = localStore.articlePagingSource(queryKey).load(

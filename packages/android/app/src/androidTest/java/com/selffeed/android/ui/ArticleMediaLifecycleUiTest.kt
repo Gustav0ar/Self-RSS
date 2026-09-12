@@ -26,6 +26,7 @@ import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.ReaderWebView
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -105,7 +106,7 @@ class ArticleMediaLifecycleUiTest {
         val reader = mediaReader(fixture)
         val orientation = composeRule.activity.requestedOrientation
         play(reader)
-        tapDocumentButton(reader, "document.getElementById('fixture-media').requestFullscreen()")
+        tapDocumentButton(reader, "document.getElementById('fixture-media').requestFullscreen()", fullscreen = true)
         composeRule.waitUntil(5_000) { javascript(reader, "!!document.fullscreenElement") == "true" }
         composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
         composeRule.waitUntil(3_000) { paused(reader) }
@@ -202,17 +203,41 @@ class ArticleMediaLifecycleUiTest {
 
     private fun paused(view: WebView): Boolean = javascript(view, "document.getElementById('fixture-media').paused") == "true"
 
-    private fun tapDocumentButton(view: WebView, action: String) {
+    private fun tapDocumentButton(view: WebView, action: String, fullscreen: Boolean = false) {
+        val id = if (fullscreen) "fixture-fullscreen" else "fixture-play"
+        val position = if (fullscreen) "right:0" else "left:0"
         javascript(view, """
-            document.getElementById('fixture-action')?.remove();
-            var button = document.createElement('button');
-            button.id = 'fixture-action';
+            var button = document.getElementById('$id') || document.createElement('button');
+            button.id = '$id';
             button.textContent = 'Local media action';
-            button.style.cssText = 'position:fixed;top:0;left:0;width:160px;height:48px;z-index:2147483647';
-            button.onclick = function() { $action; };
+            button.style.cssText = 'position:fixed;top:0;$position;width:40%;height:48px;box-sizing:border-box;padding:0;z-index:2147483647';
+            window.fixtureGesture = { clicked: false, completed: false, error: null };
+            button.onclick = function() {
+                window.fixtureGesture.clicked = true;
+                try {
+                    Promise.resolve($action)
+                        .then(function() { window.fixtureGesture.completed = true; })
+                        .catch(function(error) { window.fixtureGesture.error = String(error); });
+                } catch (error) { window.fixtureGesture.error = String(error); }
+            };
             document.body.prepend(button);
         """.trimIndent())
-        val point = JSONArray(javascript(view, "(function(){var r=document.getElementById('fixture-action').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()"))
+        composeRule.waitForIdle()
+        val painted = CountDownLatch(1)
+        composeRule.runOnUiThread {
+            view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) { painted.countDown() }
+            })
+        }
+        check(painted.await(5, TimeUnit.SECONDS)) { "Media action was not drawn by Chromium" }
+        val bounds = JSONArray(javascript(view, "(function(){var r=document.getElementById('$id').getBoundingClientRect();return [r.left,r.top,r.right,r.bottom,innerWidth,innerHeight]})()"))
+        assertTrue("Media action overflows the viewport: $bounds", bounds.getDouble(0) >= 0 && bounds.getDouble(1) >= 0 &&
+            bounds.getDouble(2) <= bounds.getDouble(4) && bounds.getDouble(3) <= bounds.getDouble(5))
+        val point = JSONArray().put((bounds.getDouble(0) + bounds.getDouble(2)) / 2)
+            .put((bounds.getDouble(1) + bounds.getDouble(3)) / 2)
+        assertEquals("Media gesture target is obscured", "\"$id\"", javascript(
+            view, "document.elementFromPoint(${point.getDouble(0)}, ${point.getDouble(1)}).id",
+        ))
         val location = IntArray(2)
         composeRule.runOnUiThread { view.getLocationOnScreen(location) }
         val density = composeRule.activity.resources.displayMetrics.density
@@ -222,6 +247,19 @@ class ArticleMediaLifecycleUiTest {
         for (actionType in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
             val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), actionType, x, y, 0)
             try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event) } finally { event.recycle() }
+        }
+        try {
+            composeRule.waitUntil(5_000) {
+                val gesture = JSONObject(javascript(view, "window.fixtureGesture"))
+                check(gesture.isNull("error")) { "Media action rejected: ${gesture.getString("error")}" }
+                gesture.getBoolean("completed")
+            }
+        } catch (failure: Exception) {
+            throw AssertionError(
+                "Media gesture $id: ${javascript(view, "window.fixtureGesture")}, " +
+                    "released=${(view as? ReaderWebView)?.released}, activity=${composeRule.activity}",
+                failure,
+            )
         }
     }
 

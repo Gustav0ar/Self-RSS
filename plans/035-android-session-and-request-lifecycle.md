@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IN PROGRESS; reader request ownership implemented, account and foreground boundaries pending
+- Status: IN PROGRESS; reader request ownership and durable session ID implemented, repository/account storage and foreground boundaries pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -111,6 +111,9 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/test/java/com/selffeed/android/network/NetworkModuleTest.kt`
 - `packages/android/app/src/androidTest/java/com/selffeed/android/ui/AndroidSessionLifecycleUiTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/data/SessionStoreTest.kt`
+- `packages/android/app/src/androidTest/java/com/selffeed/android/data/SessionOwnerMigrationDeviceTest.kt`
+- `packages/android/app/src/performanceTest/java/com/selffeed/android/RecoveryFixtureActivity.kt`
+- `packages/android/macrobenchmark/src/main/java/com/selffeed/android/macrobenchmark/AndroidProcessHarnessTest.kt`
 - This plan and its row in `plans/README.md`.
 
 Keep API/web production behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
@@ -165,7 +168,7 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 - [ ] Foreground subscriptions/polling stop while hidden and resume once; durable queued writes remain intact during ordinary backgrounding.
 - [ ] Existing auth, offline lease, paging, and fast-swipe tests remain green.
 - [ ] An old request cannot dispatch or retry with a replacement account's credentials or replacement server identity; a delayed 401 cannot sign out or authenticate as the new session.
-- [ ] A durable owner survives token refresh and process restart, changes at real account/server/session replacement, and is adopted by existing sessions without data loss.
+- [x] A durable owner survives token refresh and process restart, changes at real account/server/session replacement, and is adopted by existing sessions without data loss.
 - [ ] The targeted JVM tests, required device tests, and isolated lint/build commands above pass. Add new assertions to the named existing test classes or explicitly listed new classes, using real Room/WebView behavior where that is the affected boundary.
 - [ ] Record the failing command and symptom, passing command, tested commit, and artifact location. Performance claims include the device and configuration. Keep personal data and credentials out of artifacts.
 - [ ] `git diff --check` passes and scope review finds no unrelated changes.
@@ -192,3 +195,12 @@ Every new account-scoped repository write must join the same owner. Treat server
 - Design selection: pending where applicable
 - Remaining limitations: repository logical request ownership, atomic Room/cache commit fencing, durable account ownership, all-feature logout reset and foreground polling are still pending. No zero-leak or physical performance claim is made by this slice.
 - Account-storage dependency found during implementation: current `LocalStore.clearAll()` deletes pending user mutations. The account boundary must first add an explicit Room migration preserving old queues under their previous durable owner and prevent ordinary drains from reading those archived rows. Add `data/local/` and its migration tests to this plan's allowed scope for that prerequisite. Reconcile separate DataStore/Room commits after process death before cache reads or draining. This remains an implementation requirement, not a completed feature.
+
+### Durable owner prerequisite
+
+- Implemented a versioned DataStore 0 → 1 adoption that adds a non-secret owner UUID while preserving existing values. ApiSession checks include the durable owner. Token refresh keeps it; login/register attempts, server replacement and logout rotate it.
+- Preload joins the existing session mutation mutex. Uninitialized requests are rejected, and their provisional identity cannot gain authority when existing credentials are loaded. A controlled overlapping preload/logout test covers matching durable and memory state.
+- `SessionOwnerMigrationDeviceTest` reopens a legacy-format file containing real AndroidKeyStore ciphertext, checks exact preservation of the previous values, rotates the token, and reopens it again. The external process harness verifies a stable owner and restored credential after actual process death alongside the Room/task fixture.
+- This prerequisite does not yet bind Room rows or repository logical retries to that owner. Those remain required before this plan is complete. DataStore schema is version 1; Room remains version 7 until its separate forward migration.
+- Owner prerequisite verification: 438 JVM tests, lint and both isolated APK pairs pass. Device migration and external process recovery pass on API 36.1/WebView 134.0.6998.135; logs are `/tmp/android-session-owner-{final-build,lint-final,device-final,process-final}.log`. The owner initialized before preload was rejected after a reproduced independent-review finding. Plan 035 remains incomplete until the account/Room/request and foreground portions land.
+- Both historical session paths are exercised on the device: actual `EncryptedSharedPreferences` → owned DataStore, and valid encrypted unversioned DataStore → version 1. Synthetic fixture cleanup is confined to the dedicated device-test package.

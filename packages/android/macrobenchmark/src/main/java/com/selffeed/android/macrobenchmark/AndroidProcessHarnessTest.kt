@@ -42,6 +42,8 @@ class AndroidProcessHarnessTest {
         val ready = device.wait(Until.hasObject(By.text(nonce)), 15_000)
         val hierarchy = if (ready) "" else ByteArrayOutputStream().also(device::dumpWindowHierarchy).toString()
         assertTrue("Initial Room fixture was not displayed: $hierarchy", ready)
+        val sessionOwner = device.findObject(By.textStartsWith("Owner: ")).text
+        UUID.fromString(sessionOwner.removePrefix("Owner: "))
         device.findObject(By.text("Confirm fixture")).click()
         assertTrue(device.wait(Until.hasObject(By.text("Fixture confirmed")), 5_000))
         val oldPid = device.executeShellCommand("pidof $target").trim()
@@ -62,9 +64,10 @@ class AndroidProcessHarnessTest {
         assertTrue(device.wait(Until.hasObject(By.text("Restored process")), 15_000))
         assertTrue(device.wait(Until.hasObject(By.text("Fixture confirmed")), 5_000))
         assertTrue(device.hasObject(By.text(nonce)))
+        assertTrue("Session owner changed across process death", device.hasObject(By.text(sessionOwner)))
         val newPid = device.executeShellCommand("pidof $target").trim()
         assertTrue(newPid.isNotEmpty())
         assertNotEquals(oldPid, newPid)
-        Log.i("AndroidReview", "Room and task restored: target $oldPid -> $newPid; runner ${Process.myPid()}")
+        Log.i("AndroidReview", "Room, session owner and task restored: target $oldPid -> $newPid; runner ${Process.myPid()}")
     }
 }
