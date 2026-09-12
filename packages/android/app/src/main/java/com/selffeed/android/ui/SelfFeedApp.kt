@@ -1,5 +1,7 @@
 package com.selffeed.android.ui
 
+import android.net.Uri
+
 import com.selffeed.android.ui.articles.withArticleFlags
 
 import com.selffeed.android.data.CategoryMoveDirection
@@ -146,9 +148,10 @@ data class SelfFeedAppActions(
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
     val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},
-    val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
+    val onImportOpml: (Uri) -> Unit = {},
     val onExportOpml: () -> Unit = {},
     val onDismissImportSummary: () -> Unit = {},
+    val onDismissImportReadError: () -> Unit = {},
     val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
     val onCancelFeedReplacement: (String) -> Unit = {},
     val onConsumeExternalFeed: () -> Unit = {},
@@ -338,6 +341,7 @@ fun SelfFeedApp(
         selectedFeedId,
         state.feeds.loading,
         state.feeds.lastImportSummary,
+        state.feeds.importReadError,
         state.feeds.reorderingCategories,
         state.feeds.syncStatus,
         state.feeds.lifecycleActionFeedId,
@@ -356,6 +360,7 @@ fun SelfFeedApp(
             loading = state.feeds.loading,
             reorderingCategories = state.feeds.reorderingCategories,
             lastImportSummary = state.feeds.lastImportSummary,
+            importReadError = state.feeds.importReadError,
             syncStatus = state.feeds.syncStatus,
             lifecycleActionFeedId = state.feeds.lifecycleActionFeedId,
             externalFeedUrl = state.feeds.externalFeedUrl,
@@ -466,6 +471,7 @@ fun SelfFeedApp(
             onImportOpml = actions.onImportOpml,
             onExportOpml = actions.onExportOpml,
             onDismissImportSummary = actions.onDismissImportSummary,
+            onDismissImportReadError = actions.onDismissImportReadError,
             onSelectDiscoveryCandidate = actions.onSelectDiscoveryCandidate,
             onCancelFeedReplacement = actions.onCancelFeedReplacement,
             onConsumeExternalFeed = actions.onConsumeExternalFeed,

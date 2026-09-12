@@ -371,6 +371,7 @@ private fun AuthenticatedAppRoute(
                 onImportOpml = feedsViewModel::importOpml,
                 onExportOpml = feedsViewModel::exportOpml,
                 onDismissImportSummary = feedsViewModel::dismissImportSummary,
+                onDismissImportReadError = feedsViewModel::dismissImportReadError,
                 onSelectDiscoveryCandidate = feedsViewModel::selectDiscoveryCandidate,
                 onCancelFeedReplacement = feedsViewModel::cancelFeedReplacement,
                 onConsumeExternalFeed = feedsViewModel::consumeExternalFeed,

@@ -271,7 +271,7 @@ class RssRepositoryTest {
             com.selffeed.android.network.CategoryTreeResponse(listOf(storedCategory), totalUnread = 2),
         )
         coEvery { api.feeds(any(), any()) } returns com.selffeed.android.network.ApiEnvelope(listOf(storedFeed))
-        val model = FeedsViewModel(repository)
+        val model = FeedsViewModel(repository, mockk())
         model.refreshCategories()
         model.refreshFeedHealth()
         val counts = backgroundScope.launch { model.observeLibraryCounts() }
