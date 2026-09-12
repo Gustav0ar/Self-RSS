@@ -2,9 +2,11 @@ package com.selffeed.android.ui.components
 
 import android.view.View
 import android.view.ViewGroup
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,7 +14,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.onAllNodesWithTag
 import com.selffeed.android.network.ArticleDetail
@@ -25,11 +27,33 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class ReaderSessionRestorationTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun `reader effects return to Main after background preparation`() {
+        val gate = ReaderPreparationGate().apply { pause() }
+        val preparer = ReaderContentPreparer(gate)
+        val resumedThread = AtomicReference<Thread>()
+        composeRule.setContent {
+            LaunchedEffect(Unit) {
+                preparer.text(null, "Prepared article", null)
+                resumedThread.set(Thread.currentThread())
+            }
+        }
+        try {
+            composeRule.waitUntil(5_000) { gate.pendingCount > 0 }
+            gate.release()
+            composeRule.waitUntil(5_000) {
+                composeRule.runOnIdle { resumedThread.get() != null }
+            }
+            assertEquals(Looper.getMainLooper().thread, resumedThread.get())
+        } finally { gate.release() }
+    }
 
     @Test
     fun `reader scroll survives recreation while authentication and Room delay navigation composition`() {
