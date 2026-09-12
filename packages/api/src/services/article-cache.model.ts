@@ -1,4 +1,3 @@
-import { CacheKeys } from '../db/redis.js';
 import type { ArticleRepository } from '../repositories/article.repository.js';
 import { encodeArticleCursor } from '../utils/article-cursor.js';
 import type { MetricsService } from './metrics.service.js';
@@ -39,10 +38,6 @@ export interface ArticleListCacheMeta {
 }
 
 export type CacheMetrics = Pick<MetricsService, 'recordCacheHit' | 'recordCacheMiss'>;
-
-export function isArticleListCacheKey(userId: string, key: string): boolean {
-	return key === CacheKeys.articleListCache(userId) || key.startsWith(`articles:list:${userId}:`);
-}
 
 export function cacheMetricType(options: { feedId?: string; categoryId?: string }): string {
 	if (options.feedId) return 'article_list_feed';

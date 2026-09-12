@@ -21,6 +21,8 @@ export interface RawSearchRow {
 	feedFaviconUrl: string | null;
 	isRead: number | boolean;
 	isSaved: number | boolean;
+	readRevision: number;
+	savedRevision: number;
 	ftsRank: number;
 	contentStatus: string;
 	contentVersion: number;
@@ -40,6 +42,8 @@ export interface SearchRow {
 	feedFaviconUrl: string | null;
 	isRead: boolean;
 	isSaved: boolean;
+	readRevision: number;
+	savedRevision: number;
 	ftsRank: number;
 	contentStatus: string;
 	contentVersion: number;

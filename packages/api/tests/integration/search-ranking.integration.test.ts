@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as schema from '../../src/db/schema.js';
 import { ArticleRepository } from '../../src/repositories/article.repository.js';
+import { cacheableArticleRows } from '../../src/services/article-cache.model.js';
 import { encodeArticleCursor } from '../../src/utils/article-cursor.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -329,5 +330,76 @@ describe('ArticleRepository searchByScope with FTS', () => {
 		);
 
 		expect(results.map((result) => result.id)).toEqual(['e0000000-0000-0000-0000-000000000001']);
+	});
+});
+
+describe('ArticleRepository state snapshots', () => {
+	it('returns matching flags and revisions through list, detail and both search paths', async () => {
+		const { sqlite, repo, now } = await setupTestDatabase();
+		const articleId = 'f0000000-0000-0000-0000-000000000001';
+		insertArticle(sqlite, {
+			id: articleId,
+			title: 'Snapshot',
+			contentText: 'Snapshot body',
+			publishedAt: now,
+		});
+
+		const snapshots = async () => [
+			...(await repo.findByFeeds('user-1', ['feed-1'], { limit: 10 })),
+			...(await repo.findByScope({ userId: 'user-1', categoryId: 'cat-root' }, { limit: 10 })),
+			await repo.findDetailForUser('user-1', articleId),
+			...(await repo.search('user-1', 'snapshot', ['feed-1'], 10)),
+			...(await repo.searchByScope({ userId: 'user-1', categoryId: 'cat-root' }, 'snapshot', 10)),
+		];
+		for (const row of await snapshots()) {
+			expect(row).toMatchObject({
+				id: articleId,
+				isRead: expect.anything(),
+				isSaved: expect.anything(),
+				readRevision: 0,
+				savedRevision: 0,
+			});
+		}
+		await repo.setReadState('user-1', articleId, true, 'manual');
+		await repo.setReadState('user-1', articleId, false, 'manual');
+		await repo.setSavedState('user-1', articleId, true);
+		const rows = await snapshots();
+		const warmed = cacheableArticleRows(
+			await repo.findByFeeds('user-1', ['feed-1'], { limit: 10 }),
+		);
+		expect(warmed.articles[0]).toMatchObject({ isRead: false, isSaved: true });
+		expect(warmed.articles[0]).not.toHaveProperty('readRevision');
+		expect(warmed.articles[0]).not.toHaveProperty('savedRevision');
+		expect(rows).toHaveLength(5);
+		for (const row of rows) {
+			expect(row).toMatchObject({ readRevision: 2, savedRevision: 1 });
+			expect(Boolean(row?.isRead)).toBe(false);
+			expect(Boolean(row?.isSaved)).toBe(true);
+		}
+		await repo.markAllRead('user-1', ['feed-1']);
+		for (const row of await snapshots()) {
+			expect(row).toMatchObject({ readRevision: 3, savedRevision: 1 });
+			expect(Boolean(row?.isRead)).toBe(true);
+		}
+	});
+
+	it("does not join another user's state revision", async () => {
+		const { sqlite, repo, now } = await setupTestDatabase();
+		insertArticle(sqlite, {
+			id: 'snapshot-owned',
+			title: 'Snapshot',
+			contentText: 'Snapshot body',
+			publishedAt: now,
+		});
+		sqlite
+			.query(
+				'INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+			)
+			.run('user-2', 'other@example.com', 'hash', now, now);
+		await repo.setSavedState('user-2', 'snapshot-owned', true);
+		const own = await repo.findDetailForUser('user-1', 'snapshot-owned');
+		expect(own).toMatchObject({ readRevision: 0, savedRevision: 0 });
+		expect(Boolean(own?.isSaved)).toBe(false);
+		expect(await repo.findDetailForUser('user-2', 'snapshot-owned')).toBeNull();
 	});
 });

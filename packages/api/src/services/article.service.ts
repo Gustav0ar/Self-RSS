@@ -32,6 +32,10 @@ type ArticleDetailResponse = Omit<
 	isEnriched: boolean;
 };
 
+// Older API processes share these caches and can patch flags without revisions.
+// Keep revision metadata only in responses assembled with current SQLite state.
+type CachedArticleDetail = Omit<ArticleDetailResponse, 'readRevision' | 'savedRevision'>;
+
 type CacheMetrics = Pick<MetricsService, 'recordCacheHit' | 'recordCacheMiss'>;
 
 export class ArticleService {
@@ -97,11 +101,23 @@ export class ArticleService {
 				limit,
 			});
 			if (cached) {
-				return {
-					data: cached.articles,
-					cursor: cached.cursor,
-					hasMore: cached.hasMore,
-				};
+				const states = new Map(
+					(
+						await this.articleRepo.findStatesForUser(
+							userId,
+							cached.articles.map((article) => article.id),
+						)
+					).map((state) => [state.id, state]),
+				);
+				const data = cached.articles.flatMap((article) => {
+					const state = states.get(article.id);
+					return state ? [{ ...article, ...state }] : [];
+				});
+				// A removed or no-longer-owned row invalidates this page boundary.
+				// Fall through to scoped SQL so pagination can fill it correctly.
+				if (data.length === cached.articles.length) {
+					return { data, cursor: cached.cursor, hasMore: cached.hasMore };
+				}
 			}
 		}
 
@@ -136,6 +152,8 @@ export class ArticleService {
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: Boolean(a.isRead),
 			isSaved: Boolean(a.isSaved),
+			readRevision: a.readRevision,
+			savedRevision: a.savedRevision,
 			contentStatus: a.contentStatus,
 			contentVersion: a.contentVersion,
 		}));
@@ -153,29 +171,25 @@ export class ArticleService {
 	}
 
 	async getArticle(userId: string, articleId: string): Promise<ArticleDetailResponse> {
-		// Cache hit path: Redis lookup keyed by userId+articleId. The key
-		// namespace already enforces ownership (you can only read articles
-		// that are in your own namespace), so a hit is safe to return
-		// without a DB ownership check.
+		// Redis caches content. SQLite supplies current state and ownership even
+		// when a warmer, another API process, or a bulk mutation changed the flags.
 		const cacheKey = CacheKeys.articleDetail(userId, articleId);
 		const cached = await this.redis.get(cacheKey);
 		if (cached) {
+			let parsed: CachedArticleDetail | undefined;
 			try {
-				const parsed = JSON.parse(cached) as ArticleDetailResponse;
-				this.cacheMetrics?.recordCacheHit('article_detail');
-				return {
-					...parsed,
-					isRead: Boolean(parsed.isRead),
-					isSaved: Boolean(parsed.isSaved),
-				};
+				parsed = JSON.parse(cached) as CachedArticleDetail;
 			} catch {
-				// Corrupt cache entry — fall through to the DB.
 				await this.redis.del(cacheKey);
-				this.cacheMetrics?.recordCacheMiss('article_detail');
 			}
-		} else {
-			this.cacheMetrics?.recordCacheMiss('article_detail');
+			if (parsed) {
+				const [state] = await this.articleRepo.findStatesForUser(userId, [articleId]);
+				if (!state) throw AppError.notFound('Article not found');
+				this.cacheMetrics?.recordCacheHit('article_detail');
+				return { ...parsed, ...state };
+			}
 		}
+		this.cacheMetrics?.recordCacheMiss('article_detail');
 
 		const article = await this.articleRepo.findDetailForUser(userId, articleId);
 		if (!article) throw AppError.notFound('Article not found');
@@ -194,10 +208,13 @@ export class ArticleService {
 
 		// Populate the cache for next time. Fire-and-forget — a cache
 		// write failure must not fail the request.
-		this.redis.setex(cacheKey, CacheTTL.articleDetail, JSON.stringify(response)).catch((err) => {
-			// Best-effort cache write. Log and continue.
-			void err;
-		});
+		const { readRevision: _read, savedRevision: _saved, ...cachePayload } = response;
+		this.redis
+			.setex(cacheKey, CacheTTL.articleDetail, JSON.stringify(cachePayload))
+			.catch((err) => {
+				// Best-effort cache write. Log and continue.
+				void err;
+			});
 
 		return response;
 	}
@@ -216,12 +233,6 @@ export class ArticleService {
 		const mutation = await this.articleRepo.setReadState(userId, articleId, read, source, options);
 
 		if (mutation.changed) {
-			// The list-cache patch can scan every scoped cache key for this
-			// user, so run it as best-effort background work. The small
-			// invalidations and event fan-out are settled before the route
-			// returns, but failures after the SQLite commit are never exposed as
-			// mutation failures.
-			this.patchCachedReadState(userId, articleId, mutation.state);
 			await this.settlePostCommit('article read state', [
 				this.invalidateUnreadCache(userId, [article.feedId]),
 				this.invalidateArticleDetailCache(userId, articleId),
@@ -262,7 +273,6 @@ export class ArticleService {
 
 		const mutation = await this.articleRepo.setSavedState(userId, articleId, saved, options);
 		if (mutation.changed) {
-			this.patchCachedSavedState(userId, articleId, mutation.state);
 			await this.settlePostCommit('article saved state', [
 				this.invalidateArticleDetailCache(userId, articleId),
 				mutation.state
@@ -314,28 +324,6 @@ export class ArticleService {
 		} catch {
 			// Best-effort. Stale entries expire on their own via the
 			// 5-minute TTL.
-		}
-	}
-
-	private patchCachedReadState(userId: string, articleId: string, read: boolean): void {
-		try {
-			void this.articleCache?.updateCachedReadState(userId, articleId, read).catch(() => {
-				// Best-effort. The client performs an optimistic update and the
-				// cached list rows expire quickly, so this must not slow or fail
-				// the read-state mutation route.
-			});
-		} catch {
-			// Best-effort only.
-		}
-	}
-
-	private patchCachedSavedState(userId: string, articleId: string, saved: boolean): void {
-		try {
-			void this.articleCache?.updateCachedSavedState(userId, articleId, saved).catch(() => {
-				// Best-effort. The client updates optimistically and list caches expire quickly.
-			});
-		} catch {
-			// Best-effort only.
 		}
 	}
 
@@ -452,6 +440,8 @@ export class ArticleService {
 			displayedAt: (a.publishedAt ?? a.fetchedAt).toISOString(),
 			isRead: a.isRead,
 			isSaved: a.isSaved,
+			readRevision: a.readRevision,
+			savedRevision: a.savedRevision,
 			contentStatus: a.contentStatus,
 			contentVersion: a.contentVersion,
 		}));

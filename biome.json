@@ -54,7 +54,9 @@
 			"!**/*.gen.*",
 			"!**/.claude",
 			"!packages/api/openapi.json",
-			"!packages/api/drizzle/meta"
+			"!packages/api/drizzle/meta",
+			"!packages/android/app/schemas",
+			"!packages/android/app/src/androidTest/assets/android-review"
 		]
 	}
 }

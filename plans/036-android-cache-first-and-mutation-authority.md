@@ -140,7 +140,7 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/test/java/com/selffeed/android/ui/ArticlesViewModelTest.kt`
 - This plan and its row in `plans/README.md`.
 
-Keep API/web production behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
+The additive article snapshot prerequisite below is the only API source expansion. Keep web behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
 
 For nontrivial visible layout/copy changes, implement only the applicable choice recorded by plan 034 in `plans/android-review/design-selection.md`. Mechanical fixes may retain the existing UI. Keep black #000 backgrounds, white primary text, dense readable layouts, minimal copy, and finite motion. Persistent database changes require a new schema version, explicit forward migrations, exported schemas, and tests for clean creation and all supported upgrade paths, including the historical version-6 variant. Preserve user content, sessions, and queued changes.
 
@@ -208,6 +208,18 @@ Future mutation consumers must use LocalStore's effective result. Keep one owner
 
 ## Execution notes
 
+### Article snapshot prerequisite
+
+At `5cc8b40`, three real Room cases reproduce older receipts lowering the known read/save revision and overwriting newer state (`/tmp/android-state-revisions-red.log`). Ordinary API list, detail and search responses contain flags but omit the existing `article_user_states` revisions. Android cannot order those snapshots against mutation responses or realtime receipts.
+
+Add a separate `feat/article-state-snapshots` PR before Android reconciliation. Expand scope to the API article repository/search queries and `article-read.persistence.ts`, article service and cache model/service, unused Redis membership keys, article routes/ETags, shared article response contracts, OpenAPI source/generated document, and focused unit/integration tests. Return read/save revisions with their flags in one SQL snapshot. Keep mutation endpoints and persistent schemas unchanged.
+
+Redis supplies cached content; one bounded SQLite query supplies current flags, revisions and ownership on each cache hit. It covers only returned IDs (at most 100 for a cached page, one for detail) and uses existing indexes. Remove the redundant cached boolean patches and membership indexes. This handles stale warmers, bulk changes, legacy payloads and other API writers without a second state authority. Missing owned rows cause detail 404 or normal scoped list-query fallback. Keep content invalidation and existing cache namespaces/expiry. Cache writes omit revision metadata so older processes cannot forward revision fields while patching only flags. Test actual SQLite, disposable Redis and HTTP validators. No service deployment or live data access is authorized.
+
+The supporting PR also limits Biome's input to authored application files by excluding Android's generated Room schema directory and the intentionally malformed publisher-HTML fixture directory. Room schema validation/migration tests and Android fixture checks remain required. No production source lint rule is relaxed.
+
+Android will accept absent revision metadata from older servers as unknown. It must not reinterpret absence as revision zero or let an unversioned snapshot supersede known newer state. Existing cached content remains readable.
+
 - Reconciled commit: `25f7a0e`. Main already fixes cached article reads and serializes drains/acknowledgement publication. PR #58 adds structured cached subscription streams. PR #59 owns full worker execution and keeps existing startup work. Remaining delivery work is legacy subscription read/invalidation flushes, synchronous read/save delivery, per-action REPLACE and confirmed outbox authentication rejection. Effective rejection/count persistence follows as a separate review slice.
 - Reproduction and checks: pending
 - Device/performance evidence: pending where applicable
@@ -225,3 +237,6 @@ Independent review reproduced a manual-retry lock wait (`/tmp/android-outbox-ret
 All 518 JVM tests and both isolated APK pairs pass in `/tmp/android-outbox-isolated-build.log`. Combined testing exposed a work-testing fixture leak: `closeWorkDatabase()` closes Room but leaves its static test delegate installed. The fixture now undoes that restricted test hook in cleanup; production cancellation handling is unchanged. Final lint passes in `/tmp/android-outbox-final-lint.log`; Android results are below. Durable unread-count reconciliation, effective rejection publication, and mutation recovery after actual process death remain subsequent plan 036 work.
 
 All seven selected Android checks pass in `/tmp/android-outbox-device.log`: the three shared WorkManager contracts run on actual Android, alongside the four foreground/cached-subscription lifecycle checks. The test-only worker controls completion; repository mutation behavior uses real Room with a controlled API in JVM tests. This is not a claim that a device test exercised end-to-end server delivery.
+
+
+The snapshot prerequisite passes actual SQLite reads, Redis cache-hit authority and HTTP validators, including mixed-version payload safety. Review findings were reproduced and resolved. Full final API integration: 138 passing; API unit: 734 passing with 32 affected cases repeated after the last payload-format change; web unit: 403 passing; all package types, repository lint/architecture and web production build pass. The added cache-hit query is bounded to returned article IDs; physical Android performance remains unrelated and pending. Android Room/UI reconciliation and durable counts remain incomplete.

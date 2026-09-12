@@ -1181,6 +1181,8 @@
 					"title",
 					"isRead",
 					"isSaved",
+					"readRevision",
+					"savedRevision",
 					"contentStatus",
 					"contentVersion"
 				],
@@ -1249,6 +1251,14 @@
 					"isSaved": {
 						"type": "boolean"
 					},
+					"readRevision": {
+						"type": "integer",
+						"minimum": 0
+					},
+					"savedRevision": {
+						"type": "integer",
+						"minimum": 0
+					},
 					"contentStatus": {
 						"type": "string",
 						"enum": [
@@ -1279,6 +1289,8 @@
 					"contentVersion",
 					"isRead",
 					"isSaved",
+					"readRevision",
+					"savedRevision",
 					"isEnriched"
 				],
 				"properties": {
@@ -1412,6 +1424,14 @@
 					},
 					"isSaved": {
 						"type": "boolean"
+					},
+					"readRevision": {
+						"type": "integer",
+						"minimum": 0
+					},
+					"savedRevision": {
+						"type": "integer",
+						"minimum": 0
 					},
 					"isEnriched": {
 						"type": "boolean"
