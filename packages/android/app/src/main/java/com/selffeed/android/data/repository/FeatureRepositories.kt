@@ -61,6 +61,8 @@ class FeedRepositoryImpl @Inject constructor(
     private val source: SelfFeedRepository,
     private val access: AccountAccess,
 ) : FeedRepository {
+    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = access.observe { source.categoryUpdates() }
+    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = access.observe { source.feedUpdates() }
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> = access.withAccount { source.categories() }
     override suspend fun createCategory(
         name: String,

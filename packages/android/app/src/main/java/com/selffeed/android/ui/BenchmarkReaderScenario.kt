@@ -87,7 +87,6 @@ internal fun BenchmarkReaderScenario() {
                 onRegister = { _, _, _ -> },
                 onLogout = {},
                 onTabSelected = {},
-                onRefreshVisibleData = {},
                 onHideReadChanged = {},
                 onCategorySelected = {},
                 onFeedSelected = {},

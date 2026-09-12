@@ -5,6 +5,36 @@ import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.StatsResponse
 
 object UnreadStateReducer {
+    fun mergeFeedSnapshot(
+        current: List<FeedWithCounts>,
+        incoming: List<FeedWithCounts>,
+        keepUnreadCounts: Boolean,
+    ): List<FeedWithCounts> {
+        if (!keepUnreadCounts) return incoming
+        val counts = current.associate { it.id to it.unreadCount }
+        return incoming.map { feed -> counts[feed.id]?.let { feed.copy(unreadCount = it) } ?: feed }
+    }
+
+    fun mergeCategorySnapshot(
+        current: List<CategoryWithCounts>,
+        incoming: List<CategoryWithCounts>,
+        keepUnreadCounts: Boolean,
+    ): List<CategoryWithCounts> {
+        if (!keepUnreadCounts) return incoming
+        val counts = mutableMapOf<String, Int>()
+        fun rememberCounts(nodes: List<CategoryWithCounts>) {
+            nodes.forEach { node ->
+                counts[node.id] = node.unreadCount
+                node.children?.let(::rememberCounts)
+            }
+        }
+        fun merge(nodes: List<CategoryWithCounts>): List<CategoryWithCounts> = nodes.map { node ->
+            node.copy(unreadCount = counts[node.id] ?: node.unreadCount, children = node.children?.let(::merge))
+        }
+        rememberCounts(current)
+        return merge(incoming)
+    }
+
     fun applyFeedDelta(
         feeds: List<FeedWithCounts>,
         feedId: String,

@@ -16,7 +16,7 @@ import com.selffeed.android.ui.ArticleReadStateStore
 import com.selffeed.android.ui.ArticleFeatureEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -47,7 +47,6 @@ class ReadStateManager @Inject constructor(
     val readStateStore = ArticleReadStateStore()
     private val manuallyUnread = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    private var readStateSyncJob: Job? = null
     private var bulkLocalEdits: MutableMap<String, LocalReadEdit>? = null
 
     private data class LocalReadEdit(val feedId: String?, val previousRead: Boolean?, val read: Boolean)
@@ -162,29 +161,21 @@ class ReadStateManager @Inject constructor(
         }
     }
 
-    fun startReadStateSync() {
-        if (readStateSyncJob?.isActive == true) return
-        readStateSyncJob = scope?.launch {
-            val job = currentCoroutineContext()[Job]
-            while (job?.isActive == true) {
-                try {
-                    repository.readStateEvents().collect { event ->
-                        if (event.clientId != null && event.clientId == repository.clientId()) return@collect
-                        applyReadStateSyncEvent(event)
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Read-state sync collector crashed; restarting", e)
+    /** Collects until the visible host cancels; mutation work retains the model's separate scope. */
+    suspend fun observeReadStateSync() {
+        while (currentCoroutineContext().isActive) {
+            try {
+                repository.readStateEvents().collect { event ->
+                    if (event.clientId != null && event.clientId == repository.clientId()) return@collect
+                    applyReadStateSyncEvent(event)
                 }
-                delay(READ_STATE_SYNC_RESTART_DELAY_MS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Read-state sync collector crashed; restarting", e)
             }
+            delay(READ_STATE_SYNC_RESTART_DELAY_MS)
         }
-    }
-
-    fun stopReadStateSync() {
-        readStateSyncJob?.cancel()
-        readStateSyncJob = null
     }
 
     fun clearSessionMemory() {

@@ -17,6 +17,8 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.FakeSelfFeedRepository
 import com.selffeed.android.data.ReviewRequestGate
 import com.selffeed.android.network.ArticleDetail
+import com.selffeed.android.network.FeedSyncAllStatus
+import com.selffeed.android.network.FeedWithCounts
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import kotlinx.coroutines.runBlocking
@@ -38,6 +40,57 @@ class AndroidSessionLifecycleUiTest {
 
     @Before fun setup() { hiltRule.inject() }
     @After fun close() { scenario?.close() }
+
+    @Test
+    fun stoppingTheActivityClosesRealtimeAndEachResumeStartsOneSubscription() {
+        repository.reset(authenticated = true)
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        composeRule.waitUntil(5_000) { repository.hasReadStateSubscriber() }
+        repeat(3) {
+            assertEquals(1, repository.readStateSubscriberCount())
+            scenario!!.moveToState(Lifecycle.State.CREATED)
+            composeRule.waitUntil(5_000) { !repository.hasReadStateSubscriber() }
+            scenario!!.moveToState(Lifecycle.State.RESUMED)
+            composeRule.waitUntil(5_000) { repository.hasReadStateSubscriber() }
+        }
+        assertEquals(1, repository.readStateSubscriberCount())
+    }
+
+    @Test
+    fun coldOfflineSessionRestoresTheFeedDrawerFromStoredSubscriptions() {
+        repository.reset(authenticated = true)
+        repository.setOnline(false)
+        repository.subscriptionTitle = "Stored offline subscription"
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithContentDescription("Open feeds").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Open feeds").performClick()
+        composeRule.onNodeWithText("Stored offline subscription").assertIsDisplayed()
+    }
+
+    @Test
+    fun stoppingCancelsBlockedHealthAndStatusReadsAndResumeReissuesThem() {
+        repository.reset(authenticated = true)
+        val health = ReviewRequestGate<Unit, AppResult<List<FeedWithCounts>>>()
+        val status = ReviewRequestGate<Unit, AppResult<FeedSyncAllStatus>>()
+        repository.healthGate = health
+        repository.syncStatusGate = status
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        composeRule.waitUntil(5_000) { repository.hasReadStateSubscriber() }
+        val firstHealth = runBlocking { withTimeout(5_000) { health.next() } }
+        val firstStatus = runBlocking { withTimeout(5_000) { status.next() } }
+        scenario!!.moveToState(Lifecycle.State.CREATED)
+        composeRule.waitUntil(5_000) { firstHealth.response.isCancelled && firstStatus.response.isCancelled }
+        scenario!!.moveToState(Lifecycle.State.RESUMED)
+        composeRule.waitUntil(5_000) { repository.hasReadStateSubscriber() }
+        val nextHealth = runBlocking { withTimeout(5_000) { health.next() } }
+        val nextStatus = runBlocking { withTimeout(5_000) { status.next() } }
+        assertFalse(nextHealth.response.isCancelled)
+        assertFalse(nextStatus.response.isCancelled)
+        scenario!!.moveToState(Lifecycle.State.CREATED)
+        composeRule.waitUntil(5_000) { nextHealth.response.isCancelled && nextStatus.response.isCancelled }
+    }
 
     @Test
     fun backCancelsThePendingDetailAndTheNextArticleOpensNormally() {
@@ -72,7 +125,7 @@ class AndroidSessionLifecycleUiTest {
     }
 }
 
-class ResumeRefreshObserverUiTest {
+class ForegroundWorkEffectUiTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
@@ -82,7 +135,10 @@ class ResumeRefreshObserverUiTest {
         val callback = mutableStateOf<() -> Unit>({ oldCalls++ })
         val visible = mutableStateOf(true)
         composeRule.setContent {
-            if (visible.value) ResumeRefreshObserver(callback.value)
+            if (visible.value) ForegroundWorkEffect("owner") {
+                callback.value()
+                kotlinx.coroutines.awaitCancellation()
+            }
         }
         composeRule.runOnIdle {
             assertEquals(1, oldCalls)

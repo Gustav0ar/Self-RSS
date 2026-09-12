@@ -612,7 +612,7 @@ class ArticlesViewModelTest {
             val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
             runCurrent()
             primeArticleQueue(viewModel)
-            viewModel.startReadStateSync()
+            val realtime = backgroundScope.launch { viewModel.observeReadStateSync() }
             runCurrent()
 
             remoteEvents.emit(
@@ -629,7 +629,7 @@ class ArticlesViewModelTest {
             assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
             verify(exactly = 1) { repository.articlePagingData(any(), any()) }
             coVerify { repository.invalidateArticleContentCaches() }
-            viewModel.stopReadStateSync()
+            realtime.cancel()
             collection.cancel()
         }
 
@@ -721,11 +721,11 @@ class ArticlesViewModelTest {
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
 
-        viewModel.startReadStateSync()
+        val realtime = backgroundScope.launch { viewModel.observeReadStateSync() }
         runCurrent()
         remoteEvents.emit(event)
         runCurrent()
-        viewModel.stopReadStateSync()
+        realtime.cancel()
 
         assertEquals(true, viewModel.state.value.items.first().isRead)
         assertEquals(true, viewModel.readStateOverrides.value["a1"])
@@ -747,11 +747,11 @@ class ArticlesViewModelTest {
         val viewModel = createViewModel()
         primeArticleQueue(viewModel)
 
-        viewModel.startReadStateSync()
+        val realtime = backgroundScope.launch { viewModel.observeReadStateSync() }
         runCurrent()
         remoteEvents.emit(event)
         runCurrent()
-        viewModel.stopReadStateSync()
+        realtime.cancel()
 
         assertEquals(listOf("a1"), viewModel.state.value.items.map { it.id })
         assertEquals(true, viewModel.state.value.items.first().isRead)

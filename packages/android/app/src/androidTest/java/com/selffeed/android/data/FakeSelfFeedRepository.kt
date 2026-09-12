@@ -1,6 +1,7 @@
 package com.selffeed.android.data
 
 import com.selffeed.android.data.repository.AccountAccess
+import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import androidx.paging.PagingData
@@ -28,6 +29,7 @@ import com.selffeed.android.network.UserPreferences
 import com.selffeed.android.network.normalizeApiServerHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -40,6 +42,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     var detailGate: ReviewRequestGate<String, AppResult<ArticleDetail>>? = null
     var readGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
     var savedGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
+    var healthGate: ReviewRequestGate<Unit, AppResult<List<FeedWithCounts>>>? = null
+    var syncStatusGate: ReviewRequestGate<Unit, AppResult<FeedSyncAllStatus>>? = null
+    var subscriptionTitle = "Injected Feed"
     private val online = MutableStateFlow(true)
     private val readStateSyncEvents = MutableSharedFlow<ReadStateSyncEvent>(extraBufferCapacity = 1)
     private var apiBaseUrl = "10.0.2.2:3000"
@@ -129,6 +134,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         detailGate = null
         readGate = null
         savedGate = null
+        healthGate = null
+        syncStatusGate = null
+        subscriptionTitle = "Injected Feed"
         apiBaseUrl = "10.0.2.2:3000"
         replaceSession()
         preferences = defaultPreferences.copy(hideRead = hideRead)
@@ -202,6 +210,22 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun isLoggedIn(): Boolean = authenticated
     override fun authEvents(): Flow<String> = emptyFlow()
 
+    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = flow {
+        when (val result = categories()) {
+            is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+            is AppResult.Error -> emit(result)
+        }
+    }
+
+    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = flow {
+        when (val stored = feeds(null)) {
+            is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(stored.data, false)))
+            is AppResult.Error -> emit(stored)
+        }
+        val refreshed = refreshFeeds(null)
+        if (refreshed is AppResult.Success) emit(AppResult.Success(SubscriptionSnapshot(refreshed.data, true)))
+    }
+
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> {
         categoryRequests++
         return AppResult.Success(
@@ -243,7 +267,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
                 FeedWithCounts(
                     id = "feed-1",
                     categoryId = "category-1",
-                    title = "Injected Feed",
+                    title = subscriptionTitle,
                     feedUrl = "https://example.com/feed.xml",
                     pollingIntervalMinutes = 60,
                     syncStatus = "idle",
@@ -252,6 +276,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
             )
         )
     }
+
+    override suspend fun refreshFeeds(categoryId: String?): AppResult<List<FeedWithCounts>> =
+        healthGate?.await(Unit) ?: if (online.value) feeds(categoryId) else AppResult.Error("Offline")
 
     override suspend fun createFeed(
         feedUrl: String,
@@ -281,7 +308,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         AppResult.Success(SyncResponse(syncedFeeds = 1))
 
     override suspend fun syncAllFeedsStatus(requestId: String?): AppResult<FeedSyncAllStatus> =
-        AppResult.Success(
+        syncStatusGate?.await(Unit) ?: AppResult.Success(
             FeedSyncAllStatus(
                 queued = false,
                 running = false,
@@ -444,6 +471,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     }
 
     fun hasReadStateSubscriber(): Boolean = readStateSyncEvents.subscriptionCount.value > 0
+    fun readStateSubscriberCount(): Int = readStateSyncEvents.subscriptionCount.value
 
     fun emitRealtimeConnected(): Boolean = readStateSyncEvents.tryEmit(RealtimeConnectedEvent())
 

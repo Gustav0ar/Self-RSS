@@ -19,7 +19,9 @@ import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
 fun SelfFeedAppRoute(
@@ -148,25 +150,20 @@ private fun AuthenticatedAppRoute(
     SelfFeedTheme(darkTheme = darkTheme) {
         ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
         val latestFeedsState = rememberUpdatedState(feedsState)
+        val contentRefreshRequests = remember { Channel<Unit>(Channel.CONFLATED) }
         val workflowCoordinator = remember { AppWorkflowCoordinator() }
         val workflowSink = object : AppWorkflowSink {
             override fun refreshAuthenticatedSession() {
                 articlesViewModel.clearSessionReadStateMemory()
-                feedsViewModel.loadCategories()
-                feedsViewModel.loadFeeds()
-                feedsViewModel.reconcileSyncStatus()
                 settingsViewModel.loadPreferences()
-                settingsViewModel.loadStats()
                 settingsViewModel.loadAuthSessions()
                 if (authState.user?.role == "admin") {
                     settingsViewModel.loadAdminSettings()
                 }
                 articlesViewModel.refreshArticles()
-                articlesViewModel.startReadStateSync()
             }
 
             override fun clearUnauthenticatedSession() {
-                articlesViewModel.stopReadStateSync()
                 articlesViewModel.clearReadingSession()
                 appViewModel.clearReadingSession()
             }
@@ -180,9 +177,7 @@ private fun AuthenticatedAppRoute(
             }
 
             override fun refreshAfterFeedSync() {
-                feedsViewModel.loadCategories()
-                feedsViewModel.loadFeeds()
-                settingsViewModel.loadStats()
+                contentRefreshRequests.trySend(Unit)
                 articlesViewModel.refreshArticles()
             }
 
@@ -219,12 +214,8 @@ private fun AuthenticatedAppRoute(
             }
 
             override fun refreshArticleContent() {
-                refreshArticleContentSurfaces(
-                    loadCategories = feedsViewModel::loadCategories,
-                    loadFeeds = feedsViewModel::loadFeeds,
-                    refreshArticles = articlesViewModel::refreshArticles,
-                    loadStats = settingsViewModel::loadStats,
-                )
+                contentRefreshRequests.trySend(Unit)
+                articlesViewModel.refreshArticles()
             }
         }
 
@@ -270,12 +261,19 @@ private fun AuthenticatedAppRoute(
             }
         }
 
-        LaunchedEffect(authState.isAuthenticated) {
-            if (!authState.isAuthenticated) return@LaunchedEffect
+        ForegroundWorkEffect(accountOwnerId) {
+            launch { articlesViewModel.observeReadStateSync() }
+            launch { feedsViewModel.observeForeground() }
+            // Resume always reconciles once, including offline sessions with no SSE handshake.
+            // Keep later requests buffered while a read is in flight so an event is not lost.
+            contentRefreshRequests.tryReceive()
             while (true) {
-                delay(60_000L)
-                feedsViewModel.refreshFeedHealth()
-                feedsViewModel.reconcileSyncStatus()
+                coroutineScope {
+                    launch { feedsViewModel.refreshCategories() }
+                    launch { feedsViewModel.refreshFeedHealth() }
+                    launch { settingsViewModel.refreshStats() }
+                }
+                contentRefreshRequests.receive()
             }
         }
 
@@ -356,7 +354,6 @@ private fun AuthenticatedAppRoute(
                 onLogin = authViewModel::login,
                 onRegister = authViewModel::register,
                 onLogout = {
-                    articlesViewModel.stopReadStateSync()
                     articlesViewModel.clearReadingSession()
                     appViewModel.clearReadingSession()
                     authViewModel.logout()
@@ -368,12 +365,6 @@ private fun AuthenticatedAppRoute(
                         else -> Unit
                     }
                     appViewModel.setTab(tab)
-                },
-                onRefreshVisibleData = {
-                    feedsViewModel.loadCategories()
-                    feedsViewModel.loadFeeds()
-                    feedsViewModel.reconcileSyncStatus()
-                    settingsViewModel.loadStats()
                 },
                 onHideReadChanged = {
                     settingsViewModel.updateHideRead(it)

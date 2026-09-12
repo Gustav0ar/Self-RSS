@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.AccountAccess
 import com.selffeed.android.di.ApplicationCoroutineScope
@@ -251,6 +252,41 @@ class RssRepository @Inject constructor(
             runtime.invalidateByPrefix("auth:sessions")
         }
         response.user
+    }
+
+    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = cachedReadUpdates(
+        readCached = { session -> account.commit(session) { offlineReadStore.readCategories().takeIf { it.isNotEmpty() } } },
+        fetch = ::fetchCategories,
+    )
+
+    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = cachedReadUpdates(
+        readCached = { session -> account.commit(session) { offlineReadStore.readFeeds().takeIf { it.isNotEmpty() } } },
+        fetch = { session ->
+            withRetry(session) { feedRemote.feeds(null, session) }.also { feeds ->
+                persistFeedSnapshot(null, feeds, session)
+                account.commit(session) { runtime.putCached("feeds:", FEEDS_TTL_MS, feeds) }
+            }
+        },
+    )
+
+    /** Stored content is usable while the collector awaits or cancels freshness work. */
+    private fun <T : Any> cachedReadUpdates(
+        readCached: suspend (ApiSession) -> T?,
+        fetch: suspend (ApiSession) -> T,
+    ): Flow<AppResult<SubscriptionSnapshot<T>>> = flow {
+        account.withSession { session ->
+            val stored = (safeReadCall(session, readCached) as? AppResult.Success)?.data
+            if (stored != null) emit(AppResult.Success(SubscriptionSnapshot(stored, mayReplaceUnreadCounts = false)))
+            val pendingBefore = account.commit(session) { localStore.readPendingReadStateMutations().isNotEmpty() }
+            val fresh = safeReadCall(session, fetch)
+            when (fresh) {
+                is AppResult.Success -> {
+                    val pendingAfter = account.commit(session) { localStore.readPendingReadStateMutations().isNotEmpty() }
+                    emit(AppResult.Success(SubscriptionSnapshot(fresh.data, !pendingBefore && !pendingAfter)))
+                }
+                is AppResult.Error -> if (stored == null) emit(fresh)
+            }
+        }
     }
 
     override suspend fun categories() = safeReadCall { session ->

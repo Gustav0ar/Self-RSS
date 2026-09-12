@@ -30,7 +30,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -72,8 +77,12 @@ class FeedsViewModel @Inject constructor(
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
     private val _opmlExports = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val opmlExports: SharedFlow<String> = _opmlExports.asSharedFlow()
-    private var syncMonitorJob: Job? = null
+    private val syncMonitorRequests = Channel<Unit>(Channel.CONFLATED)
+    private var syncSubmission: Job? = null
+    private var syncSubmissionRevision = 0L
+    private val healthReads = Mutex()
     private var categoryLoadRevision = 0L
+    private var localUnreadRevision = 0L
     private var categoryReloadPending = false
 
     fun offerExternalFeed(url: String) {
@@ -111,18 +120,29 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun loadCategories() {
+        viewModelScope.launch { refreshCategories() }
+    }
+
+    suspend fun refreshCategories() {
         if (_state.value.reorderingCategories) {
             categoryReloadPending = true
             return
         }
         val revision = ++categoryLoadRevision
-        viewModelScope.launch {
-            val result = repository.categories()
-            if (revision != categoryLoadRevision) return@launch
-            when (result) {
-                is AppResult.Success -> _state.update { it.copy(categories = result.data) }
-                is AppResult.Error -> _state.update {
-                    it.copy(errorMessage = PresentationText.dynamic(result.message))
+        val unreadRevision = localUnreadRevision
+        repository.categoryUpdates().collect { result ->
+            if (revision == categoryLoadRevision) {
+                when (result) {
+                    is AppResult.Success -> _state.update {
+                        it.copy(categories = UnreadStateReducer.mergeCategorySnapshot(
+                            current = it.categories,
+                            incoming = result.data.data,
+                            keepUnreadCounts = !result.data.mayReplaceUnreadCounts || unreadRevision != localUnreadRevision,
+                        ))
+                    }
+                    is AppResult.Error -> _state.update {
+                        it.copy(errorMessage = PresentationText.dynamic(result.message))
+                    }
                 }
             }
         }
@@ -139,45 +159,66 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    fun refreshFeedHealth() {
-        viewModelScope.launch {
-            when (val result = repository.refreshFeeds(null)) {
-                is AppResult.Success -> _state.update { it.copy(feeds = result.data) }
-                // Background health polling must not replace an otherwise
-                // usable cached drawer with a global connection error.
+    suspend fun refreshFeedHealth() = healthReads.withLock {
+        val unreadRevision = localUnreadRevision
+        repository.feedUpdates().collect { result ->
+            when (result) {
+                is AppResult.Success -> _state.update {
+                    it.copy(feeds = UnreadStateReducer.mergeFeedSnapshot(
+                        current = it.feeds,
+                        incoming = result.data.data,
+                        keepUnreadCounts = !result.data.mayReplaceUnreadCounts || unreadRevision != localUnreadRevision,
+                    ))
+                }
+                // Health polling must preserve a usable cached drawer during network failure.
                 is AppResult.Error -> Unit
             }
         }
     }
 
-    /** Restores refresh UX for work started by another client or WorkManager. */
-    fun reconcileSyncStatus() {
-        if (_state.value.loading || syncMonitorJob?.isActive == true) return
-        viewModelScope.launch {
-            when (val status = repository.syncAllFeedsStatus()) {
-                is AppResult.Success -> {
-                    if (status.data.stale) {
-                        _state.update {
-                            it.copy(
-                                loading = false,
-                                syncInBackground = false,
-                                syncStatus = status.data,
-                                statusMessage = PresentationText.resource(R.string.feeds_sync_stale),
-                            )
-                        }
-                        return@launch
-                    }
-                    if (status.data.active) {
-                        publishActiveSync(status.data)
-                        startSyncMonitor()
-                    } else if (_state.value.syncInBackground || _state.value.syncStatus?.active == true) {
-                        publishCompletedSync(status.data)
-                    }
-                }
-                // This is background reconciliation. Existing offline/error UX
-                // remains authoritative when the server cannot be reached.
-                is AppResult.Error -> Unit
+    /** The visible host owns both loops and their actual requests. Queue submission is separate. */
+    suspend fun observeForeground() = coroutineScope {
+        launch {
+            while (currentCoroutineContext().isActive) {
+                delay(FEED_HEALTH_INTERVAL_MS)
+                refreshFeedHealth()
             }
+        }
+        // A queued refresh from the background is covered by the immediate reconciliation.
+        syncMonitorRequests.tryReceive()
+        while (currentCoroutineContext().isActive) {
+            reconcileSyncStatus()
+            withTimeoutOrNull(FEED_HEALTH_INTERVAL_MS) { syncMonitorRequests.receive() }
+        }
+    }
+
+    /** Restores refresh UX for work started by another client or WorkManager. */
+    suspend fun reconcileSyncStatus() {
+        if (syncSubmission != null) return
+        val revision = syncSubmissionRevision
+        val status = repository.syncAllFeedsStatus()
+        if (syncSubmission != null || revision != syncSubmissionRevision) return
+        when (status) {
+            is AppResult.Success -> {
+                if (status.data.stale) {
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            syncInBackground = false,
+                            syncStatus = status.data,
+                            statusMessage = PresentationText.resource(R.string.feeds_sync_stale),
+                        )
+                    }
+                    return
+                }
+                if (status.data.active) {
+                    monitorQueuedSync(status)
+                } else if (_state.value.syncInBackground || _state.value.syncStatus?.active == true) {
+                    publishCompletedSync(status.data)
+                }
+            }
+            // Existing offline/error UX remains authoritative when the server is unreachable.
+            is AppResult.Error -> if (_state.value.syncInBackground) monitorQueuedSync(status)
         }
     }
 
@@ -392,7 +433,7 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun syncAllFeeds(feedId: String? = null, categoryId: String? = null) {
-        if (_state.value.loading) return
+        if (syncSubmission != null) return
         if (refreshScopesOverlap(feedId, categoryId, _state.value.syncStatus, _state.value.feeds)) {
             _state.update {
                 it.copy(statusMessage = backgroundSyncMessage(it.syncCompletedFeeds, it.syncTotalFeeds))
@@ -410,7 +451,7 @@ class FeedsViewModel @Inject constructor(
             }
             return
         }
-        viewModelScope.launch {
+        val submission = viewModelScope.launch(start = CoroutineStart.LAZY) {
             _state.update { it.copy(loading = true, errorMessage = null) }
             val queueRequest = async { repository.syncAllFeeds(feedId, categoryId) }
             val result = withTimeoutOrNull(REFRESH_QUEUE_TIMEOUT_MS) {
@@ -436,7 +477,6 @@ class FeedsViewModel @Inject constructor(
                                 statusMessage = PresentationText.resource(R.string.feeds_sync_background),
                             )
                         }
-                        startSyncMonitor()
                     }
                     is AppResult.Error -> _state.update {
                         it.copy(
@@ -460,7 +500,6 @@ class FeedsViewModel @Inject constructor(
                             statusMessage = PresentationText.resource(R.string.feeds_sync_background),
                         )
                     }
-                    startSyncMonitor()
                 }
                 is AppResult.Error -> _state.update {
                     it.copy(
@@ -470,11 +509,13 @@ class FeedsViewModel @Inject constructor(
                 }
             }
         }
-    }
-
-    private fun startSyncMonitor() {
-        if (syncMonitorJob?.isActive == true) return
-        syncMonitorJob = viewModelScope.launch { monitorQueuedSync() }
+        syncSubmission = submission
+        syncSubmissionRevision++
+        submission.invokeOnCompletion {
+            if (syncSubmission === submission) syncSubmission = null
+            if (!submission.isCancelled && _state.value.syncInBackground) syncMonitorRequests.trySend(Unit)
+        }
+        submission.start()
     }
 
     private fun publishActiveSync(status: FeedSyncAllStatus) {
@@ -494,10 +535,11 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    private suspend fun monitorQueuedSync() {
+    private suspend fun monitorQueuedSync(initial: AppResult<FeedSyncAllStatus>) {
         var poll = 0
         var elapsedMs = 0L
         var reportedLongRunningSync = false
+        var nextStatus = initial
         while (currentCoroutineContext().isActive) {
             if (elapsedMs >= SYNC_STATUS_MAX_MONITOR_MS) {
                 _state.update {
@@ -509,7 +551,7 @@ class FeedsViewModel @Inject constructor(
                 }
                 return
             }
-            when (val status = repository.syncAllFeedsStatus()) {
+            when (val status = nextStatus) {
                 is AppResult.Success -> {
                     if (status.data.stale) {
                         _state.update {
@@ -561,6 +603,7 @@ class FeedsViewModel @Inject constructor(
             val boundedDelayMs = minOf(delayMs, SYNC_STATUS_MAX_MONITOR_MS - elapsedMs)
             delay(boundedDelayMs)
             elapsedMs += boundedDelayMs
+            if (elapsedMs < SYNC_STATUS_MAX_MONITOR_MS) nextStatus = repository.syncAllFeedsStatus()
         }
     }
 
@@ -599,6 +642,7 @@ class FeedsViewModel @Inject constructor(
     }
 
     private companion object {
+        const val FEED_HEALTH_INTERVAL_MS = 60_000L
         const val SYNC_STATUS_FAST_POLL_MS = 750L
         const val SYNC_STATUS_SLOW_POLL_MS = 10_000L
         const val SYNC_STATUS_MAX_FAST_POLLS = 8
@@ -615,6 +659,7 @@ class FeedsViewModel @Inject constructor(
 
     fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
         if (feedId == null || unreadDelta == 0) return
+        localUnreadRevision++
         _state.update { state ->
             val feed = state.feeds.firstOrNull { it.id == feedId }
             state.copy(
@@ -627,6 +672,7 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>) {
+        localUnreadRevision++
         _state.update { state ->
             val targetFeedIds = when {
                 affectedFeedIds.isNotEmpty() -> affectedFeedIds
