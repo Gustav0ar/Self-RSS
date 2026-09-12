@@ -53,6 +53,15 @@ jobs:
         run: bash scripts/android-review-device-test.sh
       - name: Run Android unit tests
         run: ./packages/android/gradlew -p packages/android :app:testDeviceTestUnitTest
+      - name: Upload failed unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-unit-failure
+          path: |
+            packages/android/app/build/test-results/testDeviceTestUnitTest
+            packages/android/app/build/reports/tests/testDeviceTestUnitTest
+          retention-days: 7
 
   android-build-check:
     name: Android Lint & Build
