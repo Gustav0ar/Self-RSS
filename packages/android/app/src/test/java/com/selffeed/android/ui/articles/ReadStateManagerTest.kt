@@ -9,6 +9,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,7 +30,7 @@ class ReadStateManagerTest {
         val manager = ReadStateManager(repository)
         manager.setScope(backgroundScope)
         manager.readStateStore.remember("article-1", true)
-        manager.startReadStateSync()
+        val realtime = backgroundScope.launch { manager.observeReadStateSync() }
         val emittedEvent = async { manager.events.first() }
         runCurrent()
 
@@ -39,6 +40,6 @@ class ReadStateManagerTest {
         coVerify(exactly = 1) { repository.invalidateReadStateCaches() }
         assertTrue(manager.knownArticleReadStates().isEmpty())
         assertTrue(emittedEvent.await() is ArticleFeatureEvent.ArticlesChanged)
-        manager.stopReadStateSync()
+        realtime.cancel()
     }
 }

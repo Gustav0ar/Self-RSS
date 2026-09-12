@@ -5,6 +5,7 @@ import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.data.RssRepository
+import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
@@ -19,6 +20,12 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -43,6 +50,18 @@ class FeedsViewModelTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
+        every { repository.categoryUpdates() } answers { flow {
+            when (val result = repository.categories()) {
+                is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+                is AppResult.Error -> emit(result)
+            }
+        } }
+        every { repository.feedUpdates() } answers { flow {
+            when (val result = repository.refreshFeeds(null)) {
+                is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+                is AppResult.Error -> emit(result)
+            }
+        } }
         coEvery { repository.categories() } returns AppResult.Success(emptyList())
         coEvery { repository.feeds(any()) } returns AppResult.Success(emptyList())
         coEvery { repository.refreshFeeds(any()) } returns AppResult.Success(emptyList())
@@ -155,6 +174,194 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `cancelling the health read caller cancels its actual repository request`() = runTest {
+        val cancelled = CompletableDeferred<Unit>()
+        coEvery { repository.refreshFeeds(null) } coAnswers {
+            try { awaitCancellation() } finally { cancelled.complete(Unit) }
+        }
+        val viewModel = FeedsViewModel(repository)
+        val caller = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            viewModel.refreshFeedHealth()
+            awaitCancellation()
+        }
+        caller.cancelAndJoin()
+        try {
+            assertTrue("Health I/O must belong to its caller", cancelled.isCompleted)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `a queued user refresh does not start interactive polling without a visible host`() = runTest {
+        val viewModel = FeedsViewModel(repository)
+        viewModel.syncAllFeeds()
+
+        coVerify(exactly = 1) { repository.syncAllFeeds() }
+        coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
+        assertTrue(viewModel.state.value.syncInBackground)
+    }
+
+    @Test
+    fun `foreground cancellation stops blocked status and health requests before restarting`() = runTest {
+        var statusCalls = 0
+        var activeStatus = 0
+        var healthCalls = 0
+        var activeHealth = 0
+        coEvery { repository.syncAllFeedsStatus() } coAnswers {
+            statusCalls++
+            activeStatus++
+            try { awaitCancellation() } finally { activeStatus-- }
+        }
+        coEvery { repository.refreshFeeds(null) } coAnswers {
+            healthCalls++
+            activeHealth++
+            try { awaitCancellation() } finally { activeHealth-- }
+        }
+        val viewModel = FeedsViewModel(repository)
+        val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(1, activeStatus)
+        assertEquals(1, activeHealth)
+        first.cancelAndJoin()
+        assertEquals(0, activeStatus)
+        assertEquals(0, activeHealth)
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(1, statusCalls)
+        assertEquals(1, healthCalls)
+
+        val resumed = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        assertEquals(2, statusCalls)
+        assertEquals(1, activeStatus)
+        resumed.cancelAndJoin()
+        assertEquals(0, activeStatus)
+    }
+
+    @Test
+    fun `late queue submission survives foreground cancellation and wakes resume only once`() = runTest {
+        val queued = CompletableDeferred<AppResult<SyncResponse>>()
+        coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
+        val viewModel = FeedsViewModel(repository)
+        val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        viewModel.syncAllFeeds()
+        first.cancelAndJoin()
+        assertFalse(queued.isCancelled)
+        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        runCurrent()
+        coVerify(exactly = 1) { repository.syncAllFeedsStatus() }
+        assertTrue(viewModel.state.value.syncInBackground)
+
+        val resumed = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        runCurrent()
+        coVerify(exactly = 2) { repository.syncAllFeedsStatus() }
+        assertFalse(viewModel.state.value.syncInBackground)
+        assertEquals(1L, viewModel.state.value.syncRevision)
+        resumed.cancelAndJoin()
+    }
+
+    @Test
+    fun `resuming during a slow queue submission cannot declare its refresh completed`() = runTest {
+        val queued = CompletableDeferred<AppResult<SyncResponse>>()
+        coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
+        val viewModel = FeedsViewModel(repository)
+        viewModel.syncAllFeeds()
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertFalse(viewModel.state.value.loading)
+        val foreground = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        assertEquals(0L, viewModel.state.value.syncRevision)
+        assertTrue(viewModel.state.value.syncInBackground)
+        coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
+
+        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        runCurrent()
+        assertEquals(1L, viewModel.state.value.syncRevision)
+        coVerify(exactly = 1) { repository.syncAllFeedsStatus() }
+        foreground.cancelAndJoin()
+    }
+
+    @Test
+    fun `status requested before a pending submission cannot complete that submission`() = runTest {
+        val oldStatus = CompletableDeferred<AppResult<FeedSyncAllStatus>>()
+        val queued = CompletableDeferred<AppResult<SyncResponse>>()
+        var statusCalls = 0
+        coEvery { repository.syncAllFeedsStatus() } coAnswers {
+            if (statusCalls++ == 0) oldStatus.await() else AppResult.Success(completedSyncStatus())
+        }
+        coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
+        val viewModel = FeedsViewModel(repository)
+        val foreground = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        viewModel.syncAllFeeds()
+        advanceTimeBy(4_000)
+        runCurrent()
+        oldStatus.complete(AppResult.Success(completedSyncStatus()))
+        runCurrent()
+        assertEquals(0L, viewModel.state.value.syncRevision)
+        assertTrue(viewModel.state.value.syncInBackground)
+
+        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        runCurrent()
+        assertEquals(1L, viewModel.state.value.syncRevision)
+        assertEquals(2, statusCalls)
+        foreground.cancelAndJoin()
+    }
+
+    @Test
+    fun `status requested before a completed submission cannot resume an obsolete monitor`() = runTest {
+        val oldStatus = CompletableDeferred<AppResult<FeedSyncAllStatus>>()
+        var statusCalls = 0
+        coEvery { repository.syncAllFeedsStatus() } coAnswers {
+            if (statusCalls++ == 0) oldStatus.await() else AppResult.Success(completedSyncStatus())
+        }
+        val viewModel = FeedsViewModel(repository)
+        val foreground = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
+        viewModel.syncAllFeeds()
+        oldStatus.complete(AppResult.Success(completedSyncStatus().copy(active = true, running = true)))
+        runCurrent()
+
+        assertEquals(1L, viewModel.state.value.syncRevision)
+        assertEquals(2, statusCalls)
+        assertFalse(viewModel.state.value.syncInBackground)
+        foreground.cancelAndJoin()
+    }
+
+    @Test
+    fun `read changes during snapshot requests preserve nested counts and accept new metadata`() = runTest {
+        for (markScope in listOf(false, true)) {
+            val child = sampleCategory("child").copy(unreadCount = 2)
+            val parent = sampleCategory("parent", children = listOf(child)).copy(unreadCount = 2)
+            val feed = sampleFeed("feed", "child").copy(unreadCount = 2)
+            coEvery { repository.categories() } returns AppResult.Success(listOf(parent))
+            coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(feed))
+            val model = FeedsViewModel(repository)
+            model.refreshCategories()
+            model.refreshFeedHealth()
+            val categoryResponse = CompletableDeferred<AppResult<List<CategoryWithCounts>>>()
+            val feedResponse = CompletableDeferred<AppResult<List<FeedWithCounts>>>()
+            coEvery { repository.categories() } coAnswers { categoryResponse.await() }
+            coEvery { repository.refreshFeeds(null) } coAnswers { feedResponse.await() }
+            val categories = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.refreshCategories() }
+            val feeds = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.refreshFeedHealth() }
+            if (markScope) model.applyScopeMarkedRead(null, "parent", emptySet())
+            else model.applyUnreadDelta("feed", -1)
+            categoryResponse.complete(AppResult.Success(listOf(parent.copy(name = "Updated parent"))))
+            feedResponse.complete(AppResult.Success(listOf(feed.copy(title = "Updated feed"))))
+            categories.join()
+            feeds.join()
+
+            val expectedCount = if (markScope) 0 else 1
+            assertEquals("Updated feed", model.state.value.feeds.single().title)
+            assertEquals(expectedCount, model.state.value.feeds.single().unreadCount)
+            val updatedParent = model.state.value.categories.single()
+            assertEquals("Updated parent", updatedParent.name)
+            assertEquals(expectedCount, updatedParent.unreadCount)
+            assertEquals(expectedCount, updatedParent.children!!.single().unreadCount)
+        }
+    }
+
+    @Test
     fun `createCategory surfaces status message`() = runTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.createCategory("Tech")
@@ -225,6 +432,7 @@ class FeedsViewModelTest {
     fun `syncAllFeeds sets loading flag and populates lastSyncSummary`() = runTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         val s = viewModel.state.value
         assertEquals(false, s.loading)
         assertEquals(3, s.lastSyncSummary?.syncedFeeds)
@@ -236,6 +444,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         val firstRevision = viewModel.state.value.syncRevision
         val firstSummary = viewModel.state.value.lastSyncSummary
 
@@ -252,6 +461,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         advanceTimeBy(4_000L)
         runCurrent()
 
@@ -301,6 +511,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(7L, viewModel.state.value.articleRevision)
         assertTrue(viewModel.state.value.syncInBackground)
@@ -332,12 +543,11 @@ class FeedsViewModelTest {
         )
         coEvery { repository.syncAllFeedsStatus() } returnsMany listOf(
             AppResult.Success(active),
-            AppResult.Success(active),
             AppResult.Success(completedSyncStatus().copy(articleRevision = 9)),
         )
         val viewModel = FeedsViewModel(repository)
 
-        viewModel.reconcileSyncStatus()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(true, viewModel.state.value.syncInBackground)
         assertEquals(6, viewModel.state.value.syncTotalFeeds)
@@ -369,6 +579,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(true, viewModel.state.value.syncInBackground)
         assertEquals(
@@ -393,6 +604,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         assertEquals(true, viewModel.state.value.syncInBackground)
 
         advanceTimeBy(330_000L)
@@ -414,6 +626,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(false, viewModel.state.value.syncInBackground)
         assertNull(viewModel.state.value.errorMessage)
@@ -436,6 +649,7 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
 
         viewModel.syncAllFeeds()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(
             PresentationText.joined(

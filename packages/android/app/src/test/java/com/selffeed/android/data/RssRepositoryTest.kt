@@ -14,6 +14,7 @@ import com.selffeed.android.data.remote.SearchRemoteDataSource
 import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.ArticleRepository
+import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -28,6 +29,7 @@ import com.selffeed.android.network.SessionRefreshCoordinator
 import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.SyncResponse
 import com.selffeed.android.ui.ArticlesViewModel
+import com.selffeed.android.ui.FeedsViewModel
 import com.selffeed.android.ui.MainDispatcherRule
 import com.selffeed.android.ui.articles.ArticleWarmingManager
 import com.selffeed.android.ui.articles.EnrichmentManager
@@ -40,6 +42,10 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -155,6 +161,110 @@ class RssRepositoryTest {
             networkMonitor = networkMonitor,
             refreshScope = backgroundScope,
         )
+    }
+
+    @Test
+    fun `foreground subscriptions emit Room snapshots before freshness and cancel their real refresh calls`() = runTest {
+        repository.prepareSession()
+        val storedCategory = sampleCategory("stored-category")
+        val storedFeed = sampleFeed("stored-feed")
+        localStore.writeCategories(listOf(storedCategory))
+        localStore.writeFeeds(listOf(storedFeed))
+        val queued = localStore.queueReadStateMutation("pending-article", true)
+        val categoryStarted = CompletableDeferred<Unit>()
+        val feedStarted = CompletableDeferred<Unit>()
+        val categoryCancelled = CompletableDeferred<Unit>()
+        val feedCancelled = CompletableDeferred<Unit>()
+        coEvery { api.categories(any()) } coAnswers {
+            categoryStarted.complete(Unit)
+            try { awaitCancellation() } finally { categoryCancelled.complete(Unit) }
+        }
+        coEvery { api.feeds(any(), any()) } coAnswers {
+            feedStarted.complete(Unit)
+            try { awaitCancellation() } finally { feedCancelled.complete(Unit) }
+        }
+        val categories = mutableListOf<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>>()
+        val feeds = mutableListOf<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>>()
+        val categoryRead = launch { repository.categoryUpdates().toList(categories) }
+        val feedRead = launch { repository.feedUpdates().toList(feeds) }
+        categoryStarted.await()
+        feedStarted.await()
+        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedCategory), false))), categories)
+        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedFeed), false))), feeds)
+        assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
+
+        categoryRead.cancelAndJoin()
+        feedRead.cancelAndJoin()
+        assertTrue(categoryCancelled.isCompleted)
+        assertTrue(feedCancelled.isCompleted)
+        assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
+    }
+
+    @Test
+    fun `foreground snapshots preserve pending unread counts while accepting fresh metadata`() = runTest {
+        repository.prepareSession()
+        val storedCategory = sampleCategory("c-local").copy(unreadCount = 2)
+        val storedFeed = sampleFeed("f-local").copy(unreadCount = 2)
+        val storedArticle = sampleArticle("pending-count")
+        localStore.writeCategories(listOf(storedCategory))
+        localStore.writeFeeds(listOf(storedFeed))
+        localStore.writeArticleRemotePage("count-test", ApiListResponse(listOf(storedArticle), null, false), true)
+        coEvery { api.categories(any()) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.CategoryTreeResponse(listOf(storedCategory), totalUnread = 2),
+        )
+        coEvery { api.feeds(any(), any()) } returns com.selffeed.android.network.ApiEnvelope(listOf(storedFeed))
+        val model = FeedsViewModel(repository)
+        model.refreshCategories()
+        model.refreshFeedHealth()
+        model.applyUnreadDelta("f-local", -1)
+        val queued = localStore.queueReadStateMutation(storedArticle.id, true)
+        coEvery { api.feeds(any(), any()) } returns com.selffeed.android.network.ApiEnvelope(
+            listOf(storedFeed.copy(title = "Updated metadata")),
+        )
+
+        model.refreshFeedHealth()
+        model.refreshCategories()
+
+        assertEquals("Updated metadata", model.state.value.feeds.single().title)
+        assertEquals(1, model.state.value.feeds.single().unreadCount)
+        assertEquals(1, model.state.value.categories.single().unreadCount)
+        assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
+    }
+
+    @Test
+    fun `a subscription fetch cannot claim current counts when pending reads drain during it`() = runTest {
+        repository.prepareSession()
+        val storedFeed = sampleFeed("f-local").copy(unreadCount = 2)
+        localStore.writeFeeds(listOf(storedFeed))
+        val queued = localStore.queueReadStateMutation("pending-count", true)
+        val started = CompletableDeferred<Unit>()
+        val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<List<FeedWithCounts>>>()
+        coEvery { api.feeds(any(), any()) } coAnswers {
+            started.complete(Unit)
+            response.await()
+        }
+        val snapshots = async { repository.feedUpdates().toList() }
+        started.await()
+        localStore.acknowledgeReadStateMutation(queued, true, 1)
+        response.complete(com.selffeed.android.network.ApiEnvelope(listOf(storedFeed)))
+
+        val result = snapshots.await().last() as AppResult.Success
+        assertEquals(false, result.data.mayReplaceUnreadCounts)
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+    }
+
+    @Test
+    fun `foreground subscription snapshots remain usable when freshness fails offline`() = runTest {
+        repository.prepareSession()
+        val storedCategory = sampleCategory("offline-category")
+        val storedFeed = sampleFeed("offline-feed")
+        localStore.writeCategories(listOf(storedCategory))
+        localStore.writeFeeds(listOf(storedFeed))
+        coEvery { api.categories(any()) } throws java.io.IOException("Offline")
+        coEvery { api.feeds(any(), any()) } throws java.io.IOException("Offline")
+
+        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedCategory), false))), repository.categoryUpdates().toList())
+        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedFeed), false))), repository.feedUpdates().toList())
     }
 
     @Test
@@ -873,7 +983,7 @@ class RssRepositoryTest {
         val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
             viewModel.updateArticleQueueSnapshot(listOf(article.copy(isRead = true)))
-            viewModel.startReadStateSync()
+            backgroundScope.launch { viewModel.observeReadStateSync() }
             val received = async { viewModel.events.first() }
             runCurrent()
             remoteEvents.emit(com.selffeed.android.network.ArticleReadStateChangedEvent(
@@ -931,7 +1041,7 @@ class RssRepositoryTest {
         val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
             viewModel.updateArticleQueueSnapshot(listOf(article))
-            viewModel.startReadStateSync()
+            backgroundScope.launch { viewModel.observeReadStateSync() }
             val bulk = async {
                 viewModel.events.first { it is com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead }
                     as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
@@ -987,7 +1097,7 @@ class RssRepositoryTest {
             viewModel.updateArticleQueueSnapshot(listOf(pending.copy(isRead = false), unread, other))
             viewModel.openArticle(pending.id)
             viewModel.state.first { it.selectedArticle?.contentHtml != null }
-            viewModel.startReadStateSync()
+            backgroundScope.launch { viewModel.observeReadStateSync() }
             val received = async { viewModel.events.first() }
             runCurrent()
             remoteEvents.emit(com.selffeed.android.network.ArticlesMarkedReadEvent(

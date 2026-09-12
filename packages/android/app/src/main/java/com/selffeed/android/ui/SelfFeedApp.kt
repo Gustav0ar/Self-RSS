@@ -134,7 +134,6 @@ data class SelfFeedAppActions(
     val onRegister: (String, String, String) -> Unit,
     val onLogout: () -> Unit,
     val onTabSelected: (HomeTab) -> Unit,
-    val onRefreshVisibleData: () -> Unit,
     val onHideReadChanged: (Boolean) -> Unit,
     val onCategorySelected: (String?) -> Unit,
     val onFeedSelected: (String?) -> Unit,
@@ -629,7 +628,6 @@ fun SelfFeedApp(
             },
         ) { paddingValues ->
             if (state.auth.isAuthenticated) {
-                ResumeRefreshObserver(onResume = actions.onRefreshVisibleData)
             }
 
             Box(

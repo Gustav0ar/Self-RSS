@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IN PROGRESS; account feature lifetimes implemented and verified; foreground work pending
+- Status: IN PROGRESS; account features and foreground work verified; worker ownership pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -172,7 +172,7 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 - [x] Delayed article success/failure cannot reopen a closed reader or overwrite a newly selected scope.
 - [ ] Old-account responses cannot publish state, credentials, replay cursor, or Room/cache entries after the new session starts.
 - [ ] Feeds, search, settings, admin data, selected article, and account-scoped work reset on logout/server change.
-- [ ] Foreground subscriptions/polling stop while hidden and resume once; durable queued writes remain intact during ordinary backgrounding.
+- [x] Foreground subscriptions/polling stop while hidden and resume once; durable queued writes remain intact during ordinary backgrounding.
 - [ ] Existing auth, offline lease, paging, and fast-swipe tests remain green.
 - [ ] An old request cannot dispatch or retry with a replacement account's credentials or replacement server identity; a delayed 401 cannot sign out or authenticate as the new session.
 - [x] A durable owner survives token refresh and process restart, changes at real account/server/session replacement, and is adopted by existing sessions without data loss.
@@ -263,3 +263,13 @@ Feed, article, search and settings repositories now receive immutable account ac
 The authenticated subtree uses Navigation3 saveable-state and ViewModel-store decorators. Account removal clears all feature models and their jobs, while ordinary Activity recreation retains them. A parent model remembers the last membership Navigation3 processed; reattachment reconciles it before forgetting a departed entry. This closes a reproduced retention bug when sign-out happens while the Activity is stopped and the next composition is in a recreated Activity.
 
 Three new JVM admission cases failed before implementation. The stopped sign-out device case failed on retained models and now passes. All 500 JVM tests, 21 selected emulator checks, lint and both isolated APK pairs pass. Logs: `/tmp/android-account-screens-{red,stopped-red,final-build,device-final,final-lint}.log`. Source review is complete. These tests verify model/job disposal; native memory measurements and production process restoration are still pending.
+
+## Foreground implementation and cache dependency
+
+Foreground work now uses one account-keyed `repeatOnLifecycle(STARTED)` effect. Its children await the actual SSE, status, health, category and statistics reads. Queue submission remains in the account ViewModel scope and wakes a conflated monitor channel after completion. The previous independent startup/resume poll triggers are removed. Status responses are fenced against a newer queue submission, including a submission that finishes before the old status response returns.
+
+Review exposed a required dependency on plan 036: the old cached category/feed methods launch application-owned refreshes. The foreground paths now use explicit `categoryUpdates` and `feedUpdates` streams, emitting stored subscriptions before awaiting freshness without draining the outbox. Their snapshot contract says whether unread counts may replace existing counts. Cached snapshots and requests overlapping pending read work preserve local counts; the model also protects edits accepted during a request, including nested category and bulk-read changes. Metadata can still refresh. This conservatively preserves prior cold-offline count semantics; it does not claim exact durable counter reconciliation, which remains plan 036 work. This amendment adds `ui/UnreadStateReducer.kt` and its callers to the concrete dependency scope.
+
+Failures were reproduced in `/tmp/android-foreground-{red,device-red,review-red,status-red,count-red}.log`. The cold-offline test initially matched article badges; a distinct stored-subscription label produces the valid missing-drawer failure in `/tmp/android-foreground-offline-red-final.log`. Focused fixes pass; full build/device/lint verification is in progress. Worker polling identity is a separate remaining slice.
+
+Final verification passes: 511 JVM tests and both isolated APK pairs (`/tmp/android-foreground-final-build.log`), 26 integrated API 36.1 emulator checks (`/tmp/android-foreground-device-final.log`), and lint (`/tmp/android-foreground-final-lint.log`). The blocked-request fixture waits for Compose foreground activation before waiting on its external gates. The independent source review completed with no remaining finding in this slice.

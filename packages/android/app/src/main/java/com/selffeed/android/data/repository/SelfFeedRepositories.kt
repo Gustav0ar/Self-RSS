@@ -50,7 +50,13 @@ interface AuthRepository {
     fun authEvents(): Flow<String>
 }
 
+/** Cached or pending snapshots may update metadata without undoing local unread counts. */
+data class SubscriptionSnapshot<T>(val data: T, val mayReplaceUnreadCounts: Boolean)
+
 interface FeedRepository {
+    /** Emits stored content first; the collector owns the subsequent freshness request. */
+    fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>>
+    fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>>
     suspend fun categories(): AppResult<List<CategoryWithCounts>>
     suspend fun createCategory(
         name: String,

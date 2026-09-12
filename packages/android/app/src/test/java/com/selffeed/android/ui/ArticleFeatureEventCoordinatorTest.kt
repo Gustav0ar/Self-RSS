@@ -125,20 +125,6 @@ class ArticleFeatureEventCoordinatorTest {
         assertEquals(listOf("a-1" to false, "a-2" to false, "a-3" to false), sink.articleReadStates)
     }
 
-    @Test
-    fun `article content refresh updates every dependent surface including the paged list`() {
-        val calls = mutableListOf<String>()
-
-        refreshArticleContentSurfaces(
-            loadCategories = { calls += "categories" },
-            loadFeeds = { calls += "feeds" },
-            refreshArticles = { calls += "articles" },
-            loadStats = { calls += "stats" },
-        )
-
-        assertEquals(listOf("categories", "feeds", "articles", "stats"), calls)
-    }
-
     private fun sampleFeed(id: String, categoryId: String): FeedWithCounts = FeedWithCounts(
         id = id,
         categoryId = categoryId,

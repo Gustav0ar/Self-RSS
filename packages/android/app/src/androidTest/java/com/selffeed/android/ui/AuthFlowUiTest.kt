@@ -242,7 +242,6 @@ class AuthFlowUiTest {
         onRegister = { _, _, _ -> },
         onLogout = {},
         onTabSelected = {},
-        onRefreshVisibleData = {},
         onHideReadChanged = {},
         onCategorySelected = {},
         onFeedSelected = {},

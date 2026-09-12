@@ -119,15 +119,17 @@ class SettingsViewModel @Inject constructor(
     fun updateFontFamily(family: String) = updatePreferences(UpdatePreferencesRequest(fontFamily = family))
 
     fun loadStats() {
-        viewModelScope.launch {
-            when (val result = repository.stats()) {
-                is AppResult.Success -> {
-                    _state.update { it.copy(stats = result.data) }
-                    loadDebugSnapshot()
-                }
-                is AppResult.Error -> _state.update {
-                    it.copy(errorMessage = PresentationText.dynamic(result.message))
-                }
+        viewModelScope.launch { refreshStats() }
+    }
+
+    suspend fun refreshStats() {
+        when (val result = repository.stats()) {
+            is AppResult.Success -> {
+                _state.update { it.copy(stats = result.data) }
+                loadDebugSnapshot()
+            }
+            is AppResult.Error -> _state.update {
+                it.copy(errorMessage = PresentationText.dynamic(result.message))
             }
         }
     }

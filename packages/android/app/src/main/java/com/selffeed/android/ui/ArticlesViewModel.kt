@@ -209,7 +209,6 @@ class ArticlesViewModel @Inject constructor(
         readingSessionKey = null
         readingSessionRestored = false
         preserveRestoredFiltersOnBootstrap = false
-        readStateManager.stopReadStateSync()
         readStateManager.clearSessionMemory()
         readStateManager.updateItems(emptyList())
         readStateManager.updateScope(null, null)
@@ -587,13 +586,7 @@ class ArticlesViewModel @Inject constructor(
         return enrichmentManager.enrichArticle(articleId)
     }
 
-    fun startReadStateSync() {
-        readStateManager.startReadStateSync()
-    }
-
-    fun stopReadStateSync() {
-        readStateManager.stopReadStateSync()
-    }
+    suspend fun observeReadStateSync() = readStateManager.observeReadStateSync()
 
     fun clearSessionReadStateMemory() {
         readStateManager.clearSessionMemory()
@@ -606,7 +599,6 @@ class ArticlesViewModel @Inject constructor(
     override fun onCleared() {
         cancelReaderWork()
         articleWarmingManager.setOnArticlesWarmed {}
-        readStateManager.stopReadStateSync()
         super.onCleared()
     }
 
