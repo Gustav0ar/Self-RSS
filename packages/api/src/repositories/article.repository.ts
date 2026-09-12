@@ -1,7 +1,14 @@
 import type { Database as BunDatabase } from 'bun:sqlite';
-import { and, asc, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { articleMedia, articleReads, articleSaves, articles, feeds } from '../db/schema.js';
+import {
+	articleMedia,
+	articleReads,
+	articleSaves,
+	articles,
+	articleUserStates,
+	feeds,
+} from '../db/schema.js';
 import { decodeArticleCursor } from '../utils/article-cursor.js';
 import {
 	type EnrichedContentReplacement,
@@ -13,6 +20,7 @@ import {
 	replaceArticleEnrichedContent,
 } from './article-enrichment.persistence.js';
 import { type ArticleScope, type SearchRow, scopeConditions } from './article-query.helpers.js';
+import { findArticleDetailForUser, findArticleStatesForUser } from './article-read.persistence.js';
 import { searchArticles, searchArticlesByScope } from './article-search.js';
 import {
 	type ArticleStateMutationResult,
@@ -90,6 +98,8 @@ export class ArticleRepository {
 				feedFaviconUrl: feeds.faviconUrl,
 				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
 				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
+				readRevision: sql<number>`coalesce(${articleUserStates.readRevision}, 0)`,
+				savedRevision: sql<number>`coalesce(${articleUserStates.savedRevision}, 0)`,
 			})
 			.from(articles)
 			.innerJoin(feeds, eq(articles.feedId, feeds.id))
@@ -100,6 +110,10 @@ export class ArticleRepository {
 			.leftJoin(
 				articleSaves,
 				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, userId)),
+			)
+			.leftJoin(
+				articleUserStates,
+				and(eq(articleUserStates.articleId, articles.id), eq(articleUserStates.userId, userId)),
 			)
 			.where(and(...conditions))
 			.orderBy(orderBy)
@@ -156,6 +170,8 @@ export class ArticleRepository {
 				feedFaviconUrl: feeds.faviconUrl,
 				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
 				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
+				readRevision: sql<number>`coalesce(${articleUserStates.readRevision}, 0)`,
+				savedRevision: sql<number>`coalesce(${articleUserStates.savedRevision}, 0)`,
 			})
 			.from(articles)
 			.innerJoin(feeds, eq(articles.feedId, feeds.id))
@@ -167,9 +183,20 @@ export class ArticleRepository {
 				articleSaves,
 				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, scope.userId)),
 			)
+			.leftJoin(
+				articleUserStates,
+				and(
+					eq(articleUserStates.articleId, articles.id),
+					eq(articleUserStates.userId, scope.userId),
+				),
+			)
 			.where(and(...conditions))
 			.orderBy(orderBy)
 			.limit(options.limit + 1);
+	}
+
+	findStatesForUser(userId: string, articleIds: string[]) {
+		return findArticleStatesForUser(this.db, userId, articleIds);
 	}
 
 	async countByFeeds(feedIds: string[]): Promise<number> {
@@ -217,58 +244,8 @@ export class ArticleRepository {
 		});
 	}
 
-	async findDetailForUser(userId: string, articleId: string) {
-		const [article] = await this.db
-			.select({
-				id: articles.id,
-				feedId: articles.feedId,
-				guid: articles.guid,
-				canonicalUrl: articles.canonicalUrl,
-				title: articles.title,
-				author: articles.author,
-				excerpt: articles.excerpt,
-				contentHtml: articles.contentHtml,
-				contentText: articles.contentText,
-				heroImageUrl: articles.heroImageUrl,
-				publishedAt: articles.publishedAt,
-				fetchedAt: articles.fetchedAt,
-				hash: articles.hash,
-				contentStatus: articles.contentStatus,
-				contentVersion: articles.contentVersion,
-				enrichmentQueuedAt: articles.enrichmentQueuedAt,
-				enrichmentAttemptedAt: articles.enrichmentAttemptedAt,
-				enrichedAt: articles.enrichedAt,
-				enrichmentError: articles.enrichmentError,
-				feedTitle: feeds.title,
-				feedFaviconUrl: feeds.faviconUrl,
-				feedSiteUrl: feeds.siteUrl,
-				isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
-				isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
-			})
-			.from(articles)
-			.innerJoin(feeds, and(eq(articles.feedId, feeds.id), eq(feeds.userId, userId)))
-			.leftJoin(
-				articleReads,
-				and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
-			)
-			.leftJoin(
-				articleSaves,
-				and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, userId)),
-			)
-			.where(eq(articles.id, articleId))
-			.limit(1);
-
-		if (!article) {
-			return null;
-		}
-
-		const media = await this.db
-			.select()
-			.from(articleMedia)
-			.where(eq(articleMedia.articleId, articleId))
-			.orderBy(asc(articleMedia.position));
-
-		return { ...article, media };
+	findDetailForUser(userId: string, articleId: string) {
+		return findArticleDetailForUser(this.db, userId, articleId);
 	}
 
 	async findRefForUser(userId: string, articleId: string) {

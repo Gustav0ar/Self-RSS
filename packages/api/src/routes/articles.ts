@@ -17,11 +17,9 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		const userId = c.get('userId');
 		const article = await articleService.getArticle(userId, articleId);
 
-		// The representation changes with content, read state, or saved state.
-		// (hash) or mark-read (isRead). Client sends back via
-		// If-None-Match; if unchanged, 304 avoids transferring the full
-		// HTML body — the dominant cost for old, long articles.
-		const etag = `"${article.hash ?? article.id}-v${article.contentVersion}-${article.isRead ? 'r' : 'u'}-${article.isSaved ? 's' : 'n'}"`;
+		// Include revisions even when a flag toggles back to its previous value.
+		// Otherwise a 304 would hide state metadata needed for offline reconciliation.
+		const etag = `"${article.hash ?? article.id}-v${article.contentVersion}-${article.isRead ? 'r' : 'u'}-${article.isSaved ? 's' : 'n'}-r${article.readRevision}-s${article.savedRevision}"`;
 		if (c.req.header('If-None-Match') === etag) {
 			return c.body(null, 304, { ETag: etag });
 		}

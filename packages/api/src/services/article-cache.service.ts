@@ -11,7 +11,6 @@ import {
 	type CacheMetrics,
 	cacheableArticleRows,
 	cacheMetricType,
-	isArticleListCacheKey,
 } from './article-cache.model.js';
 import { REDIS_SCAN_BATCH, scanKeys } from './redis-scan.js';
 
@@ -239,7 +238,6 @@ export class ArticleCacheService {
 			await Promise.all([
 				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
 				this.redis.setex(metaKey, CacheTTL.articleList * 3, JSON.stringify(cached.meta)),
-				this.registerArticleListMembership(userId, cacheKey, cached),
 			]);
 
 			logger.debug('Article cache populated', {
@@ -291,10 +289,7 @@ export class ArticleCacheService {
 			if (!(await this.isGenerationCurrent(userId, generation))) {
 				return;
 			}
-			await Promise.all([
-				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
-				this.registerArticleListMembership(userId, cacheKey, cached),
-			]);
+			await Promise.all([this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached))]);
 		} catch (err) {
 			logger.error('Failed to populate feed cache', {
 				userId,
@@ -363,10 +358,7 @@ export class ArticleCacheService {
 			if (!(await this.isGenerationCurrent(userId, generation))) {
 				return;
 			}
-			await Promise.all([
-				this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached)),
-				this.registerArticleListMembership(userId, cacheKey, cached),
-			]);
+			await Promise.all([this.redis.setex(cacheKey, CacheTTL.articleList, JSON.stringify(cached))]);
 		} catch (err) {
 			logger.error('Failed to populate category cache', {
 				userId,
@@ -403,95 +395,6 @@ export class ArticleCacheService {
 		if (keys.length > 0) {
 			await this.redis.del(...keys);
 		}
-	}
-
-	/**
-	 * Patch cached article-list rows after a single read-state toggle.
-	 * This keeps hot list caches coherent without bumping the generation and
-	 * deleting every scoped list on every navigation-driven mark-read event.
-	 */
-	async updateCachedReadState(userId: string, articleId: string, read: boolean): Promise<void> {
-		await this.updateCachedBooleanState(userId, articleId, 'isRead', read);
-	}
-
-	async updateCachedSavedState(userId: string, articleId: string, saved: boolean): Promise<void> {
-		await this.updateCachedBooleanState(userId, articleId, 'isSaved', saved);
-	}
-
-	private async updateCachedBooleanState(
-		userId: string,
-		articleId: string,
-		field: 'isRead' | 'isSaved',
-		value: boolean,
-	): Promise<void> {
-		try {
-			const indexKey = CacheKeys.articleListMembership(userId, articleId);
-			const indexedKeys = await this.redis.smembers(indexKey);
-			const keys = indexedKeys.filter((key) => isArticleListCacheKey(userId, key));
-			if (keys.length === 0) {
-				const scopedKeys = await scanKeys(this.redis, `articles:list:${userId}:*`);
-				keys.push(CacheKeys.articleListCache(userId), ...scopedKeys);
-			}
-			const uniqueKeys = Array.from(new Set(keys));
-
-			await Promise.allSettled(
-				uniqueKeys.map(async (key) => {
-					const cached = await this.redis.get(key);
-					if (!cached) {
-						return;
-					}
-
-					let data: CachedArticleList;
-					try {
-						data = JSON.parse(cached) as CachedArticleList;
-					} catch {
-						await this.redis.del(key);
-						return;
-					}
-
-					let changed = false;
-					const articles = data.articles.map((article) => {
-						if (article.id !== articleId || article[field] === value) {
-							return article;
-						}
-						changed = true;
-						return { ...article, [field]: value };
-					});
-
-					if (!changed) {
-						return;
-					}
-
-					const nextData = { ...data, articles };
-					await Promise.all([
-						this.redis.setex(key, CacheTTL.articleList, JSON.stringify(nextData)),
-						this.registerArticleListMembership(userId, key, nextData),
-					]);
-				}),
-			);
-		} catch (err) {
-			logger.warn('Failed to update cached article state', {
-				userId,
-				articleId,
-				field,
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	private async registerArticleListMembership(
-		userId: string,
-		cacheKey: string,
-		data: CachedArticleList,
-	): Promise<void> {
-		if (data.articles.length === 0) return;
-		const pipeline = this.redis.pipeline();
-		for (const article of data.articles) {
-			const indexKey = CacheKeys.articleListMembership(userId, article.id);
-			pipeline.sadd(indexKey, cacheKey);
-			pipeline.expire(indexKey, CacheTTL.articleList);
-		}
-		await pipeline.exec();
 	}
 
 	/**

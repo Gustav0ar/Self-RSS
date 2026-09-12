@@ -152,6 +152,9 @@ export interface ArticleListItem {
 	displayedAt: string;
 	isRead: boolean;
 	isSaved: boolean;
+	/** Absent when connected to an older server. Never treat absence as revision zero. */
+	readRevision?: number;
+	savedRevision?: number;
 	contentStatus: ArticleContentStatus;
 	contentVersion: number;
 }
@@ -163,6 +166,9 @@ export interface ArticleDetail extends Article {
 	media: ArticleMedia[];
 	isRead: boolean;
 	isSaved: boolean;
+	/** Absent when connected to an older server. Never treat absence as revision zero. */
+	readRevision?: number;
+	savedRevision?: number;
 	isEnriched: boolean;
 }
 

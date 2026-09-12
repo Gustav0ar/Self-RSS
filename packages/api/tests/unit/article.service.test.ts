@@ -293,6 +293,9 @@ describe('ArticleService', () => {
 		};
 		const articleRepo = {
 			findDetailForUser: vi.fn(),
+			findStatesForUser: vi.fn(async () => [
+				{ id: 'article-1', isRead: true, isSaved: false, readRevision: 4, savedRevision: 2 },
+			]),
 		};
 		const redis = {
 			get: vi.fn(async () => JSON.stringify(cachedArticle)),
@@ -314,7 +317,13 @@ describe('ArticleService', () => {
 
 		const result = await service.getArticle('user-1', 'article-1');
 
-		expect(result).toEqual(cachedArticle);
+		expect(result).toEqual({
+			...cachedArticle,
+			isRead: true,
+			isSaved: false,
+			readRevision: 4,
+			savedRevision: 2,
+		});
 		expect(articleRepo.findDetailForUser).not.toHaveBeenCalled();
 		expect(redis.setex).not.toHaveBeenCalled();
 		expect(metrics.recordCacheHit).toHaveBeenCalledWith('article_detail');
@@ -430,7 +439,6 @@ describe('ArticleService', () => {
 			publishReadStateEvent: vi.fn(async () => undefined),
 		};
 		const articleCache = {
-			updateCachedReadState: vi.fn(async () => undefined),
 			invalidateCache: vi.fn(async () => undefined),
 		};
 
@@ -457,7 +465,6 @@ describe('ArticleService', () => {
 		expect(metricsRepo.incrementReadCount).toHaveBeenCalledWith('user-1', 1);
 		expect(redis.del).toHaveBeenCalledWith('unread:user-1', 'unread:user-1:feed:feed-1');
 		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
-		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
 		expect(articleCache.invalidateCache).not.toHaveBeenCalled();
 		expect(realtime.publishReadStateEvent).toHaveBeenCalledWith(
 			'user-1',
@@ -478,46 +485,6 @@ describe('ArticleService', () => {
 			read: true,
 			revision: 1,
 		});
-	});
-
-	it('does not wait for scoped list cache patching on markRead', async () => {
-		const articleRepo = {
-			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
-			setReadState: vi.fn(async () => ({
-				state: true,
-				revision: 1,
-				applied: true,
-				changed: true,
-				conflict: false,
-				duplicate: false,
-			})),
-		};
-		const metricsRepo = {
-			incrementReadCount: vi.fn(async () => undefined),
-		};
-		const redis = {
-			del: vi.fn(async () => 1),
-		};
-		const realtime = {
-			publishReadStateEvent: vi.fn(async () => undefined),
-		};
-		const articleCache = {
-			updateCachedReadState: vi.fn(() => new Promise(() => undefined)),
-		};
-		const service = new ArticleService(
-			articleRepo as never,
-			{} as never,
-			metricsRepo as never,
-			redis as never,
-			undefined,
-			realtime as never,
-			articleCache as never,
-		);
-
-		await expect(
-			service.markRead('user-1', 'article-1', true, 'manual', 'client-1'),
-		).resolves.toMatchObject({ success: true, read: true, revision: 1 });
-		expect(articleCache.updateCachedReadState).toHaveBeenCalledWith('user-1', 'article-1', true);
 	});
 
 	it('returns the committed mutation when Redis and realtime fan-out fail', async () => {
@@ -548,7 +515,7 @@ describe('ArticleService', () => {
 		).resolves.toMatchObject({ success: true, read: true, revision: 4 });
 	});
 
-	it('saves an owned article and patches list and detail caches', async () => {
+	it('saves an owned article and invalidates its detail cache', async () => {
 		const articleRepo = {
 			findRefForUser: vi.fn(async () => ({ id: 'article-1', feedId: 'feed-1' })),
 			setSavedState: vi.fn(async () => ({
@@ -561,9 +528,7 @@ describe('ArticleService', () => {
 			})),
 		};
 		const redis = { del: vi.fn(async () => 1) };
-		const articleCache = {
-			updateCachedSavedState: vi.fn(async () => undefined),
-		};
+		const articleCache = {};
 		const service = new ArticleService(
 			articleRepo as never,
 			{} as never,
@@ -580,7 +545,6 @@ describe('ArticleService', () => {
 			revision: 1,
 		});
 		expect(articleRepo.setSavedState).toHaveBeenCalledWith('user-1', 'article-1', true, {});
-		expect(articleCache.updateCachedSavedState).toHaveBeenCalledWith('user-1', 'article-1', true);
 		expect(redis.del).toHaveBeenCalledWith('articles:detail:user-1:article-1');
 	});
 

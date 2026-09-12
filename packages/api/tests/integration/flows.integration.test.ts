@@ -424,6 +424,42 @@ describe('API integration - additional flows', () => {
 			expect(cached.status).toBe(304);
 			expect(cached.headers.get('ETag')).toBe(etag);
 
+			let previousEtag = etag;
+			for (const kind of ['read', 'saved']) {
+				for (const state of [true, false]) {
+					const changed = await authedRequest(`/api/v1/articles/${articleId}/${kind}`, token, {
+						method: 'PATCH',
+						body: JSON.stringify({ [kind]: state }),
+					});
+					expect(changed.response.status).toBe(200);
+				}
+				const updated = await app.request(
+					`/api/v1/articles/detail?id=${encodeURIComponent(articleId)}`,
+					{
+						headers: { Authorization: `Bearer ${token}`, 'If-None-Match': previousEtag ?? '' },
+					},
+				);
+				expect(updated.status).toBe(200);
+				expect(await updated.json()).toMatchObject({
+					data: { [`${kind}Revision`]: 2, isRead: false, isSaved: false },
+				});
+				expect(updated.headers.get('ETag')).not.toBe(previousEtag);
+				previousEtag = updated.headers.get('ETag');
+			}
+
+			await authedRequest('/api/v1/articles/mark-all-read', token, {
+				method: 'PATCH',
+				body: JSON.stringify({}),
+			});
+			const afterBulk = await app.request(
+				`/api/v1/articles/detail?id=${encodeURIComponent(articleId)}`,
+				{
+					headers: { Authorization: `Bearer ${token}`, 'If-None-Match': previousEtag ?? '' },
+				},
+			);
+			expect(afterBulk.status).toBe(200);
+			expect(await afterBulk.json()).toMatchObject({ data: { isRead: true, readRevision: 3 } });
+
 			const legacyDetail = await authedRequest(`/api/v1/articles/${articleId}`, token);
 			expect(legacyDetail.response.status).toBe(200);
 			expect(legacyDetail.body.data.id).toBe(articleId);
