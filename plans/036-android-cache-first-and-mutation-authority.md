@@ -1,6 +1,6 @@
 # Plan 036: Return cached content immediately and preserve the latest mutation
 
-- Status: TODO
+- Status: IN PROGRESS
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -124,6 +124,7 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/main/java/com/selffeed/android/data/local/LocalStore.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/local/LocalDatabase.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/ArticleStateSyncWorker.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/SelfFeedApplication.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/repository/FeatureRepositories.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/repository/SelfFeedRepositories.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/ui/articles/ReadStateManager.kt`
@@ -131,6 +132,9 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/main/java/com/selffeed/android/ui/ArticleReadStateStore.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/data/RssRepositoryTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/data/ArticleStateSyncWorkerTest.kt`
+- `packages/android/app/src/test/java/com/selffeed/android/data/WorkerSchedulingTest.kt`
+- `packages/android/app/src/sharedTest/java/com/selffeed/android/data/WorkerSchedulingContract.kt`
+- `packages/android/app/src/androidTest/java/com/selffeed/android/data/WorkerSchedulingDeviceTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/data/local/LocalStoreTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/ui/articles/ReadStateManagerTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/ui/ArticlesViewModelTest.kt`
@@ -181,8 +185,8 @@ Verify with `./packages/android/gradlew -p packages/android :app:testDeviceTestU
 
 ## Test and acceptance contract
 
-- [ ] Cached content returns while mutation transport is suspended.
-- [ ] At most one session drain delivers mutations at a time; queued work cannot become stranded in the enqueue/worker-completion race.
+- [x] Cached content returns while mutation transport is suspended.
+- [x] At most one session drain delivers mutations at a time; queued work cannot become stranded in the enqueue/worker-completion race.
 - [ ] A newer local mutation wins over an older acknowledgement or remote receipt until reconciliation completes.
 - [ ] Read/save UI, cached detail, Room, and counts converge to the same effective state.
 - [ ] Process restart preserves mutation IDs, ordering, and retryability without changing the server contract.
@@ -204,8 +208,20 @@ Future mutation consumers must use LocalStore's effective result. Keep one owner
 
 ## Execution notes
 
-- Reconciled commit: pending
+- Reconciled commit: `25f7a0e`. Main already fixes cached article reads and serializes drains/acknowledgement publication. PR #58 adds structured cached subscription streams. PR #59 owns full worker execution and keeps existing startup work. Remaining delivery work is legacy subscription read/invalidation flushes, synchronous read/save delivery, per-action REPLACE and confirmed outbox authentication rejection. Effective rejection/count persistence follows as a separate review slice.
 - Reproduction and checks: pending
 - Device/performance evidence: pending where applicable
 - Design selection: pending where applicable
 - Remaining limitations: pending
+
+### Delivery slice
+
+The first three reproductions fail in `/tmp/android-outbox-delivery-red.log`: cached subscription reads wait for an existing delivery, read/save actions perform transport on their caller, and a burst replaces pending WorkManager requests. Cached reads/invalidation now stay independent of delivery. Read/save accepts durable Room intent and performs only a short local scheduling handoff before returning; ordinary lifecycle cancellation still propagates from the enclosing owner scope.
+
+Scheduling queries unfinished work only. Existing queued/blocked attempts coalesce. A running attempt gets one successor through APPEND_OR_REPLACE; an empty unfinished set uses KEEP to remove completed-chain history. Delivery stays serialized, and explicit drains now use normal authenticated error handling. A confirmed authentication rejection archives the old queue and clears its owner instead of escaping the normal auth-loss path.
+
+Independent review reproduced a manual-retry lock wait (`/tmp/android-outbox-retry-lock-red.log`) and completed-chain growth (`/tmp/android-outbox-history-red.log`, expected one named row, found three). Both are corrected. The shared WorkManager contract runs repeated queued bursts, edits during a finishing worker and completed delivery cycles on JVM and Android.
+
+All 518 JVM tests and both isolated APK pairs pass in `/tmp/android-outbox-isolated-build.log`. Combined testing exposed a work-testing fixture leak: `closeWorkDatabase()` closes Room but leaves its static test delegate installed. The fixture now undoes that restricted test hook in cleanup; production cancellation handling is unchanged. Final lint passes in `/tmp/android-outbox-final-lint.log`; Android results are below. Durable unread-count reconciliation, effective rejection publication, and mutation recovery after actual process death remain subsequent plan 036 work.
+
+All seven selected Android checks pass in `/tmp/android-outbox-device.log`: the three shared WorkManager contracts run on actual Android, alongside the four foreground/cached-subscription lifecycle checks. The test-only worker controls completion; repository mutation behavior uses real Room with a controlled API in JVM tests. This is not a claim that a device test exercised end-to-end server delivery.

@@ -10,8 +10,14 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.WorkInfo
+import androidx.work.WorkQuery
+import androidx.work.await
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 /** Delivers the Room-backed article outbox after process death or connectivity loss. */
@@ -31,8 +37,23 @@ class ArticleStateSyncWorker @AssistedInject constructor(
 
     companion object {
         private const val WORK_NAME = "article-state-outbox"
+        private val scheduling = Mutex()
 
-        fun kickOnce(context: Context) = enqueue(context, ExistingWorkPolicy.REPLACE)
+        /** Coalesce pending attempts and retain one successor when delivery is already running. */
+        suspend fun kickOnce(context: Context) = scheduling.withLock {
+            val workManager = WorkManager.getInstance(context)
+            val query = WorkQuery.Builder.fromUniqueWorkNames(listOf(WORK_NAME))
+                .addStates(listOf(WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING, WorkInfo.State.BLOCKED))
+                .build()
+            val unfinished = workManager.getWorkInfosFlow(query).first()
+            // Intent is committed before this query. An unstarted attempt will
+            // see it; a running attempt may already have observed an empty queue.
+            if (unfinished.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }) {
+                return@withLock
+            }
+            val policy = if (unfinished.isEmpty()) ExistingWorkPolicy.KEEP else ExistingWorkPolicy.APPEND_OR_REPLACE
+            enqueue(context, policy).await()
+        }
 
         /** Restore durable work on process start without resetting retry backoff. */
         fun ensureScheduled(context: Context) = enqueue(context, ExistingWorkPolicy.KEEP)

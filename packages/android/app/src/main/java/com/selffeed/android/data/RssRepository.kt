@@ -41,6 +41,7 @@ import coil3.ImageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -295,7 +296,6 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun categories() = safeReadCall { session ->
-        flushPendingArticleStateMutations(session)
         categoryCacheMutex.withLock {
             runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
                 runtime.recordCacheHit()
@@ -376,7 +376,6 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun feeds(categoryId: String?) = safeReadCall { session ->
-        flushPendingArticleStateMutations(session)
         val key = "feeds:${categoryId.orEmpty()}"
         runtime.getCached<List<FeedWithCounts>>(key)?.let {
             runtime.recordCacheHit()
@@ -409,7 +408,6 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun refreshFeeds(categoryId: String?) = safeReadCall { session ->
-        flushPendingArticleStateMutations(session)
         withRetry(session) { feedRemote.feeds(categoryId, session = session) }.also { feeds ->
             account.commit(session) { runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds) }
             persistFeedSnapshot(categoryId, feeds, session)
@@ -783,25 +781,26 @@ class RssRepository @Inject constructor(
     suspend fun enrichArticle(articleId: String): AppResult<EnrichArticleResponse> =
         enrichArticle(articleId, invalidateCaches = true)
 
-    /** Queues the desired state before attempting network delivery. */
+    /** Returns after durable intent and scheduling; transport belongs to the worker. */
     override suspend fun markRead(articleId: String, read: Boolean, source: String) = safeCall { session ->
         val key = "article:$articleId"
-        articleStateProjectionMutex.withLock {
-            account.commit(session) {
-                localStore.queueReadStateMutation(articleId, read, source)
-                // Optimistic write — visible to the reader screen and the next
-                // list query before the round-trip completes.
-                runtime.getCached<ArticleDetail>(key)?.let { previous ->
-                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
+        withContext(NonCancellable) {
+            articleStateProjectionMutex.withLock {
+                account.commit(session) {
+                    localStore.queueReadStateMutation(articleId, read, source)
+                    // Optimistic write — visible to the reader screen and the next
+                    // list query before the round-trip completes.
+                    runtime.getCached<ArticleDetail>(key)?.let { previous ->
+                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
+                    }
                 }
             }
+            account.commit(session) { runtime.invalidateByPrefix("stats") }
+            // The durable Room write is the success boundary. WorkManager may be
+            // temporarily unavailable during process initialization, so scheduling
+            // must never turn an already-persisted user action into an error.
+            scheduleArticleStateDelivery()
         }
-        account.commit(session) { runtime.invalidateByPrefix("stats") }
-        // The durable Room write is the success boundary. WorkManager may be
-        // temporarily unavailable during process initialization, so scheduling
-        // must never turn an already-persisted user action into an error.
-        runCatching { ArticleStateSyncWorker.kickOnce(imageRequestContext) }
-        if (networkMonitor.online.value) flushPendingArticleStateMutations(session)
         read
     }
 
@@ -826,20 +825,22 @@ class RssRepository @Inject constructor(
 
     override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall { session ->
         val key = "article:$articleId"
-        val previous = articleStateProjectionMutex.withLock {
-            account.commit(session) {
-                localStore.queueSavedStateMutation(articleId, saved)
-                runtime.getCached<ArticleDetail>(key)?.also { cached ->
-                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+        val previous = withContext(NonCancellable) {
+            val cached = articleStateProjectionMutex.withLock {
+                account.commit(session) {
+                    localStore.queueSavedStateMutation(articleId, saved)
+                    runtime.getCached<ArticleDetail>(key)?.also { cached ->
+                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+                    }
                 }
             }
+            account.commit(session) {
+                runtime.invalidateByPrefix("articles")
+                runtime.invalidateByPrefix("search")
+            }
+            scheduleArticleStateDelivery()
+            cached
         }
-        account.commit(session) {
-            runtime.invalidateByPrefix("articles")
-            runtime.invalidateByPrefix("search")
-        }
-        runCatching { ArticleStateSyncWorker.kickOnce(imageRequestContext) }
-        if (networkMonitor.online.value) flushPendingArticleStateMutations(session)
         if (saved) {
             if (previous == null) backgroundRefreshArticle(articleId, cacheImages = true, session = session)
             else cacheArticleImages(previous.copy(isSaved = true))
@@ -1022,9 +1023,8 @@ class RssRepository @Inject constructor(
 
     override suspend fun retryPendingArticleChanges() {
         account.withSession { session ->
-            account.commit(session) {
-                if (isLoggedIn()) ArticleStateSyncWorker.kickOnce(imageRequestContext)
-            }
+            val authenticated = account.commit(session) { isLoggedIn() }
+            if (authenticated) ArticleStateSyncWorker.kickOnce(imageRequestContext)
         }
     }
 
@@ -1131,7 +1131,6 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun invalidateReadStateCaches(articleId: String?) = account.withSession { session ->
-        flushPendingArticleStateMutations(session)
         // Read state is an overlay; never evict immutable article content or
         // the visible list for a receipt arriving from another client.
         account.commit(session) {
@@ -1229,13 +1228,21 @@ class RssRepository @Inject constructor(
         }
     }
 
-    // Workers and foreground actions share one drain, including its reads and acknowledgments.
-    suspend fun flushPendingArticleStateMutations(): Boolean = account.withSession { session ->
-        flushPendingArticleStateMutations(session)
+    private suspend fun scheduleArticleStateDelivery() {
+        try {
+            ArticleStateSyncWorker.kickOnce(imageRequestContext)
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            runtime.debugLog("Outbox scheduling unavailable; durable intent will be recovered on startup")
+        }
     }
 
-    private suspend fun flushPendingArticleStateMutations(session: ApiSession): Boolean = articleStateFlushMutex.withLock {
-        drainPendingArticleStateMutations(session)
+    // Explicit delivery joins one drain and uses normal authenticated error handling.
+    suspend fun flushPendingArticleStateMutations(): Boolean = when (val result = safeCall { session ->
+        articleStateFlushMutex.withLock { drainPendingArticleStateMutations(session) }
+    }) {
+        is AppResult.Success -> result.data
+        is AppResult.Error -> false
     }
 
     private suspend fun drainPendingArticleStateMutations(session: ApiSession): Boolean {

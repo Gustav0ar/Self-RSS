@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IMPLEMENTED; integrated acceptance remains plan 049; account features and foreground work verified; worker ownership pending
+- Status: IMPLEMENTED; integrated acceptance remains plan 049
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
