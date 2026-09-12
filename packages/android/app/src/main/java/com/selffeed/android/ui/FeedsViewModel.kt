@@ -3,6 +3,7 @@ package com.selffeed.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
+import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.data.categoryMoveUpdates
@@ -82,33 +83,53 @@ class FeedsViewModel @Inject constructor(
     private var syncSubmissionRevision = 0L
     private val healthReads = Mutex()
     private var categoryLoadRevision = 0L
-    private var localUnreadRevision = 0L
     private var categoryReloadPending = false
 
+    private var libraryCounts = LibraryCounts()
+
+    suspend fun observeCountRefreshRequests(onRefresh: () -> Unit) {
+        repository.countRefreshRequests().collect { onRefresh() }
+    }
+
+    suspend fun observeLibraryCounts() {
+        repository.libraryCounts().collect {
+            libraryCounts = it
+            _state.update { state -> state.withLibraryCounts(libraryCounts) }
+        }
+    }
+
+    private inline fun updateState(transform: (FeedsUiState) -> FeedsUiState) {
+        _state.update { current ->
+            val updated = transform(current)
+            if (current.feeds === updated.feeds && current.categories === updated.categories) updated
+            else updated.withLibraryCounts(libraryCounts)
+        }
+    }
+
     fun offerExternalFeed(url: String) {
-        _state.update { it.copy(externalFeedUrl = url) }
+        updateState { it.copy(externalFeedUrl = url) }
     }
 
     fun consumeExternalFeed() {
-        _state.update { it.copy(externalFeedUrl = null) }
+        updateState { it.copy(externalFeedUrl = null) }
     }
 
     fun loadFeedSyncHistory(feedId: String) {
         viewModelScope.launch {
-            _state.update {
+            updateState {
                 it.copy(
                     syncHistoryLoadingFeedId = feedId,
                     syncHistoryErrorByFeed = it.syncHistoryErrorByFeed - feedId,
                 )
             }
             when (val result = repository.feedSyncHistory(feedId)) {
-                is AppResult.Success -> _state.update {
+                is AppResult.Success -> updateState {
                     it.copy(
                         syncHistoryByFeed = it.syncHistoryByFeed + (feedId to result.data.runs),
                         syncHistoryLoadingFeedId = null,
                     )
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(
                         syncHistoryLoadingFeedId = null,
                         syncHistoryErrorByFeed = it.syncHistoryErrorByFeed +
@@ -129,18 +150,13 @@ class FeedsViewModel @Inject constructor(
             return
         }
         val revision = ++categoryLoadRevision
-        val unreadRevision = localUnreadRevision
         repository.categoryUpdates().collect { result ->
             if (revision == categoryLoadRevision) {
                 when (result) {
-                    is AppResult.Success -> _state.update {
-                        it.copy(categories = UnreadStateReducer.mergeCategorySnapshot(
-                            current = it.categories,
-                            incoming = result.data.data,
-                            keepUnreadCounts = !result.data.mayReplaceUnreadCounts || unreadRevision != localUnreadRevision,
-                        ))
+                    is AppResult.Success -> updateState {
+                        it.copy(categories = result.data)
                     }
-                    is AppResult.Error -> _state.update {
+                    is AppResult.Error -> updateState {
                         it.copy(errorMessage = PresentationText.dynamic(result.message))
                     }
                 }
@@ -149,26 +165,14 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun loadFeeds() {
-        viewModelScope.launch {
-            when (val result = repository.feeds(null)) {
-                is AppResult.Success -> _state.update { it.copy(feeds = result.data) }
-                is AppResult.Error -> _state.update {
-                    it.copy(errorMessage = PresentationText.dynamic(result.message))
-                }
-            }
-        }
+        viewModelScope.launch { refreshFeedHealth() }
     }
 
     suspend fun refreshFeedHealth() = healthReads.withLock {
-        val unreadRevision = localUnreadRevision
         repository.feedUpdates().collect { result ->
             when (result) {
-                is AppResult.Success -> _state.update {
-                    it.copy(feeds = UnreadStateReducer.mergeFeedSnapshot(
-                        current = it.feeds,
-                        incoming = result.data.data,
-                        keepUnreadCounts = !result.data.mayReplaceUnreadCounts || unreadRevision != localUnreadRevision,
-                    ))
+                is AppResult.Success -> updateState {
+                    it.copy(feeds = result.data)
                 }
                 // Health polling must preserve a usable cached drawer during network failure.
                 is AppResult.Error -> Unit
@@ -201,7 +205,7 @@ class FeedsViewModel @Inject constructor(
         when (status) {
             is AppResult.Success -> {
                 if (status.data.stale) {
-                    _state.update {
+                    updateState {
                         it.copy(
                             loading = false,
                             syncInBackground = false,
@@ -226,11 +230,11 @@ class FeedsViewModel @Inject constructor(
         if (_state.value.reorderingCategories) return
         val updates = categoryMoveUpdates(_state.value.categories, id, direction) ?: return
         categoryLoadRevision++
-        _state.update { it.copy(reorderingCategories = true, errorMessage = null) }
+        updateState { it.copy(reorderingCategories = true, errorMessage = null) }
         viewModelScope.launch {
             try {
                 when (val result = repository.reorderCategories(updates)) {
-                    is AppResult.Success -> _state.update {
+                    is AppResult.Success -> updateState {
                         it.copy(
                             categories = applyCategoryOrder(it.categories, updates),
                             statusMessage = PresentationText.resource(
@@ -239,12 +243,12 @@ class FeedsViewModel @Inject constructor(
                             ),
                         )
                     }
-                    is AppResult.Error -> _state.update {
+                    is AppResult.Error -> updateState {
                         it.copy(errorMessage = PresentationText.dynamic(result.message))
                     }
                 }
             } finally {
-                _state.update { it.copy(reorderingCategories = false) }
+                updateState { it.copy(reorderingCategories = false) }
                 if (categoryReloadPending) {
                     categoryReloadPending = false
                     loadCategories()
@@ -258,12 +262,12 @@ class FeedsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.createCategory(name.trim(), parentCategoryId)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(statusMessage = PresentationText.resource(R.string.feeds_category_created))
                     }
                     loadCategories()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -275,12 +279,12 @@ class FeedsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.updateCategory(id, name.trim(), parentCategoryId)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(statusMessage = PresentationText.resource(R.string.feeds_category_updated))
                     }
                     loadCategories()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -291,12 +295,12 @@ class FeedsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.deleteCategory(id)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(statusMessage = PresentationText.resource(R.string.feeds_category_deleted))
                     }
                     loadCategories()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -312,14 +316,14 @@ class FeedsViewModel @Inject constructor(
                 when (val result = repository.createCategory("Uncategorized", null)) {
                     is AppResult.Success -> result.data.id
                     is AppResult.Error -> {
-                        _state.update { it.copy(errorMessage = PresentationText.dynamic(result.message)) }
+                        updateState { it.copy(errorMessage = PresentationText.dynamic(result.message)) }
                         return@launch
                     }
                 }
             } else categoryId
             when (val result = repository.createFeed(feedUrl.trim(), destinationCategoryId, title?.trim()?.ifBlank { null })) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             statusMessage = PresentationText.resource(
                                 if (result.data.lifecycleStatus == "pending") {
@@ -332,7 +336,7 @@ class FeedsViewModel @Inject constructor(
                     }
                     loadFeeds()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -352,7 +356,7 @@ class FeedsViewModel @Inject constructor(
                 )
             ) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             statusMessage = PresentationText.resource(
                                 if (result.data.lifecycleStatus == "replacement_pending") {
@@ -365,7 +369,7 @@ class FeedsViewModel @Inject constructor(
                     }
                     loadFeeds()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -376,12 +380,12 @@ class FeedsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.deleteFeed(id)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(statusMessage = PresentationText.resource(R.string.feeds_removed))
                     }
                     loadFeeds()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -391,16 +395,16 @@ class FeedsViewModel @Inject constructor(
     fun selectDiscoveryCandidate(feedId: String, candidateId: String) {
         if (_state.value.lifecycleActionFeedId != null) return
         viewModelScope.launch {
-            _state.update { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
+            updateState { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
             when (val result = repository.selectDiscoveryCandidate(candidateId)) {
-                is AppResult.Success -> _state.update { state ->
+                is AppResult.Success -> updateState { state ->
                     state.copy(
                         lifecycleActionFeedId = null,
                         feeds = state.feeds.map { if (it.id == feedId) result.data else it },
                         statusMessage = PresentationText.resource(R.string.feeds_selected_validation_queued),
                     )
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(
                         lifecycleActionFeedId = null,
                         errorMessage = PresentationText.dynamic(result.message),
@@ -413,16 +417,16 @@ class FeedsViewModel @Inject constructor(
     fun cancelFeedReplacement(feedId: String) {
         if (_state.value.lifecycleActionFeedId != null) return
         viewModelScope.launch {
-            _state.update { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
+            updateState { it.copy(lifecycleActionFeedId = feedId, errorMessage = null) }
             when (val result = repository.cancelFeedReplacement(feedId)) {
-                is AppResult.Success -> _state.update { state ->
+                is AppResult.Success -> updateState { state ->
                     state.copy(
                         lifecycleActionFeedId = null,
                         feeds = state.feeds.map { if (it.id == feedId) result.data else it },
                         statusMessage = PresentationText.resource(R.string.feeds_replacement_cancelled),
                     )
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(
                         lifecycleActionFeedId = null,
                         errorMessage = PresentationText.dynamic(result.message),
@@ -435,13 +439,13 @@ class FeedsViewModel @Inject constructor(
     fun syncAllFeeds(feedId: String? = null, categoryId: String? = null) {
         if (syncSubmission != null) return
         if (refreshScopesOverlap(feedId, categoryId, _state.value.syncStatus, _state.value.feeds)) {
-            _state.update {
+            updateState {
                 it.copy(statusMessage = backgroundSyncMessage(it.syncCompletedFeeds, it.syncTotalFeeds))
             }
             return
         }
         if (_state.value.syncInBackground) {
-            _state.update {
+            updateState {
                 it.copy(
                     statusMessage = backgroundSyncMessage(
                         completed = it.syncCompletedFeeds,
@@ -452,7 +456,7 @@ class FeedsViewModel @Inject constructor(
             return
         }
         val submission = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            _state.update { it.copy(loading = true, errorMessage = null) }
+            updateState { it.copy(loading = true, errorMessage = null) }
             val queueRequest = async { repository.syncAllFeeds(feedId, categoryId) }
             val result = withTimeoutOrNull(REFRESH_QUEUE_TIMEOUT_MS) {
                 queueRequest.await()
@@ -462,7 +466,7 @@ class FeedsViewModel @Inject constructor(
                 // VPS can still delay the response. Release pull-to-refresh,
                 // but keep the request alive so a slow response cannot silently
                 // cancel the refresh the user explicitly requested.
-                _state.update {
+                updateState {
                     it.copy(
                         loading = false,
                         syncInBackground = true,
@@ -471,14 +475,14 @@ class FeedsViewModel @Inject constructor(
                 }
                 when (val eventualResult = queueRequest.await()) {
                     is AppResult.Success -> {
-                        _state.update {
+                        updateState {
                             it.copy(
                                 lastSyncSummary = eventualResult.data,
                                 statusMessage = PresentationText.resource(R.string.feeds_sync_background),
                             )
                         }
                     }
-                    is AppResult.Error -> _state.update {
+                    is AppResult.Error -> updateState {
                         it.copy(
                             syncInBackground = false,
                             errorMessage = PresentationText.dynamic(eventualResult.message),
@@ -489,7 +493,7 @@ class FeedsViewModel @Inject constructor(
             }
             when (result) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             loading = false,
                             syncInBackground = true,
@@ -501,7 +505,7 @@ class FeedsViewModel @Inject constructor(
                         )
                     }
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(
                         loading = false,
                         errorMessage = PresentationText.dynamic(result.message),
@@ -519,7 +523,7 @@ class FeedsViewModel @Inject constructor(
     }
 
     private fun publishActiveSync(status: FeedSyncAllStatus) {
-        _state.update {
+        updateState {
             it.copy(
                 loading = false,
                 syncInBackground = true,
@@ -531,7 +535,7 @@ class FeedsViewModel @Inject constructor(
             )
         }
         if (status.articleRevision > _state.value.articleRevision) {
-            _state.update { it.copy(articleRevision = status.articleRevision) }
+            updateState { it.copy(articleRevision = status.articleRevision) }
         }
     }
 
@@ -542,7 +546,7 @@ class FeedsViewModel @Inject constructor(
         var nextStatus = initial
         while (currentCoroutineContext().isActive) {
             if (elapsedMs >= SYNC_STATUS_MAX_MONITOR_MS) {
-                _state.update {
+                updateState {
                     it.copy(
                         loading = false,
                         syncInBackground = false,
@@ -554,7 +558,7 @@ class FeedsViewModel @Inject constructor(
             when (val status = nextStatus) {
                 is AppResult.Success -> {
                     if (status.data.stale) {
-                        _state.update {
+                        updateState {
                             it.copy(
                                 syncInBackground = false,
                                 syncStatus = status.data,
@@ -574,7 +578,7 @@ class FeedsViewModel @Inject constructor(
                     // A transient status request must not make an active backend
                     // refresh disappear from the UI. Keep the animation visible
                     // and retry within the bounded backend deadline.
-                    _state.update {
+                    updateState {
                         it.copy(
                             loading = false,
                             syncInBackground = true,
@@ -591,7 +595,7 @@ class FeedsViewModel @Inject constructor(
             // signal and leaving the list stale.
             if (poll == SYNC_STATUS_MAX_FAST_POLLS && !reportedLongRunningSync) {
                 reportedLongRunningSync = true
-                _state.update {
+                updateState {
                     it.copy(statusMessage = PresentationText.resource(R.string.feeds_sync_slow))
                 }
             }
@@ -627,7 +631,7 @@ class FeedsViewModel @Inject constructor(
     }
 
     private fun publishCompletedSync(status: FeedSyncAllStatus) {
-        _state.update {
+        updateState {
             it.copy(
                 loading = false,
                 syncInBackground = false,
@@ -657,56 +661,11 @@ class FeedsViewModel @Inject constructor(
             }
     }
 
-    fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
-        if (feedId == null || unreadDelta == 0) return
-        localUnreadRevision++
-        _state.update { state ->
-            val feed = state.feeds.firstOrNull { it.id == feedId }
-            state.copy(
-                feeds = UnreadStateReducer.applyFeedDelta(state.feeds, feedId, unreadDelta),
-                categories = feed?.let {
-                    UnreadStateReducer.applyCategoryDelta(state.categories, it.categoryId, unreadDelta)
-                } ?: state.categories,
-            )
-        }
-    }
-
-    fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>) {
-        localUnreadRevision++
-        _state.update { state ->
-            val targetFeedIds = when {
-                affectedFeedIds.isNotEmpty() -> affectedFeedIds
-                feedId != null -> setOf(feedId)
-                categoryId != null -> {
-                    val categoryIds = descendantCategoryIds(state.categories, categoryId)
-                    state.feeds.filter { it.categoryId in categoryIds }.map { it.id }.toSet()
-                }
-                else -> state.feeds.map { it.id }.toSet()
-            }
-            val categoryDeltas = state.feeds
-                .filter { it.id in targetFeedIds && it.unreadCount > 0 }
-                .groupBy { it.categoryId }
-                .mapValues { (_, feeds) -> -feeds.sumOf { it.unreadCount } }
-            val shouldClearAllCategories = feedId == null && categoryId == null && affectedFeedIds.isEmpty()
-
-            state.copy(
-                feeds = state.feeds.map { feed ->
-                    if (feed.id in targetFeedIds) feed.copy(unreadCount = 0) else feed
-                },
-                categories = if (shouldClearAllCategories) {
-                    UnreadStateReducer.clearCategoryUnreadCounts(state.categories)
-                } else {
-                    UnreadStateReducer.applyCategoryDeltas(state.categories, categoryDeltas)
-                },
-            )
-        }
-    }
-
     fun importOpml(fileName: String, fileBytes: ByteArray) {
         viewModelScope.launch {
             when (val result = repository.importOpml(fileName, fileBytes)) {
                 is AppResult.Success -> {
-                    _state.update {
+                    updateState {
                         it.copy(
                             lastImportSummary = result.data,
                             statusMessage = PresentationText.resource(
@@ -719,7 +678,7 @@ class FeedsViewModel @Inject constructor(
                     loadCategories()
                     loadFeeds()
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -731,11 +690,11 @@ class FeedsViewModel @Inject constructor(
             when (val result = repository.exportOpml()) {
                 is AppResult.Success -> {
                     _opmlExports.emit(result.data)
-                    _state.update {
+                    updateState {
                         it.copy(statusMessage = PresentationText.resource(R.string.feeds_export_ready))
                     }
                 }
-                is AppResult.Error -> _state.update {
+                is AppResult.Error -> updateState {
                     it.copy(errorMessage = PresentationText.dynamic(result.message))
                 }
             }
@@ -743,33 +702,14 @@ class FeedsViewModel @Inject constructor(
     }
 
     fun dismissImportSummary() {
-        _state.update { it.copy(lastImportSummary = null) }
+        updateState { it.copy(lastImportSummary = null) }
     }
 
     fun clearMessages() {
-        _state.update { it.copy(errorMessage = null, statusMessage = null) }
+        updateState { it.copy(errorMessage = null, statusMessage = null) }
     }
 
-    private fun descendantCategoryIds(categories: List<CategoryWithCounts>, categoryId: String): Set<String> {
-        val ids = mutableSetOf<String>()
-        fun visit(category: CategoryWithCounts) {
-            if (!ids.add(category.id)) return
-            category.children.orEmpty().forEach(::visit)
-        }
 
-        fun findAndVisit(nodes: List<CategoryWithCounts>): Boolean {
-            for (node in nodes) {
-                if (node.id == categoryId) {
-                    visit(node)
-                    return true
-                }
-                if (findAndVisit(node.children.orEmpty())) return true
-            }
-            return false
-        }
-
-        return if (findAndVisit(categories)) ids else setOf(categoryId)
-    }
 }
 
 internal fun refreshScopesOverlap(

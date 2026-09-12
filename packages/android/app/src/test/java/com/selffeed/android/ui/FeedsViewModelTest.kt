@@ -1,11 +1,12 @@
 package com.selffeed.android.ui
 
+import com.selffeed.android.data.repository.LibraryCounts
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.data.RssRepository
-import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
@@ -44,26 +45,29 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class FeedsViewModelTest {
     private lateinit var repository: RssRepository
+    private lateinit var countUpdates: MutableStateFlow<LibraryCounts>
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         repository = mockk()
+        countUpdates = MutableStateFlow(LibraryCounts())
+        every { repository.libraryCounts() } returns countUpdates
         every { repository.categoryUpdates() } answers { flow {
             when (val result = repository.categories()) {
-                is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+                is AppResult.Success -> emit(AppResult.Success(result.data))
                 is AppResult.Error -> emit(result)
             }
         } }
         every { repository.feedUpdates() } answers { flow {
             when (val result = repository.refreshFeeds(null)) {
-                is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+                is AppResult.Success -> emit(AppResult.Success(result.data))
                 is AppResult.Error -> emit(result)
             }
         } }
         coEvery { repository.categories() } returns AppResult.Success(emptyList())
-        coEvery { repository.feeds(any()) } returns AppResult.Success(emptyList())
+        coEvery { repository.refreshFeeds(any()) } returns AppResult.Success(emptyList())
         coEvery { repository.refreshFeeds(any()) } returns AppResult.Success(emptyList())
         coEvery { repository.createCategory(any(), any()) } returns AppResult.Success(sampleCategory())
         coEvery { repository.updateCategory(any(), any(), any()) } returns AppResult.Success(sampleCategory())
@@ -82,7 +86,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `moving a nested category updates only siblings and preserves concurrent unread counts`() = runTest {
-        coEvery { repository.feeds(any()) } returns AppResult.Success(listOf(sampleFeed("f", "b")))
+        coEvery { repository.refreshFeeds(any()) } returns AppResult.Success(listOf(sampleFeed("f", "b")))
         val children = listOf(sampleCategory("a"), sampleCategory("b")).map { it.copy(parentCategoryId = "parent") }
         val original = listOf(sampleCategory("parent", children = children), sampleCategory("other"))
         coEvery { repository.categories() } returns AppResult.Success(original)
@@ -96,7 +100,8 @@ class FeedsViewModelTest {
         viewModel.moveCategory("a", CategoryMoveDirection.DOWN)
         assertTrue(viewModel.state.value.reorderingCategories)
         assertEquals(original, viewModel.state.value.categories)
-        viewModel.applyUnreadDelta("f", 3)
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeLibraryCounts() }
+        countUpdates.value = LibraryCounts(mapOf("f" to 3), mapOf("b" to 3, "parent" to 3))
         pending.complete(AppResult.Success(Unit))
         runCurrent()
 
@@ -344,8 +349,9 @@ class FeedsViewModelTest {
             coEvery { repository.refreshFeeds(null) } coAnswers { feedResponse.await() }
             val categories = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.refreshCategories() }
             val feeds = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.refreshFeedHealth() }
-            if (markScope) model.applyScopeMarkedRead(null, "parent", emptySet())
-            else model.applyUnreadDelta("feed", -1)
+            val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.observeLibraryCounts() }
+            val storedCount = if (markScope) 0 else 1
+            countUpdates.value = LibraryCounts(mapOf("feed" to storedCount), mapOf("parent" to storedCount, "child" to storedCount))
             categoryResponse.complete(AppResult.Success(listOf(parent.copy(name = "Updated parent"))))
             feedResponse.complete(AppResult.Success(listOf(feed.copy(title = "Updated feed"))))
             categories.join()
@@ -358,7 +364,26 @@ class FeedsViewModelTest {
             assertEquals("Updated parent", updatedParent.name)
             assertEquals(expectedCount, updatedParent.unreadCount)
             assertEquals(expectedCount, updatedParent.children!!.single().unreadCount)
+            observer.cancelAndJoin()
+            countUpdates.value = LibraryCounts()
         }
+    }
+
+    @Test
+    fun `feed creation receives delayed replacement metadata without waiting for polling`() = runTest {
+        val original = sampleFeed("original")
+        val created = sampleFeed("created")
+        coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(original))
+        val viewModel = FeedsViewModel(repository)
+        viewModel.loadFeeds()
+        val response = CompletableDeferred<AppResult<List<FeedWithCounts>>>()
+        coEvery { repository.refreshFeeds(null) } coAnswers { response.await() }
+        coEvery { repository.createFeed(any(), any(), any()) } returns AppResult.Success(created)
+        viewModel.createFeed("https://example.invalid/rss", "c-1", null)
+        assertEquals(listOf("original"), viewModel.state.value.feeds.map { it.id })
+        response.complete(AppResult.Success(listOf(original, created)))
+        runCurrent()
+        assertEquals(listOf("original", "created"), viewModel.state.value.feeds.map { it.id })
     }
 
     @Test
@@ -684,7 +709,7 @@ class FeedsViewModelTest {
             viewModel.state.value.statusMessage,
         )
         coVerify { repository.categories() }
-        coVerify { repository.feeds(null) }
+        coVerify { repository.refreshFeeds(null) }
     }
 
     @Test
@@ -702,101 +727,6 @@ class FeedsViewModelTest {
         val viewModel = FeedsViewModel(repository)
         viewModel.loadCategories()
         assertEquals(PresentationText.dynamic("boom"), viewModel.state.value.errorMessage)
-    }
-
-    @Test
-    fun `applyUnreadDelta keeps feed and category badges in sync`() = runTest {
-        coEvery { repository.categories() } returns AppResult.Success(
-            listOf(sampleCategory(unreadCount = 2)),
-        )
-        coEvery { repository.feeds(any()) } returns AppResult.Success(
-            listOf(sampleFeed(unreadCount = 2)),
-        )
-        val viewModel = FeedsViewModel(repository)
-        viewModel.loadCategories()
-        viewModel.loadFeeds()
-
-        viewModel.applyUnreadDelta(feedId = "f-1", unreadDelta = -1)
-
-        assertEquals(1, viewModel.state.value.feeds.first().unreadCount)
-        assertEquals(1, viewModel.state.value.categories.first().unreadCount)
-    }
-
-    @Test
-    fun `applyScopeMarkedRead clears only targeted feed badges`() = runTest {
-        coEvery { repository.categories() } returns AppResult.Success(
-            listOf(sampleCategory(unreadCount = 5)),
-        )
-        coEvery { repository.feeds(any()) } returns AppResult.Success(
-            listOf(
-                sampleFeed(id = "f-1", unreadCount = 2),
-                sampleFeed(id = "f-2", unreadCount = 3),
-            ),
-        )
-        val viewModel = FeedsViewModel(repository)
-        viewModel.loadCategories()
-        viewModel.loadFeeds()
-
-        viewModel.applyScopeMarkedRead(
-            feedId = null,
-            categoryId = null,
-            affectedFeedIds = setOf("f-1"),
-        )
-
-        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-1" }.unreadCount)
-        assertEquals(3, viewModel.state.value.feeds.first { it.id == "f-2" }.unreadCount)
-        assertEquals(3, viewModel.state.value.categories.first().unreadCount)
-    }
-
-    @Test
-    fun `applyScopeMarkedRead for all feeds clears category badges even before feeds load`() = runTest {
-        coEvery { repository.categories() } returns AppResult.Success(
-            listOf(sampleCategory(unreadCount = 5)),
-        )
-        val viewModel = FeedsViewModel(repository)
-        viewModel.loadCategories()
-
-        viewModel.applyScopeMarkedRead(
-            feedId = null,
-            categoryId = null,
-            affectedFeedIds = emptySet(),
-        )
-
-        assertEquals(0, viewModel.state.value.categories.first().unreadCount)
-    }
-
-    @Test
-    fun `applyScopeMarkedRead for a parent category includes descendant feed ids`() = runTest {
-        coEvery { repository.categories() } returns AppResult.Success(
-            listOf(
-                sampleCategory(
-                    id = "c-parent",
-                    unreadCount = 5,
-                    children = listOf(sampleCategory(id = "c-child", unreadCount = 3)),
-                ),
-            ),
-        )
-        coEvery { repository.feeds(any()) } returns AppResult.Success(
-            listOf(
-                sampleFeed(id = "f-parent", categoryId = "c-parent", unreadCount = 2),
-                sampleFeed(id = "f-child", categoryId = "c-child", unreadCount = 3),
-                sampleFeed(id = "f-other", categoryId = "c-other", unreadCount = 4),
-            ),
-        )
-        val viewModel = FeedsViewModel(repository)
-        viewModel.loadCategories()
-        viewModel.loadFeeds()
-
-        viewModel.applyScopeMarkedRead(
-            feedId = null,
-            categoryId = "c-parent",
-            affectedFeedIds = emptySet(),
-        )
-
-        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-parent" }.unreadCount)
-        assertEquals(0, viewModel.state.value.feeds.first { it.id == "f-child" }.unreadCount)
-        assertEquals(4, viewModel.state.value.feeds.first { it.id == "f-other" }.unreadCount)
-        assertEquals(0, viewModel.state.value.categories.first().unreadCount)
     }
 
     private fun sampleCategory(

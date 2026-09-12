@@ -1,7 +1,6 @@
 package com.selffeed.android.data
 
 import com.selffeed.android.data.repository.AccountAccess
-import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import androidx.paging.PagingData
@@ -39,6 +38,11 @@ import javax.inject.Singleton
 
 @Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
+    override fun countRefreshRequests(): Flow<Unit> = flowOf(Unit)
+    override fun libraryCounts(): Flow<com.selffeed.android.data.repository.LibraryCounts> = emptyFlow()
+    override suspend fun localArticleState(articleId: String) = AppResult.Success(
+        com.selffeed.android.data.repository.LocalArticleState(articleReadStates[articleId], articleSavedStates[articleId]),
+    )
     var detailGate: ReviewRequestGate<String, AppResult<ArticleDetail>>? = null
     var readGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
     var savedGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
@@ -210,20 +214,20 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun isLoggedIn(): Boolean = authenticated
     override fun authEvents(): Flow<String> = emptyFlow()
 
-    override fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>> = flow {
+    override fun categoryUpdates(): Flow<AppResult<List<CategoryWithCounts>>> = flow {
         when (val result = categories()) {
-            is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(result.data, true)))
+            is AppResult.Success -> emit(AppResult.Success(result.data))
             is AppResult.Error -> emit(result)
         }
     }
 
-    override fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>> = flow {
+    override fun feedUpdates(): Flow<AppResult<List<FeedWithCounts>>> = flow {
         when (val stored = feeds(null)) {
-            is AppResult.Success -> emit(AppResult.Success(SubscriptionSnapshot(stored.data, false)))
+            is AppResult.Success -> emit(AppResult.Success(stored.data))
             is AppResult.Error -> emit(stored)
         }
         val refreshed = refreshFeeds(null)
-        if (refreshed is AppResult.Success) emit(AppResult.Success(SubscriptionSnapshot(refreshed.data, true)))
+        if (refreshed is AppResult.Success) emit(AppResult.Success(refreshed.data))
     }
 
     override suspend fun categories(): AppResult<List<CategoryWithCounts>> {

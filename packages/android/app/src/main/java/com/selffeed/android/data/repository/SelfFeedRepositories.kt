@@ -50,13 +50,23 @@ interface AuthRepository {
     fun authEvents(): Flow<String>
 }
 
-/** Cached or pending snapshots may update metadata without undoing local unread counts. */
-data class SubscriptionSnapshot<T>(val data: T, val mayReplaceUnreadCounts: Boolean)
+/** Complete durable count projection. Null totals mean no usable aggregate has been stored yet. */
+data class LibraryCounts(
+    val feedUnread: Map<String, Int> = emptyMap(),
+    val categoryUnread: Map<String, Int> = emptyMap(),
+    val totalRead: Int? = null,
+    val totalUnread: Int? = null,
+)
 
-interface FeedRepository {
+interface LibraryCountsRepository {
+    fun libraryCounts(): Flow<LibraryCounts>
+}
+
+interface FeedRepository : LibraryCountsRepository {
+    fun countRefreshRequests(): Flow<Unit>
     /** Emits stored content first; the collector owns the subsequent freshness request. */
-    fun categoryUpdates(): Flow<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>>
-    fun feedUpdates(): Flow<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>>
+    fun categoryUpdates(): Flow<AppResult<List<CategoryWithCounts>>>
+    fun feedUpdates(): Flow<AppResult<List<FeedWithCounts>>>
     suspend fun categories(): AppResult<List<CategoryWithCounts>>
     suspend fun createCategory(
         name: String,
@@ -105,9 +115,20 @@ interface FeedRepository {
     suspend fun exportOpml(): AppResult<String>
 }
 
-data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean?)
+data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean?, val mutationId: String)
+data class ReadStateRejection(val articleId: String, val mutationId: String)
+
+data class LocalArticleState(
+    val isRead: Boolean?,
+    val isSaved: Boolean?,
+    val pendingReadMutationId: String? = null,
+    val pendingSavedMutationId: String? = null,
+    val lastReadMutationId: String? = null,
+    val lastSavedMutationId: String? = null,
+)
 
 interface ArticleRepository {
+    suspend fun localArticleState(articleId: String): AppResult<LocalArticleState>
     fun observePendingArticleChanges(): Flow<Int> = emptyFlow()
     fun observeArticleTextAvailability(articleId: String): Flow<Boolean> = emptyFlow()
     suspend fun retryPendingArticleChanges() = Unit
@@ -135,6 +156,7 @@ interface ArticleRepository {
 
     suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean>
     fun savedStateRejections(): Flow<SavedStateRejection> = emptyFlow()
+    fun readStateRejections(): Flow<ReadStateRejection> = emptyFlow()
     suspend fun markAllRead(
         feedId: String? = null,
         categoryId: String? = null
@@ -158,7 +180,7 @@ interface SearchRepository {
     ): AppResult<ApiListResponse<ArticleListItem>>
 }
 
-interface SettingsRepository {
+interface SettingsRepository : LibraryCountsRepository {
     suspend fun preferences(): AppResult<UserPreferences>
     suspend fun updatePreferences(request: UpdatePreferencesRequest): AppResult<UserPreferences>
     suspend fun stats(): AppResult<StatsResponse>
@@ -198,8 +220,5 @@ interface SelfFeedRepository :
 /** Local read choices that a remote bulk receipt must preserve. */
 data class BulkReadReconciliation(
     val unreadArticleFeeds: Map<String, String> = emptyMap(),
-    val locallyHandledCount: Int = 0,
-    // Includes both read and unread choices already considered by this receipt.
-    val pendingArticleIds: Set<String> = emptySet(),
     val affectedArticleIds: Set<String> = emptySet(),
 )

@@ -1,6 +1,10 @@
 package com.selffeed.android.ui
 
 import com.selffeed.android.BuildConfig
+import com.selffeed.android.data.repository.LibraryCounts
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import io.mockk.every
 import com.selffeed.android.R
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.RssRepository
@@ -123,14 +127,17 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `applyStatsDelta keeps unread and read totals in sync`() = runTest {
+    fun `durable stats counts survive delayed stats metadata`() = runTest {
         coEvery { repository.stats() } returns AppResult.Success(
             StatsResponse(totalUnread = 5, totalRead = 10, totalFeeds = 2, totalCategories = 1),
         )
         val viewModel = SettingsViewModel(repository)
         viewModel.loadStats()
 
-        viewModel.applyStatsDelta(unreadDelta = -2, readDelta = 2)
+        val counts = MutableStateFlow(LibraryCounts(totalRead = 12, totalUnread = 3))
+        every { repository.libraryCounts() } returns counts
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeLibraryCounts() }
+        viewModel.loadStats()
 
         assertEquals(3, viewModel.state.value.stats?.totalUnread)
         assertEquals(12, viewModel.state.value.stats?.totalRead)

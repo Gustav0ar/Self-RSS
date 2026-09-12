@@ -14,7 +14,6 @@ import com.selffeed.android.data.remote.SearchRemoteDataSource
 import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.ArticleRepository
-import com.selffeed.android.data.repository.SubscriptionSnapshot
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ApiEnvelope
 import com.selffeed.android.network.ArticleDetail
@@ -239,14 +238,14 @@ class RssRepositoryTest {
             feedStarted.complete(Unit)
             try { awaitCancellation() } finally { feedCancelled.complete(Unit) }
         }
-        val categories = mutableListOf<AppResult<SubscriptionSnapshot<List<CategoryWithCounts>>>>()
-        val feeds = mutableListOf<AppResult<SubscriptionSnapshot<List<FeedWithCounts>>>>()
+        val categories = mutableListOf<AppResult<List<CategoryWithCounts>>>()
+        val feeds = mutableListOf<AppResult<List<FeedWithCounts>>>()
         val categoryRead = launch { repository.categoryUpdates().toList(categories) }
         val feedRead = launch { repository.feedUpdates().toList(feeds) }
         categoryStarted.await()
         feedStarted.await()
-        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedCategory), false))), categories)
-        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedFeed), false))), feeds)
+        assertEquals(listOf(AppResult.Success(listOf(storedCategory))), categories)
+        assertEquals(listOf(AppResult.Success(listOf(storedFeed))), feeds)
         assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
 
         categoryRead.cancelAndJoin()
@@ -261,7 +260,7 @@ class RssRepositoryTest {
         repository.prepareSession()
         val storedCategory = sampleCategory("c-local").copy(unreadCount = 2)
         val storedFeed = sampleFeed("f-local").copy(unreadCount = 2)
-        val storedArticle = sampleArticle("pending-count")
+        val storedArticle = sampleArticle("pending-count").copy(feedId = "f-local")
         localStore.writeCategories(listOf(storedCategory))
         localStore.writeFeeds(listOf(storedFeed))
         localStore.writeArticleRemotePage("count-test", ApiListResponse(listOf(storedArticle), null, false), true)
@@ -272,7 +271,7 @@ class RssRepositoryTest {
         val model = FeedsViewModel(repository)
         model.refreshCategories()
         model.refreshFeedHealth()
-        model.applyUnreadDelta("f-local", -1)
+        val counts = backgroundScope.launch { model.observeLibraryCounts() }
         val queued = localStore.queueReadStateMutation(storedArticle.id, true)
         coEvery { api.feeds(any(), any()) } returns com.selffeed.android.network.ApiEnvelope(
             listOf(storedFeed.copy(title = "Updated metadata")),
@@ -305,7 +304,7 @@ class RssRepositoryTest {
         response.complete(com.selffeed.android.network.ApiEnvelope(listOf(storedFeed)))
 
         val result = snapshots.await().last() as AppResult.Success
-        assertEquals(false, result.data.mayReplaceUnreadCounts)
+        assertEquals(2, result.data.single().unreadCount)
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
     }
 
@@ -319,8 +318,8 @@ class RssRepositoryTest {
         coEvery { api.categories(any()) } throws java.io.IOException("Offline")
         coEvery { api.feeds(any(), any()) } throws java.io.IOException("Offline")
 
-        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedCategory), false))), repository.categoryUpdates().toList())
-        assertEquals(listOf(AppResult.Success(SubscriptionSnapshot(listOf(storedFeed), false))), repository.feedUpdates().toList())
+        assertEquals(listOf(AppResult.Success(listOf(storedCategory))), repository.categoryUpdates().toList())
+        assertEquals(listOf(AppResult.Success(listOf(storedFeed))), repository.feedUpdates().toList())
     }
 
     @Test
@@ -597,6 +596,25 @@ class RssRepositoryTest {
         coVerify {
             api.markRead(articleId, match { it.read && it.source == "auto_open" && it.mutationId != null }, session = any())
         }
+    }
+
+    @Test
+    fun `feed deletion invalidates cached query membership while retaining queued count baselines`() = runTest {
+        repository.prepareSession()
+        localStore.writeFeeds(listOf(sampleFeed("f-local").copy(unreadCount = 2)))
+        val article = sampleArticle("deleted-feed-article").copy(feedId = "f-local")
+        localStore.writeArticleRemotePage("deleted-feed-query", ApiListResponse(listOf(article), null, false), true)
+        val queued = localStore.queueReadStateMutation(article.id, true)
+        coEvery { api.deleteFeed("f-local", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.SuccessResponse(true),
+        )
+        assertTrue(repository.deleteFeed("f-local") is AppResult.Success)
+        val page = localStore.articlePagingSource("deleted-feed-query", ownerId = null).load(
+            androidx.paging.PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+        ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertTrue(page.data.isEmpty())
+        assertEquals(1, localStore.readFeeds().single().unreadCount)
+        assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
     }
 
     @Test
@@ -1077,8 +1095,6 @@ class RssRepositoryTest {
             assertEquals(true, viewModel.state.value.items.single().isRead)
             assertEquals(true, viewModel.readStateOverrides.value[article.id])
             assertEquals(true, localStore.readPendingReadStateMutations().single().read)
-            assertEquals(0, event.unreadDelta)
-            assertEquals(0, event.readDelta)
 
             coEvery { api.markRead(article.id, any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
                 MarkReadResponse(success = true, read = true, revision = 4),
@@ -1149,7 +1165,6 @@ class RssRepositoryTest {
             assertEquals(!initiallyRead, viewModel.readStateOverrides.value[article.id])
             assertEquals(if (initiallyRead) mapOf(article.id to article.feedId) else emptyMap<String, String>(),
                 event.retainedUnreadArticleFeeds)
-            assertEquals(0, event.markedCount)
         } finally {
             resumeReceipt.complete(Unit)
             store.clear()
@@ -1189,7 +1204,6 @@ class RssRepositoryTest {
             ))
             val event = received.await() as com.selffeed.android.ui.ArticleFeatureEvent.ScopeMarkedRead
             assertEquals(mapOf(pending.id to pending.feedId), event.retainedUnreadArticleFeeds)
-            assertEquals(1, event.markedCount)
             assertEquals(mapOf(pending.id to false, unread.id to true, other.id to false),
                 viewModel.state.value.items.associate { it.id to it.isRead })
             assertEquals(false, viewModel.readStateOverrides.value[pending.id])

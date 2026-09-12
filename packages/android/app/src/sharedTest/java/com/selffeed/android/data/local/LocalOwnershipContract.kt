@@ -188,7 +188,7 @@ abstract class LocalOwnershipContract {
         dao.upsertArticleDetail(ArticleDetailEntity("body-only", "feed", raw, 4L))
         val pending = store.queueReadStateMutation("body-only", false)
         val result = store.markArticlesReadByFeeds(setOf("feed"))
-        assertEquals(setOf("body-only"), result.pendingArticleIds)
+        assertEquals(setOf("body-only"), result.affectedArticleIds)
         assertEquals(mapOf("body-only" to "feed"), result.unreadArticleFeeds)
         assertEquals(listOf(pending.copy(previousState = true)), store.readPendingReadStateMutations())
         assertEquals(raw, dao.readArticleDetail("body-only")?.payloadJson)

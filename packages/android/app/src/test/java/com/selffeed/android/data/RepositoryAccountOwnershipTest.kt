@@ -151,8 +151,9 @@ class RepositoryAccountOwnershipTest {
         repository.prepareSession()
         val feature = ArticleRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
         repository.setApiBaseUrl("new.example")
+        every { repository.readStateRejections() } returns kotlinx.coroutines.flow.emptyFlow()
         every { repository.savedStateRejections() } returns kotlinx.coroutines.flow.flowOf(
-            SavedStateRejection("same-id", false),
+            SavedStateRejection("same-id", false, "mutation"),
         )
 
         val collect = async { feature.savedStateRejections().first() }
@@ -464,6 +465,29 @@ class RepositoryAccountOwnershipTest {
         assertTrue(pageTitles(saved()).isEmpty())
         assertEquals(listOf("Account B"), pageTitles(local.articlePagingSource("same-query", next.ownerId)))
         assertEquals(listOf("Account B"), pageTitles(local.savedArticlePagingSource(next.ownerId)))
+    }
+
+    @Test
+    fun `permanent read rejection publishes the captured id after restoring local state`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        val article = ArticleListItem("read-rejected", "feed", "Feed", title = "Article", isRead = false, readRevision = 4)
+        local.writeArticleRemotePage("read-rejected", ApiListResponse(listOf(article), null, false), true)
+        val queued = local.queueReadStateMutation(article.id, true)
+        coEvery { api.markRead(any(), any(), session = any()) } throws retrofit2.HttpException(
+            retrofit2.Response.error<Unit>(422, "rejected".toResponseBody()),
+        )
+        val failure = async(start = CoroutineStart.UNDISPATCHED) { repository.readStateRejections().first() }
+        try {
+            online.value = true
+            assertTrue(repository.flushPendingArticleStateMutations())
+            val rejected = withTimeout(5_000) { failure.await() }
+            assertEquals(queued.mutationId, rejected.mutationId)
+            assertEquals(article.id, rejected.articleId)
+            assertEquals(false, local.readArticleState(article.id).isRead)
+            assertTrue(local.readPendingReadStateMutations().isEmpty())
+        } finally { failure.cancelAndJoin() }
     }
 
     @Test

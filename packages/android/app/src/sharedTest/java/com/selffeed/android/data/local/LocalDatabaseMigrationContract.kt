@@ -281,6 +281,39 @@ abstract class LocalDatabaseMigrationContract {
     }
 
     @Test
+    fun version9PreservesQueuedIntentAndRecoversOnlyKnownMutationIdentityAndMembership() = runBlocking {
+        val name = "mutation-identity-v9"
+        helper.createDatabase(name, 9).use { database ->
+            database.execSQL("""
+                INSERT INTO articles(id, feedId, feedTitle, title, isRead, isSaved, contentStatus, contentVersion)
+                VALUES ('article', 'feed', 'Feed', 'Cached', 1, 1, 'feed_ready', 1)
+            """.trimIndent())
+            database.execSQL("INSERT INTO article_state_revisions VALUES ('article', 10, 20, 0, 0)")
+            database.execSQL("INSERT INTO pending_read_state_mutations VALUES ('article', 1, 'read-9', 'manual', 10, 0, 17)")
+            database.execSQL("INSERT INTO pending_saved_state_mutations VALUES ('article', 1, 'saved-9', 20, 0, 18)")
+            database.execSQL("INSERT INTO article_details VALUES ('article', 'feed', '{unchanged bytes', 42)")
+        }
+        helper.runMigrationsAndValidate(name, LOCAL_DATABASE_VERSION, true, *LOCAL_DATABASE_MIGRATIONS).close()
+        val database = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), LocalDatabase::class.java, name)
+            .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
+        try {
+            val store = LocalStore(database, NetworkModule.provideMoshi())
+            val dao = database.localStoreDao()
+            val state = requireNotNull(dao.readArticleStateRevision("article"))
+            assertEquals("read-9", state.lastReadMutationId)
+            assertEquals("saved-9", state.lastSavedMutationId)
+            assertEquals("feed", state.articleFeedId)
+            assertEquals(false, state.confirmedReadState)
+            assertEquals(false, state.confirmedSavedState)
+            assertEquals(10, state.readRevision)
+            assertEquals(20, state.savedRevision)
+            assertEquals(null, store.readPendingReadStateMutations().single().countScopeJson)
+            assertEquals("{unchanged bytes", dao.readArticleDetail("article")?.payloadJson)
+            assertEquals(null, store.readStats())
+        } finally { database.close() }
+    }
+
+    @Test
     fun everySupportedUpgradePreservesExistingRowsAndCachedBytes() {
         for (version in 1 until LOCAL_DATABASE_VERSION) {
             val name = "populated-migration-$version"

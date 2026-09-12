@@ -181,28 +181,12 @@ private fun AuthenticatedAppRoute(
                 articlesViewModel.refreshArticles()
             }
 
-            override fun applyUnreadDelta(feedId: String?, unreadDelta: Int) {
-                feedsViewModel.applyUnreadDelta(feedId, unreadDelta)
-            }
-
-            override fun applyStatsDelta(unreadDelta: Int, readDelta: Int) {
-                settingsViewModel.applyStatsDelta(unreadDelta, readDelta)
-            }
-
             override fun applyArticleReadState(articleId: String, read: Boolean) {
                 searchViewModel.applyArticleReadState(articleId, read)
             }
 
             override fun applyArticleSavedState(articleId: String, saved: Boolean) {
                 searchViewModel.updateSavedState(articleId, saved)
-            }
-
-            override fun applyScopeMarkedRead(
-                feedId: String?,
-                categoryId: String?,
-                affectedFeedIds: Set<String>,
-            ) {
-                feedsViewModel.applyScopeMarkedRead(feedId, categoryId, affectedFeedIds)
             }
 
             override fun applySearchScopeMarkedRead(feedIds: Set<String>) {
@@ -262,18 +246,21 @@ private fun AuthenticatedAppRoute(
         }
 
         ForegroundWorkEffect(accountOwnerId) {
-            launch { articlesViewModel.observeReadStateSync() }
-            launch { feedsViewModel.observeForeground() }
-            // Resume always reconciles once, including offline sessions with no SSE handshake.
-            // Keep later requests buffered while a read is in flight so an event is not lost.
             contentRefreshRequests.tryReceive()
+            launch { articlesViewModel.observeReadStateSync() }
+            launch { feedsViewModel.observeLibraryCounts() }
+            launch { feedsViewModel.observeCountRefreshRequests { contentRefreshRequests.trySend(Unit) } }
+            launch { settingsViewModel.observeLibraryCounts() }
+            launch { feedsViewModel.observeForeground() }
+            // The Room observer requests initial reconciliation, including while delivery is pending.
+            // Keep later requests buffered while a read is in flight so an event is not lost.
             while (true) {
+                contentRefreshRequests.receive()
                 coroutineScope {
                     launch { feedsViewModel.refreshCategories() }
                     launch { feedsViewModel.refreshFeedHealth() }
                     launch { settingsViewModel.refreshStats() }
                 }
-                contentRefreshRequests.receive()
             }
         }
 

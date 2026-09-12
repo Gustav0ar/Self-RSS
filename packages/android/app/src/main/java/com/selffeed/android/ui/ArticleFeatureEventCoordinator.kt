@@ -1,11 +1,8 @@
 package com.selffeed.android.ui
 
 interface ArticleFeatureEventSink {
-    fun applyUnreadDelta(feedId: String?, unreadDelta: Int)
-    fun applyStatsDelta(unreadDelta: Int, readDelta: Int)
     fun applyArticleReadState(articleId: String, read: Boolean)
     fun applyArticleSavedState(articleId: String, saved: Boolean)
-    fun applyScopeMarkedRead(feedId: String?, categoryId: String?, affectedFeedIds: Set<String>)
     fun applySearchScopeMarkedRead(feedIds: Set<String>)
     fun applyAllSearchMarkedRead()
     fun refreshArticleContent()
@@ -19,8 +16,6 @@ class ArticleFeatureEventCoordinator {
     ) {
         when (event) {
             is ArticleFeatureEvent.ArticleReadStateChanged -> {
-                sink.applyUnreadDelta(event.feedId, event.unreadDelta)
-                sink.applyStatsDelta(event.unreadDelta, event.readDelta)
                 sink.applyArticleReadState(event.articleId, event.read)
             }
 
@@ -29,18 +24,6 @@ class ArticleFeatureEventCoordinator {
             }
 
             is ArticleFeatureEvent.ScopeMarkedRead -> {
-                sink.applyScopeMarkedRead(
-                    feedId = event.feedId,
-                    categoryId = event.categoryId,
-                    affectedFeedIds = event.affectedFeedIds,
-                )
-                event.retainedUnreadArticleFeeds.values.groupingBy { it }.eachCount().forEach { (feedId, count) ->
-                    sink.applyUnreadDelta(feedId, count)
-                }
-                sink.applyStatsDelta(
-                    unreadDelta = -event.markedCount,
-                    readDelta = event.markedCount,
-                )
                 val searchFeedIds = searchFeedIdsFor(event, latestFeedsState)
                 if (isAllFeedsScope(event)) {
                     sink.applyAllSearchMarkedRead()

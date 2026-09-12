@@ -21,7 +21,7 @@ class EnrichmentManager @Inject constructor(
     private var scope: CoroutineScope? = null
     private var enrichArticleJob: Job? = null
     private var selectedArticle: ArticleDetail? = null
-    private var onArticleRefreshed: ((ArticleDetail) -> Unit)? = null
+    private var onArticleRefreshed: (suspend (ArticleDetail) -> Unit)? = null
 
     fun setScope(scope: CoroutineScope) {
         this.scope = scope
@@ -31,7 +31,7 @@ class EnrichmentManager @Inject constructor(
         selectedArticle = article
     }
 
-    fun setOnArticleRefreshed(callback: (ArticleDetail) -> Unit) {
+    fun setOnArticleRefreshed(callback: suspend (ArticleDetail) -> Unit) {
         onArticleRefreshed = callback
     }
 
