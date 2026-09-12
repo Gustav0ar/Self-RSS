@@ -25,7 +25,8 @@ afterEach(() => {
 async function setupDatabase() {
 	const directory = await mkdtemp(join(tmpdir(), 'transaction-atomicity-'));
 	tempDirs.push(directory);
-	const sqlite = new Database(join(directory, 'rss.db'));
+	const databasePath = join(directory, 'rss.db');
+	const sqlite = new Database(databasePath);
 	databases.push(sqlite);
 	sqlite.exec('PRAGMA foreign_keys = ON;');
 	for (const filename of readdirSync(migrationsFolder)
@@ -36,7 +37,7 @@ async function setupDatabase() {
 			if (statement.trim()) sqlite.exec(statement.trim());
 		}
 	}
-	return { sqlite, db: drizzle(sqlite, { schema }) };
+	return { sqlite, db: drizzle(sqlite, { schema }), databasePath };
 }
 
 function seedArticleGraph(sqlite: Database) {
@@ -217,6 +218,55 @@ describe('Bun SQLite repository transaction atomicity', () => {
 		expect(
 			sqlite.query<{ count: number }, []>('SELECT COUNT(*) AS count FROM users').get()?.count,
 		).toBe(0);
+	});
+
+	it('registers atomically when another SQLite writer overlaps its validation reads', async () => {
+		const { sqlite, databasePath } = await setupDatabase();
+		sqlite.exec('PRAGMA journal_mode = WAL;');
+		seedArticleGraph(sqlite);
+		const writer = new Database(databasePath);
+		databases.push(writer);
+		writer.exec('PRAGMA busy_timeout = 0;');
+		let attemptedWrite = false;
+		let writerBlocked = false;
+		const update = "UPDATE articles SET title = 'Worker update' WHERE id = 'article-1'";
+		const repository = new UserRepository(
+			drizzle(sqlite, {
+				schema,
+				logger: {
+					logQuery(query) {
+						if (attemptedWrite || !query.includes('count(*)')) return;
+						attemptedWrite = true;
+						// The email read has established a snapshot before this second validation read.
+						try {
+							writer.exec(update);
+						} catch (error) {
+							if (!(error instanceof Error) || !error.message.includes('database is locked'))
+								throw error;
+							writerBlocked = true;
+						}
+					},
+				},
+			}),
+		);
+
+		const result = await repository.registerUser({
+			email: 'concurrent-registration@example.com',
+			passwordHash: 'hash',
+			registrationLocked: false,
+		});
+		expect(attemptedWrite).toBe(true);
+		expect(writerBlocked).toBe(true);
+		expect(result.isBootstrapAdmin).toBe(false);
+		expect(result.user.role).toBe('user');
+		expect(await repository.getPreferences(result.user.id)).toMatchObject({
+			userId: result.user.id,
+		});
+		writer.exec(update);
+		expect(
+			sqlite.query<{ title: string }, []>("SELECT title FROM articles WHERE id = 'article-1'").get()
+				?.title,
+		).toBe('Worker update');
 	});
 
 	it('rolls back earlier categories when a later hierarchical insert fails', async () => {

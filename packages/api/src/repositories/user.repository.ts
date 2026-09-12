@@ -49,35 +49,39 @@ export class UserRepository {
 	}
 
 	async registerUser(data: { email: string; passwordHash: string; registrationLocked: boolean }) {
-		return this.db.transaction((tx) => {
-			const existing = tx.query.users.findFirst({ where: eq(users.email, data.email) }).sync();
-			if (existing) {
-				throw AppError.conflict('Email already registered');
-			}
+		// Acquire the writer before validation reads to avoid upgrading a stale WAL snapshot.
+		return this.db.transaction(
+			(tx) => {
+				const existing = tx.query.users.findFirst({ where: eq(users.email, data.email) }).sync();
+				if (existing) {
+					throw AppError.conflict('Email already registered');
+				}
 
-			const countRows = tx.select({ count: sql<number>`count(*)` }).from(users).all();
-			const isBootstrapAdmin = (countRows[0]?.count ?? 0) === 0;
+				const countRows = tx.select({ count: sql<number>`count(*)` }).from(users).all();
+				const isBootstrapAdmin = (countRows[0]?.count ?? 0) === 0;
 
-			if (data.registrationLocked && !isBootstrapAdmin) {
-				throw AppError.forbidden('Registration is currently closed');
-			}
+				if (data.registrationLocked && !isBootstrapAdmin) {
+					throw AppError.forbidden('Registration is currently closed');
+				}
 
-			const [user] = tx
-				.insert(users)
-				.values({
-					email: data.email,
-					passwordHash: data.passwordHash,
-					role: isBootstrapAdmin ? 'admin' : 'user',
-				})
-				.returning()
-				.all();
-			if (!user) {
-				throw AppError.internal('Failed to create user');
-			}
-			tx.insert(userPreferences).values({ userId: user.id }).run();
+				const [user] = tx
+					.insert(users)
+					.values({
+						email: data.email,
+						passwordHash: data.passwordHash,
+						role: isBootstrapAdmin ? 'admin' : 'user',
+					})
+					.returning()
+					.all();
+				if (!user) {
+					throw AppError.internal('Failed to create user');
+				}
+				tx.insert(userPreferences).values({ userId: user.id }).run();
 
-			return { user, isBootstrapAdmin };
-		});
+				return { user, isBootstrapAdmin };
+			},
+			{ behavior: 'immediate' },
+		);
 	}
 
 	async createPreferences(userId: string) {
