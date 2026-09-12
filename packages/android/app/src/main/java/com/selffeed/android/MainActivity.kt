@@ -13,12 +13,8 @@ import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.AppViewModel
 import com.selffeed.android.ui.BenchmarkScenario
 import com.selffeed.android.ui.BenchmarkScenarioExtra
-import com.selffeed.android.ui.ArticlesViewModel
 import com.selffeed.android.ui.AuthViewModel
-import com.selffeed.android.ui.FeedsViewModel
-import com.selffeed.android.ui.SearchViewModel
 import com.selffeed.android.ui.SelfFeedAppRoute
-import com.selffeed.android.ui.SettingsViewModel
 import com.selffeed.android.ui.benchmarkScenarioFor
 import com.selffeed.android.ui.parseSelfFeedAction
 import com.selffeed.android.ui.parseSharedFeedAction
@@ -28,10 +24,6 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val appViewModel: AppViewModel by viewModels()
     private val authViewModel: AuthViewModel by viewModels()
-    private val feedsViewModel: FeedsViewModel by viewModels()
-    private val articlesViewModel: ArticlesViewModel by viewModels()
-    private val searchViewModel: SearchViewModel by viewModels()
-    private val settingsViewModel: SettingsViewModel by viewModels()
     private var jankStats: JankStats? = null
     private lateinit var performanceMetricsState: PerformanceMetricsState.Holder
     private var benchmarkScenario: BenchmarkScenario? = null
@@ -76,10 +68,6 @@ class MainActivity : ComponentActivity() {
             SelfFeedAppRoute(
                 appViewModel = appViewModel,
                 authViewModel = authViewModel,
-                feedsViewModel = feedsViewModel,
-                articlesViewModel = articlesViewModel,
-                searchViewModel = searchViewModel,
-                settingsViewModel = settingsViewModel,
                 performanceMetricsState = performanceMetricsState,
                 benchmarkScenario = benchmarkScenario,
             )

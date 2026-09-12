@@ -25,22 +25,112 @@ import kotlinx.coroutines.delay
 fun SelfFeedAppRoute(
     appViewModel: AppViewModel,
     authViewModel: AuthViewModel,
+    performanceMetricsState: PerformanceMetricsState.Holder,
+    benchmarkScenario: BenchmarkScenario? = null,
+) {
+    if (benchmarkScenario == BenchmarkScenario.READER) {
+        SelfFeedTheme { BenchmarkReaderScenario() }
+        return
+    }
+    val authState by authViewModel.state.collectAsStateWithLifecycle()
+    val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
+    LaunchedEffect(chromeState.sessionReady) {
+        if (chromeState.sessionReady) authViewModel.bootstrap()
+    }
+    val session = authState.session?.takeIf {
+        authState.isAuthenticated && authViewModel.isCurrentSession(it)
+    }
+    LaunchedEffect(authState.loading, session?.ownerId) {
+        if (!authState.loading && session == null) appViewModel.clearReadingSession()
+    }
+    // Always compose the host, including its empty stack, so logout pops and clears old models.
+    AccountScreenScope(session?.ownerId) { ownerId ->
+        AuthenticatedAppRoute(
+            accountOwnerId = ownerId,
+            authState = authState,
+            appViewModel = appViewModel,
+            authViewModel = authViewModel,
+            feedsViewModel = accountViewModel(ownerId),
+            articlesViewModel = accountViewModel(ownerId),
+            searchViewModel = accountViewModel(ownerId),
+            settingsViewModel = accountViewModel(ownerId),
+            performanceMetricsState = performanceMetricsState,
+        )
+    }
+    if (session == null) {
+        SelfFeedTheme {
+            ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
+            if (authState.loading || authState.isAuthenticated) {
+                LoadingScreen()
+            } else {
+                AuthScreen(
+                    mode = authState.authMode,
+                    apiBaseUrl = authState.apiBaseUrl,
+                    registrationEnabled = authState.registrationEnabled,
+                    errorMessage = authState.errorMessage,
+                    onModeChange = authViewModel::setAuthMode,
+                    onLogin = authViewModel::login,
+                    onRegister = authViewModel::register,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerChangeConfirmation(
+    chromeState: AppChromeState,
+    authState: AuthUiState,
+    appViewModel: AppViewModel,
+    authViewModel: AuthViewModel,
+) {
+    chromeState.serverChangeConfirmation?.let { confirmation ->
+        val requestedServer = confirmation.serverOrigin.orEmpty()
+        AlertDialog(
+            onDismissRequest = appViewModel::cancelExternalServerChange,
+            title = { Text(stringResource(R.string.external_link_switch_server_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.external_link_switch_server_detail,
+                        requestedServer,
+                        authState.apiBaseUrl,
+                    ),
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = appViewModel::cancelExternalServerChange) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        appViewModel.confirmExternalServerChange()
+                        authViewModel.switchServerForExternalAction(requestedServer)
+                    },
+                ) {
+                    Text(stringResource(R.string.external_link_switch_server_action))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun AuthenticatedAppRoute(
+    accountOwnerId: String,
+    authState: AuthUiState,
+    appViewModel: AppViewModel,
+    authViewModel: AuthViewModel,
     feedsViewModel: FeedsViewModel,
     articlesViewModel: ArticlesViewModel,
     searchViewModel: SearchViewModel,
     settingsViewModel: SettingsViewModel,
     performanceMetricsState: PerformanceMetricsState.Holder,
-    benchmarkScenario: BenchmarkScenario? = null,
 ) {
-    if (benchmarkScenario == BenchmarkScenario.READER) {
-        SelfFeedTheme {
-            BenchmarkReaderScenario()
-        }
-        return
-    }
-
+    if (authState.session?.ownerId != accountOwnerId) return
     val context = LocalContext.current
-    val authState by authViewModel.state.collectAsStateWithLifecycle()
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
     val isOnline by appViewModel.isOnline.collectAsStateWithLifecycle()
     val feedsState by feedsViewModel.state.collectAsStateWithLifecycle()
@@ -56,37 +146,7 @@ fun SelfFeedAppRoute(
     }
 
     SelfFeedTheme(darkTheme = darkTheme) {
-        chromeState.serverChangeConfirmation?.let { confirmation ->
-            val requestedServer = confirmation.serverOrigin.orEmpty()
-            AlertDialog(
-                onDismissRequest = appViewModel::cancelExternalServerChange,
-                title = { Text(stringResource(R.string.external_link_switch_server_title)) },
-                text = {
-                    Text(
-                        stringResource(
-                            R.string.external_link_switch_server_detail,
-                            requestedServer,
-                            authState.apiBaseUrl,
-                        ),
-                    )
-                },
-                dismissButton = {
-                    TextButton(onClick = appViewModel::cancelExternalServerChange) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            appViewModel.confirmExternalServerChange()
-                            authViewModel.switchServerForExternalAction(requestedServer)
-                        },
-                    ) {
-                        Text(stringResource(R.string.external_link_switch_server_action))
-                    }
-                },
-            )
-        }
+        ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
         val latestFeedsState = rememberUpdatedState(feedsState)
         val workflowCoordinator = remember { AppWorkflowCoordinator() }
         val workflowSink = object : AppWorkflowSink {
@@ -168,15 +228,11 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(chromeState.sessionReady) {
-            if (chromeState.sessionReady) {
-                authViewModel.bootstrap()
-            }
-        }
-
-        LaunchedEffect(Unit) {
+        LaunchedEffect(feedsViewModel, accountOwnerId) {
             feedsViewModel.opmlExports.collect { content ->
-                shareOpmlContent(context, content)
+                if (authState.session?.let(authViewModel::isCurrentSession) == true) {
+                    shareOpmlContent(context, content)
+                }
             }
         }
 
@@ -261,7 +317,7 @@ fun SelfFeedAppRoute(
             }
         }
 
-        LaunchedEffect(Unit) {
+        LaunchedEffect(articlesViewModel, accountOwnerId) {
             articlesViewModel.events.collect { event ->
                 workflowCoordinator.onArticleEvent(
                     event = event,
@@ -291,9 +347,9 @@ fun SelfFeedAppRoute(
                 settings = settingsState,
                 isOnline = isOnline,
             ),
-            pendingArticleChanges = appViewModel.pendingArticleChanges,
-            observeOfflineText = remember(appViewModel) { appViewModel::observeArticleTextAvailability },
-            onRetryPendingChanges = appViewModel::retryPendingArticleChanges,
+            pendingArticleChanges = articlesViewModel.pendingArticleChanges,
+            observeOfflineText = remember(articlesViewModel) { articlesViewModel::observeArticleTextAvailability },
+            onRetryPendingChanges = articlesViewModel::retryPendingArticleChanges,
             readStateOverrides = articlesViewModel.readStateOverrides,
             actions = SelfFeedAppActions(
                 onAuthModeChange = authViewModel::setAuthMode,

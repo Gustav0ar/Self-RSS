@@ -730,7 +730,7 @@ private fun <T : Any> androidx.paging.compose.LazyPagingItems<T>.lastIndexOrNull
 private const val READER_PAGE_PREFETCH_DISTANCE = 8
 
 @Composable
-private fun LoadingScreen() {
+internal fun LoadingScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()

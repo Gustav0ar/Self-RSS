@@ -5,6 +5,13 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.data.repository.AuthenticatedSession
+import com.selffeed.android.data.repository.SettingsRepositoryImpl
+import com.selffeed.android.data.repository.ArticleRepositoryImpl
+import com.selffeed.android.data.repository.SavedStateRejection
+import com.selffeed.android.network.UpdatePreferencesRequest
+import com.selffeed.android.network.ArticleDetail
+import org.junit.Assert.assertNull
+import io.mockk.coVerify
 import com.selffeed.android.network.User
 import com.selffeed.android.data.local.LocalDatabase
 import com.selffeed.android.data.local.LocalStore
@@ -109,6 +116,49 @@ class RepositoryAccountOwnershipTest {
     private fun provideTestCredential(token: String) {
         val owner = store.currentSession()
         every { store.getAccessToken() } answers { token.takeIf { store.isCurrentSession(owner) } }
+    }
+
+    @Test
+    fun `a feature created for an old owner cannot dispatch a queued preference edit`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        coEvery { api.updatePreferences(any(), session = any()) } returns ApiEnvelope(preferences("new-owner"))
+        val repository = repository(api)
+        repository.prepareSession()
+        val feature = SettingsRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
+        repository.setApiBaseUrl("new.example")
+
+        val edit = async { feature.updatePreferences(UpdatePreferencesRequest(theme = "dark")) }
+        edit.join()
+
+        assertTrue("The old feature must retain its original owner", edit.isCancelled)
+        coVerify(exactly = 0) { api.updatePreferences(any(), session = any()) }
+    }
+
+    @Test
+    fun `an old feature cannot read a replacement account from memory`() = runBlocking {
+        val repository = spyk(repository(mockk(relaxed = true)))
+        repository.prepareSession()
+        val feature = ArticleRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
+        repository.setApiBaseUrl("new.example")
+        every { repository.cachedArticleDetail("same-id") } returns mockk<ArticleDetail>()
+
+        assertNull(feature.cachedArticleDetail("same-id"))
+    }
+
+    @Test
+    fun `an old feature cannot start collecting a new account event flow`() = runBlocking {
+        val repository = spyk(repository(mockk(relaxed = true)))
+        repository.prepareSession()
+        val feature = ArticleRepositoryImpl(repository, repository.accountAccess(store.currentSession().ownerId))
+        repository.setApiBaseUrl("new.example")
+        every { repository.savedStateRejections() } returns kotlinx.coroutines.flow.flowOf(
+            SavedStateRejection("same-id", false),
+        )
+
+        val collect = async { feature.savedStateRejections().first() }
+        collect.join()
+
+        assertTrue("Cold collection must keep the feature's original owner", collect.isCancelled)
     }
 
     @Test

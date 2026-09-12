@@ -1,6 +1,7 @@
 package com.selffeed.android.data
 
 import com.selffeed.android.data.repository.AuthenticatedSession
+import com.selffeed.android.data.repository.AccountAccess
 import com.selffeed.android.di.ApplicationCoroutineScope
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import android.content.Context
@@ -123,6 +124,20 @@ class RssRepository @Inject constructor(
             }
         }
     }
+
+    override fun accountAccess(ownerId: String): AccountAccess = object : AccountAccess {
+        override val ownerId = ownerId
+
+        override fun isCurrent(): Boolean = sessionStore.loadedSession()?.ownerId == ownerId
+
+        override suspend fun <T> withAccount(block: suspend () -> T): T {
+            val expected = sessionStore.loadedSession()?.takeIf { it.ownerId == ownerId }
+                ?: throw SessionChangedException()
+            return account.withSession(expected) { block() }
+        }
+    }
+
+    override fun isCurrentSession(session: ApiSession): Boolean = sessionStore.isCurrentSession(session)
 
     override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
 
@@ -948,9 +963,11 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override fun observePendingArticleChanges(): Flow<Int> = flow {
-        account.prepare()
-        emitAll(localStore.observePendingArticleChanges())
+    override fun observePendingArticleChanges(): Flow<Int> {
+        val expected = sessionStore.loadedSession()
+        return flow {
+            account.withSession(expected) { emitAll(localStore.observePendingArticleChanges()) }
+        }
     }
 
     override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> {
@@ -962,8 +979,12 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override fun retryPendingArticleChanges() {
-        if (isLoggedIn()) ArticleStateSyncWorker.kickOnce(imageRequestContext)
+    override suspend fun retryPendingArticleChanges() {
+        account.withSession { session ->
+            account.commit(session) {
+                if (isLoggedIn()) ArticleStateSyncWorker.kickOnce(imageRequestContext)
+            }
+        }
     }
 
     override fun isOnline(): Boolean = networkMonitor.online.value
