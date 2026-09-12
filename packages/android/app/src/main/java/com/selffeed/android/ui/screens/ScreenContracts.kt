@@ -1,5 +1,7 @@
 package com.selffeed.android.ui.screens
 
+import android.net.Uri
+
 import com.selffeed.android.ui.articles.ArticleFlags
 
 import com.selffeed.android.data.CategoryMoveDirection
@@ -27,6 +29,7 @@ data class FeedTabState(
     val loading: Boolean = false,
     val reorderingCategories: Boolean = false,
     val lastImportSummary: OpmlImportSummary? = null,
+    val importReadError: PresentationText? = null,
     val syncStatus: FeedSyncAllStatus? = null,
     val lifecycleActionFeedId: String? = null,
     val externalFeedUrl: String? = null,
@@ -46,9 +49,10 @@ data class FeedTabActions(
     val onCreateFeed: (String, String, String?) -> Unit = { _, _, _ -> },
     val onUpdateFeed: (String, String, String?, String?, Int?) -> Unit = { _, _, _, _, _ -> },
     val onDeleteFeed: (String) -> Unit = {},
-    val onImportOpml: (String, ByteArray) -> Unit = { _, _ -> },
+    val onImportOpml: (Uri) -> Unit = {},
     val onExportOpml: () -> Unit = {},
     val onDismissImportSummary: () -> Unit = {},
+    val onDismissImportReadError: () -> Unit = {},
     val onSelectDiscoveryCandidate: (String, String) -> Unit = { _, _ -> },
     val onCancelFeedReplacement: (String) -> Unit = {},
     val onConsumeExternalFeed: () -> Unit = {},

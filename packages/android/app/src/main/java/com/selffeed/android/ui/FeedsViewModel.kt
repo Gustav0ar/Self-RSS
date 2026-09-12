@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import androidx.lifecycle.ViewModel
+import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import com.selffeed.android.R
 import com.selffeed.android.data.repository.LibraryCounts
@@ -30,6 +31,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import com.selffeed.android.ui.screens.OpmlDocumentReader
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineStart
@@ -56,6 +59,7 @@ data class FeedsUiState(
     val syncStatus: FeedSyncAllStatus? = null,
     val lifecycleActionFeedId: String? = null,
     val lastImportSummary: OpmlImportSummary? = null,
+    val importReadError: PresentationText? = null,
     val errorMessage: PresentationText? = null,
     val statusMessage: PresentationText? = null,
     val externalFeedUrl: String? = null,
@@ -73,6 +77,7 @@ data class FeedsUiState(
 @HiltViewModel
 class FeedsViewModel @Inject constructor(
     private val repository: FeedRepository,
+    private val opmlReader: OpmlDocumentReader,
 ) : ViewModel() {
     private val _state = MutableStateFlow(FeedsUiState())
     val state: StateFlow<FeedsUiState> = _state.asStateFlow()
@@ -84,6 +89,7 @@ class FeedsViewModel @Inject constructor(
     private val healthReads = Mutex()
     private var categoryLoadRevision = 0L
     private var categoryReloadPending = false
+    private var importJob: Job? = null
 
     private var libraryCounts = LibraryCounts()
 
@@ -661,9 +667,19 @@ class FeedsViewModel @Inject constructor(
             }
     }
 
-    fun importOpml(fileName: String, fileBytes: ByteArray) {
-        viewModelScope.launch {
-            when (val result = repository.importOpml(fileName, fileBytes)) {
+    fun importOpml(uri: Uri) {
+        importJob?.cancel()
+        updateState { it.copy(importReadError = null) }
+        importJob = viewModelScope.launch {
+            val file = opmlReader.read(uri)
+            currentCoroutineContext().ensureActive()
+            if (file == null) {
+                updateState { it.copy(importReadError = PresentationText.resource(R.string.feeds_read_opml_error)) }
+                return@launch
+            }
+            val result = repository.importOpml(file.fileName, file.bytes)
+            currentCoroutineContext().ensureActive()
+            when (result) {
                 is AppResult.Success -> {
                     updateState {
                         it.copy(
@@ -703,6 +719,10 @@ class FeedsViewModel @Inject constructor(
 
     fun dismissImportSummary() {
         updateState { it.copy(lastImportSummary = null) }
+    }
+
+    fun dismissImportReadError() {
+        updateState { it.copy(importReadError = null) }
     }
 
     fun clearMessages() {

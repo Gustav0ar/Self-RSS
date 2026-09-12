@@ -1,5 +1,9 @@
 package com.selffeed.android.ui
 
+import android.net.Uri
+import com.selffeed.android.ui.screens.OpmlDocumentReader
+import com.selffeed.android.ui.screens.OpmlImportFile
+
 import com.selffeed.android.data.repository.LibraryCounts
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.selffeed.android.R
@@ -19,6 +23,8 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import androidx.lifecycle.viewModelScope
@@ -44,6 +50,7 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FeedsViewModelTest {
+    private val opmlReader = mockk<OpmlDocumentReader>()
     private lateinit var repository: RssRepository
     private lateinit var countUpdates: MutableStateFlow<LibraryCounts>
     private val testDispatcher = UnconfinedTestDispatcher()
@@ -92,7 +99,7 @@ class FeedsViewModelTest {
         coEvery { repository.categories() } returns AppResult.Success(original)
         val pending = CompletableDeferred<AppResult<Unit>>()
         coEvery { repository.reorderCategories(any()) } coAnswers { pending.await() }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadCategories()
 
         viewModel.loadFeeds()
@@ -118,7 +125,7 @@ class FeedsViewModelTest {
         val original = listOf(sampleCategory("a"), sampleCategory("b"))
         coEvery { repository.categories() } returns AppResult.Success(original)
         coEvery { repository.reorderCategories(any()) } returns AppResult.Error("Offline")
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadCategories()
 
         viewModel.moveCategory("a", CategoryMoveDirection.UP)
@@ -137,7 +144,7 @@ class FeedsViewModelTest {
         val original = listOf(sampleCategory("a"), sampleCategory("b"))
         coEvery { repository.categories() } returns AppResult.Success(original)
         coEvery { repository.reorderCategories(any()) } returns AppResult.Success(Unit)
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadCategories()
         val oldLoad = CompletableDeferred<AppResult<List<CategoryWithCounts>>>()
         coEvery { repository.categories() } coAnswers { oldLoad.await() }
@@ -151,14 +158,14 @@ class FeedsViewModelTest {
 
     @Test
     fun `loadCategories populates the state`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadCategories()
         assertNotNull(viewModel.state.value.categories)
     }
 
     @Test
     fun `loadFeeds populates the state`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadFeeds()
         assertNotNull(viewModel.state.value.feeds)
     }
@@ -170,7 +177,7 @@ class FeedsViewModelTest {
             lastSyncError = "HTTP 503: Service Unavailable",
         )
         coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(failedFeed))
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.refreshFeedHealth()
 
@@ -184,7 +191,7 @@ class FeedsViewModelTest {
         coEvery { repository.refreshFeeds(null) } coAnswers {
             try { awaitCancellation() } finally { cancelled.complete(Unit) }
         }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         val caller = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             viewModel.refreshFeedHealth()
             awaitCancellation()
@@ -199,7 +206,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `a queued user refresh does not start interactive polling without a visible host`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.syncAllFeeds()
 
         coVerify(exactly = 1) { repository.syncAllFeeds() }
@@ -223,7 +230,7 @@ class FeedsViewModelTest {
             activeHealth++
             try { awaitCancellation() } finally { activeHealth-- }
         }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         advanceTimeBy(60_000)
         runCurrent()
@@ -248,7 +255,7 @@ class FeedsViewModelTest {
     fun `late queue submission survives foreground cancellation and wakes resume only once`() = runTest {
         val queued = CompletableDeferred<AppResult<SyncResponse>>()
         coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         viewModel.syncAllFeeds()
         first.cancelAndJoin()
@@ -270,7 +277,7 @@ class FeedsViewModelTest {
     fun `resuming during a slow queue submission cannot declare its refresh completed`() = runTest {
         val queued = CompletableDeferred<AppResult<SyncResponse>>()
         coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.syncAllFeeds()
         advanceTimeBy(4_000)
         runCurrent()
@@ -296,7 +303,7 @@ class FeedsViewModelTest {
             if (statusCalls++ == 0) oldStatus.await() else AppResult.Success(completedSyncStatus())
         }
         coEvery { repository.syncAllFeeds() } coAnswers { queued.await() }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         val foreground = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         viewModel.syncAllFeeds()
         advanceTimeBy(4_000)
@@ -320,7 +327,7 @@ class FeedsViewModelTest {
         coEvery { repository.syncAllFeedsStatus() } coAnswers {
             if (statusCalls++ == 0) oldStatus.await() else AppResult.Success(completedSyncStatus())
         }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         val foreground = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         viewModel.syncAllFeeds()
         oldStatus.complete(AppResult.Success(completedSyncStatus().copy(active = true, running = true)))
@@ -340,7 +347,7 @@ class FeedsViewModelTest {
             val feed = sampleFeed("feed", "child").copy(unreadCount = 2)
             coEvery { repository.categories() } returns AppResult.Success(listOf(parent))
             coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(feed))
-            val model = FeedsViewModel(repository)
+            val model = FeedsViewModel(repository, opmlReader)
             model.refreshCategories()
             model.refreshFeedHealth()
             val categoryResponse = CompletableDeferred<AppResult<List<CategoryWithCounts>>>()
@@ -374,7 +381,7 @@ class FeedsViewModelTest {
         val original = sampleFeed("original")
         val created = sampleFeed("created")
         coEvery { repository.refreshFeeds(null) } returns AppResult.Success(listOf(original))
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadFeeds()
         val response = CompletableDeferred<AppResult<List<FeedWithCounts>>>()
         coEvery { repository.refreshFeeds(null) } coAnswers { response.await() }
@@ -388,7 +395,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `createCategory surfaces status message`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.createCategory("Tech")
         assertEquals(
             PresentationText.resource(R.string.feeds_category_created),
@@ -399,7 +406,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `createCategory preserves the selected parent`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.createCategory("Android", parentCategoryId = "tech")
 
         coVerify { repository.createCategory("Android", "tech") }
@@ -407,14 +414,14 @@ class FeedsViewModelTest {
 
     @Test
     fun `createCategory with blank name is a no-op`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.createCategory("   ")
         coVerify(exactly = 0) { repository.createCategory(any(), any()) }
     }
 
     @Test
     fun `deleteCategory surfaces status and reloads`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.deleteCategory("c-1")
         assertEquals(
             PresentationText.resource(R.string.feeds_category_deleted),
@@ -425,14 +432,14 @@ class FeedsViewModelTest {
 
     @Test
     fun `createFeed with blank url is a no-op`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.createFeed("", "c-1", "Title")
         coVerify(exactly = 0) { repository.createFeed(any(), any(), any()) }
     }
 
     @Test
     fun `updateFeed trims and forwards the edited URL`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.updateFeed(
             id = "f-1",
@@ -455,7 +462,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `syncAllFeeds sets loading flag and populates lastSyncSummary`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         val s = viewModel.state.value
@@ -466,7 +473,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `syncAllFeeds increments sync revision when summary is unchanged`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -483,7 +490,7 @@ class FeedsViewModelTest {
     fun `queue response timeout releases foreground loading without cancelling the refresh`() = runTest {
         val delayedResponse = CompletableDeferred<AppResult<SyncResponse>>()
         coEvery { repository.syncAllFeeds() } coAnswers { delayedResponse.await() }
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -509,7 +516,7 @@ class FeedsViewModelTest {
     fun `syncAllFeeds forwards the selected scope`() = runTest {
         coEvery { repository.syncAllFeeds("feed-1", "category-1") } returns
             AppResult.Success(SyncResponse(status = "queued"))
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds(feedId = "feed-1", categoryId = "category-1")
 
@@ -533,7 +540,7 @@ class FeedsViewModelTest {
             ),
             AppResult.Success(completedSyncStatus().copy(articleRevision = 7)),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -570,7 +577,7 @@ class FeedsViewModelTest {
             AppResult.Success(active),
             AppResult.Success(completedSyncStatus().copy(articleRevision = 9)),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
@@ -601,7 +608,7 @@ class FeedsViewModelTest {
             AppResult.Success(active),
             AppResult.Success(completedSyncStatus()),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -626,7 +633,7 @@ class FeedsViewModelTest {
     @Test
     fun `status monitoring is bounded when status requests keep failing`() = runTest {
         coEvery { repository.syncAllFeedsStatus() } returns AppResult.Error("status unavailable")
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -648,7 +655,7 @@ class FeedsViewModelTest {
         coEvery { repository.syncAllFeedsStatus() } returns AppResult.Success(
             completedSyncStatus().copy(stale = true),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -671,7 +678,7 @@ class FeedsViewModelTest {
                 skippedFeeds = 2,
             ),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
@@ -690,6 +697,78 @@ class FeedsViewModelTest {
     }
 
     @Test
+    fun `a replaced import cannot overwrite the newer import summary`() = runTest {
+        val oldResult = CompletableDeferred<Unit>()
+        coEvery { repository.importOpml("old.opml", any()) } coAnswers {
+            withContext(NonCancellable) { oldResult.await() }
+            AppResult.Success(OpmlImportSummary(1, 1, 0, 0))
+        }
+        coEvery { repository.importOpml("new.opml", any()) } returns
+            AppResult.Success(OpmlImportSummary(2, 3, 0, 0))
+        val viewModel = FeedsViewModel(repository, opmlReader)
+        viewModel.importOpml(importUri("old.opml", "old"))
+        viewModel.importOpml(importUri("new.opml", "new"))
+        assertEquals(3, viewModel.state.value.lastImportSummary?.createdFeeds)
+        oldResult.complete(Unit)
+        runCurrent()
+        assertEquals("A late replaced import must not replace the current result", 3, viewModel.state.value.lastImportSummary?.createdFeeds)
+    }
+
+    @Test
+    fun `a replaced document read cannot submit its bytes after cancellation`() = runTest {
+        val uri = mockk<Uri>()
+        val lateRead = CompletableDeferred<Unit>()
+        coEvery { opmlReader.read(uri) } coAnswers {
+            withContext(NonCancellable) { lateRead.await() }
+            OpmlImportFile("old.opml", "old".encodeToByteArray())
+        }
+        coEvery { repository.importOpml("new.opml", any()) } returns
+            AppResult.Success(OpmlImportSummary(0, 1, 0, 0))
+        val viewModel = FeedsViewModel(repository, opmlReader)
+        viewModel.importOpml(uri)
+        viewModel.importOpml(importUri("new.opml", "new"))
+        lateRead.complete(Unit)
+        runCurrent()
+        coVerify(exactly = 0) { repository.importOpml("old.opml", any()) }
+        assertEquals(1, viewModel.state.value.lastImportSummary?.createdFeeds)
+        assertNull(viewModel.state.value.importReadError)
+    }
+
+    @Test
+    fun `clearing the feature cancels acquisition without an upload or read error`() = runTest {
+        val uri = mockk<Uri>()
+        var cancelled = false
+        coEvery { opmlReader.read(uri) } coAnswers {
+            try { awaitCancellation() } finally { cancelled = true }
+        }
+        val viewModel = FeedsViewModel(repository, opmlReader)
+        viewModel.importOpml(uri)
+        viewModel.viewModelScope.cancel()
+        runCurrent()
+        assertTrue(cancelled)
+        assertNull(viewModel.state.value.importReadError)
+        assertNull(viewModel.state.value.lastImportSummary)
+        coVerify(exactly = 0) { repository.importOpml(any(), any()) }
+    }
+
+    @Test
+    fun `read failures remain feature state until dismissed and a new import can succeed`() = runTest {
+        val unreadable = mockk<Uri>()
+        coEvery { opmlReader.read(unreadable) } returns null
+        val viewModel = FeedsViewModel(repository, opmlReader)
+        viewModel.importOpml(unreadable)
+        assertEquals(PresentationText.resource(R.string.feeds_read_opml_error), viewModel.state.value.importReadError)
+        coVerify(exactly = 0) { repository.importOpml(any(), any()) }
+        viewModel.dismissImportReadError()
+        assertNull(viewModel.state.value.importReadError)
+        coEvery { repository.importOpml("retry.opml", any()) } returns
+            AppResult.Success(OpmlImportSummary(0, 1, 0, 0))
+        viewModel.importOpml(importUri("retry.opml", "<opml/>"))
+        assertEquals(1, viewModel.state.value.lastImportSummary?.createdFeeds)
+        assertNull(viewModel.state.value.importReadError)
+    }
+
+    @Test
     fun `importOpml exposes a result summary and refreshes subscription data`() = runTest {
         coEvery { repository.importOpml(any(), any()) } returns AppResult.Success(
             OpmlImportSummary(
@@ -699,9 +778,9 @@ class FeedsViewModelTest {
                 invalidEntries = 0,
             ),
         )
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
 
-        viewModel.importOpml("feeds.opml", "<opml/>".encodeToByteArray())
+        viewModel.importOpml(importUri("feeds.opml", "<opml/>"))
 
         assertEquals(3, viewModel.state.value.lastImportSummary?.createdFeeds)
         assertEquals(
@@ -714,7 +793,7 @@ class FeedsViewModelTest {
 
     @Test
     fun `clearMessages wipes error and status`() = runTest {
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.createCategory("Tech")
         viewModel.clearMessages()
         assertNull(viewModel.state.value.statusMessage)
@@ -724,9 +803,15 @@ class FeedsViewModelTest {
     @Test
     fun `failure paths surface error messages`() = runTest {
         coEvery { repository.categories() } returns AppResult.Error("boom")
-        val viewModel = FeedsViewModel(repository)
+        val viewModel = FeedsViewModel(repository, opmlReader)
         viewModel.loadCategories()
         assertEquals(PresentationText.dynamic("boom"), viewModel.state.value.errorMessage)
+    }
+
+    private fun importUri(fileName: String, contents: String): Uri {
+        val uri = mockk<Uri>()
+        coEvery { opmlReader.read(uri) } returns OpmlImportFile(fileName, contents.encodeToByteArray())
+        return uri
     }
 
     private fun sampleCategory(

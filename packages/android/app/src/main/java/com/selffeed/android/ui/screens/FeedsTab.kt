@@ -82,7 +82,6 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -94,7 +93,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
@@ -133,8 +131,6 @@ import com.selffeed.android.ui.feedLifecyclePresentation
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -202,13 +198,8 @@ fun FeedsTab(
     actions: FeedTabActions,
     onSelect: () -> Unit = {},
 ) {
-    val context = LocalContext.current
     val expandedCategories = remember { mutableStateMapOf<String, Boolean>() }
     var managementDialog by remember { mutableStateOf<FeedManagementDialog?>(null) }
-    val importScope = rememberCoroutineScope()
-    var importReadJob by remember { mutableStateOf<Job?>(null) }
-    var importError by remember { mutableStateOf<String?>(null) }
-    val opmlReadError = stringResource(R.string.feeds_read_opml_error)
 
     LaunchedEffect(state.externalFeedUrl) {
         val url = state.externalFeedUrl ?: return@LaunchedEffect
@@ -249,16 +240,7 @@ fun FeedsTab(
     val allCategories = state.categories.flattenCategories()
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        importReadJob?.cancel()
-        importReadJob = importScope.launch {
-            importError = null
-            val contents = readBoundedOpml { context.contentResolver.openInputStream(uri) }
-            if (contents == null) {
-                importError = opmlReadError
-            } else {
-                actions.onImportOpml(uri.lastPathSegment?.substringAfterLast('/') ?: "feeds.opml", contents)
-            }
-        }
+        actions.onImportOpml(uri)
     }
 
     LazyColumn(
@@ -598,16 +580,16 @@ fun FeedsTab(
     state.lastImportSummary?.let { summary ->
         OpmlImportSummaryDialog(summary = summary, onDismiss = actions.onDismissImportSummary)
     }
-    importError?.let { message ->
+    state.importReadError?.let { message ->
         AlertDialog(
-            onDismissRequest = { importError = null },
+            onDismissRequest = actions.onDismissImportReadError,
             confirmButton = {
-                TextButton(onClick = { importError = null }) {
+                TextButton(onClick = actions.onDismissImportReadError) {
                     Text(stringResource(R.string.action_ok))
                 }
             },
             title = { Text(stringResource(R.string.feeds_import_title)) },
-            text = { Text(message) },
+            text = { Text(message.resolve()) },
         )
     }
 }
