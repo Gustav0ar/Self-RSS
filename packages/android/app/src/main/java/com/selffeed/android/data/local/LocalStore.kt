@@ -21,7 +21,9 @@ import com.selffeed.android.network.UserPreferences
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
@@ -45,12 +47,14 @@ import java.util.UUID
 class LocalStore internal constructor(
     private val database: LocalDatabase,
     moshi: Moshi,
+    private val processingDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : OfflineReadStore {
-    constructor(context: Context, moshi: Moshi) : this(
+    constructor(context: Context, moshi: Moshi, processingDispatcher: CoroutineDispatcher = Dispatchers.Default) : this(
         Room.databaseBuilder(context.applicationContext, LocalDatabase::class.java, DB_NAME)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
             .build(),
         moshi,
+        processingDispatcher,
     )
     private val dao = database.localStoreDao()
     private val counts = LocalCountStore(dao, moshi)
@@ -242,8 +246,9 @@ class LocalStore internal constructor(
         notifyInvalidation(TABLE_CATEGORIES)
     }
 
-    override suspend fun readCategories(): List<CategoryWithCounts> =
+    override suspend fun readCategories(): List<CategoryWithCounts> = withContext(processingDispatcher) {
         dao.readCategories().map { it.toModel().withVisibleCounts() }
+    }
 
     suspend fun reorderCategories(updates: List<CategoryOrderUpdate>) = database.withTransaction {
         writeCategories(applyCategoryOrder(dao.readCategories().map { it.toModel() }, updates))
@@ -775,8 +780,9 @@ class LocalStore internal constructor(
         return text.any { !it.isWhitespace() && it != '\uFFFC' }
     }
 
-    override suspend fun readArticleDetail(articleId: String): ArticleDetail? =
+    override suspend fun readArticleDetail(articleId: String): ArticleDetail? = withContext(processingDispatcher) {
         readableArticleDetail(dao.readArticleDetail(articleId))
+    }
 
     private suspend fun readableArticleDetail(detail: ArticleDetailEntity?): ArticleDetail? {
         detail ?: return null
@@ -802,13 +808,16 @@ class LocalStore internal constructor(
     }
 
     suspend fun writePreferences(preferences: UserPreferences) {
+        val payload = withContext(processingDispatcher) { preferencesAdapter.toJson(preferences) }
         dao.upsertPreferences(
-            PreferencesEntity(payloadJson = preferencesAdapter.toJson(preferences), writtenAt = System.currentTimeMillis()),
+            PreferencesEntity(payloadJson = payload, writtenAt = System.currentTimeMillis()),
         )
     }
 
-    suspend fun readPreferences(): UserPreferences? = dao.readPreferences()?.let { entity ->
-        runCatching { preferencesAdapter.fromJson(entity.payloadJson) }.getOrNull()
+    suspend fun readPreferences(): UserPreferences? = withContext(processingDispatcher) {
+        dao.readPreferences()?.let { entity ->
+            runCatching { preferencesAdapter.fromJson(entity.payloadJson) }.getOrNull()
+        }
     }
 
     suspend fun searchArticles(query: String, categoryId: String?, limit: Int = 20): List<ArticleListItem> =
