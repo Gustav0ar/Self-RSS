@@ -199,6 +199,7 @@ fun SelfFeedApp(
     pendingArticleChanges: Flow<Int> = emptyFlow(),
     observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
     onRetryPendingChanges: () -> Unit = {},
+    onArticleBodyReady: (String) -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState =
@@ -528,6 +529,7 @@ fun SelfFeedApp(
         { preferHtml, onPreferHtmlChanged ->
             selectedArticle?.let { article ->
                 ArticleReaderPane(
+                    onArticleBodyReady = onArticleBodyReady,
                     articles = articleQueue,
                     selectedArticle = article,
                     prefetchedArticles = state.articles.readerDetails,

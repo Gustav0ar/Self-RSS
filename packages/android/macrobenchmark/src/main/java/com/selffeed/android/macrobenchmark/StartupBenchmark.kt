@@ -14,7 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-private const val TARGET_PACKAGE = "com.selffeed.android"
+private const val TARGET_PACKAGE = BuildConfig.TARGET_PACKAGE
 private const val BenchmarkScenarioExtra = "com.selffeed.android.extra.BENCHMARK_SCENARIO"
 private const val BenchmarkReaderScenarioName = "reader"
 private const val BenchmarkArticleCardDescription = "Unread article: Reader navigation performance, from Self Feed"
@@ -44,8 +44,10 @@ class StartupBenchmark {
             pressHome()
         },
     ) {
-        startActivityAndWait()
-        device.waitForIdle()
+        startActivityAndWait(benchmarkReaderIntent())
+        check(device.wait(Until.hasObject(By.desc(BenchmarkArticleCardDescription)), UiTimeoutMillis)) {
+            "Synthetic startup fixture was not rendered"
+        }
     }
 }
 
@@ -87,6 +89,6 @@ class BaselineProfileGenerator {
 
 private fun benchmarkReaderIntent(): Intent = Intent(Intent.ACTION_MAIN).apply {
     addCategory(Intent.CATEGORY_LAUNCHER)
-    setClassName(TARGET_PACKAGE, "$TARGET_PACKAGE.MainActivity")
+    setClassName(TARGET_PACKAGE, "com.selffeed.android.MainActivity")
     putExtra(BenchmarkScenarioExtra, BenchmarkReaderScenarioName)
 }

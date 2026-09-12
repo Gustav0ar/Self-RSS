@@ -87,6 +87,7 @@ fun ArticleReaderPane(
     onVisibleArticleChanged: (String) -> Unit = {},
     onArticleDisplayed: (String) -> Unit = {},
     onArticleCompleted: (String) -> Unit = {},
+    onArticleBodyReady: (String) -> Unit = {},
     appearance: ReaderAppearance = ReaderAppearance(),
     preferHtml: Boolean = true,
     onPreferHtmlChanged: (Boolean) -> Unit = {},
@@ -109,6 +110,7 @@ fun ArticleReaderPane(
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
             onCompleted = { onArticleCompleted(selectedArticle.id) },
+            onBodyReady = { onArticleBodyReady(selectedArticle.id) },
             preferHtml = preferHtml,
             onPreferHtmlChanged = onPreferHtmlChanged,
             appearance = appearance,
@@ -184,6 +186,7 @@ fun ArticleReaderPane(
                 onOpenOriginal = { onOpenOriginal(article) },
                 onDisplayed = { onArticleDisplayed(article.id) },
                 onCompleted = { onArticleCompleted(article.id) },
+                onBodyReady = { onArticleBodyReady(article.id) },
                 preferHtml = preferHtml,
                 onPreferHtmlChanged = onPreferHtmlChanged,
                 appearance = appearance,
@@ -203,6 +206,7 @@ private fun ArticleDetailView(
     onOpenOriginal: () -> Unit,
     onDisplayed: () -> Unit = {},
     onCompleted: () -> Unit = {},
+    onBodyReady: () -> Unit = {},
     preferHtml: Boolean,
     onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
@@ -345,7 +349,10 @@ private fun ArticleDetailView(
                     documentBaseUrl = documentBaseUrl,
                     onShowFullscreenMedia = showFullscreenMedia,
                     onHideFullscreenMedia = hideFullscreenMedia,
-                    onReady = { htmlReady = true },
+                    onReady = {
+                        htmlReady = true
+                        onBodyReady()
+                    },
                 )
             } else if (preferHtml && article.isRichContentPending()) {
                 // Keep Rich selected while the next article's detail request
@@ -553,7 +560,12 @@ private fun SecureHtmlContent(
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         view?.evaluateJavascript("window.postHeight && window.postHeight();") { }
-                        onReady?.invoke()
+                        val document = view?.tag ?: return
+                        view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
+                            override fun onComplete(requestId: Long) {
+                                if (view.tag == document) onReady?.invoke()
+                            }
+                        })
                     }
                 }
             }

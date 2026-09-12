@@ -5,9 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
 import coil3.ImageLoader
-import com.selffeed.android.data.local.CompositeOfflineReadStore
 import com.selffeed.android.data.local.LocalStore
-import com.selffeed.android.data.local.OfflineCacheStore
 import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.remote.ArticleRemoteDataSource
 import com.selffeed.android.data.remote.AuthRemoteDataSource
@@ -44,11 +42,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -84,7 +80,6 @@ class RssRepositoryTest {
     private lateinit var api: RssApi
     private lateinit var sessionStore: SessionStore
     private lateinit var sessionRefreshCoordinator: SessionRefreshCoordinator
-    private lateinit var cacheStore: OfflineCacheStore
     private lateinit var localStore: LocalStore
     private lateinit var offlineReadStore: OfflineReadStore
     private lateinit var imageLoader: ImageLoader
@@ -103,13 +98,11 @@ class RssRepositoryTest {
         // adapters aren't on the test classpath. The test suite uses the
         // same Moshi so writes through LocalStore can encode payloads.
         val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
-        cacheStore = OfflineCacheStore(context, moshi)
         localStore = LocalStore(context, moshi)
         runBlocking {
             localStore.clearAll()
-            cacheStore.clearAll()
         }
-        offlineReadStore = CompositeOfflineReadStore(localStore, cacheStore)
+        offlineReadStore = localStore
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
         onlineState = MutableStateFlow(true)
@@ -724,7 +717,7 @@ class RssRepositoryTest {
 
         assertEquals(AppResult.Success(Unit), repository.reorderCategories(updates))
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
-        assertEquals(listOf("second", "first"), cacheStore.readCategories().map { it.id })
+        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(4, localStore.readCategories().last().unreadCount)
         coVerify(exactly = 1) { api.reorderCategories(request) }
     }
@@ -758,7 +751,7 @@ class RssRepositoryTest {
 
         assertEquals(AppResult.Success(updated), loading.await())
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
-        assertEquals(listOf("second", "first"), cacheStore.readCategories().map { it.id })
+        assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         coVerify(exactly = 2) { api.categories() }
     }
 
@@ -810,7 +803,7 @@ class RssRepositoryTest {
         assertEquals("f-network", feed.id)
         assertEquals("error", feed.syncStatus)
         assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
-        assertEquals(listOf("f-network"), cacheStore.readFeeds().map { it.id })
+        assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
         coVerify(exactly = 1) { api.feeds(null) }
     }
 
@@ -986,7 +979,7 @@ class RssRepositoryTest {
         )
         assertEquals(
             setOf("f-existing", "f-target"),
-            cacheStore.readFeeds().map { it.id }.toSet(),
+            localStore.readFeeds().map { it.id }.toSet(),
         )
     }
 

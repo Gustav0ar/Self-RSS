@@ -175,6 +175,15 @@ android {
             versionNameSuffix = DEVICE_TEST_VERSION_NAME_SUFFIX
             matchingFallbacks += listOf("debug")
         }
+        create("performanceTest") {
+            initWith(getByName("release"))
+            // Review fixtures never inherit a configured real server.
+            buildConfigField("String", "API_BASE_URL", quotedBuildConfigValue("https://example.invalid/api/v1/"))
+            applicationIdSuffix = ".performancetest"
+            versionNameSuffix = "-performance-test"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     // All connected instrumentation tests target the isolated deviceTest app
@@ -204,7 +213,8 @@ android {
         // tests, so Room's migration fixtures must be packaged here too.
         getByName("deviceTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
         getByName("test").assets.setSrcDirs(listOf("$projectDir/schemas"))
-        getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas", "$projectDir/src/androidTest/assets"))
+        getByName("performanceTest").assets.srcDir("src/androidTest/assets")
     }
 
     testOptions {

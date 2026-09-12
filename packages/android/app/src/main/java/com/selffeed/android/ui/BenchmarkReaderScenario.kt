@@ -44,7 +44,10 @@ internal fun benchmarkScenarioFor(
     }
 }
 
-private val benchmarkBuildTypes = setOf("benchmarkRelease", "nonMinifiedRelease")
+private val benchmarkBuildTypes = setOf(
+    "benchmarkRelease", "nonMinifiedRelease", "performanceTest",
+    "benchmarkPerformanceTest", "nonMinifiedPerformanceTest",
+)
 
 /**
  * A local, deterministic authenticated article-list → reader journey for
@@ -55,6 +58,7 @@ private val benchmarkBuildTypes = setOf("benchmarkRelease", "nonMinifiedRelease"
 @Composable
 internal fun BenchmarkReaderScenario() {
     var selectedArticle by remember { mutableStateOf<ArticleDetail?>(null) }
+    var readyArticleId by remember { mutableStateOf<String?>(null) }
     val pagingData = remember { flowOf(PagingData.from(listOf(benchmarkArticle))) }
     val readStateOverrides = remember { MutableStateFlow<Map<String, Boolean>>(emptyMap()) }
     val state = SelfFeedAppState(
@@ -73,6 +77,7 @@ internal fun BenchmarkReaderScenario() {
 
     Box(modifier = Modifier.fillMaxSize()) {
         SelfFeedApp(
+            onArticleBodyReady = { readyArticleId = it },
             state = state,
             readStateOverrides = readStateOverrides,
             articlePagingData = pagingData,
@@ -88,10 +93,14 @@ internal fun BenchmarkReaderScenario() {
                 onFeedSelected = {},
                 onRefreshArticles = {},
                 onOpenArticle = { articleId ->
+                    readyArticleId = null
                     selectedArticle = benchmarkArticleDetail.takeIf { it.id == articleId }
                 },
                 onArticleDisplayed = {},
-                onCloseArticle = { selectedArticle = null },
+                onCloseArticle = {
+                    selectedArticle = null
+                    readyArticleId = null
+                },
                 onToggleRead = { _, _ -> },
                 onMarkAllRead = {},
                 onArticleSnapshot = {},
@@ -108,7 +117,7 @@ internal fun BenchmarkReaderScenario() {
             ),
         )
 
-        if (selectedArticle != null) {
+        if (selectedArticle != null && readyArticleId == selectedArticle?.id) {
             Text(
                 text = "Reader ready",
                 modifier = Modifier
