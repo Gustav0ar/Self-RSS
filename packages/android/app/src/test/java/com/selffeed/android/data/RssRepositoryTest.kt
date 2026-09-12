@@ -374,9 +374,13 @@ class RssRepositoryTest {
                 }
                 try {
                     started.await()
-                    runCurrent()
-                    assertTrue("The durable receipt must not wait for WorkManager", action.isCompleted)
-                    val receipt = (action.await() as AppResult.Success).data
+                    // Room completes on its own executor, outside the test scheduler.
+                    // Await the receipt while WorkManager is still held at the gate.
+                    val result = withContext(Dispatchers.Default) {
+                        withTimeout(5_000) { action.await() }
+                    }
+                    assertTrue("WorkManager must still be suspended", !release.isCompleted)
+                    val receipt = (result as AppResult.Success).data
                     val pendingId = if (saved) localStore.readPendingSavedStateMutations().single().mutationId
                         else localStore.readPendingReadStateMutations().single().mutationId
                     assertEquals(pendingId, receipt.mutationId)
