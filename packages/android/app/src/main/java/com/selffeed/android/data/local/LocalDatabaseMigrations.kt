@@ -3,7 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-const val LOCAL_DATABASE_VERSION = 7
+const val LOCAL_DATABASE_VERSION = 8
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -111,6 +111,52 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+/** Preserve legacy offline pins before the published 6 -> 7 repair drops their table. */
+val MIGRATION_6_8 = object : Migration(6, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.createOwnershipTables()
+        if (db.hasTable("saved_articles")) {
+            db.execSQL("INSERT INTO legacy_offline_articles(articleId, savedAt) SELECT articleId, savedAt FROM saved_articles")
+        }
+        MIGRATION_6_7.migrate(db)
+    }
+}
+
+/** Existing version-7 rows remain byte-for-byte intact until their first owner is adopted. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) = db.createOwnershipTables()
+}
+
+private fun SupportSQLiteDatabase.createOwnershipTables() {
+    execSQL("""
+        CREATE TABLE IF NOT EXISTS current_local_owner (
+            `key` TEXT NOT NULL PRIMARY KEY, ownerId TEXT NOT NULL, apiBaseUrl TEXT NOT NULL, userId TEXT
+        )
+    """.trimIndent())
+    execSQL("""
+        CREATE TABLE IF NOT EXISTS archived_read_state_mutations (
+            ownerId TEXT NOT NULL, apiBaseUrl TEXT NOT NULL, userId TEXT,
+            articleId TEXT NOT NULL, read INTEGER NOT NULL,
+            mutationId TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'manual',
+            baseRevision INTEGER, previousState INTEGER, updatedAt INTEGER NOT NULL,
+            PRIMARY KEY(ownerId, articleId)
+        )
+    """.trimIndent())
+    execSQL("""
+        CREATE TABLE IF NOT EXISTS archived_saved_state_mutations (
+            ownerId TEXT NOT NULL, apiBaseUrl TEXT NOT NULL, userId TEXT,
+            articleId TEXT NOT NULL, saved INTEGER NOT NULL, mutationId TEXT NOT NULL,
+            baseRevision INTEGER, previousState INTEGER, updatedAt INTEGER NOT NULL,
+            PRIMARY KEY(ownerId, articleId)
+        )
+    """.trimIndent())
+    execSQL("""
+        CREATE TABLE IF NOT EXISTS legacy_offline_articles (
+            articleId TEXT NOT NULL PRIMARY KEY, savedAt INTEGER NOT NULL
+        )
+    """.trimIndent())
+}
+
 private fun SupportSQLiteDatabase.hasTable(tableName: String): Boolean =
     query(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
@@ -134,4 +180,6 @@ val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
         MIGRATION_4_5,
         MIGRATION_5_6,
         MIGRATION_6_7,
+        MIGRATION_6_8,
+        MIGRATION_7_8,
     )

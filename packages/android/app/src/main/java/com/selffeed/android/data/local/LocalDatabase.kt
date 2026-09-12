@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Embedded
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -26,6 +27,10 @@ object LocalTables {
     const val ARTICLE_READ_OVERRIDES = "article_read_overrides"
     const val ARTICLE_DETAILS = "article_details"
     const val PREFERENCES = "preferences"
+    const val CURRENT_LOCAL_OWNER = "current_local_owner"
+    const val ARCHIVED_READ_STATE_MUTATIONS = "archived_read_state_mutations"
+    const val ARCHIVED_SAVED_STATE_MUTATIONS = "archived_saved_state_mutations"
+    const val LEGACY_OFFLINE_ARTICLES = "legacy_offline_articles"
 }
 
 @Entity(
@@ -132,6 +137,39 @@ data class PendingSavedStateMutationEntity(
     val updatedAt: Long,
 )
 
+/** The single active snapshot's durable session identity, independent of token rotation. */
+@Entity(tableName = LocalTables.CURRENT_LOCAL_OWNER)
+data class LocalOwnerEntity(
+    @PrimaryKey val key: String = "current",
+    val ownerId: String,
+    val apiBaseUrl: String,
+    val userId: String? = null,
+)
+
+/** Historical outboxes never participate in active drains or presentation overlays. */
+@Entity(tableName = LocalTables.ARCHIVED_READ_STATE_MUTATIONS, primaryKeys = ["ownerId", "articleId"])
+data class ArchivedReadStateMutationEntity(
+    val ownerId: String,
+    val apiBaseUrl: String,
+    val userId: String?,
+    @Embedded val mutation: PendingReadStateMutationEntity,
+)
+
+@Entity(tableName = LocalTables.ARCHIVED_SAVED_STATE_MUTATIONS, primaryKeys = ["ownerId", "articleId"])
+data class ArchivedSavedStateMutationEntity(
+    val ownerId: String,
+    val apiBaseUrl: String,
+    val userId: String?,
+    @Embedded val mutation: PendingSavedStateMutationEntity,
+)
+
+/** Early version 6 used local offline pins, which are distinct from server bookmarks. */
+@Entity(tableName = LocalTables.LEGACY_OFFLINE_ARTICLES)
+data class LegacyOfflineArticleEntity(
+    @PrimaryKey val articleId: String,
+    val savedAt: Long,
+)
+
 @Entity(tableName = LocalTables.ARTICLE_STATE_REVISIONS)
 data class ArticleStateRevisionEntity(
     @PrimaryKey val articleId: String,
@@ -169,6 +207,49 @@ data class SavedArticleSnapshot(val articleId: String, val savedRevision: Int?)
 
 @Dao
 interface LocalStoreDao {
+    @Query("SELECT * FROM current_local_owner WHERE `key` = 'current'")
+    suspend fun readOwner(): LocalOwnerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertOwner(owner: LocalOwnerEntity)
+
+    @Query("""
+        INSERT INTO archived_read_state_mutations
+            (ownerId, apiBaseUrl, userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt)
+        SELECT :ownerId, :apiBaseUrl, :userId, articleId, read, mutationId, source, baseRevision, previousState, updatedAt
+        FROM pending_read_state_mutations
+    """)
+    suspend fun archiveReadStateMutations(ownerId: String, apiBaseUrl: String, userId: String?)
+
+    @Query("""
+        INSERT INTO archived_saved_state_mutations
+            (ownerId, apiBaseUrl, userId, articleId, saved, mutationId, baseRevision, previousState, updatedAt)
+        SELECT :ownerId, :apiBaseUrl, :userId, articleId, saved, mutationId, baseRevision, previousState, updatedAt
+        FROM pending_saved_state_mutations
+    """)
+    suspend fun archiveSavedStateMutations(ownerId: String, apiBaseUrl: String, userId: String?)
+
+    @Query("SELECT * FROM archived_read_state_mutations WHERE ownerId = :ownerId ORDER BY updatedAt, articleId")
+    suspend fun readArchivedReadStateMutations(ownerId: String): List<ArchivedReadStateMutationEntity>
+
+    @Query("SELECT * FROM archived_saved_state_mutations WHERE ownerId = :ownerId ORDER BY updatedAt, articleId")
+    suspend fun readArchivedSavedStateMutations(ownerId: String): List<ArchivedSavedStateMutationEntity>
+
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM archived_read_state_mutations WHERE ownerId = :ownerId)
+            OR EXISTS(SELECT 1 FROM archived_saved_state_mutations WHERE ownerId = :ownerId)
+    """)
+    suspend fun hasArchivedOwner(ownerId: String): Boolean
+
+    @Query("SELECT EXISTS(SELECT 1 FROM legacy_offline_articles WHERE articleId = :articleId)")
+    suspend fun isLegacyOfflineArticle(articleId: String): Boolean
+
+    @Query("DELETE FROM legacy_offline_articles WHERE articleId = :articleId")
+    suspend fun removeLegacyOfflineArticle(articleId: String)
+
+    @Query("DELETE FROM legacy_offline_articles")
+    suspend fun clearLegacyOfflineArticles()
+
     @Query("SELECT (SELECT COUNT(*) FROM pending_read_state_mutations) + (SELECT COUNT(*) FROM pending_saved_state_mutations)")
     fun observePendingArticleChanges(): Flow<Int>
 
@@ -337,10 +418,10 @@ interface LocalStoreDao {
     @Query("SELECT * FROM article_details WHERE id = :articleId LIMIT 1")
     suspend fun readArticleDetail(articleId: String): ArticleDetailEntity?
 
-    @Query("DELETE FROM article_details WHERE id = :articleId")
+    @Query("DELETE FROM article_details WHERE id = :articleId AND id NOT IN (SELECT articleId FROM legacy_offline_articles)")
     suspend fun clearArticleDetail(articleId: String)
 
-    @Query("SELECT * FROM article_details WHERE writtenAt < :cutoff")
+    @Query("SELECT * FROM article_details WHERE writtenAt < :cutoff AND id NOT IN (SELECT articleId FROM legacy_offline_articles)")
     suspend fun readExpiredArticleDetails(cutoff: Long): List<ArticleDetailEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -372,6 +453,7 @@ interface LocalStoreDao {
           AND id NOT IN (SELECT id FROM article_details)
           AND id NOT IN (SELECT articleId FROM pending_read_state_mutations)
           AND id NOT IN (SELECT articleId FROM pending_saved_state_mutations)
+          AND id NOT IN (SELECT articleId FROM legacy_offline_articles)
           AND isSaved = 0
         """,
     )
@@ -404,8 +486,11 @@ interface LocalStoreDao {
     @Query("DELETE FROM article_read_overrides")
     suspend fun clearArticleReadOverrides()
 
-    @Query("DELETE FROM article_details")
+    @Query("DELETE FROM article_details WHERE id NOT IN (SELECT articleId FROM legacy_offline_articles)")
     suspend fun clearArticleDetails()
+
+    @Query("DELETE FROM article_details")
+    suspend fun clearAllArticleDetails()
 }
 
 @Database(
@@ -421,6 +506,10 @@ interface LocalStoreDao {
         ArticleReadOverrideEntity::class,
         ArticleDetailEntity::class,
         PreferencesEntity::class,
+        LocalOwnerEntity::class,
+        ArchivedReadStateMutationEntity::class,
+        ArchivedSavedStateMutationEntity::class,
+        LegacyOfflineArticleEntity::class,
     ],
     version = LOCAL_DATABASE_VERSION,
     exportSchema = true,

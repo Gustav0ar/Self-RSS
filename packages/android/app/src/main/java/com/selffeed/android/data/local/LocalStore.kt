@@ -16,6 +16,7 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -33,17 +34,16 @@ import java.util.UUID
  * Paging 3's typed query entries, while reader details retain complete
  * immutable documents for instant offline reopening.
  */
-class LocalStore(
-    context: Context,
+class LocalStore internal constructor(
+    private val database: LocalDatabase,
     moshi: Moshi,
 ) : OfflineReadStore {
-    private val database: LocalDatabase = Room.databaseBuilder(
-        context.applicationContext,
-        LocalDatabase::class.java,
-        DB_NAME,
+    constructor(context: Context, moshi: Moshi) : this(
+        Room.databaseBuilder(context.applicationContext, LocalDatabase::class.java, DB_NAME)
+            .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
+            .build(),
+        moshi,
     )
-        .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
-        .build()
     private val dao = database.localStoreDao()
 
     private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
@@ -54,9 +54,42 @@ class LocalStore(
     private val preferencesAdapter: JsonAdapter<UserPreferences> =
         moshi.adapter(UserPreferences::class.java)
 
-    private val _invalidations = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 16)
+    // A freshness hint, not an event log. A slow observer must not hold a database/account commit open.
+    private val _invalidations = MutableSharedFlow<String>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val invalidations = _invalidations.asSharedFlow()
     private val invalidationSeq = AtomicLong(0)
+
+    suspend fun readOwner(): LocalOwnerEntity? = dao.readOwner()
+
+    /**
+     * Adopts an existing snapshot without deleting data, or archives the previous
+     * owner's queued intent and replaces the active snapshot in one transaction.
+     * The repository must serialize this with all account-scoped commits.
+     */
+    suspend fun switchOwner(next: LocalOwnerEntity): Boolean {
+        require(next.key == "current" && next.ownerId.isNotBlank() && next.apiBaseUrl.isNotBlank())
+        val replaced = database.withTransaction {
+            val previous = dao.readOwner()
+            if (previous?.ownerId == next.ownerId) {
+                require(previous.apiBaseUrl == next.apiBaseUrl) { "Owner cannot change server" }
+                require(previous.userId == null || next.userId == null || previous.userId == next.userId) {
+                    "Owner cannot change authenticated user"
+                }
+                if (previous.userId == null && next.userId != null) dao.upsertOwner(next)
+                return@withTransaction false
+            }
+            check(!dao.hasArchivedOwner(next.ownerId)) { "Archived owner cannot become active again" }
+            if (previous != null) {
+                dao.archiveReadStateMutations(previous.ownerId, previous.apiBaseUrl, previous.userId)
+                dao.archiveSavedStateMutations(previous.ownerId, previous.apiBaseUrl, previous.userId)
+                clearActiveSnapshot()
+            }
+            dao.upsertOwner(next)
+            previous != null
+        }
+        if (replaced) notifyInvalidation("all")
+        return replaced
+    }
 
     override suspend fun writeCategories(categories: List<CategoryWithCounts>) {
         database.withTransaction {
@@ -114,7 +147,7 @@ class LocalStore(
 
             dao.updateArticleSavedState(articleId, false)
             dao.readArticleDetail(articleId)?.let { entity ->
-                articleDetailAdapter.fromJson(entity.payloadJson)?.let { detail ->
+                runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
                     dao.upsertArticleDetail(
                         entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = false))),
                     )
@@ -217,6 +250,7 @@ class LocalStore(
     ): PendingSavedStateMutationEntity {
         lateinit var queued: PendingSavedStateMutationEntity
         database.withTransaction {
+            if (!saved) dao.removeLegacyOfflineArticle(articleId)
             val previous = dao.readPendingSavedStateMutation(articleId)
             val revision = dao.readArticleStateRevision(articleId)?.savedRevision
             val detailEntity = dao.readArticleDetail(articleId)
@@ -317,7 +351,7 @@ class LocalStore(
             for (mutation in pending) {
                 val feedId = dao.readArticle(mutation.articleId)?.feedId
                     ?: dao.readArticleDetail(mutation.articleId)?.let {
-                        articleDetailAdapter.fromJson(it.payloadJson)?.feedId
+                        it.feedId ?: runCatching { articleDetailAdapter.fromJson(it.payloadJson)?.feedId }.getOrNull()
                     }
                 if (feedIds.isNotEmpty() && feedId !in feedIds) continue
                 pendingArticleIds += mutation.articleId
@@ -536,7 +570,7 @@ class LocalStore(
         if (System.currentTimeMillis() - detail.writtenAt > MAX_ARTICLE_DETAIL_AGE_MS) {
             // A saved article is an explicit offline promise. It remains readable
             // until the user unsaves it or signs out, even after normal cache TTLs.
-            if (parsed?.isSaved == true) return parsed
+            if (parsed?.isSaved == true || dao.isLegacyOfflineArticle(detail.id)) return parsed
             dao.clearArticleDetail(detail.id)
             return null
         }
@@ -567,20 +601,23 @@ class LocalStore(
         dao.searchArticles(query.trim(), categoryId, limit).map { it.toModel() }
 
     override suspend fun clearAll() {
-        database.withTransaction {
-            dao.clearCategories()
-            dao.clearFeeds()
-            dao.clearArticles()
-            dao.clearArticleQueryEntries()
-            dao.clearArticleRemoteKeys()
-            dao.clearPendingReadStateMutations()
-            dao.clearPendingSavedStateMutations()
-            dao.clearArticleStateRevisions()
-            dao.clearArticleReadOverrides()
-            dao.clearArticleDetails()
-            dao.clearPreferences()
-        }
+        database.withTransaction { clearActiveSnapshot() }
         notifyInvalidation("all")
+    }
+
+    private suspend fun clearActiveSnapshot() {
+        dao.clearCategories()
+        dao.clearFeeds()
+        dao.clearArticles()
+        dao.clearArticleQueryEntries()
+        dao.clearArticleRemoteKeys()
+        dao.clearPendingReadStateMutations()
+        dao.clearPendingSavedStateMutations()
+        dao.clearArticleStateRevisions()
+        dao.clearArticleReadOverrides()
+        dao.clearAllArticleDetails()
+        dao.clearPreferences()
+        dao.clearLegacyOfflineArticles()
     }
 
     override suspend fun clearCategories() = clearTable(TABLE_CATEGORIES)
@@ -621,8 +658,8 @@ class LocalStore(
 
     fun invalidationFlow(): Flow<String> = invalidations
 
-    private suspend fun notifyInvalidation(table: String) {
-        _invalidations.emit("${invalidationSeq.incrementAndGet()}:$table")
+    private fun notifyInvalidation(table: String) {
+        _invalidations.tryEmit("${invalidationSeq.incrementAndGet()}:$table")
     }
 
     private fun CategoryWithCounts.toEntity(cacheOrder: Int): CategoryEntity =

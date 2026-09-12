@@ -213,7 +213,9 @@ android {
         // tests, so Room's migration fixtures must be packaged here too.
         getByName("deviceTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
         getByName("test").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        getByName("test").kotlin.srcDir("src/sharedTest/java")
         getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas", "$projectDir/src/androidTest/assets"))
+        getByName("androidTest").kotlin.srcDir("src/sharedTest/java")
         getByName("performanceTest").assets.srcDir("src/androidTest/assets")
     }
 
