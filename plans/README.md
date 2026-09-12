@@ -18,7 +18,7 @@ These rules apply to **033–049**. Earlier branch, roadmap-wait, deployment, an
 | [036](036-android-cache-first-and-mutation-authority.md) | Return cached content immediately and preserve the latest mutation | P1 | L | 033, 035 | TODO |
 | [037](037-android-main-safe-io.md) | Keep networking, document reads, and body preparation off Main | P1 | M | 033, 035 | TODO |
 | [038](038-android-loading-and-error-lifecycle.md) | Keep loading continuous and make failures recoverable | P1 | L | 033, 034, 035, 036, 037 | TODO |
-| [039](039-android-media-and-reader-resource-lifecycle.md) | Pause inactive media and release reader resources predictably | P1 | L | 033, 035 | TODO |
+| [039](039-android-media-and-reader-resource-lifecycle.md) | Pause inactive media and release reader resources predictably | P1 | L | 033, 035 | IMPLEMENTED; integration pending |
 | [040](040-android-reader-readiness-and-fallback.md) | Show usable reader content without placeholder loops or layout jumps | P1 | M | 033, 034, 037, 038, 039 | TODO |
 | [041](041-android-cache-retention-and-budgets.md) | Bound cache maintenance and protect retained offline content | P1 | L | 033, 035, 036, 037 | TODO |
 | [042](042-android-durable-offline-downloads.md) | Resume offline downloads and serve cached media to the reader | P1 | L | 033, 034, 035, 036, 037, 039, 040, 041 | TODO |

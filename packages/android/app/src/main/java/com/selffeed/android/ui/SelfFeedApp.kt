@@ -529,6 +529,7 @@ fun SelfFeedApp(
         { preferHtml, onPreferHtmlChanged ->
             selectedArticle?.let { article ->
                 ArticleReaderPane(
+                    isVisible = activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED),
                     onArticleBodyReady = onArticleBodyReady,
                     articles = articleQueue,
                     selectedArticle = article,

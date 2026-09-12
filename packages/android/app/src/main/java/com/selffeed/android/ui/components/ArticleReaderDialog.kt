@@ -1,11 +1,5 @@
-@file:SuppressLint("SetJavaScriptEnabled")
 package com.selffeed.android.ui.components
 
-import android.annotation.SuppressLint
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,14 +23,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.ui.utils.canPreviewMedia
@@ -146,8 +137,10 @@ fun ArticleReaderDialog(
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             if (showHtml && !article.contentHtml.isNullOrBlank()) {
-                                SecureHtmlContent(
+                                ReaderHtmlContent(
                                     html = article.contentHtml,
+                                    isActive = previewEmbedUrl == null,
+                                    fixedHeightDp = 420,
                                     backgroundColor = readerBackgroundColor,
                                     textColor = readerTextColor,
                                     surfaceColor = readerSurfaceColor,
@@ -212,113 +205,19 @@ fun ArticleReaderDialog(
             },
             title = { Text(stringResource(R.string.reader_embedded_media)) },
             text = {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(260.dp),
-                    factory = { factoryContext ->
-                        WebView(factoryContext).apply {
-                            settings.javaScriptEnabled = true
-                            settings.allowFileAccess = false
-                            settings.allowContentAccess = false
-                            settings.domStorageEnabled = true
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            settings.safeBrowsingEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = true
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(
-                                    view: WebView?,
-                                    request: WebResourceRequest?,
-                                ): Boolean {
-                                    val url = request?.url?.toString()
-                                    return if (isTrustedEmbedUrl(url)) {
-                                        false
-                                    } else {
-                                        openExternalUrl(factoryContext, url)
-                                        true
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    update = { webView ->
-                        if (isTrustedEmbedUrl(embedUrl)) {
-                            webView.loadUrl(embedUrl)
-                        }
-                    },
-                    onRelease = { webView ->
-                        webView.releaseReaderResources()
-                    },
-                )
+                if (isTrustedEmbedUrl(embedUrl)) {
+                    ReaderHtmlContent(
+                        html = "<iframe src='${android.text.TextUtils.htmlEncode(embedUrl)}' width='100%' height='240'></iframe>",
+                        backgroundColor = readerBackgroundColor,
+                        textColor = readerTextColor,
+                        surfaceColor = readerSurfaceColor,
+                        mutedTextColor = readerMutedTextColor,
+                        linkColor = readerLinkColor,
+                        documentBaseUrl = documentBaseUrl,
+                        fixedHeightDp = 260,
+                    )
+                }
             },
         )
     }
-}
-
-@Composable
-private fun SecureHtmlContent(
-    html: String,
-    backgroundColor: Color,
-    textColor: Color,
-    surfaceColor: Color,
-    mutedTextColor: Color,
-    linkColor: Color,
-    documentBaseUrl: String,
-) {
-    val processedHtml = buildReaderHtmlDocument(
-        html = html,
-        colors = readerHtmlColors(
-            backgroundColor = backgroundColor,
-            textColor = textColor,
-            surfaceColor = surfaceColor,
-            mutedTextColor = mutedTextColor,
-            linkColor = linkColor,
-        ),
-    )
-
-    AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(420.dp),
-        factory = { factoryContext ->
-            WebView(factoryContext).apply {
-                settings.javaScriptEnabled = true
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.domStorageEnabled = false
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.safeBrowsingEnabled = true
-                settings.loadsImagesAutomatically = true
-                settings.builtInZoomControls = false
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                setBackgroundColor(backgroundColor.toArgb())
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(
-                        view: WebView?,
-                        request: WebResourceRequest?,
-                    ): Boolean {
-                        openExternalUrl(factoryContext, request?.url?.toString())
-                        return true
-                    }
-                }
-            }
-        },
-        update = { webView ->
-            val contentKey = "$documentBaseUrl\n$processedHtml"
-            if (webView.tag != contentKey) {
-                webView.tag = contentKey
-                webView.loadDataWithBaseURL(
-                    documentBaseUrl,
-                    processedHtml,
-                    "text/html",
-                    "utf-8",
-                    documentBaseUrl,
-                )
-            }
-        },
-        onRelease = { webView ->
-            webView.releaseReaderResources()
-        },
-    )
 }
