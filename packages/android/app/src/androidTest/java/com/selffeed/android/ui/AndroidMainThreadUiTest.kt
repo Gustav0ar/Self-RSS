@@ -3,6 +3,17 @@ package com.selffeed.android.ui
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
+import android.os.StrictMode
+import androidx.room.Room
+import androidx.compose.runtime.LaunchedEffect
+import androidx.test.filters.SdkSuppress
+import com.selffeed.android.data.local.LocalDatabase
+import com.selffeed.android.data.local.LocalStore
+import com.selffeed.android.network.NetworkModule
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import java.util.UUID
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.ScrollState
@@ -41,6 +52,100 @@ import java.util.concurrent.TimeUnit
 
 class AndroidMainThreadUiTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test @SdkSuppress(minSdkVersion = 28)
+    fun cachedReaderNavigationAndClosingHaveNoMainDiskOrNetworkViolations() {
+        val context = composeRule.activity.applicationContext
+        val name = "reader-main-${UUID.randomUUID()}"
+        val database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
+        val store = LocalStore(database, NetworkModule.provideMoshi())
+        val gate = ReaderPreparationGate()
+        val preparer = ReaderContentPreparer(gate)
+        val ready = CopyOnWriteArrayList<String>()
+        val violations = CopyOnWriteArrayList<android.os.strictmode.Violation>()
+        var requested by mutableStateOf("first")
+        var visible by mutableStateOf(true)
+        var loaded by mutableStateOf<ArticleDetail?>(null)
+        var previousPolicy: StrictMode.ThreadPolicy? = null
+        try {
+            runBlocking(Dispatchers.IO) {
+                listOf("first", "second", "third", "closed").forEach { id ->
+                    val html = "<p id='$id'>Cached $id article</p>" + (1..64).joinToString("") {
+                        "<p>${"Readable cached paragraph $it. ".repeat(15)}</p>"
+                    }
+                    store.writeArticleDetail(ArticleDetail(
+                        id = id, feedId = "feed", guid = id, hash = id,
+                        title = "Cached $id article", feedTitle = "Fixture", isRead = false,
+                        contentHtml = html, contentText = "Cached $id text",
+                    ))
+                }
+            }
+            composeRule.runOnUiThread {
+                previousPolicy = StrictMode.getThreadPolicy()
+                StrictMode.setThreadPolicy(
+                    StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().detectNetwork()
+                        .penaltyListener({ command -> command.run() }) { violations.add(it) }.build(),
+                )
+            }
+            composeRule.setContent {
+                LaunchedEffect(requested, visible) {
+                    if (visible) loaded = store.readArticleDetail(requested)
+                }
+                SelfFeedTheme(darkTheme = true) {
+                    Column {
+                        Button(onClick = { requested = "second" }) { Text("Second cached article") }
+                        Button(onClick = { requested = "third" }) { Text("Third cached article") }
+                        if (visible) loaded?.let { article ->
+                            ReaderHtmlContent(
+                                documentId = article.id, html = article.contentHtml!!,
+                                backgroundColor = Color.Black, textColor = Color.White,
+                                surfaceColor = Color.Black, mutedTextColor = Color.White, linkColor = Color.White,
+                                documentBaseUrl = "https://example.invalid/${article.id}",
+                                preparer = preparer, onReady = { ready += article.id },
+                            )
+                        }
+                    }
+                }
+            }
+            composeRule.waitUntil(15_000) { ready.contains("first") }
+            val first = readers().single() as ReaderWebView
+            gate.pause()
+            composeRule.onNodeWithText("Second cached article").performClick()
+            composeRule.waitUntil(5_000) { gate.pendingCount == 1 }
+            composeRule.onNodeWithText("Third cached article").performClick()
+            composeRule.waitUntil(5_000) { gate.pendingCount == 2 }
+            gate.release()
+            composeRule.waitUntil(15_000) { ready.contains("third") }
+            assertEquals(listOf("first", "third"), ready.toList())
+            assertTrue(first.released)
+            val current = readers().single() as ReaderWebView
+            assertEquals("true", javascript(current, "!!document.getElementById('third')"))
+
+            gate.pause()
+            composeRule.runOnIdle { requested = "closed" }
+            composeRule.waitUntil(5_000) { gate.pendingCount == 1 }
+            composeRule.runOnIdle { visible = false }
+            gate.release()
+            composeRule.waitUntil(5_000) { gate.isIdle }
+            composeRule.waitForIdle()
+            assertTrue(current.released)
+            assertEquals(0, readers().size)
+            assertEquals(listOf("first", "third"), ready.toList())
+            assertEquals(emptyList<android.os.strictmode.Violation>(), violations.toList())
+        } finally {
+            gate.release()
+            try {
+                composeRule.runOnIdle { visible = false }
+                composeRule.waitForIdle()
+            } finally {
+                try {
+                    composeRule.runOnUiThread { previousPolicy?.let(StrictMode::setThreadPolicy) }
+                } finally {
+                    runBlocking { withContext(Dispatchers.IO) { database.close(); context.deleteDatabase(name) } }
+                }
+            }
+        }
+    }
 
     @Test fun inputRemainsUsableAndOnlyTheReplacementArticleIsRendered() {
         val gate = ReaderPreparationGate().apply { pause() }
