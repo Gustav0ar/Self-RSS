@@ -82,11 +82,13 @@ class AuthenticationSessionTest {
         val monitor = mockk<NetworkMonitor> {
             every { online } returns MutableStateFlow(false)
         }
+        val backgroundJob = kotlinx.coroutines.SupervisorJob()
         val repository = RssRepository(
             AuthRemoteDataSource(api), FeedRemoteDataSource(api), ArticleRemoteDataSource(api),
             SearchRemoteDataSource(api), SettingsRemoteDataSource(api), store, coordinator,
             client, moshi, mockk(relaxed = true), mockk(relaxed = true), context,
             mockk(relaxed = true), monitor,
+            kotlinx.coroutines.CoroutineScope(backgroundJob + kotlinx.coroutines.Dispatchers.IO),
         )
         try {
             val refresh = CompletableFuture.supplyAsync { coordinator.refreshAccessToken() }
@@ -110,6 +112,7 @@ class AuthenticationSessionTest {
             assertEquals(newSession, store.currentSession())
             assertTrue(store.getRefreshCookie().orEmpty().contains("new-account-refreshed"))
         } finally {
+            runBlocking { backgroundJob.cancel(); backgroundJob.join() }
             finishOldRefresh.countDown()
             server.stop(0)
             executor.shutdownNow()

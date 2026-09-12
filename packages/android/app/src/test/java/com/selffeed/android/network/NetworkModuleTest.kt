@@ -100,7 +100,7 @@ class NetworkModuleTest {
         try {
             val remote = AuthRemoteDataSource(NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store))
             val pending = CompletableFuture.supplyAsync {
-                runBlocking { remote.logout("old-access", "rss_refresh_token=old-refresh; Path=/api/v1/auth") }
+                runBlocking { remote.logout("old-access", "rss_refresh_token=old-refresh; Path=/api/v1/auth", store.currentSession()) }
             }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             currentServer.set("localhost:${server.address.port}")

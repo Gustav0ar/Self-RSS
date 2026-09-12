@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.di.ApplicationCoroutineScope
 import com.selffeed.android.data.repository.BulkReadReconciliation
 import android.content.Context
 import androidx.paging.ExperimentalPagingApi
@@ -7,6 +8,7 @@ import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.map
+import com.selffeed.android.data.local.LocalOwnerEntity
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.remote.ArticleRemoteDataSource
@@ -35,16 +37,18 @@ import com.squareup.moshi.Moshi
 import coil3.ImageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -81,6 +85,7 @@ class RssRepository @Inject constructor(
     private val imageRequestContext: Context,
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
+    @param:ApplicationCoroutineScope private val refreshScope: CoroutineScope,
 ) : SelfFeedRepository {
     private val preferencesMutex = Mutex()
     private val runtime = RepositoryRuntime(
@@ -93,82 +98,78 @@ class RssRepository @Inject constructor(
         okHttpClient = okHttpClient,
         moshi = moshi,
         runtime = runtime,
-        apiBaseUrl = sessionStore::getApiBaseUrl,
     )
 
-    // Detached scope for fire-and-forget background refreshes (e.g. the
-    // stale-while-revalidate path in `article()`). Using a supervisor
-    // scope tied to the repository means background work survives
-    // individual failures and is cleaned up when the process dies.
-    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val savedStateRejectionEvents = MutableSharedFlow<SavedStateRejection>(extraBufferCapacity = 32)
-    private val authLostEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val savedStateRejectionEvents = MutableSharedFlow<SessionEvent<SavedStateRejection>>(extraBufferCapacity = 32)
+    private val authLostEvents = MutableSharedFlow<SessionEvent<String>>(extraBufferCapacity = 1)
     private val analyticsSessionLock = Any()
     private val categoryCacheMutex = Mutex()
     private val categoryOrderRevision = AtomicLong()
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
-    private val sessionGeneration = AtomicLong(0)
+    private val account = AccountSessionBoundary(sessionStore, localStore, ::clearSessionMemory)
     private val articleStateFlushMutex = Mutex()
     private val articleStateProjectionMutex = Mutex()
 
     init {
         refreshScope.launch {
             networkMonitor.online.collect { online ->
-                if (online) flushProductAnalyticsEvents()
+                if (online) {
+                    try { flushProductAnalyticsEvents() } catch (_: SessionChangedException) {
+                        // A departing account cancels its flush, not this process-wide observer.
+                    }
+                }
             }
         }
     }
 
     override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
 
-    override suspend fun setApiBaseUrl(rawBaseUrl: String) = safeCall {
-        val previousBaseUrl = sessionStore.getApiBaseUrl()
-        val nextBaseUrl = sessionStore.setApiBaseUrl(rawBaseUrl)
-        if (nextBaseUrl != previousBaseUrl) {
-            sessionGeneration.incrementAndGet()
-            clearCacheAndDatabase()
+    override suspend fun setApiBaseUrl(rawBaseUrl: String) = runtime.safeCall {
+        account.replace { sessionStore.setApiBaseUrl(rawBaseUrl) }
+    }
+
+    override suspend fun registrationStatus() = safePublicCall { session ->
+        authRemote.registrationStatus(session)
+    }
+
+    override suspend fun login(email: String, password: String) = authenticate { session ->
+        authRemote.login(email, password, session)
+    }
+
+    override suspend fun register(email: String, password: String) = authenticate { session ->
+        authRemote.register(email, password, session)
+    }
+
+    private suspend fun authenticate(
+        request: suspend (ApiSession) -> com.selffeed.android.network.AuthResponse,
+    ): AppResult<com.selffeed.android.network.User> = runtime.safeCall {
+        val session = account.replace { sessionStore.beginAuthentication() }
+        account.withSession(session) {
+            val response = request(session)
+            account.commit(session) {
+                check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
+                bindVerifiedUser(session, response.user.id)
+                sessionStore.recordAuthenticated()
+            }
+            recordAppOpen(session)
+            flushProductAnalyticsEvents(session)
+            response.user
         }
-        nextBaseUrl
     }
 
-    override suspend fun registrationStatus() = safePublicCall {
-        authRemote.registrationStatus()
+    // Called only inside the local commit boundary after a verified server response.
+    private suspend fun bindVerifiedUser(session: ApiSession, userId: String) {
+        localStore.switchOwner(LocalOwnerEntity(ownerId = session.ownerId, apiBaseUrl = session.apiBaseUrl, userId = userId))
     }
 
-    override suspend fun login(email: String, password: String) = safePublicCall {
-        val session = sessionStore.beginAuthentication()
-        val response = authRemote.login(email, password, session)
-        check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
-        sessionGeneration.incrementAndGet()
-        clearCacheAndDatabase()
-        sessionStore.recordAuthenticated()
-        recordAppOpen()
-        flushProductAnalyticsEvents()
-        response.user
-    }
-
-    override suspend fun register(email: String, password: String) = safePublicCall {
-        val session = sessionStore.beginAuthentication()
-        val response = authRemote.register(email, password, session)
-        check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
-        sessionGeneration.incrementAndGet()
-        clearCacheAndDatabase()
-        sessionStore.recordAuthenticated()
-        recordAppOpen()
-        flushProductAnalyticsEvents()
-        response.user
-    }
-
-    override suspend fun restoreSession() = safeCall {
-        val hasRefreshCookie = !sessionStore.getRefreshCookie().isNullOrBlank()
-        val hasAccessToken = !sessionStore.getAccessToken().isNullOrBlank()
-        if (!hasRefreshCookie && !hasAccessToken) {
-            throw IllegalStateException("No saved session")
+    override suspend fun restoreSession() = safeCall { session ->
+        val (hasRefreshCookie, hasAccessToken) = account.commit(session) {
+            !sessionStore.getRefreshCookie().isNullOrBlank() to !sessionStore.getAccessToken().isNullOrBlank()
         }
-
+        check(hasRefreshCookie || hasAccessToken) { "No saved session" }
         if (!hasAccessToken && hasRefreshCookie) {
-            when (sessionRefreshCoordinator.refreshAccessToken()) {
+            when (withContext(Dispatchers.IO) { sessionRefreshCoordinator.refreshAccessToken(session) }) {
                 is SessionRefreshResult.Success -> Unit
                 SessionRefreshResult.Rejected -> throw AuthenticationLostException()
                 is SessionRefreshResult.Unavailable -> throw IllegalStateException(
@@ -176,164 +177,171 @@ class RssRepository @Inject constructor(
                 )
             }
         }
-
-        val user = runtime.withRetry { authRemote.me() }
-        sessionStore.recordAuthenticated()
-        recordAppOpen()
-        flushProductAnalyticsEvents()
+        val user = withRetry(session) { authRemote.me(session) }
+        account.commit(session) {
+            bindVerifiedUser(session, user.id)
+            sessionStore.recordAuthenticated()
+        }
+        recordAppOpen(session)
+        flushProductAnalyticsEvents(session)
         user
     }
 
-    override suspend fun logout(): AppResult<Boolean> {
-        // Start revocation with the current credentials, then make logout local
-        // and irreversible without waiting on the network.
-        val accessToken = sessionStore.getAccessToken()
-        val refreshCookie = sessionStore.getRefreshCookie()
-        refreshScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            if (runCatching { authRemote.logout(accessToken, refreshCookie) }.isFailure) {
-                runtime.debugLog("Remote logout could not be confirmed; local session was cleared")
-            }
+    override suspend fun logout(): AppResult<Boolean> = runtime.safeCall {
+        val credentials = account.replace {
+            Triple(sessionStore.currentSession(), sessionStore.getAccessToken(), sessionStore.getRefreshCookie())
+                .also { sessionStore.clear() }
         }
-        sessionGeneration.incrementAndGet()
-        sessionStore.clear()
-        clearCacheAndDatabase()
-        return AppResult.Success(true)
+        // Revocation carries the departed owner's explicit credentials and server.
+        // It cannot delay local logout or acquire the next account's credentials.
+        refreshScope.launch {
+            runCatching { authRemote.logout(credentials.second, credentials.third, credentials.first) }
+                .onFailure { runtime.debugLog("Remote logout could not be confirmed; local session was cleared") }
+        }
+        true
     }
 
-    suspend fun prepareSession() = sessionStore.preload()
+    suspend fun prepareSession() { account.prepare() }
 
-    override suspend fun me() = safeReadCall {
-        runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { runtime.withRetry { authRemote.me() } }
+    override suspend fun me() = safeReadCall { session ->
+        runtime.cachedGet(key = "me", ttlMs = USER_TTL_MS) { withRetry(session) { authRemote.me(session = session) } }
     }
 
-    override suspend fun changePassword(currentPassword: String, newPassword: String) = safeCall {
-        val session = sessionStore.currentSession()
-        val response = authRemote.changePassword(currentPassword, newPassword)
-        check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
-        runtime.invalidateByPrefix("auth:sessions")
+    override suspend fun changePassword(currentPassword: String, newPassword: String) = safeCall { session ->
+        val response = authRemote.changePassword(currentPassword, newPassword, session = session)
+        account.commit(session) {
+            check(sessionStore.setAccessTokenIfCurrent(session, response.tokens.accessToken)) { "Session changed" }
+            runtime.invalidateByPrefix("auth:sessions")
+        }
         response.user
     }
 
-    override suspend fun categories() = safeReadCall {
-        flushPendingArticleStateMutations()
+    override suspend fun categories() = safeReadCall { session ->
+        flushPendingArticleStateMutations(session)
         categoryCacheMutex.withLock {
             runtime.getCached<List<CategoryWithCounts>>("categories")?.let {
                 runtime.recordCacheHit()
                 return@safeReadCall it
             }
 
-            val cachedCategories = offlineReadStore.readCategories()
+            val cachedCategories = account.commit(session) { offlineReadStore.readCategories() }
             if (cachedCategories.isNotEmpty()) {
-                runtime.putCached("categories", CATEGORIES_TTL_MS, cachedCategories)
-                refreshCategoriesInBackground()
+                account.commit(session) { runtime.putCached("categories", CATEGORIES_TTL_MS, cachedCategories) }
+                refreshCategoriesInBackground(session)
                 return@safeReadCall cachedCategories
             }
         }
 
         try {
-            fetchCategories()
+            fetchCategories(session)
         } catch (e: Exception) {
-            offlineReadStore.readCategories().takeIf { it.isNotEmpty() } ?: throw e
+            if (e is CancellationException) throw e
+            account.requireCurrent(session)
+            account.commit(session) { offlineReadStore.readCategories() }.takeIf { it.isNotEmpty() } ?: throw e
         }
     }
 
-    private suspend fun fetchCategories(): List<CategoryWithCounts> {
-        val generation = sessionGeneration.get()
+    private suspend fun fetchCategories(session: ApiSession): List<CategoryWithCounts> {
         while (true) {
             val revision = categoryOrderRevision.get()
-            val categories = runtime.withRetry { feedRemote.categories() }
+            val categories = withRetry(session) { feedRemote.categories(session = session) }
             categoryCacheMutex.withLock {
-                check(generation == sessionGeneration.get()) { "Session changed" }
                 // A reorder completed while this snapshot was in flight. Fetch
                 // again rather than putting the old order back into either cache.
                 if (revision == categoryOrderRevision.get()) {
-                    offlineReadStore.writeCategories(categories)
-                    runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                    account.commit(session) {
+                        offlineReadStore.writeCategories(categories)
+                        runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                    }
                     return categories
                 }
             }
         }
     }
 
-    override suspend fun createCategory(name: String, parentCategoryId: String?) = safeCall {
-        feedRemote.createCategory(name, parentCategoryId).also {
-            runtime.invalidateByPrefix("categories")
-            runtime.invalidateByPrefix("feeds")
-            runtime.invalidateByPrefix("stats")
-            offlineReadStore.clearCategories()
-            offlineReadStore.clearFeeds()
+    override suspend fun createCategory(name: String, parentCategoryId: String?) = safeCall { session ->
+        feedRemote.createCategory(name, parentCategoryId, session = session).also {
+            account.commit(session) {
+                runtime.invalidateByPrefix("categories")
+                runtime.invalidateByPrefix("feeds")
+                runtime.invalidateByPrefix("stats")
+                offlineReadStore.clearCategories()
+                offlineReadStore.clearFeeds()
+            }
         }
     }
 
     override suspend fun updateCategory(id: String, name: String?, parentCategoryId: String?) =
-        safeCall {
-            feedRemote.updateCategory(id, name, parentCategoryId).also {
-                invalidateFeedAndArticleCaches()
+        safeCall { session ->
+            feedRemote.updateCategory(id, name, parentCategoryId, session = session).also {
+                invalidateFeedAndArticleCaches(session)
             }
         }
 
-    override suspend fun reorderCategories(updates: List<CategoryOrderUpdate>) = safeCall {
-        val generation = sessionGeneration.get()
-        check(feedRemote.reorderCategories(updates) == updates.size) { "Category order was not fully saved" }
+    override suspend fun reorderCategories(updates: List<CategoryOrderUpdate>) = safeCall { session ->
+        check(feedRemote.reorderCategories(updates, session = session) == updates.size) { "Category order was not fully saved" }
         categoryCacheMutex.withLock {
-            check(generation == sessionGeneration.get()) { "Session changed" }
-            categoryOrderRevision.incrementAndGet()
-            val reordered = applyCategoryOrder(offlineReadStore.readCategories(), updates)
-            offlineReadStore.writeCategories(reordered)
-            runtime.invalidateByPrefix("categories")
-            runtime.invalidateByPrefix("stats")
+            account.commit(session) {
+                categoryOrderRevision.incrementAndGet()
+                val reordered = applyCategoryOrder(offlineReadStore.readCategories(), updates)
+                offlineReadStore.writeCategories(reordered)
+                runtime.invalidateByPrefix("categories")
+                runtime.invalidateByPrefix("stats")
+            }
         }
     }
 
-    override suspend fun deleteCategory(id: String) = safeCall {
-        feedRemote.deleteCategory(id).also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun deleteCategory(id: String) = safeCall { session ->
+        feedRemote.deleteCategory(id, session = session).also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun feeds(categoryId: String?) = safeReadCall {
-        flushPendingArticleStateMutations()
+    override suspend fun feeds(categoryId: String?) = safeReadCall { session ->
+        flushPendingArticleStateMutations(session)
         val key = "feeds:${categoryId.orEmpty()}"
         runtime.getCached<List<FeedWithCounts>>(key)?.let {
             runtime.recordCacheHit()
             return@safeReadCall it
         }
 
-        val cachedFeeds = offlineReadStore.readFeeds()
+        val cachedFeeds = account.commit(session) { offlineReadStore.readFeeds() }
         if (cachedFeeds.isNotEmpty()) {
-            val filtered = filterCachedFeeds(cachedFeeds, categoryId)
+            val filtered = filterCachedFeeds(cachedFeeds, categoryId, session)
             if (filtered.isNotEmpty()) {
-                runtime.putCached(key, FEEDS_TTL_MS, filtered)
-                refreshFeedsInBackground(categoryId)
+                account.commit(session) { runtime.putCached(key, FEEDS_TTL_MS, filtered) }
+                refreshFeedsInBackground(categoryId, session)
                 return@safeReadCall filtered
             }
         }
 
         try {
             runtime.cachedGet(key = key, ttlMs = FEEDS_TTL_MS) {
-                runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
-                    persistFeedSnapshot(categoryId, feeds)
+                withRetry(session) { feedRemote.feeds(categoryId, session = session) }.also { feeds ->
+                    persistFeedSnapshot(categoryId, feeds, session)
                 }
             }
         } catch (e: Exception) {
-            val cached = offlineReadStore.readFeeds()
-            val filtered = filterCachedFeeds(cached, categoryId)
+            if (e is CancellationException) throw e
+            account.requireCurrent(session)
+            val cached = account.commit(session) { offlineReadStore.readFeeds() }
+            val filtered = filterCachedFeeds(cached, categoryId, session)
             filtered.takeIf { it.isNotEmpty() } ?: throw e
         }
     }
 
-    override suspend fun refreshFeeds(categoryId: String?) = safeReadCall {
-        flushPendingArticleStateMutations()
-        runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
-            runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
-            persistFeedSnapshot(categoryId, feeds)
+    override suspend fun refreshFeeds(categoryId: String?) = safeReadCall { session ->
+        flushPendingArticleStateMutations(session)
+        withRetry(session) { feedRemote.feeds(categoryId, session = session) }.also { feeds ->
+            account.commit(session) { runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds) }
+            persistFeedSnapshot(categoryId, feeds, session)
         }
     }
 
     override suspend fun createFeed(feedUrl: String, categoryId: String, title: String?) =
-        safeCall {
-            feedRemote.createFeed(feedUrl, categoryId, title).also {
-                invalidateFeedAndArticleCaches()
+        safeCall { session ->
+            feedRemote.createFeed(feedUrl, categoryId, title, session = session).also {
+                invalidateFeedAndArticleCaches(session)
             }
         }
 
@@ -343,74 +351,74 @@ class RssRepository @Inject constructor(
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?
-    ) = safeCall {
-        feedRemote.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes).also {
-            invalidateFeedAndArticleCaches()
+    ) = safeCall { session ->
+        feedRemote.updateFeed(id, feedUrl, categoryId, title, pollingIntervalMinutes, session = session).also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun deleteFeed(id: String) = safeCall {
-        feedRemote.deleteFeed(id).also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun deleteFeed(id: String) = safeCall { session ->
+        feedRemote.deleteFeed(id, session = session).also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun syncFeed(id: String) = safeCall {
-        feedRemote.syncFeed(id).also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun syncFeed(id: String) = safeCall { session ->
+        feedRemote.syncFeed(id, session = session).also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall {
-        val response = feedRemote.syncAllFeeds(feedId, categoryId)
+    override suspend fun syncAllFeeds(feedId: String?, categoryId: String?) = safeCall { session ->
+        val response = feedRemote.syncAllFeeds(feedId, categoryId, session = session)
         if (response.requestId != null) {
-            sessionStore.setFeedRefreshRequestId(response.requestId)
+            account.commit(session) { sessionStore.setFeedRefreshRequestId(response.requestId) }
         }
         response
     }
 
-    override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall {
+    override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall { session ->
         val trackedRequestId =
             requestId ?: sessionStore.getFeedRefreshRequestId()?.takeIf(String::isNotBlank)
-        val trackedStatus = feedRemote.syncAllFeedsStatus(trackedRequestId)
+        val trackedStatus = feedRemote.syncAllFeedsStatus(trackedRequestId, session = session)
         val status = if (trackedRequestId != null && trackedStatus.requestId != trackedRequestId) {
-            sessionStore.setFeedRefreshRequestId(null)
-            feedRemote.syncAllFeedsStatus(null)
+            account.commit(session) { sessionStore.setFeedRefreshRequestId(null) }
+            feedRemote.syncAllFeedsStatus(null, session = session)
         } else trackedStatus
         if (status.active && status.requestId != null) {
-            sessionStore.setFeedRefreshRequestId(status.requestId)
+            account.commit(session) { sessionStore.setFeedRefreshRequestId(status.requestId) }
         }
-        if (!status.active) invalidateFeedAndArticleRuntimeCaches()
+        if (!status.active) invalidateFeedAndArticleRuntimeCaches(session)
         status
     }
 
-    override suspend fun feedSyncHistory(feedId: String) = safeReadCall {
-        feedRemote.feedSyncHistory(feedId)
+    override suspend fun feedSyncHistory(feedId: String) = safeReadCall { session ->
+        feedRemote.feedSyncHistory(feedId, session = session)
     }
 
-    override suspend fun selectDiscoveryCandidate(candidateId: String) = safeCall {
-        val selection = feedRemote.selectDiscoveryCandidate(candidateId)
-        sessionStore.setFeedRefreshRequestId(selection.requestId)
-        feedRemote.feeds(null).first { it.id == selection.feedId }.also {
-            invalidateFeedAndArticleCaches()
+    override suspend fun selectDiscoveryCandidate(candidateId: String) = safeCall { session ->
+        val selection = feedRemote.selectDiscoveryCandidate(candidateId, session = session)
+        account.commit(session) { sessionStore.setFeedRefreshRequestId(selection.requestId) }
+        feedRemote.feeds(null, session = session).first { it.id == selection.feedId }.also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun cancelFeedReplacement(feedId: String) = safeCall {
-        feedRemote.cancelFeedReplacement(feedId).also { invalidateFeedAndArticleCaches() }
+    override suspend fun cancelFeedReplacement(feedId: String) = safeCall { session ->
+        feedRemote.cancelFeedReplacement(feedId, session = session).also { invalidateFeedAndArticleCaches(session) }
     }
 
-    override suspend fun importOpml(fileName: String, fileBytes: ByteArray) = safeCall {
+    override suspend fun importOpml(fileName: String, fileBytes: ByteArray) = safeCall { session ->
         val body = fileBytes.toRequestBody("application/xml".toMediaType())
         val part = MultipartBody.Part.createFormData("file", fileName, body)
-        feedRemote.importOpml(part).also {
-            invalidateFeedAndArticleCaches()
+        feedRemote.importOpml(part, session = session).also {
+            invalidateFeedAndArticleCaches(session)
         }
     }
 
-    override suspend fun exportOpml() = safeReadCall {
+    override suspend fun exportOpml() = safeReadCall { session ->
         runtime.cachedGet(key = "opml:export", ttlMs = OPML_EXPORT_TTL_MS) {
-            val response = runtime.withRetry { feedRemote.exportOpml() }
+            val response = withRetry(session) { feedRemote.exportOpml(session = session) }
             if (!response.isSuccessful) throw HttpException(response)
             response.body()?.string().orEmpty()
         }
@@ -422,66 +430,74 @@ class RssRepository @Inject constructor(
         readStateOverrides: () -> Map<String, Boolean>,
     ): Flow<PagingData<ArticleListItem>> {
         val queryKey = query.remoteKey()
+        val expected = sessionStore.loadedSession()
         return flow {
-            // Snapshot durable overlays once per explicit query generation.
-            // Subsequent read receipts are rendered by the ViewModel's live
-            // override state and cannot structurally invalidate this Pager.
-            val durableReadStates = localStore.readArticleReadOverrides()
-            emitAll(
-                Pager(
-                    config = PagingConfig(
-                        pageSize = ARTICLE_PAGE_SIZE,
-                        initialLoadSize = ARTICLE_PAGE_SIZE,
-                        prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
-                        enablePlaceholders = false,
-                    ),
-                    remoteMediator = ArticleRemoteMediator(
-                        queryKey = queryKey,
-                        forceInitialRefresh = query.generation > 0L,
-                        localStore = localStore,
-                        onCompletedRefresh = {
-                            if (query.savedOnly) reconcileSavedArticles(queryKey) else AppResult.Success(Unit)
-                        },
-                        loadPage = { limit, cursor ->
-                            runtime.safeCall {
-                                runtime.withRetry {
-                                    articleRemote.articles(
-                                        feedId = query.feedId,
-                                        categoryId = query.categoryId,
-                                        unreadOnly = query.unreadOnly,
-                                        savedOnly = query.savedOnly,
-                                        sort = query.sort,
-                                        limit = limit,
-                                        cursor = cursor,
-                                    )
+            account.withSession(expected) { session ->
+                // Snapshot durable overlays once per explicit query generation.
+                // Subsequent read receipts are rendered by the ViewModel's live
+                // override state and cannot structurally invalidate this Pager.
+                val durableReadStates = account.commit(session) { localStore.readArticleReadOverrides() }
+                emitAll(
+                    Pager(
+                        config = PagingConfig(
+                            pageSize = ARTICLE_PAGE_SIZE,
+                            initialLoadSize = ARTICLE_PAGE_SIZE,
+                            prefetchDistance = ARTICLE_PAGING_PREFETCH_DISTANCE,
+                            enablePlaceholders = false,
+                        ),
+                        remoteMediator = ArticleRemoteMediator(
+                            forceInitialRefresh = query.generation > 0L,
+                            readRemoteKey = { account.commit(session) { localStore.readArticleRemoteKey(queryKey) } },
+                            storeRemotePage = { payload, clearExisting ->
+                                account.commit(session) { localStore.writeArticleRemotePage(queryKey, payload, clearExisting) }
+                            },
+                            onCompletedRefresh = {
+                                if (query.savedOnly) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
+                            },
+                            loadPage = { limit, cursor ->
+                                safeReadCall(session) {
+                                    withRetry(session) {
+                                        articleRemote.articles(
+                                            feedId = query.feedId,
+                                            categoryId = query.categoryId,
+                                            unreadOnly = query.unreadOnly,
+                                            savedOnly = query.savedOnly,
+                                            sort = query.sort,
+                                            limit = limit,
+                                            cursor = cursor,
+                                            session = session,
+                                        )
+                                    }
                                 }
-                            }
+                            },
+                        ),
+                        pagingSourceFactory = {
+                            if (query.savedOnly) localStore.savedArticlePagingSource(session.ownerId)
+                            else localStore.articlePagingSource(queryKey, session.ownerId)
                         },
-                    ),
-                    pagingSourceFactory = {
-                        if (query.savedOnly) localStore.savedArticlePagingSource()
-                        else localStore.articlePagingSource(queryKey)
+                    ).flow.map { pagingData ->
+                        val readStates = durableReadStates + readStateOverrides()
+                        pagingData.map { article ->
+                            readStates[article.id]?.let { article.copy(isRead = it) } ?: article
+                        }
                     },
-                ).flow.map { pagingData ->
-                    val readStates = durableReadStates + readStateOverrides()
-                    pagingData.map { article ->
-                        readStates[article.id]?.let { article.copy(isRead = it) } ?: article
-                    }
-                },
-            )
+                )
+            }
         }
     }
 
     /** Missing list membership needs confirmation because saved state can change between pages. */
-    internal suspend fun reconcileSavedArticles(queryKey: String): AppResult<Unit> = safeReadCall {
-        val generation = sessionGeneration.get()
-        val missing = localStore.savedArticlesMissingFromQuery(queryKey)
+    internal suspend fun reconcileSavedArticles(
+        queryKey: String,
+        expected: ApiSession? = sessionStore.loadedSession(),
+    ): AppResult<Unit> = safeReadCall(expected) { session ->
+        val missing = account.commit(session) { localStore.savedArticlesMissingFromQuery(queryKey) }
         for (batch in missing.chunked(4)) {
             val confirmed = coroutineScope {
                 batch.map { snapshot ->
                     async {
                         val saved = try {
-                            runtime.withRetry { articleRemote.article(snapshot.articleId) }.isSaved
+                            withRetry(session) { articleRemote.article(snapshot.articleId, session = session) }.isSaved
                         } catch (error: HttpException) {
                             if (error.code() == 404) false else throw error
                         }
@@ -489,16 +505,17 @@ class RssRepository @Inject constructor(
                     }
                 }.awaitAll()
             }
-            if (generation != sessionGeneration.get()) return@safeReadCall
             for ((snapshot, saved) in confirmed) {
                 if (!saved) {
                     articleStateProjectionMutex.withLock {
-                        if (localStore.clearSavedStateIfUnchanged(snapshot)) {
-                            val key = "article:${snapshot.articleId}"
-                            runtime.getCached<ArticleDetail>(key)?.let { detail ->
-                                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = false))
+                        account.commit(session) {
+                            if (localStore.clearSavedStateIfUnchanged(snapshot)) {
+                                val key = "article:${snapshot.articleId}"
+                                runtime.getCached<ArticleDetail>(key)?.let { detail ->
+                                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = false))
+                                }
+                                runtime.invalidateByPrefix("search")
                             }
-                            runtime.invalidateByPrefix("search")
                         }
                     }
                 }
@@ -506,13 +523,15 @@ class RssRepository @Inject constructor(
         }
     }
 
-    override suspend fun article(articleId: String, forceRefresh: Boolean) = safeReadCall {
+    override suspend fun article(articleId: String, forceRefresh: Boolean) = safeReadCall { session ->
         if (forceRefresh) {
             val stale = runtime.getCached<ArticleDetail>("article:$articleId")
-                ?: offlineReadStore.readArticleDetail(articleId)
+                ?: account.commit(session) { offlineReadStore.readArticleDetail(articleId) }
             return@safeReadCall try {
-                fetchAndStoreArticle(articleId)
+                fetchAndStoreArticle(articleId, session)
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                account.requireCurrent(session)
                 stale ?: throw error
             }
         }
@@ -529,9 +548,11 @@ class RssRepository @Inject constructor(
         // on success; on failure the cached copy stays valid until its own
         // expiry.
         val cachedDetail = articleStateProjectionMutex.withLock {
-            offlineReadStore.readArticleDetail(articleId)?.let { cached ->
-                localStore.applyPendingArticleState(cached).also { projected ->
-                    runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, projected)
+            account.commit(session) {
+                offlineReadStore.readArticleDetail(articleId)?.let { cached ->
+                    localStore.applyPendingArticleState(cached).also { projected ->
+                        runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, projected)
+                    }
                 }
             }
         }
@@ -540,81 +561,67 @@ class RssRepository @Inject constructor(
             // We swallow the result here on purpose: the caller already
             // has a usable ArticleDetail. Errors are surfaced on the next
             // explicit open or pull-to-refresh.
-            backgroundRefreshArticle(articleId)
+            backgroundRefreshArticle(articleId, session = session)
             return@safeReadCall cachedDetail
         }
 
         // Cold path: nothing in memory or durable storage. Hit the network.
         try {
-            fetchAndStoreArticle(articleId)
+            fetchAndStoreArticle(articleId, session)
         } catch (e: Exception) {
-            offlineReadStore.readArticleDetail(articleId) ?: throw e
+            if (e is CancellationException) throw e
+            account.requireCurrent(session)
+            account.commit(session) { offlineReadStore.readArticleDetail(articleId) } ?: throw e
         }
     }
 
     suspend fun article(articleId: String): AppResult<ArticleDetail> =
         article(articleId, forceRefresh = false)
 
-    private fun backgroundRefreshArticle(articleId: String, cacheImages: Boolean = false) {
-        val generation = sessionGeneration.get()
+    private fun backgroundRefreshArticle(articleId: String, cacheImages: Boolean = false, session: ApiSession) {
         refreshScope.launch {
-            try {
-                val remoteDetail = runtime.withRetry { articleRemote.article(articleId) }
-                val detail = articleStateProjectionMutex.withLock {
-                    if (generation != sessionGeneration.get() || !isLoggedIn()) return@launch
-                    localStore.applyPendingArticleState(remoteDetail).also { projected ->
-                        runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, projected)
-                        offlineReadStore.writeArticleDetail(projected)
-                    }
-                }
-                if (cacheImages) cacheArticleImages(detail)
-            } catch (_: Exception) {
-                // Background refresh is best-effort. The cached copy the
-                // user is already reading is still valid.
+            safeReadCall(session) {
+                val detail = fetchAndStoreArticle(articleId, session)
+                if (cacheImages) account.commit(session) { cacheArticleImages(detail) }
             }
         }
     }
 
-    private fun refreshCategoriesInBackground() {
-        val generation = sessionGeneration.get()
+    private fun refreshCategoriesInBackground(session: ApiSession) {
         val orderRevision = categoryOrderRevision.get()
         refreshScope.launch {
-            runCatching {
-                runtime.withRetry { feedRemote.categories() }.also { categories ->
-                    categoryCacheMutex.withLock {
-                        if (generation != sessionGeneration.get() || !isLoggedIn() ||
-                            orderRevision != categoryOrderRevision.get()
-                        ) return@withLock
-                        runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
-                        offlineReadStore.writeCategories(categories)
+            safeReadCall(session) {
+                val categories = withRetry(session) { feedRemote.categories(session) }
+                categoryCacheMutex.withLock {
+                    account.commit(session) {
+                        if (orderRevision == categoryOrderRevision.get()) {
+                            offlineReadStore.writeCategories(categories)
+                            runtime.putCached("categories", CATEGORIES_TTL_MS, categories)
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun refreshFeedsInBackground(categoryId: String?) {
-        val generation = sessionGeneration.get()
+    private fun refreshFeedsInBackground(categoryId: String?, session: ApiSession) {
         refreshScope.launch {
-            runCatching {
-                runtime.withRetry { feedRemote.feeds(categoryId) }.also { feeds ->
-                    if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
-                    runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds)
-                    persistFeedSnapshot(categoryId, feeds)
-                }
+            safeReadCall(session) {
+                val feeds = withRetry(session) { feedRemote.feeds(categoryId, session) }
+                persistFeedSnapshot(categoryId, feeds, session)
+                account.commit(session) { runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, feeds) }
             }
         }
     }
 
-    private fun refreshPreferencesInBackground() {
-        val generation = sessionGeneration.get()
+    private fun refreshPreferencesInBackground(session: ApiSession) {
         refreshScope.launch {
-            preferencesMutex.withLock {
-                runCatching {
-                    runtime.withRetry { settingsRemote.preferences() }.also { preferences ->
-                        if (generation != sessionGeneration.get() || !isLoggedIn()) return@also
-                        runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
+            safeReadCall(session) {
+                preferencesMutex.withLock {
+                    val preferences = withRetry(session) { settingsRemote.preferences(session) }
+                    account.commit(session) {
                         localStore.writePreferences(preferences)
+                        runtime.putCached("preferences", PREFERENCES_TTL_MS, preferences)
                     }
                 }
             }
@@ -622,29 +629,28 @@ class RssRepository @Inject constructor(
     }
 
     override fun cachedArticleDetail(articleId: String): ArticleDetail? =
-        runtime.getCached("article:$articleId")
+        account.readCurrentMemory { runtime.getCached("article:$articleId") }
 
-    override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? =
-        localStore.readArticleDetail(articleId)?.let { localStore.applyPendingArticleState(it) }
+    override suspend fun readCachedArticleDetail(articleId: String): ArticleDetail? = account.withSession { session ->
+        account.commit(session) { localStore.readArticleDetail(articleId) }?.let { account.commit(session) { localStore.applyPendingArticleState(it) } }
+    }
 
     override suspend fun prefetchArticle(articleId: String): AppResult<ArticleDetail> =
         article(articleId)
 
     override suspend fun refreshArticleDetail(articleId: String): AppResult<ArticleDetail> =
-        safeReadCall {
-            fetchAndStoreArticle(articleId)
+        safeReadCall { session ->
+            fetchAndStoreArticle(articleId, session)
         }
 
-    private suspend fun fetchAndStoreArticle(articleId: String): ArticleDetail {
-        val generation = sessionGeneration.get()
-        val remoteDetail = runtime.withRetry { articleRemote.article(articleId) }
+    private suspend fun fetchAndStoreArticle(articleId: String, session: ApiSession): ArticleDetail {
+        val remoteDetail = withRetry(session) { articleRemote.article(articleId, session = session) }
         return articleStateProjectionMutex.withLock {
-            if (generation != sessionGeneration.get() || !isLoggedIn()) {
-                throw IllegalStateException("Session changed while article was loading")
-            }
-            localStore.applyPendingArticleState(remoteDetail).also { detail ->
-                runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-                offlineReadStore.writeArticleDetail(detail)
+            account.commit(session) {
+                localStore.applyPendingArticleState(remoteDetail).also { detail ->
+                    runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
+                    offlineReadStore.writeArticleDetail(detail)
+                }
             }
         }
     }
@@ -683,13 +689,14 @@ class RssRepository @Inject constructor(
             }
     }
 
-    override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean) = safeCall {
-        articleRemote.enrichArticle(articleId).also {
+    override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean) = safeCall { session ->
+        articleRemote.enrichArticle(articleId, session = session).also {
             if (it.success || it.reason == "already_enriched") {
                 if (invalidateCaches) {
-                    invalidateArticleCaches(articleId)
+                    invalidateArticleDetailCache(articleId, session)
+                    account.commit(session) { runtime.invalidateByPrefix("stats") }
                 } else {
-                    invalidateArticleDetailCache(articleId)
+                    invalidateArticleDetailCache(articleId, session)
                 }
             }
         }
@@ -699,54 +706,64 @@ class RssRepository @Inject constructor(
         enrichArticle(articleId, invalidateCaches = true)
 
     /** Queues the desired state before attempting network delivery. */
-    override suspend fun markRead(articleId: String, read: Boolean, source: String) = safeCall {
+    override suspend fun markRead(articleId: String, read: Boolean, source: String) = safeCall { session ->
         val key = "article:$articleId"
         articleStateProjectionMutex.withLock {
-            localStore.queueReadStateMutation(articleId, read, source)
-            // Optimistic write — visible to the reader screen and the next
-            // list query before the round-trip completes.
-            runtime.getCached<ArticleDetail>(key)?.let { previous ->
-                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
+            account.commit(session) {
+                localStore.queueReadStateMutation(articleId, read, source)
+                // Optimistic write — visible to the reader screen and the next
+                // list query before the round-trip completes.
+                runtime.getCached<ArticleDetail>(key)?.let { previous ->
+                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
+                }
             }
         }
-        runtime.invalidateByPrefix("stats")
+        account.commit(session) { runtime.invalidateByPrefix("stats") }
         // The durable Room write is the success boundary. WorkManager may be
         // temporarily unavailable during process initialization, so scheduling
         // must never turn an already-persisted user action into an error.
         runCatching { ArticleStateSyncWorker.kickOnce(imageRequestContext) }
-        if (networkMonitor.online.value) flushPendingArticleStateMutations()
+        if (networkMonitor.online.value) flushPendingArticleStateMutations(session)
         read
     }
 
     suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> =
         markRead(articleId, read, source = "manual")
 
-    override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall {
-        articleRemote.markAllRead(feedId, categoryId).also {
-            localStore.clearAcknowledgedReadStateOverrides()
-            runtime.invalidateByPrefix("feeds")
-            runtime.invalidateByPrefix("categories")
-            runtime.invalidateByPrefix("stats")
-            runtime.invalidateByPrefix("search")
+    override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall { session ->
+        articleRemote.markAllRead(feedId, categoryId, session = session).also {
+            account.commit(session) {
+                localStore.clearAcknowledgedReadStateOverrides()
+                runtime.invalidateByPrefix("feeds")
+                runtime.invalidateByPrefix("categories")
+                runtime.invalidateByPrefix("stats")
+                runtime.invalidateByPrefix("search")
+            }
         }
     }
 
-    override fun savedStateRejections(): Flow<SavedStateRejection> = savedStateRejectionEvents.asSharedFlow()
+    override fun savedStateRejections(): Flow<SavedStateRejection> = savedStateRejectionEvents.mapNotNull { event ->
+        event.value.takeIf { sessionStore.isCurrentSession(event.session) }
+    }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall {
+    override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall { session ->
         val key = "article:$articleId"
         val previous = articleStateProjectionMutex.withLock {
-            localStore.queueSavedStateMutation(articleId, saved)
-            runtime.getCached<ArticleDetail>(key)?.also { cached ->
-                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+            account.commit(session) {
+                localStore.queueSavedStateMutation(articleId, saved)
+                runtime.getCached<ArticleDetail>(key)?.also { cached ->
+                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+                }
             }
         }
-        runtime.invalidateByPrefix("articles")
-        runtime.invalidateByPrefix("search")
+        account.commit(session) {
+            runtime.invalidateByPrefix("articles")
+            runtime.invalidateByPrefix("search")
+        }
         runCatching { ArticleStateSyncWorker.kickOnce(imageRequestContext) }
-        if (networkMonitor.online.value) flushPendingArticleStateMutations()
+        if (networkMonitor.online.value) flushPendingArticleStateMutations(session)
         if (saved) {
-            if (previous == null) backgroundRefreshArticle(articleId, cacheImages = true)
+            if (previous == null) backgroundRefreshArticle(articleId, cacheImages = true, session = session)
             else cacheArticleImages(previous.copy(isSaved = true))
         }
         saved
@@ -756,17 +773,27 @@ class RssRepository @Inject constructor(
 
     override fun clientId(): String = sessionStore.getClientId()
 
-    override fun readStateEvents(): Flow<ReadStateSyncEvent> =
-        readStateStreamClient.events(::isLoggedIn)
+    override fun readStateEvents(): Flow<ReadStateSyncEvent> {
+        val expected = sessionStore.loadedSession()
+        return flow {
+            account.withSession(expected) { session ->
+                readStateStreamClient.events(session, ::isLoggedIn).collect { event ->
+                    account.requireCurrent(session)
+                    emit(event)
+                }
+            }
+        }
+    }
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =
-        safeReadCall {
+        safeReadCall { session ->
             if (!cursor.isNullOrBlank()) {
-                return@safeReadCall runtime.withRetry {
+                return@safeReadCall withRetry(session) {
                     searchRemote.search(
                         query = query,
                         categoryId = categoryId,
-                        cursor = cursor
+                        cursor = cursor,
+                        session = session,
                     )
                 }
             }
@@ -774,16 +801,19 @@ class RssRepository @Inject constructor(
             val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
             try {
                 runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) {
-                    runtime.withRetry {
+                    withRetry(session) {
                         searchRemote.search(
                             query = query,
                             categoryId = categoryId,
                             cursor = cursor,
+                            session = session,
                         )
                     }
                 }
             } catch (error: Exception) {
-                val cached = localStore.searchArticles(query, categoryId)
+                if (error is CancellationException) throw error
+                account.requireCurrent(session)
+                val cached = account.commit(session) { localStore.searchArticles(query, categoryId) }
                 if (cached.isEmpty()) throw error
                 ApiListResponse(data = cached, cursor = null, hasMore = false)
             }
@@ -792,77 +822,79 @@ class RssRepository @Inject constructor(
     suspend fun search(query: String): AppResult<ApiListResponse<ArticleListItem>> =
         search(query = query, categoryId = null, cursor = null)
 
-    override suspend fun preferences() = safeReadCall {
+    override suspend fun preferences() = safeReadCall { session ->
         preferencesMutex.withLock {
-            localStore.readPreferences()?.let { cached ->
-                refreshPreferencesInBackground()
+            account.commit(session) { localStore.readPreferences() }?.let { cached ->
+                refreshPreferencesInBackground(session)
                 return@withLock cached
             }
             runtime.cachedGet(key = "preferences", ttlMs = PREFERENCES_TTL_MS) {
-                runtime.withRetry { settingsRemote.preferences() }.also {
-                    localStore.writePreferences(it)
+                withRetry(session) { settingsRemote.preferences(session = session) }.also {
+                    account.commit(session) { localStore.writePreferences(it) }
                 }
             }
         }
     }
 
-    override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall {
+    override suspend fun updatePreferences(request: UpdatePreferencesRequest) = safeCall { session ->
         preferencesMutex.withLock {
-            settingsRemote.updatePreferences(request).also {
-                localStore.writePreferences(it)
-                runtime.invalidateByPrefix("preferences")
-                runtime.invalidateByPrefix("articles")
-                runtime.invalidateByPrefix("search")
+            settingsRemote.updatePreferences(request, session = session).also {
+                account.commit(session) {
+                    localStore.writePreferences(it)
+                    runtime.invalidateByPrefix("preferences")
+                    runtime.invalidateByPrefix("articles")
+                    runtime.invalidateByPrefix("search")
+                }
             }
         }
     }
 
-    override suspend fun stats() = safeReadCall {
+    override suspend fun stats() = safeReadCall { session ->
         runtime.cachedGet(
             key = "stats",
             ttlMs = STATS_TTL_MS
-        ) { runtime.withRetry { settingsRemote.stats() } }
+        ) { withRetry(session) { settingsRemote.stats(session = session) } }
     }
 
-    override suspend fun authSessions() = safeReadCall {
+    override suspend fun authSessions() = safeReadCall { session ->
         runtime.cachedGet(key = "auth:sessions", ttlMs = AUTH_SESSIONS_TTL_MS) {
-            runtime.withRetry { settingsRemote.authSessions() }
+            withRetry(session) { settingsRemote.authSessions(session = session) }
         }
     }
 
-    override suspend fun revokeAuthSession(id: String) = safeCall {
-        settingsRemote.revokeAuthSession(id).also {
-            runtime.invalidateByPrefix("auth:sessions")
+    override suspend fun revokeAuthSession(id: String) = safeCall { session ->
+        settingsRemote.revokeAuthSession(id, session = session).also {
+            account.commit(session) { runtime.invalidateByPrefix("auth:sessions") }
         }
     }
 
-    override suspend fun adminSettings() = safeReadCall {
+    override suspend fun adminSettings() = safeReadCall { session ->
         runtime.cachedGet(
             key = "admin:settings",
             ttlMs = ADMIN_SETTINGS_TTL_MS
-        ) { runtime.withRetry { settingsRemote.adminSettings() } }
+        ) { withRetry(session) { settingsRemote.adminSettings(session = session) } }
     }
 
-    override suspend fun updateAdminSettings(registrationLocked: Boolean) = safeCall {
-        settingsRemote.updateAdminSettings(registrationLocked).also {
-            runtime.invalidateByPrefix("admin:settings")
+    override suspend fun updateAdminSettings(registrationLocked: Boolean) = safeCall { session ->
+        settingsRemote.updateAdminSettings(registrationLocked, session = session).also {
+            account.commit(session) { runtime.invalidateByPrefix("admin:settings") }
         }
     }
 
-    override suspend fun adminUsers() = safeReadCall {
-        settingsRemote.adminUsers().users
+    override suspend fun adminUsers() = safeReadCall { session ->
+        settingsRemote.adminUsers(session = session).users
     }
 
-    override suspend fun adminCreateUser(email: String, password: String, role: String) = safeCall {
-        settingsRemote.adminCreateUser(email, password, role)
+    override suspend fun adminCreateUser(email: String, password: String, role: String) = safeCall { session ->
+        settingsRemote.adminCreateUser(email, password, role, session = session)
     }
 
-    override suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?) = safeCall {
-        settingsRemote.adminUpdateUser(id, role, isActive)
+    override suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?) = safeCall { session ->
+        settingsRemote.adminUpdateUser(id, role, isActive, session = session)
     }
 
-    override suspend fun adminResetPassword(id: String, password: String) = safeCall {
-        settingsRemote.adminResetPassword(id, password)
+    override suspend fun adminResetPassword(id: String, password: String) = safeCall { session ->
+        settingsRemote.adminResetPassword(id, password, session = session)
     }
 
     override fun isLoggedIn(): Boolean =
@@ -872,25 +904,44 @@ class RssRepository @Inject constructor(
     override fun canUseOfflineSession(): Boolean =
         isLoggedIn() && sessionStore.hasValidOfflineAccessLease()
 
-    override fun authEvents(): Flow<String> = authLostEvents.asSharedFlow()
+    override fun authEvents(): Flow<String> = authLostEvents.mapNotNull { event ->
+        event.value.takeIf { sessionStore.isCurrentSession(event.session) }
+    }
 
     override suspend fun recordOfflineRestore() {
-        recordAppOpen()
-        runCatching { sessionStore.enqueueProductAnalyticsEvent("offline_restore") }
-        flushProductAnalyticsEvents()
+        safePublicCall { session ->
+            recordAppOpen(session)
+            account.commit(session) { sessionStore.enqueueProductAnalyticsEvent("offline_restore") }
+            flushProductAnalyticsEvents(session)
+        }
     }
 
     override suspend fun recordArticleCompletion(articleId: String) {
-        val isNewCompletion = synchronized(analyticsSessionLock) { completedArticleIds.add(articleId) }
-        if (!isNewCompletion) return
-        runCatching { sessionStore.enqueueProductAnalyticsEvent("article_completed") }
-        flushProductAnalyticsEvents()
+        safePublicCall { session ->
+            account.commit(session) {
+                val alreadyRecorded = synchronized(analyticsSessionLock) { articleId in completedArticleIds }
+                if (!alreadyRecorded) {
+                    sessionStore.enqueueProductAnalyticsEvent("article_completed")
+                    synchronized(analyticsSessionLock) { completedArticleIds.add(articleId) }
+                }
+            }
+            flushProductAnalyticsEvents(session)
+        }
     }
 
-    override fun observePendingArticleChanges(): Flow<Int> = localStore.observePendingArticleChanges()
+    override fun observePendingArticleChanges(): Flow<Int> = flow {
+        account.prepare()
+        emitAll(localStore.observePendingArticleChanges())
+    }
 
-    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> =
-        localStore.observeArticleTextAvailability(articleId)
+    override fun observeArticleTextAvailability(articleId: String): Flow<Boolean> {
+        val expected = sessionStore.loadedSession()
+        return flow {
+            account.withSession(expected) {
+                emitAll(localStore.observeArticleTextAvailability(articleId))
+            }
+        }
+    }
 
     override fun retryPendingArticleChanges() {
         if (isLoggedIn()) ArticleStateSyncWorker.kickOnce(imageRequestContext)
@@ -910,106 +961,118 @@ class RssRepository @Inject constructor(
      */
     override fun trimMemoryCaches() = runtime.trimMemoryCaches()
 
-    private suspend fun <T> safeReadCall(block: suspend () -> T): AppResult<T> = safeCall(block)
+    private suspend fun <T> safeReadCall(
+        expected: ApiSession? = sessionStore.loadedSession(),
+        block: suspend (ApiSession) -> T,
+    ): AppResult<T> = safeCall(expected, block)
 
-    private suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> {
-        val result = runtime.safeCall(block)
+    private suspend fun <T> safeCall(
+        expected: ApiSession? = sessionStore.loadedSession(),
+        block: suspend (ApiSession) -> T,
+    ): AppResult<T> {
+        var owner: ApiSession? = null
+        val result = runtime.safeCall {
+            account.withSession(expected) { session -> owner = session; block(session) }
+        }
         if (result is AppResult.Error) {
+            val session = owner ?: return result
+            account.requireCurrent(session)
             if (isAuthenticationLost(result)) {
-                handleAuthenticationLost()
+                account.clearIfCurrent(session)?.let { cleared ->
+                    authLostEvents.tryEmit(SessionEvent(cleared, AUTH_LOST_MESSAGE))
+                }
                 return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
             }
-            if (isUnauthorized(result)) {
+            if ((result.cause as? HttpException)?.code() == 401) {
                 return AppResult.Error(SESSION_REFRESH_UNAVAILABLE_MESSAGE, result.cause)
             }
         }
         return result
     }
 
-    private fun isAuthenticationLost(result: AppResult.Error): Boolean {
-        if (result.cause is AuthenticationLostException) {
-            return true
+    private fun isAuthenticationLost(result: AppResult.Error): Boolean =
+        result.cause is AuthenticationLostException ||
+            ((result.cause as? HttpException)?.code() == 401 && sessionRefreshCoordinator.hasRecentRefreshRejection())
+
+    private suspend fun <T> safePublicCall(
+        expected: ApiSession? = sessionStore.loadedSession(),
+        block: suspend (ApiSession) -> T,
+    ): AppResult<T> = runtime.safeCall { account.withSession(expected, block) }
+
+    private suspend fun <T> withRetry(session: ApiSession, block: suspend () -> T): T = runtime.withRetry {
+        currentCoroutineContext().ensureActive()
+        account.requireCurrent(session)
+        block().also {
+            currentCoroutineContext().ensureActive()
+            account.requireCurrent(session)
         }
-        val http = result.cause as? HttpException ?: return false
-        return http.code() == 401 && sessionRefreshCoordinator.hasRecentRefreshRejection()
     }
 
-    private fun isUnauthorized(result: AppResult.Error): Boolean =
-        (result.cause as? HttpException)?.code() == 401
-
-    private suspend fun <T> safePublicCall(block: suspend () -> T): AppResult<T> =
-        runtime.safeCall(block)
-
-    private suspend fun handleAuthenticationLost() {
-        sessionGeneration.incrementAndGet()
-        sessionStore.clear()
-        clearCacheAndDatabase()
-        authLostEvents.tryEmit(AUTH_LOST_MESSAGE)
-    }
-
-    private suspend fun flushProductAnalyticsEvents() {
+    private suspend fun flushProductAnalyticsEvents(expected: ApiSession? = sessionStore.loadedSession()) {
         if (!networkMonitor.online.value || !isLoggedIn()) return
-        val pending = runCatching { sessionStore.pendingProductAnalyticsEvents() }.getOrNull() ?: return
-        if (pending.isEmpty()) return
-        runCatching {
-            settingsRemote.recordProductAnalyticsEvents(RecordProductAnalyticsEventsRequest(pending))
-            sessionStore.removeProductAnalyticsEvents(pending.mapTo(mutableSetOf()) { it.id })
+        safePublicCall(expected) { session ->
+            if (!networkMonitor.online.value || !isLoggedIn()) return@safePublicCall
+            val pending = account.commit(session) { sessionStore.pendingProductAnalyticsEvents() }
+            if (pending.isEmpty()) return@safePublicCall
+            settingsRemote.recordProductAnalyticsEvents(RecordProductAnalyticsEventsRequest(pending), session)
+            account.commit(session) { sessionStore.removeProductAnalyticsEvents(pending.mapTo(mutableSetOf()) { it.id }) }
         }
     }
 
-    private suspend fun recordAppOpen() {
-        val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-        val shouldRecord = synchronized(analyticsSessionLock) {
-            if (appOpenRecordedOn == today) {
-                false
-            } else {
-                appOpenRecordedOn = today
-                true
+    private suspend fun recordAppOpen(session: ApiSession) {
+        runtime.safeCall {
+            account.commit(session) {
+                val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
+                val alreadyRecorded = synchronized(analyticsSessionLock) { appOpenRecordedOn == today }
+                if (!alreadyRecorded) {
+                    sessionStore.enqueueProductAnalyticsEvent("app_opened")
+                    synchronized(analyticsSessionLock) { appOpenRecordedOn = today }
+                }
             }
         }
-        if (!shouldRecord) return
-        if (runCatching { sessionStore.enqueueProductAnalyticsEvent("app_opened") }.isFailure) {
-            synchronized(analyticsSessionLock) { appOpenRecordedOn = null }
-        }
     }
 
-    suspend fun invalidateArticleCaches(articleId: String) {
+    suspend fun invalidateArticleCaches(articleId: String) = account.withSession { session ->
         // Targeted invalidation for a single markRead. The SSE read-state
         // event handles the in-memory `state.articles` patch, so we
         // don't need to blow away every cached list here. We only drop
         // the article detail and the stats aggregate; feeds/categories
         // are refreshed lazily on the next unread-count read.
-        invalidateArticleDetailCache(articleId)
-        runtime.invalidateByPrefix("stats")
+        invalidateArticleDetailCache(articleId, session)
+        account.commit(session) { runtime.invalidateByPrefix("stats") }
     }
 
-    private suspend fun invalidateArticleDetailCache(articleId: String) {
-        runtime.invalidateByPrefix("article:$articleId")
+    private suspend fun invalidateArticleDetailCache(articleId: String, session: ApiSession) {
+        account.commit(session) { runtime.invalidateByPrefix("article:$articleId") }
         // Keep the durable copy as a stale fallback until a successful fetch
         // replaces it. Realtime invalidation is only a freshness hint and can
         // arrive immediately before connectivity is lost.
     }
 
-    override suspend fun invalidateReadStateCaches(articleId: String?) {
-        flushPendingArticleStateMutations()
+    override suspend fun invalidateReadStateCaches(articleId: String?) = account.withSession { session ->
+        flushPendingArticleStateMutations(session)
         // Read state is an overlay; never evict immutable article content or
         // the visible list for a receipt arriving from another client.
-        runtime.invalidateByPrefix("feeds")
-        runtime.invalidateByPrefix("categories")
-        runtime.invalidateByPrefix("stats")
+        account.commit(session) {
+            runtime.invalidateByPrefix("feeds")
+            runtime.invalidateByPrefix("categories")
+            runtime.invalidateByPrefix("stats")
+        }
     }
 
-    override suspend fun invalidateArticleContentCaches(articleId: String?) {
+    override suspend fun invalidateArticleContentCaches(articleId: String?) = account.withSession { session ->
         if (articleId != null) {
-            invalidateArticleDetailCache(articleId)
+            invalidateArticleDetailCache(articleId, session)
         } else {
-            runtime.invalidateByPrefix("article:")
+            account.commit(session) { runtime.invalidateByPrefix("article:") }
         }
-        runtime.invalidateByPrefix("articles")
-        runtime.invalidateByPrefix("search")
-        runtime.invalidateByPrefix("feeds")
-        runtime.invalidateByPrefix("categories")
-        runtime.invalidateByPrefix("stats")
+        account.commit(session) {
+            runtime.invalidateByPrefix("articles")
+            runtime.invalidateByPrefix("search")
+            runtime.invalidateByPrefix("feeds")
+            runtime.invalidateByPrefix("categories")
+            runtime.invalidateByPrefix("stats")
+        }
         // Realtime availability is a hint for the next explicit refresh.
         // Clearing Room here invalidates the active PagingSource and briefly
         // replaces the user's queue with an empty list while they are reading.
@@ -1017,47 +1080,57 @@ class RssRepository @Inject constructor(
         // durable query rows atomically when the user asks for fresh content.
     }
 
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean =
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean = account.withSession { session ->
         articleStateProjectionMutex.withLock {
-            val visibleState = localStore.updateArticleReadState(articleId, read, revision)
-            val key = "article:$articleId"
-            runtime.getCached<ArticleDetail>(key)?.let { cached ->
-                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = visibleState))
-            }
-            visibleState
-        }
-
-    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) {
-        articleStateProjectionMutex.withLock {
-            val visibleState = localStore.updateArticleSavedState(articleId, saved, revision)
-            val key = "article:$articleId"
-            runtime.getCached<ArticleDetail>(key)?.let { cached ->
-                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = visibleState))
+            account.commit(session) {
+                val visibleState = localStore.updateArticleReadState(articleId, read, revision)
+                val key = "article:$articleId"
+                runtime.getCached<ArticleDetail>(key)?.let { cached ->
+                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = visibleState))
+                }
+                visibleState
             }
         }
-        runtime.invalidateByPrefix("articles")
-        runtime.invalidateByPrefix("search")
     }
 
-    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation {
-        val reconciliation = localStore.markArticlesReadByFeeds(feedIds)
-        runtime.invalidateByPrefix("search")
-        return reconciliation
+    override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) = account.withSession { session ->
+        articleStateProjectionMutex.withLock {
+            account.commit(session) {
+                val visibleState = localStore.updateArticleSavedState(articleId, saved, revision)
+                val key = "article:$articleId"
+                runtime.getCached<ArticleDetail>(key)?.let { cached ->
+                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = visibleState))
+                }
+            }
+        }
+        account.commit(session) {
+            runtime.invalidateByPrefix("articles")
+            runtime.invalidateByPrefix("search")
+        }
     }
 
-    private suspend fun clearCacheAndDatabase() {
+    override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation = account.withSession { session ->
+        val reconciliation = account.commit(session) {
+            runtime.invalidateByPrefix("search")
+            localStore.markArticlesReadByFeeds(feedIds)
+        }
+        reconciliation
+    }
+
+    private fun clearSessionMemory() {
         synchronized(analyticsSessionLock) {
             completedArticleIds.clear()
             appOpenRecordedOn = null
         }
         runtime.clearCache()
-        offlineReadStore.clearAll()
     }
 
-    private suspend fun invalidateFeedAndArticleCaches() {
-        invalidateFeedAndArticleRuntimeCaches()
-        runtime.invalidateByPrefix("article:")
-        offlineReadStore.clearFeedAndArticleData()
+    private suspend fun invalidateFeedAndArticleCaches(session: ApiSession) {
+        invalidateFeedAndArticleRuntimeCaches(session)
+        account.commit(session) {
+            runtime.invalidateByPrefix("article:")
+            offlineReadStore.clearFeedAndArticleData()
+        }
     }
 
     /**
@@ -1065,95 +1138,99 @@ class RssRepository @Inject constructor(
      * source currently on screen. A completed background sync is followed by
      * an explicit Pager refresh that replaces query rows transactionally.
      */
-    private fun invalidateFeedAndArticleRuntimeCaches() {
-        runtime.invalidateByPrefix("feeds")
-        runtime.invalidateByPrefix("articles")
-        runtime.invalidateByPrefix("search")
-        runtime.invalidateByPrefix("stats")
-        runtime.invalidateByPrefix("categories")
+    private suspend fun invalidateFeedAndArticleRuntimeCaches(session: ApiSession) {
+        account.commit(session) {
+            runtime.invalidateByPrefix("feeds")
+            runtime.invalidateByPrefix("articles")
+            runtime.invalidateByPrefix("search")
+            runtime.invalidateByPrefix("stats")
+            runtime.invalidateByPrefix("categories")
+        }
     }
 
     // Workers and foreground actions share one drain, including its reads and acknowledgments.
-    suspend fun flushPendingArticleStateMutations(): Boolean = articleStateFlushMutex.withLock {
-        drainPendingArticleStateMutations()
+    suspend fun flushPendingArticleStateMutations(): Boolean = account.withSession { session ->
+        flushPendingArticleStateMutations(session)
     }
 
-    private suspend fun drainPendingArticleStateMutations(): Boolean {
+    private suspend fun flushPendingArticleStateMutations(session: ApiSession): Boolean = articleStateFlushMutex.withLock {
+        drainPendingArticleStateMutations(session)
+    }
+
+    private suspend fun drainPendingArticleStateMutations(session: ApiSession): Boolean {
         if (!networkMonitor.online.value) return false
         repeat(MAX_OUTBOX_FLUSH_ATTEMPTS) {
-            val read = localStore.readPendingReadStateMutations().firstOrNull()
-            val saved = localStore.readPendingSavedStateMutations().firstOrNull()
+            val read = account.commit(session) { localStore.readPendingReadStateMutations() }.firstOrNull()
+            val saved = account.commit(session) { localStore.readPendingSavedStateMutations() }.firstOrNull()
             if (read == null && saved == null) return true
             try {
                 if (saved == null || (read != null && read.updatedAt <= saved.updatedAt)) {
                     val mutation = requireNotNull(read)
                     if (mutation.mutationId.isBlank()) {
-                        localStore.rebaseReadStateMutation(mutation, mutation.baseRevision ?: 0)
+                        account.commit(session) { localStore.rebaseReadStateMutation(mutation, mutation.baseRevision ?: 0) }
                         return@repeat
                     }
-                    val response = runtime.withRetry {
+                    val response = withRetry(session) {
                         articleRemote.markRead(
                             articleId = mutation.articleId,
                             read = mutation.read,
                             source = mutation.source,
                             mutationId = mutation.mutationId,
                             baseRevision = mutation.baseRevision,
+                            session = session,
                         )
                     }
                     if (response.conflict) {
-                        localStore.rebaseReadStateMutation(mutation, response.revision)
+                        account.commit(session) { localStore.rebaseReadStateMutation(mutation, response.revision) }
                     } else {
                         val authoritative = response.read ?: mutation.read
                         articleStateProjectionMutex.withLock {
-                            if (localStore.acknowledgeReadStateMutation(
-                                    mutation,
-                                    authoritative,
-                                    response.revision,
-                                )
-                            ) {
-                                runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
-                                    runtime.putCached(
-                                        "article:${mutation.articleId}",
-                                        ARTICLE_DETAIL_TTL_MS,
-                                        detail.copy(isRead = authoritative),
-                                    )
+                            account.commit(session) {
+                                if (localStore.acknowledgeReadStateMutation(mutation, authoritative, response.revision)) {
+                                    runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
+                                        runtime.putCached(
+                                            "article:${mutation.articleId}",
+                                            ARTICLE_DETAIL_TTL_MS,
+                                            detail.copy(isRead = authoritative),
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
                     val mutation = saved
-                    val response = runtime.withRetry {
+                    val response = withRetry(session) {
                         articleRemote.setSaved(
                             articleId = mutation.articleId,
                             saved = mutation.saved,
                             mutationId = mutation.mutationId,
                             baseRevision = mutation.baseRevision,
+                            session = session,
                         )
                     }
                     if (response.conflict) {
-                        localStore.rebaseSavedStateMutation(mutation, response.revision)
+                        account.commit(session) { localStore.rebaseSavedStateMutation(mutation, response.revision) }
                     } else {
                         val authoritative = response.saved ?: mutation.saved
                         articleStateProjectionMutex.withLock {
-                            if (localStore.acknowledgeSavedStateMutation(
-                                    mutation,
-                                    authoritative,
-                                    response.revision,
-                                )
-                            ) {
-                                runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
-                                    runtime.putCached(
-                                        "article:${mutation.articleId}",
-                                        ARTICLE_DETAIL_TTL_MS,
-                                        detail.copy(isSaved = authoritative),
-                                    )
+                            account.commit(session) {
+                                if (localStore.acknowledgeSavedStateMutation(mutation, authoritative, response.revision)) {
+                                    runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
+                                        runtime.putCached(
+                                            "article:${mutation.articleId}",
+                                            ARTICLE_DETAIL_TTL_MS,
+                                            detail.copy(isSaved = authoritative),
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                account.requireCurrent(session)
                 val status = (error as? HttpException)?.code()
                 if (status == 401) {
                     if (sessionRefreshCoordinator.hasRecentRefreshRejection()) throw error
@@ -1163,21 +1240,25 @@ class RssRepository @Inject constructor(
                 if (status != null && !isRetriableMutationStatus(status)) {
                     if (read != null && (saved == null || read.updatedAt <= saved.updatedAt)) {
                         articleStateProjectionMutex.withLock {
-                            localStore.discardReadStateMutation(read)
+                            account.commit(session) {
+                                localStore.discardReadStateMutation(read)
+                            }
                         }
                     } else if (saved != null) {
                         val restored = articleStateProjectionMutex.withLock {
-                            localStore.discardSavedStateMutation(saved)?.let { restored ->
-                                val key = "article:${saved.articleId}"
-                                runtime.getCached<ArticleDetail>(key)?.let { detail ->
-                                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = restored))
+                            account.commit(session) {
+                                localStore.discardSavedStateMutation(saved)?.let { restored ->
+                                    val key = "article:${saved.articleId}"
+                                    runtime.getCached<ArticleDetail>(key)?.let { detail ->
+                                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = restored))
+                                    }
+                                    runtime.invalidateByPrefix("search")
+                                    restored
                                 }
-                                runtime.invalidateByPrefix("search")
-                                restored
                             }
                         }
                         restored?.let {
-                            savedStateRejectionEvents.emit(SavedStateRejection(saved.articleId, it))
+                            savedStateRejectionEvents.emit(SessionEvent(session, SavedStateRejection(saved.articleId, it)))
                         }
                     }
                     return@repeat
@@ -1194,17 +1275,18 @@ class RssRepository @Inject constructor(
     private fun isRetriableMutationStatus(status: Int): Boolean =
         status == 408 || status == 425 || status == 429 || status >= 500
 
-    private suspend fun persistFeedSnapshot(categoryId: String?, feeds: List<FeedWithCounts>) {
+    private suspend fun persistFeedSnapshot(categoryId: String?, feeds: List<FeedWithCounts>, session: ApiSession) {
         if (categoryId == null) {
-            offlineReadStore.writeFeeds(feeds)
+            account.commit(session) { offlineReadStore.writeFeeds(feeds) }
         } else {
-            offlineReadStore.mergeFeeds(feeds)
+            account.commit(session) { offlineReadStore.mergeFeeds(feeds) }
         }
     }
 
     private suspend fun filterCachedFeeds(
         feeds: List<FeedWithCounts>,
         categoryId: String?,
+        session: ApiSession,
     ): List<FeedWithCounts> {
         if (categoryId == null) return feeds
         val flattened = buildList {
@@ -1214,7 +1296,7 @@ class RssRepository @Inject constructor(
                     append(category.children.orEmpty())
                 }
             }
-            append(offlineReadStore.readCategories())
+            append(account.commit(session) { offlineReadStore.readCategories() })
         }
         val includedCategoryIds = mutableSetOf(categoryId)
         var changed: Boolean
@@ -1264,3 +1346,5 @@ class RssRepository @Inject constructor(
 private class AuthenticationLostException : IllegalStateException(
     "Authentication was lost. Please sign in again.",
 )
+
+private data class SessionEvent<out T>(val session: ApiSession, val value: T)

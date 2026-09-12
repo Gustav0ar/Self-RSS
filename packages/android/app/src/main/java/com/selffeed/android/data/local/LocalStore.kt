@@ -127,11 +127,11 @@ class LocalStore internal constructor(
         })
     }
 
-    fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem> =
-        dao.articlePagingSource(queryKey)
+    fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem> =
+        dao.articlePagingSource(queryKey, ownerId)
 
-    fun savedArticlePagingSource(): PagingSource<Int, ArticleListItem> =
-        dao.savedArticlePagingSource()
+    fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem> =
+        dao.savedArticlePagingSource(ownerId)
 
     suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot> =
         dao.savedArticlesMissingFromQuery(queryKey)

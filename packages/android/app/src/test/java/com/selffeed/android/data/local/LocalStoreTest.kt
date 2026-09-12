@@ -172,7 +172,7 @@ class LocalStoreTest {
         assertNotNull(remoteKey)
         assertEquals("next-cursor", remoteKey!!.nextCursor)
 
-        val result = store.articlePagingSource("query-1").load(
+        val result = store.articlePagingSource("query-1", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -204,7 +204,7 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
-        val pagingSource = store.articlePagingSource("query-read-state")
+        val pagingSource = store.articlePagingSource("query-read-state", ownerId = null)
         pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
@@ -222,7 +222,7 @@ class LocalStoreTest {
         assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
         assertEquals(true, pagingSource.invalid)
 
-        val result = store.articlePagingSource("query-read-state").load(
+        val result = store.articlePagingSource("query-read-state", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -261,7 +261,7 @@ class LocalStoreTest {
         val pending = store.readPendingReadStateMutations().single()
         assertEquals(newest.mutationId, pending.mutationId)
         assertEquals(false, pending.read)
-        val page = store.articlePagingSource("query-toggle").load(
+        val page = store.articlePagingSource("query-toggle", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(false, page.data.single().isRead)
@@ -280,11 +280,11 @@ class LocalStoreTest {
         store.acknowledgeSavedStateMutation(mutation, saved = true, revision = 7)
 
         assertTrue(store.readPendingSavedStateMutations().isEmpty())
-        val page = store.articlePagingSource("query-save").load(
+        val page = store.articlePagingSource("query-save", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(true, page.data.single().isSaved)
-        val savedPage = store.savedArticlePagingSource().load(
+        val savedPage = store.savedArticlePagingSource(ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(listOf("a-save"), savedPage.data.map { it.id })
@@ -296,7 +296,7 @@ class LocalStoreTest {
 
         store.queueSavedStateMutation("a-detail-save", saved = true)
 
-        val page = store.savedArticlePagingSource().load(
+        val page = store.savedArticlePagingSource(ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(listOf("a-detail-save"), page.data.map { it.id })
@@ -322,7 +322,7 @@ class LocalStoreTest {
         store.discardSavedStateMutation(mutation)
 
         assertEquals(false, store.readArticleDetail("detail-only-rollback")?.isSaved)
-        val page = store.savedArticlePagingSource().load(
+        val page = store.savedArticlePagingSource(ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertTrue(page.data.isEmpty())
@@ -344,7 +344,7 @@ class LocalStoreTest {
 
         assertTrue(store.readPendingSavedStateMutations().isEmpty())
         assertEquals(false, store.readArticleDetail("a-save")?.isSaved)
-        val page = store.articlePagingSource("query-save-rollback").load(
+        val page = store.articlePagingSource("query-save-rollback", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(false, page.data.single().isSaved)
@@ -384,7 +384,7 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
-        val pagingSource = store.articlePagingSource("query-retained-read")
+        val pagingSource = store.articlePagingSource("query-retained-read", ownerId = null)
         pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
@@ -395,7 +395,7 @@ class LocalStoreTest {
         store.updateArticleReadState("a-1", read = true)
 
         assertTrue(store.readArticleReadOverrides().isEmpty())
-        val result = store.articlePagingSource("query-retained-read").load(
+        val result = store.articlePagingSource("query-retained-read", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -426,7 +426,7 @@ class LocalStoreTest {
         assertEquals(false, store.readPendingReadStateMutations().single().previousState)
         assertEquals(true, store.readPendingSavedStateMutations().single().saved)
         assertEquals(false, store.readPendingSavedStateMutations().single().previousState)
-        val page = store.articlePagingSource("query-concurrent").load(
+        val page = store.articlePagingSource("query-concurrent", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(true, page.data.single().isRead)
@@ -437,7 +437,7 @@ class LocalStoreTest {
             payload = ApiListResponse(data = listOf(sampleArticle("a-1")), cursor = null, hasMore = false),
             clearExisting = true,
         )
-        val refreshedPage = store.articlePagingSource("query-concurrent").load(
+        val refreshedPage = store.articlePagingSource("query-concurrent", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as PagingSource.LoadResult.Page
         assertEquals(true, refreshedPage.data.single().isRead)
@@ -504,7 +504,7 @@ class LocalStoreTest {
             clearExisting = true,
         )
 
-        val pagingSource = store.articlePagingSource("query-feed-read-state")
+        val pagingSource = store.articlePagingSource("query-feed-read-state", ownerId = null)
         store.markArticlesReadByFeeds(setOf("f-1"))
 
         assertEquals(false, pagingSource.invalid)

@@ -39,7 +39,8 @@ class RecoveryFixtureActivity : ComponentActivity() {
             if (savedInstanceState == null) {
                 // Any background revalidation can only reach a closed loopback
                 // port. No real server, publisher, account or credential is used.
-                sessionStore.setApiBaseUrl("http://127.0.0.1:1")
+                check(repository.setApiBaseUrl("http://127.0.0.1:1") is AppResult.Success)
+                check(localStore.readOwner()?.ownerId == sessionStore.currentSession().ownerId)
                 sessionStore.setAccessToken("isolated-review-fixture")
                 localStore.writeArticleDetail(
                     ArticleDetail(
@@ -54,7 +55,9 @@ class RecoveryFixtureActivity : ComponentActivity() {
             check(sessionStore.getAccessToken() == "isolated-review-fixture") { "Fixture credential was not restored" }
             val sessionOwner = sessionStore.currentSession().ownerId
             val result = repository.article(articleId)
-            check(result is AppResult.Success) { "Production repository could not recover the cached body" }
+            check(result is AppResult.Success) {
+                "Production repository could not recover the cached body: ${(result as? AppResult.Error)?.message}"
+            }
             setContent {
                 SelfFeedTheme {
                     var confirmed by rememberSaveable { mutableStateOf(false) }

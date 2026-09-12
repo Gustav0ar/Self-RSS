@@ -44,6 +44,20 @@ class SessionOwnerMigrationTest {
     }
 
     @Test
+    fun `new authentication discards the previous accounts analytics and sync request`() = runTest {
+        val store = SessionStore(
+            ApplicationProvider.getApplicationContext(), StandardTestDispatcher(testScheduler), dataStore = preferences(),
+        )
+        store.preload()
+        store.setFeedRefreshRequestId("previous-sync")
+        store.enqueueProductAnalyticsEvent("article_completed")
+        assertTrue(store.pendingProductAnalyticsEvents().isNotEmpty())
+        store.beginAuthentication()
+        assertEquals(null, store.getFeedRefreshRequestId())
+        assertTrue(store.pendingProductAnalyticsEvents().isEmpty())
+    }
+
+    @Test
     fun `logout waits for preload and leaves durable and memory owners consistent`() = runTest {
         val preferences = preferences()
         preferences.edit { it[longPreferencesKey("last_authenticated_at")] = 1_700_000_000_000L }

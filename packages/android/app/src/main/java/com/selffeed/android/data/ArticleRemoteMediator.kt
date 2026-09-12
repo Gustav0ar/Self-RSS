@@ -4,16 +4,16 @@ import androidx.paging.ExperimentalPagingApi
 import androidx.paging.LoadType
 import androidx.paging.PagingState
 import androidx.paging.RemoteMediator
-import com.selffeed.android.data.local.LocalStore
+import com.selffeed.android.data.local.ArticleRemoteKeyEntity
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleListItem
 import retrofit2.HttpException
 
 @OptIn(ExperimentalPagingApi::class)
 class ArticleRemoteMediator(
-    private val queryKey: String,
     private val forceInitialRefresh: Boolean,
-    private val localStore: LocalStore,
+    private val readRemoteKey: suspend () -> ArticleRemoteKeyEntity?,
+    private val storeRemotePage: suspend (ApiListResponse<ArticleListItem>, Boolean) -> Unit,
     private val loadPage: suspend (limit: Int, cursor: String?) -> AppResult<ApiListResponse<ArticleListItem>>,
     private val onCompletedRefresh: suspend () -> AppResult<Unit> = { AppResult.Success(Unit) },
 ) : RemoteMediator<Int, ArticleListItem>() {
@@ -25,7 +25,7 @@ class ArticleRemoteMediator(
             LoadType.REFRESH -> null
             LoadType.PREPEND -> return MediatorResult.Success(endOfPaginationReached = true)
             LoadType.APPEND -> {
-                val remoteKey = localStore.readArticleRemoteKey(queryKey)
+                val remoteKey = readRemoteKey()
                     ?: return MediatorResult.Success(endOfPaginationReached = true)
                 if (remoteKey.endReached) return completeRefresh()
                 remoteKey.nextCursor
@@ -58,7 +58,7 @@ class ArticleRemoteMediator(
     }
 
     private suspend fun storePage(payload: ApiListResponse<ArticleListItem>, clearExisting: Boolean): MediatorResult {
-        localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
+        storeRemotePage(payload, clearExisting)
         return if (!payload.hasMore || payload.cursor.isNullOrBlank()) {
             completeRefresh()
         } else {
@@ -73,7 +73,7 @@ class ArticleRemoteMediator(
 
     override suspend fun initialize(): InitializeAction {
         if (forceInitialRefresh) return InitializeAction.LAUNCH_INITIAL_REFRESH
-        val remoteKey = localStore.readArticleRemoteKey(queryKey)
+        val remoteKey = readRemoteKey()
         return if (remoteKey == null || System.currentTimeMillis() - remoteKey.updatedAt > MAX_QUERY_AGE_MS) {
             InitializeAction.LAUNCH_INITIAL_REFRESH
         } else {

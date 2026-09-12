@@ -18,7 +18,7 @@ import retrofit2.http.Query
 
 interface RssApi {
     @GET("auth/registration-status")
-    suspend fun registrationStatus(): ApiEnvelope<RegistrationStatusResponse>
+    suspend fun registrationStatus(@Tag session: ApiSession? = null): ApiEnvelope<RegistrationStatusResponse>
 
     @POST("auth/login")
     suspend fun login(
@@ -36,57 +36,61 @@ interface RssApi {
     suspend fun logout(
         @Header("Authorization") authorization: String? = null,
         @Header("Cookie") cookie: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<SuccessResponse>
 
     @GET("auth/me")
-    suspend fun me(): ApiEnvelope<User>
+    suspend fun me(@Tag session: ApiSession? = null): ApiEnvelope<User>
 
     @POST("auth/change-password")
-    suspend fun changePassword(@Body request: ChangePasswordRequest): ApiEnvelope<AuthResponse>
+    suspend fun changePassword(@Body request: ChangePasswordRequest, @Tag session: ApiSession? = null): ApiEnvelope<AuthResponse>
 
     @GET("auth/sessions")
-    suspend fun authSessions(): ApiEnvelope<AuthSessionsResponse>
+    suspend fun authSessions(@Tag session: ApiSession? = null): ApiEnvelope<AuthSessionsResponse>
 
     @DELETE("auth/sessions/{id}")
-    suspend fun revokeAuthSession(@Path("id") id: String): ApiEnvelope<SuccessResponse>
+    suspend fun revokeAuthSession(@Path("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<SuccessResponse>
 
     @GET("categories")
-    suspend fun categories(): ApiEnvelope<CategoryTreeResponse>
+    suspend fun categories(@Tag session: ApiSession? = null): ApiEnvelope<CategoryTreeResponse>
 
     @POST("categories")
-    suspend fun createCategory(@Body request: CreateCategoryRequest): ApiEnvelope<CategoryWithCounts>
+    suspend fun createCategory(@Body request: CreateCategoryRequest, @Tag session: ApiSession? = null): ApiEnvelope<CategoryWithCounts>
 
     @PATCH("categories/{id}")
     suspend fun updateCategory(
         @Path("id") id: String,
         @Body request: UpdateCategoryRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<CategoryWithCounts>
 
     @PATCH("categories/reorder")
-    suspend fun reorderCategories(@Body request: ReorderCategoriesRequest): ApiEnvelope<ReorderCategoriesResponse>
+    suspend fun reorderCategories(@Body request: ReorderCategoriesRequest, @Tag session: ApiSession? = null): ApiEnvelope<ReorderCategoriesResponse>
 
     @DELETE("categories/{id}")
-    suspend fun deleteCategory(@Path("id") id: String): ApiEnvelope<SuccessResponse>
+    suspend fun deleteCategory(@Path("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<SuccessResponse>
 
     @GET("feeds")
-    suspend fun feeds(@Query("categoryId") categoryId: String? = null): ApiEnvelope<List<FeedWithCounts>>
+    suspend fun feeds(@Query("categoryId") categoryId: String? = null, @Tag session: ApiSession? = null): ApiEnvelope<List<FeedWithCounts>>
 
     @POST("feeds")
-    suspend fun createFeed(@Body request: CreateFeedRequest): ApiEnvelope<FeedWithCounts>
+    suspend fun createFeed(@Body request: CreateFeedRequest, @Tag session: ApiSession? = null): ApiEnvelope<FeedWithCounts>
 
     @PATCH("feeds/{id}")
     suspend fun updateFeed(
         @Path("id") id: String,
-        @Body request: UpdateFeedRequest
+        @Body request: UpdateFeedRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<FeedWithCounts>
 
     @DELETE("feeds/{id}")
-    suspend fun deleteFeed(@Path("id") id: String): ApiEnvelope<SuccessResponse>
+    suspend fun deleteFeed(@Path("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<SuccessResponse>
 
     @POST("feeds/{id}/sync")
     suspend fun syncFeed(
         @Path("id") id: String,
         @Header("Idempotency-Key") idempotencyKey: String,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<SyncResponse>
 
     @GET("feeds/{id}/sync-runs")
@@ -94,6 +98,7 @@ interface RssApi {
         @Path("id") id: String,
         @Query("limit") limit: Int = 25,
         @Query("cursor") cursor: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<FeedSyncHistoryResponse>
 
     @POST("feeds/sync")
@@ -101,26 +106,27 @@ interface RssApi {
         @Header("Idempotency-Key") idempotencyKey: String,
         @Query("feedId") feedId: String? = null,
         @Query("categoryId") categoryId: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<SyncResponse>
 
     @GET("feeds/sync/status")
-    suspend fun syncAllFeedsStatus(@Query("requestId") requestId: String? = null): ApiEnvelope<FeedSyncAllStatus>
+    suspend fun syncAllFeedsStatus(@Query("requestId") requestId: String? = null, @Tag session: ApiSession? = null): ApiEnvelope<FeedSyncAllStatus>
 
     @GET("feeds/discovery/{requestId}")
-    suspend fun discoveryCandidates(@Path("requestId") requestId: String): ApiEnvelope<List<FeedDiscoveryCandidate>>
+    suspend fun discoveryCandidates(@Path("requestId") requestId: String, @Tag session: ApiSession? = null): ApiEnvelope<List<FeedDiscoveryCandidate>>
 
     @POST("feeds/discovery/candidates/{candidateId}/select")
-    suspend fun selectDiscoveryCandidate(@Path("candidateId") candidateId: String): ApiEnvelope<DiscoverySelectionResponse>
+    suspend fun selectDiscoveryCandidate(@Path("candidateId") candidateId: String, @Tag session: ApiSession? = null): ApiEnvelope<DiscoverySelectionResponse>
 
     @POST("feeds/{feedId}/replacement/cancel")
-    suspend fun cancelFeedReplacement(@Path("feedId") feedId: String): ApiEnvelope<FeedWithCounts>
+    suspend fun cancelFeedReplacement(@Path("feedId") feedId: String, @Tag session: ApiSession? = null): ApiEnvelope<FeedWithCounts>
 
     @Multipart
     @POST("feeds/import/opml")
-    suspend fun importOpml(@Part file: MultipartBody.Part): ApiEnvelope<OpmlImportSummary>
+    suspend fun importOpml(@Part file: MultipartBody.Part, @Tag session: ApiSession? = null): ApiEnvelope<OpmlImportSummary>
 
     @GET("feeds/export/opml")
-    suspend fun exportOpml(): Response<ResponseBody>
+    suspend fun exportOpml(@Tag session: ApiSession? = null): Response<ResponseBody>
 
     @GET("articles")
     suspend fun articles(
@@ -131,28 +137,31 @@ interface RssApi {
         @Query("sort") sort: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("cursor") cursor: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiListResponse<ArticleListItem>
 
     @GET("articles/detail")
-    suspend fun article(@Query("id") id: String): ApiEnvelope<ArticleDetail>
+    suspend fun article(@Query("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<ArticleDetail>
 
     @POST("articles/{id}/enrich")
-    suspend fun enrichArticle(@Path("id") id: String): ApiEnvelope<EnrichArticleResponse>
+    suspend fun enrichArticle(@Path("id") id: String, @Tag session: ApiSession? = null): ApiEnvelope<EnrichArticleResponse>
 
     @PATCH("articles/{id}/read")
     suspend fun markRead(
         @Path("id") id: String,
-        @Body request: MarkReadRequest
+        @Body request: MarkReadRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<MarkReadResponse>
 
     @PATCH("articles/{id}/saved")
     suspend fun setSaved(
         @Path("id") id: String,
-        @Body request: SaveArticleRequest
+        @Body request: SaveArticleRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<MarkReadResponse>
 
     @PATCH("articles/mark-all-read")
-    suspend fun markAllRead(@Body request: MarkAllReadRequest): ApiEnvelope<MarkAllReadResponse>
+    suspend fun markAllRead(@Body request: MarkAllReadRequest, @Tag session: ApiSession? = null): ApiEnvelope<MarkAllReadResponse>
 
     @GET("search")
     suspend fun search(
@@ -160,46 +169,51 @@ interface RssApi {
         @Query("categoryId") categoryId: String? = null,
         @Query("limit") limit: Int? = 20,
         @Query("cursor") cursor: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiListResponse<ArticleListItem>
 
     @GET("preferences")
-    suspend fun preferences(): ApiEnvelope<UserPreferences>
+    suspend fun preferences(@Tag session: ApiSession? = null): ApiEnvelope<UserPreferences>
 
     @PATCH("preferences")
-    suspend fun updatePreferences(@Body request: UpdatePreferencesRequest): ApiEnvelope<UserPreferences>
+    suspend fun updatePreferences(@Body request: UpdatePreferencesRequest, @Tag session: ApiSession? = null): ApiEnvelope<UserPreferences>
 
     @GET("stats")
-    suspend fun stats(): ApiEnvelope<StatsResponse>
+    suspend fun stats(@Tag session: ApiSession? = null): ApiEnvelope<StatsResponse>
 
     @POST("analytics/events")
     suspend fun recordProductAnalyticsEvents(
         @Body request: RecordProductAnalyticsEventsRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<RecordProductAnalyticsEventsResponse>
 
     @GET("admin/settings")
-    suspend fun adminSettings(): ApiEnvelope<AppSettingsResponse>
+    suspend fun adminSettings(@Tag session: ApiSession? = null): ApiEnvelope<AppSettingsResponse>
 
     @PATCH("admin/settings")
-    suspend fun updateAdminSettings(@Body request: UpdateAppSettingsRequest): ApiEnvelope<AppSettingsResponse>
+    suspend fun updateAdminSettings(@Body request: UpdateAppSettingsRequest, @Tag session: ApiSession? = null): ApiEnvelope<AppSettingsResponse>
 
     @GET("admin/users")
     suspend fun adminUsers(
         @Query("limit") limit: Int = 100,
         @Query("cursor") cursor: String? = null,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<AdminUsersResponse>
 
     @POST("admin/users")
-    suspend fun adminCreateUser(@Body request: AdminCreateUserRequest): ApiEnvelope<User>
+    suspend fun adminCreateUser(@Body request: AdminCreateUserRequest, @Tag session: ApiSession? = null): ApiEnvelope<User>
 
     @PATCH("admin/users/{id}")
     suspend fun adminUpdateUser(
         @Path("id") id: String,
         @Body request: AdminUpdateUserRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<User>
 
     @POST("admin/users/{id}/reset-password")
     suspend fun adminResetPassword(
         @Path("id") id: String,
         @Body request: AdminResetPasswordRequest,
+        @Tag session: ApiSession? = null,
     ): ApiEnvelope<User>
 }

@@ -1,6 +1,6 @@
 package com.selffeed.android.data.repository
 
-import com.selffeed.android.BuildConfig
+import com.selffeed.android.data.ApiSession
 import com.selffeed.android.network.apiEndpointUrl
 import com.selffeed.android.network.ReadStateEventPayload
 import com.selffeed.android.network.ReadStateSyncEvent
@@ -11,7 +11,6 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -28,21 +27,15 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 class ReadStateStreamClient(
     okHttpClient: OkHttpClient,
     moshi: Moshi,
     private val runtime: RepositoryRuntime,
-    private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
 ) {
-    private val sseLastEventId = AtomicReference<String?>(null)
     private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
-
-    // Heartbeat tracking: timestamp of the last received event
-    @Volatile
-    private var lastEventTimestampMs: Long = 0L
 
     /**
      * Reuses the authenticated app client while configuring timeouts for SSE streams.
@@ -57,26 +50,14 @@ class ReadStateStreamClient(
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .callTimeout(0, TimeUnit.MILLISECONDS)
-        .addInterceptor { chain ->
-            val original = chain.request()
-            val builder = original.newBuilder()
-            val lastId = sseLastEventId.get()
-            if (!lastId.isNullOrBlank()) {
-                builder.header("Last-Event-ID", lastId)
-            }
-            chain.proceed(builder.build())
-        }
         .build()
 
-    fun events(isLoggedIn: () -> Boolean): Flow<ReadStateSyncEvent> = flow {
+    fun events(session: ApiSession, isLoggedIn: () -> Boolean): Flow<ReadStateSyncEvent> = flow {
         var attempt = 0
         while (coroutineContext.isActive && isLoggedIn()) {
             try {
-                eventsOnce().collect { event ->
+                eventsOnce(session).collect { event ->
                     attempt = 0
-                    if (event !is RealtimeConnectedEvent && event.eventId.isNotBlank()) {
-                        sseLastEventId.set(event.eventId)
-                    }
                     emit(event)
                 }
             } catch (e: CancellationException) {
@@ -91,12 +72,12 @@ class ReadStateStreamClient(
         }
     }
 
-    private fun eventsOnce(): Flow<ReadStateSyncEvent> = callbackFlow stream@ {
-        // Reset heartbeat tracking for a new connection
-        lastEventTimestampMs = System.currentTimeMillis()
+    private fun eventsOnce(session: ApiSession): Flow<ReadStateSyncEvent> = callbackFlow stream@ {
+        val lastEventTimestampMs = AtomicLong(System.currentTimeMillis())
 
         val request = Request.Builder()
-            .url(apiEndpointUrl(apiBaseUrl(), "events/read-state"))
+            .url(apiEndpointUrl(session.apiBaseUrl, "events/read-state"))
+            .tag(ApiSession::class.java, session)
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
             .build()
@@ -106,7 +87,7 @@ class ReadStateStreamClient(
         val heartbeatJob = launch {
             while (isActive) {
                 delay(HEARTBEAT_CHECK_INTERVAL_MS)
-                val elapsed = System.currentTimeMillis() - lastEventTimestampMs
+                val elapsed = System.currentTimeMillis() - lastEventTimestampMs.get()
                 if (elapsed > HEARTBEAT_TIMEOUT_MS) {
                     runtime.debugLog("Read-state stream heartbeat timeout after ${elapsed / 1000}s - closing connection")
                     call.cancel()
@@ -131,7 +112,7 @@ class ReadStateStreamClient(
                             this@stream.close(IOException("Read-state stream failed with HTTP ${response.code}"))
                             return
                         }
-                        lastEventTimestampMs = System.currentTimeMillis()
+                        lastEventTimestampMs.set(System.currentTimeMillis())
                         this@stream.trySend(RealtimeConnectedEvent())
 
                         val parser = SseEventParser()
@@ -139,15 +120,15 @@ class ReadStateStreamClient(
                             val source = response.body.source()
                             while (!call.isCanceled()) {
                                 val line = source.readUtf8Line() ?: break
-                                lastEventTimestampMs = System.currentTimeMillis()
+                                lastEventTimestampMs.set(System.currentTimeMillis())
                                 parser.pushLine(line)
                                     ?.toReadStateEvent(readStateEventAdapter)
-                                    ?.also { lastEventTimestampMs = System.currentTimeMillis() }
+                                    ?.also { lastEventTimestampMs.set(System.currentTimeMillis()) }
                                     ?.let { this@stream.trySend(it) }
                             }
                             parser.flush()
                                 ?.toReadStateEvent(readStateEventAdapter)
-                                ?.also { lastEventTimestampMs = System.currentTimeMillis() }
+                                ?.also { lastEventTimestampMs.set(System.currentTimeMillis()) }
                                 ?.let { this@stream.trySend(it) }
                             this@stream.close()
                         } catch (e: IOException) {
