@@ -149,12 +149,10 @@ private fun AuthenticatedAppRoute(
 
     SelfFeedTheme(darkTheme = darkTheme) {
         ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
-        val latestFeedsState = rememberUpdatedState(feedsState)
         val contentRefreshRequests = remember { Channel<Unit>(Channel.CONFLATED) }
         val workflowCoordinator = remember { AppWorkflowCoordinator() }
         val workflowSink = object : AppWorkflowSink {
             override fun refreshAuthenticatedSession() {
-                articlesViewModel.clearSessionReadStateMemory()
                 settingsViewModel.loadPreferences()
                 settingsViewModel.loadAuthSessions()
                 if (authState.user?.role == "admin") {
@@ -181,20 +179,8 @@ private fun AuthenticatedAppRoute(
                 articlesViewModel.refreshArticles()
             }
 
-            override fun applyArticleReadState(articleId: String, read: Boolean) {
-                searchViewModel.applyArticleReadState(articleId, read)
-            }
-
-            override fun applyArticleSavedState(articleId: String, saved: Boolean) {
-                searchViewModel.updateSavedState(articleId, saved)
-            }
-
-            override fun applySearchScopeMarkedRead(feedIds: Set<String>) {
-                searchViewModel.applyScopeMarkedRead(feedIds)
-            }
-
-            override fun applyAllSearchMarkedRead() {
-                searchViewModel.applyAllMarkedRead()
+            override fun refreshArticleState() {
+                contentRefreshRequests.trySend(Unit)
             }
 
             override fun refreshArticleContent() {
@@ -243,6 +229,10 @@ private fun AuthenticatedAppRoute(
 
                 null -> Unit
             }
+        }
+
+        LaunchedEffect(searchState.results) {
+            articlesViewModel.updateSearchArticleIds(searchState.results.map { it.id }.toSet())
         }
 
         ForegroundWorkEffect(accountOwnerId) {
@@ -306,7 +296,6 @@ private fun AuthenticatedAppRoute(
             articlesViewModel.events.collect { event ->
                 workflowCoordinator.onArticleEvent(
                     event = event,
-                    latestFeedsState = latestFeedsState.value,
                     sink = workflowSink,
                 )
             }
@@ -335,7 +324,6 @@ private fun AuthenticatedAppRoute(
             pendingArticleChanges = articlesViewModel.pendingArticleChanges,
             observeOfflineText = remember(articlesViewModel) { articlesViewModel::observeArticleTextAvailability },
             onRetryPendingChanges = articlesViewModel::retryPendingArticleChanges,
-            readStateOverrides = articlesViewModel.readStateOverrides,
             actions = SelfFeedAppActions(
                 onAuthModeChange = authViewModel::setAuthMode,
                 onLogin = authViewModel::login,
@@ -429,12 +417,7 @@ private fun AuthenticatedAppRoute(
                     appViewModel.closeReader()
                 },
                 onToggleRead = articlesViewModel::markRead,
-                onToggleSaved = { articleId, saved ->
-                    articlesViewModel.setSaved(articleId, saved) {
-                        searchViewModel.updateSavedState(articleId, !saved)
-                    }
-                    searchViewModel.updateSavedState(articleId, saved)
-                },
+                onToggleSaved = { articleId, saved -> articlesViewModel.setSaved(articleId, saved) },
                 onMarkAllRead = articlesViewModel::markAllRead,
                 onArticleSnapshot = articlesViewModel::updateArticleQueueSnapshot,
                 onVisibleArticles = articlesViewModel::warmVisibleArticles,

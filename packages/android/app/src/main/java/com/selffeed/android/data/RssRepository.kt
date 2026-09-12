@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.ArticleMutationReceipt
 import com.selffeed.android.data.repository.LocalArticleState
 import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.repository.AuthenticatedSession
@@ -523,16 +524,11 @@ class RssRepository @Inject constructor(
     @OptIn(ExperimentalPagingApi::class)
     override fun articlePagingData(
         query: ArticlePageQuery,
-        readStateOverrides: () -> Map<String, Boolean>,
     ): Flow<PagingData<ArticleListItem>> {
         val queryKey = query.remoteKey()
         val expected = sessionStore.loadedSession()
         return flow {
             account.withSession(expected) { session ->
-                // Snapshot durable overlays once per explicit query generation.
-                // Subsequent read receipts are rendered by the ViewModel's live
-                // override state and cannot structurally invalidate this Pager.
-                val durableReadStates = account.commit(session) { localStore.readArticleReadOverrides() }
                 emitAll(
                     Pager(
                         config = PagingConfig(
@@ -574,12 +570,7 @@ class RssRepository @Inject constructor(
                             if (query.savedOnly) localStore.savedArticlePagingSource(session.ownerId)
                             else localStore.articlePagingSource(queryKey, session.ownerId)
                         },
-                    ).flow.map { pagingData ->
-                        val readStates = durableReadStates + readStateOverrides()
-                        pagingData.map { article ->
-                            readStates[article.id]?.let { article.copy(isRead = it) } ?: article
-                        }
-                    },
+                    ).flow,
                 )
             }
         }
@@ -826,29 +817,26 @@ class RssRepository @Inject constructor(
     suspend fun enrichArticle(articleId: String): AppResult<EnrichArticleResponse> =
         enrichArticle(articleId, invalidateCaches = true)
 
-    /** Returns after durable intent and scheduling; transport belongs to the worker. */
+    /** Returns the committed local choice; delivery and its transport IDs belong to the worker. */
     override suspend fun markRead(articleId: String, read: Boolean, source: String) = safeCall { session ->
-        val key = "article:$articleId"
         withContext(NonCancellable) {
-            articleStateProjectionMutex.withLock {
+            val receipt = articleStateProjectionMutex.withLock {
                 account.commit(session) {
-                    localStore.queueReadStateMutation(articleId, read, source)
-                    // Optimistic write — visible to the reader screen and the next
-                    // list query before the round-trip completes.
+                    val pending = localStore.queueReadStateMutation(articleId, read, source)
+                    val key = "article:$articleId"
                     runtime.getCached<ArticleDetail>(key)?.let { previous ->
                         runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, previous.copy(isRead = read))
                     }
+                    ArticleMutationReceipt(pending.mutationId)
                 }
             }
-            // The durable Room write is the success boundary. WorkManager may be
-            // temporarily unavailable during process initialization, so scheduling
-            // must never turn an already-persisted user action into an error.
+            // Scheduling failure cannot turn a committed choice into an error.
             scheduleArticleStateDelivery()
+            receipt
         }
-        read
     }
 
-    suspend fun markRead(articleId: String, read: Boolean): AppResult<Boolean> =
+    suspend fun markRead(articleId: String, read: Boolean): AppResult<ArticleMutationReceipt> =
         markRead(articleId, read, source = "manual")
 
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall { session ->
@@ -872,28 +860,31 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall { session ->
-        val key = "article:$articleId"
-        val previous = withContext(NonCancellable) {
-            val cached = articleStateProjectionMutex.withLock {
+        val (receipt, previous) = withContext(NonCancellable) {
+            val committed = articleStateProjectionMutex.withLock {
                 account.commit(session) {
-                    localStore.queueSavedStateMutation(articleId, saved)
-                    runtime.getCached<ArticleDetail>(key)?.also { cached ->
-                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = saved))
+                    val pending = localStore.queueSavedStateMutation(articleId, saved)
+                    val key = "article:$articleId"
+                    val cached = runtime.getCached<ArticleDetail>(key)?.also {
+                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, it.copy(isSaved = saved))
                     }
+                    runtime.invalidateByPrefix("articles")
+                    runtime.invalidateByPrefix("search")
+                    ArticleMutationReceipt(pending.mutationId) to cached
                 }
             }
-            account.commit(session) {
-                runtime.invalidateByPrefix("articles")
-                runtime.invalidateByPrefix("search")
-            }
             scheduleArticleStateDelivery()
-            cached
+            committed
         }
         if (saved) {
             if (previous == null) backgroundRefreshArticle(articleId, cacheImages = true, session = session)
-            else cacheArticleImages(previous.copy(isSaved = true))
+            else refreshScope.launch {
+                safeReadCall(session) {
+                    account.commit(session) { cacheArticleImages(previous.copy(isSaved = true)) }
+                }
+            }
         }
-        saved
+        receipt
     }
 
     suspend fun markAllRead() = markAllRead(feedId = null, categoryId = null)
@@ -1286,12 +1277,17 @@ class RssRepository @Inject constructor(
         }
     }
 
-    private suspend fun scheduleArticleStateDelivery() {
-        try {
-            ArticleStateSyncWorker.kickOnce(imageRequestContext)
-        } catch (error: Exception) {
-            if (error is CancellationException) throw error
-            runtime.debugLog("Outbox scheduling unavailable; durable intent will be recovered on startup")
+    private fun scheduleArticleStateDelivery() {
+        // The application owns scheduling after Room accepts the edit. A slow
+        // WorkManager query must not hold the caller's durable receipt.
+        refreshScope.launch {
+            try {
+                ArticleStateSyncWorker.kickOnce(imageRequestContext)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                runtime.debugLog("Outbox scheduling unavailable; durable intent will be recovered on startup")
+            }
         }
     }
 

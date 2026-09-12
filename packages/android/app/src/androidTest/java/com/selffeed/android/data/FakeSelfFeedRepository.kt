@@ -1,5 +1,9 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.ArticleMutationReceipt
+import com.selffeed.android.data.repository.LocalArticleState
+import kotlinx.coroutines.flow.map
+
 import com.selffeed.android.data.repository.AccountAccess
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.BulkReadReconciliation
@@ -40,11 +44,21 @@ import javax.inject.Singleton
 class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override fun countRefreshRequests(): Flow<Unit> = flowOf(Unit)
     override fun libraryCounts(): Flow<com.selffeed.android.data.repository.LibraryCounts> = emptyFlow()
-    // This fixture does not yet drive Room observation; state integration tests use the real store.
-    override fun observeArticleStates(articleIds: Set<String>): Flow<AppResult<Map<String, com.selffeed.android.data.repository.LocalArticleState>>> = emptyFlow()
-    override suspend fun refreshArticleStates(articleIds: Set<String>) = AppResult.Success(Unit)
-    override suspend fun localArticleState(articleId: String) = AppResult.Success(
-        com.selffeed.android.data.repository.LocalArticleState(articleReadStates[articleId], articleSavedStates[articleId]),
+    private val stateVersion = MutableStateFlow(0L)
+    private val readReceipts = mutableMapOf<String, String>()
+    private val savedReceipts = mutableMapOf<String, String>()
+    override fun observeArticleStates(articleIds: Set<String>): Flow<AppResult<Map<String, LocalArticleState>>> = stateVersion.map {
+        AppResult.Success(articleIds.associateWith(::articleState))
+    }
+    override suspend fun refreshArticleStates(articleIds: Set<String>): AppResult<Unit> {
+        articleStateRefreshRequests++
+        return AppResult.Success(Unit)
+    }
+    override suspend fun localArticleState(articleId: String) = AppResult.Success(articleState(articleId))
+    private fun articleState(id: String): LocalArticleState = LocalArticleState(
+        articleReadStates[id] ?: fakeArticles.firstOrNull { it.id == id }?.isRead,
+        articleSavedStates[id] ?: fakeArticles.firstOrNull { it.id == id }?.isSaved,
+        lastReadMutationId = readReceipts[id], lastSavedMutationId = savedReceipts[id],
     )
     var detailGate: ReviewRequestGate<String, AppResult<ArticleDetail>>? = null
     var readGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
@@ -68,6 +82,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     var categoryRequests = 0
         private set
     var feedRequests = 0
+        private set
+    var articleStateRefreshRequests = 0
         private set
     var articlePagingRequests = 0
         private set
@@ -151,10 +167,14 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         articleDetailDelayMs = 0L
         articleReadStates.clear()
         articleSavedStates.clear()
+        readReceipts.clear()
+        savedReceipts.clear()
+        stateVersion.value++
         articleDetailOverrides.clear()
         categoryRequests = 0
         feedRequests = 0
         articlePagingRequests = 0
+        articleStateRefreshRequests = 0
         statsRequests = 0
         preferenceRequests = 0
         readStateInvalidations = 0
@@ -340,13 +360,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
 
     override fun articlePagingData(
         query: ArticlePageQuery,
-        readStateOverrides: () -> Map<String, Boolean>,
     ): Flow<PagingData<ArticleListItem>> {
         articlePagingRequests++
-        val overrides = readStateOverrides()
-        val articles = currentArticles(query.unreadOnly, query.savedOnly).map { article ->
-            overrides[article.id]?.let { article.copy(isRead = it) } ?: article
-        }
+        val articles = currentArticles(query.unreadOnly, query.savedOnly)
         return flowOf(PagingData.from(articles))
     }
 
@@ -377,28 +393,32 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     ): AppResult<EnrichArticleResponse> =
         AppResult.Success(EnrichArticleResponse(success = true))
 
-    override suspend fun markRead(
-        articleId: String,
-        read: Boolean,
-        source: String
-    ): AppResult<Boolean> {
-        readGate?.let { gate ->
-            val result = gate.await(articleId to read)
-            if (result is AppResult.Success) articleReadStates[articleId] = result.data
-            return result
+    override suspend fun markRead(articleId: String, read: Boolean, source: String): AppResult<ArticleMutationReceipt> {
+        val result = readGate?.await(articleId to read) ?: AppResult.Success(read)
+        return when (result) {
+            is AppResult.Error -> result
+            is AppResult.Success -> {
+                val receipt = ArticleMutationReceipt(java.util.UUID.randomUUID().toString())
+                articleReadStates[articleId] = result.data
+                readReceipts[articleId] = receipt.mutationId
+                stateVersion.value++
+                AppResult.Success(receipt)
+            }
         }
-        articleReadStates[articleId] = read
-        return AppResult.Success(read)
     }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> {
-        savedGate?.let { gate ->
-            val result = gate.await(articleId to saved)
-            if (result is AppResult.Success) articleSavedStates[articleId] = result.data
-            return result
+    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt> {
+        val result = savedGate?.await(articleId to saved) ?: AppResult.Success(saved)
+        return when (result) {
+            is AppResult.Error -> result
+            is AppResult.Success -> {
+                val receipt = ArticleMutationReceipt(java.util.UUID.randomUUID().toString())
+                articleSavedStates[articleId] = result.data
+                savedReceipts[articleId] = receipt.mutationId
+                stateVersion.value++
+                AppResult.Success(receipt)
+            }
         }
-        articleSavedStates[articleId] = saved
-        return AppResult.Success(saved)
     }
 
     override suspend fun markAllRead(
@@ -407,6 +427,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     ): AppResult<MarkAllReadResponse> {
         val unreadBefore = unreadCount()
         fakeArticles.forEach { articleReadStates[it.id] = true }
+        stateVersion.value++
         return AppResult.Success(
             MarkAllReadResponse(
                 markedCount = unreadBefore,
@@ -424,17 +445,20 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     override suspend fun invalidateArticleContentCaches(articleId: String?) = Unit
     override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean {
         articleReadStates[articleId] = read
+        stateVersion.value++
         return read
     }
 
     override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) {
         articleSavedStates[articleId] = saved
+        stateVersion.value++
     }
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation {
         fakeArticles
             .filter { feedIds.isEmpty() || it.feedId in feedIds }
             .forEach { articleReadStates[it.id] = true }
+        stateVersion.value++
         return BulkReadReconciliation()
     }
 

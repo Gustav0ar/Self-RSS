@@ -20,7 +20,8 @@ class ReviewRequestGateTest {
         assertEquals("article-1" to false, secondRequest.input)
         assertFalse(first.isCompleted)
         secondRequest.response.complete(AppResult.Success(false))
-        assertEquals(AppResult.Success(false), second.await())
+        val secondReceipt = (second.await() as AppResult.Success).data
+        assertEquals(secondReceipt.mutationId, (repository.localArticleState("article-1") as AppResult.Success).data.lastReadMutationId)
         assertFalse(first.isCompleted)
         firstRequest.response.complete(AppResult.Error("Rejected fixture change"))
         assertEquals(AppResult.Error("Rejected fixture change"), first.await())

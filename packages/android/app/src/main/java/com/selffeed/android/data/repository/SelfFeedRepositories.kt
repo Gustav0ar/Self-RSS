@@ -115,6 +115,9 @@ interface FeedRepository : LibraryCountsRepository {
     suspend fun exportOpml(): AppResult<String>
 }
 
+/** Identifies the durable local choice, independently of transport retries or observer timing. */
+data class ArticleMutationReceipt(val mutationId: String)
+
 data class SavedStateRejection(val articleId: String, val restoredSaved: Boolean?, val mutationId: String)
 data class ReadStateRejection(val articleId: String, val mutationId: String)
 
@@ -138,7 +141,6 @@ interface ArticleRepository {
     suspend fun retryPendingArticleChanges() = Unit
     fun articlePagingData(
         query: ArticlePageQuery,
-        readStateOverrides: () -> Map<String, Boolean> = { emptyMap() },
     ): Flow<PagingData<ArticleListItem>>
 
     suspend fun article(articleId: String, forceRefresh: Boolean = false): AppResult<ArticleDetail>
@@ -156,9 +158,9 @@ interface ArticleRepository {
         articleId: String,
         read: Boolean,
         source: String = "manual"
-    ): AppResult<Boolean>
+    ): AppResult<ArticleMutationReceipt>
 
-    suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean>
+    suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt>
     fun savedStateRejections(): Flow<SavedStateRejection> = emptyFlow()
     fun readStateRejections(): Flow<ReadStateRejection> = emptyFlow()
     suspend fun markAllRead(

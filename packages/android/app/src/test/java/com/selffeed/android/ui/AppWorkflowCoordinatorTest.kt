@@ -71,10 +71,7 @@ class AppWorkflowCoordinatorTest {
             syncRefreshes += 1
         }
 
-        override fun applyArticleReadState(articleId: String, read: Boolean) = Unit
-        override fun applyArticleSavedState(articleId: String, saved: Boolean) = Unit
-        override fun applySearchScopeMarkedRead(feedIds: Set<String>) = Unit
-        override fun applyAllSearchMarkedRead() = Unit
+        override fun refreshArticleState() = Unit
         override fun refreshArticleContent() = Unit
     }
 }

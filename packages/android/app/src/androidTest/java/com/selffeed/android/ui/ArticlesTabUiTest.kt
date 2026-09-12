@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasProgressBarRangeInfo
@@ -313,7 +314,10 @@ class ArticlesTabUiTest {
 
         composeRule.waitUntil(timeoutMillis = 5_000) { visibleArticleIds.get().isNotEmpty() }
         assertEquals("article-1", visibleArticleIds.get().first())
-        assertTrue(visibleArticleIds.get().size <= 4)
+        val displayedIds = articles.filter { article ->
+            composeRule.onNodeWithText(article.title).isDisplayed()
+        }.map { it.id }
+        assertEquals(displayedIds, visibleArticleIds.get())
     }
 
     @Test

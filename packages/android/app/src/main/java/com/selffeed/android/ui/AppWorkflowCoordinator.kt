@@ -38,9 +38,8 @@ class AppWorkflowCoordinator(
 
     fun onArticleEvent(
         event: ArticleFeatureEvent,
-        latestFeedsState: FeedsUiState,
         sink: AppWorkflowSink,
     ) {
-        articleEvents.handle(event, latestFeedsState, sink)
+        articleEvents.handle(event, sink)
     }
 }

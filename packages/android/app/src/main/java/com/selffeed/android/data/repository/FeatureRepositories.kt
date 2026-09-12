@@ -154,8 +154,7 @@ class ArticleRepositoryImpl @Inject constructor(
 
     override fun articlePagingData(
         query: ArticlePageQuery,
-        readStateOverrides: () -> Map<String, Boolean>,
-    ): Flow<PagingData<ArticleListItem>> = access.observe { delegate.articlePagingData(query, readStateOverrides) }
+    ): Flow<PagingData<ArticleListItem>> = access.observe { delegate.articlePagingData(query) }
 
     override suspend fun article(
         articleId: String,
@@ -188,10 +187,10 @@ class ArticleRepositoryImpl @Inject constructor(
         articleId: String,
         read: Boolean,
         source: String
-    ): AppResult<Boolean> =
+    ): AppResult<ArticleMutationReceipt> =
         access.withAccount { delegate.markRead(articleId, read, source) }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<Boolean> =
+    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt> =
         access.withAccount { delegate.setSaved(articleId, saved) }
 
     override fun savedStateRejections(): Flow<SavedStateRejection> = access.observe { delegate.savedStateRejections() }
