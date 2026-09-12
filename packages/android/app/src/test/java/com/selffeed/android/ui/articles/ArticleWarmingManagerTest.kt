@@ -14,6 +14,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -129,6 +130,53 @@ class ArticleWarmingManagerTest {
         assertTrue("https://example.com/hero.jpg" in requestedUrls)
         assertTrue("https://example.com/body.jpg" in requestedUrls)
         assertTrue("https://example.com/video.mp4" !in requestedUrls)
+    }
+
+    @Test
+    fun `cancelled warming cannot publish late content to a new reader session`() = runTest {
+        val repository = mockk<SelfFeedRepository>()
+        every { repository.cachedArticleDetail(any()) } returns null
+        every { repository.prefetchHeroImages(any()) } just Runs
+        val response = CompletableDeferred<AppResult<ArticleDetail>>()
+        coEvery { repository.prefetchArticle("a1") } coAnswers {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { response.await() }
+        }
+        val warmed = mutableListOf<ArticleDetail>()
+        val manager = ArticleWarmingManager(repository)
+        manager.setScope(this)
+        manager.setOnArticlesWarmed(warmed::addAll)
+        manager.warmVisibleArticles(listOf(item("a1")))
+        runCurrent()
+
+        manager.cancelWarming()
+        response.complete(AppResult.Success(detail("a1")))
+        advanceUntilIdle()
+
+        assertTrue(warmed.isEmpty())
+    }
+
+    @Test
+    fun `cancelling several immediate warming jobs releases every job without mutating iteration`() = runTest {
+        val repository = mockk<SelfFeedRepository>()
+        every { repository.cachedArticleDetail(any()) } returns null
+        every { repository.prefetchHeroImages(any()) } just Runs
+        var cancelled = 0
+        coEvery { repository.prefetchArticle(any()) } coAnswers {
+            try {
+                kotlinx.coroutines.awaitCancellation()
+            } finally {
+                cancelled++
+            }
+        }
+        val manager = ArticleWarmingManager(repository)
+        manager.setScope(kotlinx.coroutines.CoroutineScope(
+            backgroundScope.coroutineContext + kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler),
+        ))
+        manager.warmVisibleArticles(listOf(item("a1"), item("a2"), item("a3")))
+
+        manager.cancelWarming()
+
+        assertEquals(3, cancelled)
     }
 
     private fun item(id: String) = ArticleListItem(

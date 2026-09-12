@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.util.concurrent.atomic.AtomicLong
@@ -97,6 +98,7 @@ class ArticlesViewModel @Inject constructor(
         .cachedIn(viewModelScope)
 
     private val openArticleSequence = AtomicLong(0)
+    private var openArticleJob: Job? = null
     private var articlePagingGeneration = 0L
 
     init {
@@ -182,7 +184,6 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun clearReadingSession() {
-        openArticleSequence.incrementAndGet()
         closeArticle()
         readingSessionKey = null
         readingSessionRestored = false
@@ -213,6 +214,7 @@ class ArticlesViewModel @Inject constructor(
     fun setScope(feedId: String?, categoryId: String?) {
         val current = _state.value
         if (current.selectedFeedId == feedId && current.selectedCategoryId == categoryId) return
+        cancelReaderWork()
         _state.update {
             it.copy(
                 selectedFeedId = feedId,
@@ -256,6 +258,7 @@ class ArticlesViewModel @Inject constructor(
 
     fun setSavedOnly(savedOnly: Boolean) {
         if (_state.value.savedOnly == savedOnly) return
+        cancelReaderWork()
         _state.update {
             it.copy(
                 selectedFeedId = if (savedOnly) null else it.selectedFeedId,
@@ -319,6 +322,8 @@ class ArticlesViewModel @Inject constructor(
 
     fun openArticle(id: String, forceRefresh: Boolean = false) {
         val openRequestId = openArticleSequence.incrementAndGet()
+        openArticleJob?.cancel()
+        enrichmentManager.cancelEnrichment()
         val current = _state.value
         val activeQueue = current.readerQueue.takeIf { queue -> queue.any { it.id == id } }
             ?: current.items
@@ -346,18 +351,15 @@ class ArticlesViewModel @Inject constructor(
             ) {
                 markReadAutomatically(id)
             }
-            viewModelScope.launch {
-                yield()
-                articleWarmingManager.warmAdjacentArticles(id, activeQueue)
-            }
         }
 
-        viewModelScope.launch {
+        openArticleJob = viewModelScope.launch {
             // The list row already supplied an optimistic reader snapshot.
             // Let Compose commit the navigation transition before starting
             // cache/database/network work for the canonical detail.
             yield()
             if (openRequestId != openArticleSequence.get()) return@launch
+            if (optimisticArticle != null) articleWarmingManager.warmAdjacentArticles(id, activeQueue)
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
@@ -425,8 +427,7 @@ class ArticlesViewModel @Inject constructor(
     }
 
     fun closeArticle() {
-        enrichmentManager.cancelEnrichment()
-        articleWarmingManager.cancelWarming()
+        cancelReaderWork()
         _state.update {
             it.copy(
                 selectedArticle = null,
@@ -436,9 +437,17 @@ class ArticlesViewModel @Inject constructor(
                 visibleReaderArticleId = null,
             )
         }
+        saveReadingSession()
+    }
+
+    private fun cancelReaderWork() {
+        openArticleSequence.incrementAndGet()
+        openArticleJob?.cancel()
+        openArticleJob = null
+        enrichmentManager.cancelEnrichment()
+        articleWarmingManager.cancelWarming()
         enrichmentManager.updateSelectedArticle(null)
         readStateManager.updateSelectedArticle(null)
-        saveReadingSession()
     }
 
     fun openAdjacentArticle(direction: Int) {
@@ -488,13 +497,16 @@ class ArticlesViewModel @Inject constructor(
             onOptimisticUpdate = { id, fId, isRead ->
                 applyArticleReadStateOptimistic(id, isRead)
             },
-            onError = { id, prevState, prevArticle ->
+            onError = { id, prevState ->
                 _state.update { state ->
                     state.copy(
                         items = prevState?.let { previous ->
                             state.items.map { if (it.id == id) it.copy(isRead = previous) else it }
                         } ?: state.items,
-                        selectedArticle = prevArticle ?: state.selectedArticle,
+                        selectedArticle = state.selectedArticle?.let { selected ->
+                            if (selected.id == id && prevState != null) selected.copy(isRead = prevState)
+                            else selected
+                        },
                         readerDetails = if (prevState == null) {
                             state.readerDetails
                         } else {
@@ -571,8 +583,7 @@ class ArticlesViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        enrichmentManager.cancelEnrichment()
-        articleWarmingManager.cancelWarming()
+        cancelReaderWork()
         articleWarmingManager.setOnArticlesWarmed {}
         readStateManager.stopReadStateSync()
         super.onCleared()

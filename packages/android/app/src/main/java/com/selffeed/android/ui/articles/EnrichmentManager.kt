@@ -6,16 +6,15 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.EnrichArticleResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Manages article enrichment (fetching full content from canonical URLs).
  * Coordinates enrichment requests, refresh delays, and cache invalidation.
  */
-@Singleton
 class EnrichmentManager @Inject constructor(
     private val repository: ArticleRepository,
 ) {
@@ -49,6 +48,7 @@ class EnrichmentManager @Inject constructor(
                     delay(ARTICLE_ENRICH_REFRESH_DELAY_MS)
                     when (val refreshed = repository.article(article.id, forceRefresh = true)) {
                         is AppResult.Success -> {
+                            coroutineContext.ensureActive()
                             if (selectedArticle?.id == article.id) {
                                 selectedArticle = refreshed.data
                                 onArticleRefreshed?.invoke(refreshed.data)

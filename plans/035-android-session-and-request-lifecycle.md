@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: TODO
+- Status: IN PROGRESS; reader request ownership implemented, account and foreground boundaries pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -159,7 +159,7 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 
 ## Test and acceptance contract
 
-- [ ] Delayed article success/failure cannot reopen a closed reader or overwrite a newly selected scope.
+- [x] Delayed article success/failure cannot reopen a closed reader or overwrite a newly selected scope.
 - [ ] Old-account responses cannot publish state, credentials, replay cursor, or Room/cache entries after the new session starts.
 - [ ] Feeds, search, settings, admin data, selected article, and account-scoped work reset on logout/server change.
 - [ ] Foreground subscriptions/polling stop while hidden and resume once; durable queued writes remain intact during ordinary backgrounding.
@@ -184,8 +184,11 @@ Every new account-scoped repository write must join the same owner. Treat server
 
 ## Execution notes
 
-- Reconciled commit: pending
-- Reproduction and checks: pending
-- Device/performance evidence: pending where applicable
+- Reconciled commit: `e812051`; existing per-call credential binding from PR #41 is retained. Reader request ownership is a separate first review slice of this plan.
+- Reproduction: `/tmp/android-session-reader-red.log` reproduced three delayed detail completion failures. Independent review then reproduced late automatic read rollback reopening Back/feed/next selections and immediate cancellation throwing `ConcurrentModificationException` in `/tmp/android-session-reader-review-red.log`.
+- Implementation: cancel and invalidate the detail job on Back, scope/Saved changes and clearing; keep warming initiation in the same job; reject cancelled warming/enrichment callbacks; cancel a snapshot of warming jobs. Read rollback changes only the matching article's read field and preserves current navigation/content. Reader managers are ViewModel-owned Hilt dependencies, eliminating application singleton references to ViewModel scopes and callbacks. ResumeRefreshObserver reads its latest callback.
+- Checks: 432 JVM tests pass in `/tmp/android-session-reader-final-build.log`; isolated APK compilation passes. Device/lint evidence recorded in the progress tracker after completion.
+- Device evidence for reader slice: all four selected tests pass in `/tmp/android-session-reader-device-final.log` on dedicated API 36.1/WebView 134.0.6998.135. Lint passes in `/tmp/android-session-reader-lint-isolated.log` using a fresh process; earlier reused Kotlin analysis worker crashed. Foreground/account device coverage and physical performance remain pending.
 - Design selection: pending where applicable
-- Remaining limitations: pending
+- Remaining limitations: repository logical request ownership, atomic Room/cache commit fencing, durable account ownership, all-feature logout reset and foreground polling are still pending. No zero-leak or physical performance claim is made by this slice.
+- Account-storage dependency found during implementation: current `LocalStore.clearAll()` deletes pending user mutations. The account boundary must first add an explicit Room migration preserving old queues under their previous durable owner and prevent ordinary drains from reading those archived rows. Add `data/local/` and its migration tests to this plan's allowed scope for that prerequisite. Reconcile separate DataStore/Room commits after process death before cache reads or draining. This remains an implementation requirement, not a completed feature.
