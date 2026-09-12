@@ -205,12 +205,12 @@ class ArticleMediaLifecycleUiTest {
 
     private fun tapDocumentButton(view: WebView, action: String, fullscreen: Boolean = false) {
         val id = if (fullscreen) "fixture-fullscreen" else "fixture-play"
-        val left = if (fullscreen) 170 else 0
+        val position = if (fullscreen) "right:0" else "left:0"
         javascript(view, """
             var button = document.getElementById('$id') || document.createElement('button');
             button.id = '$id';
             button.textContent = 'Local media action';
-            button.style.cssText = 'position:fixed;top:0;left:${left}px;width:160px;height:48px;z-index:2147483647';
+            button.style.cssText = 'position:fixed;top:0;$position;width:40%;height:48px;box-sizing:border-box;padding:0;z-index:2147483647';
             window.fixtureGesture = { clicked: false, completed: false, error: null };
             button.onclick = function() {
                 window.fixtureGesture.clicked = true;
@@ -230,7 +230,11 @@ class ArticleMediaLifecycleUiTest {
             })
         }
         check(painted.await(5, TimeUnit.SECONDS)) { "Media action was not drawn by Chromium" }
-        val point = JSONArray(javascript(view, "(function(){var r=document.getElementById('$id').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()"))
+        val bounds = JSONArray(javascript(view, "(function(){var r=document.getElementById('$id').getBoundingClientRect();return [r.left,r.top,r.right,r.bottom,innerWidth,innerHeight]})()"))
+        assertTrue("Media action overflows the viewport: $bounds", bounds.getDouble(0) >= 0 && bounds.getDouble(1) >= 0 &&
+            bounds.getDouble(2) <= bounds.getDouble(4) && bounds.getDouble(3) <= bounds.getDouble(5))
+        val point = JSONArray().put((bounds.getDouble(0) + bounds.getDouble(2)) / 2)
+            .put((bounds.getDouble(1) + bounds.getDouble(3)) / 2)
         assertEquals("Media gesture target is obscured", "\"$id\"", javascript(
             view, "document.elementFromPoint(${point.getDouble(0)}, ${point.getDouble(1)}).id",
         ))
