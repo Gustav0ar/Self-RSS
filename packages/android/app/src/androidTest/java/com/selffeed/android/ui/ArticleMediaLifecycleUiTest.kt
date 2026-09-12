@@ -256,10 +256,13 @@ class ArticleMediaLifecycleUiTest {
                 check(gesture.isNull("error")) { "Media action rejected: ${gesture.getString("error")}" }
                 gesture.getBoolean("completed")
             }
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
+            // ComposeTimeoutException is an AssertionError, so Exception misses its diagnostics.
             throw AssertionError(
                 "Media gesture $id: ${javascript(view, "window.fixtureGesture")}, " +
-                    "released=${(view as? ReaderWebView)?.released}, activity=${composeRule.activity}",
+                    "released=${(view as? ReaderWebView)?.released}, " +
+                    "view=${composeRule.runOnIdle { "${view.width}x${view.height}, shown=${view.isShown}, focused=${view.hasWindowFocus()}" }}, " +
+                    "bounds=$bounds, screenPoint=[$x,$y], activity=${composeRule.activity}",
                 failure,
             )
         }
