@@ -266,7 +266,9 @@ class RepositoryAccountOwnershipTest {
         val authLost = async(start = CoroutineStart.UNDISPATCHED) {
             repository.authEvents().first()
         }
-        val restore = async { repository.restoreSession() }
+        // Resume inline from Room while its transaction child is still finishing.
+        // The clear must publish auth loss before returning to this cancelled caller.
+        val restore = async(Dispatchers.Unconfined) { repository.restoreSession() }
         try {
             restore.join()
             assertTrue("The analytics request must exercise rejection", rejected.get())

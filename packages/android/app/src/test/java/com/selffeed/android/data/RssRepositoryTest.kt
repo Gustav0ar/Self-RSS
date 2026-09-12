@@ -40,6 +40,8 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.async
@@ -444,6 +446,7 @@ class RssRepositoryTest {
         val result = repository.markRead(articleId, true)
         assertTrue(result is AppResult.Success)
 
+        assertEquals(false, repository.flushPendingArticleStateMutations())
         val cachedAfter = repository.cachedArticleDetail(articleId)
         assertNotNull(cachedAfter)
         assertEquals(true, cachedAfter!!.isRead)
@@ -473,6 +476,7 @@ class RssRepositoryTest {
         val result = repository.markRead(articleId, true)
         assertTrue(result is AppResult.Success)
 
+        assertTrue(repository.flushPendingArticleStateMutations())
         assertEquals(true, repository.cachedArticleDetail(articleId)?.isRead)
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify {
@@ -504,9 +508,10 @@ class RssRepositoryTest {
             }
         }
 
-        val oldIntent = async { repository.markRead(articleId, true) }
+        assertEquals(AppResult.Success(true), repository.markRead(articleId, true))
+        val delivery = async { repository.flushPendingArticleStateMutations() }
         oldDeliveryStarted.await()
-        val newIntent = async(start = CoroutineStart.UNDISPATCHED) { repository.markRead(articleId, false) }
+        assertEquals(AppResult.Success(false), repository.markRead(articleId, false))
         withContext(Dispatchers.Default) {
             withTimeout(5_000) {
                 localStore.invalidations.first {
@@ -521,8 +526,7 @@ class RssRepositoryTest {
             assertEquals(false, (repository.article(articleId) as AppResult.Success).data.isRead)
         } finally {
             releaseNewDelivery.complete(Unit)
-            assertTrue(oldIntent.await() is AppResult.Success)
-            assertTrue(newIntent.await() is AppResult.Success)
+            assertTrue(delivery.await())
         }
     }
 
@@ -550,9 +554,10 @@ class RssRepositoryTest {
             }
         }
 
-        val oldIntent = async { repository.setSaved(articleId, true) }
+        assertEquals(AppResult.Success(true), repository.setSaved(articleId, true))
+        val delivery = async { repository.flushPendingArticleStateMutations() }
         oldDeliveryStarted.await()
-        val newIntent = async(start = CoroutineStart.UNDISPATCHED) { repository.setSaved(articleId, false) }
+        assertEquals(AppResult.Success(false), repository.setSaved(articleId, false))
         withContext(Dispatchers.Default) {
             withTimeout(5_000) {
                 localStore.invalidations.first {
@@ -567,8 +572,7 @@ class RssRepositoryTest {
             assertEquals(false, (repository.article(articleId) as AppResult.Success).data.isSaved)
         } finally {
             releaseNewDelivery.complete(Unit)
-            assertTrue(oldIntent.await() is AppResult.Success)
-            assertTrue(newIntent.await() is AppResult.Success)
+            assertTrue(delivery.await())
         }
     }
 
@@ -589,6 +593,7 @@ class RssRepositoryTest {
         val result = repository.markRead(articleId, true, source = "auto_open")
 
         assertTrue(result is AppResult.Success)
+        assertTrue(repository.flushPendingArticleStateMutations())
         coVerify {
             api.markRead(articleId, match { it.read && it.source == "auto_open" && it.mutationId != null }, session = any())
         }
@@ -689,7 +694,7 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `offline markRead queues mutation and next online read flushes it`() = runTest {
+    fun `offline markRead survives online reads until explicit delivery`() = runTest {
         val articleId = "article-pending"
         onlineState.value = false
         localStore.writeArticleRemotePage(
@@ -717,13 +722,16 @@ class RssRepositoryTest {
         val readResult = repository.categories()
 
         assertTrue(readResult is AppResult.Success)
+        assertEquals(1, localStore.readPendingReadStateMutations().size)
+        coVerify(exactly = 0) { api.markRead(any(), any(), session = any()) }
+        assertTrue(repository.flushPendingArticleStateMutations())
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }, session = any()) }
     }
 
     @Test
-    fun `reconnect invalidation flushes pending read state before clearing acknowledged overlays`() = runTest {
+    fun `reconnect invalidation preserves pending intent without delivering it`() = runTest {
         val articleId = "article-reconnect"
         localStore.queueReadStateMutation(articleId, read = true)
         coEvery {
@@ -734,6 +742,10 @@ class RssRepositoryTest {
 
         repository.invalidateReadStateCaches()
 
+        assertEquals(listOf(articleId), localStore.readPendingReadStateMutations().map { it.articleId })
+        assertEquals(mapOf(articleId to true), localStore.readArticleReadOverrides())
+        coVerify(exactly = 0) { api.markRead(any(), any(), session = any()) }
+        assertTrue(repository.flushPendingArticleStateMutations())
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }, session = any()) }
@@ -764,6 +776,22 @@ class RssRepositoryTest {
 
         assertEquals(false, flushed)
         assertEquals(articleId, localStore.readPendingReadStateMutations().single().articleId)
+    }
+
+    @Test
+    fun `confirmed outbox authentication rejection clears its account through normal handling`() = runTest {
+        every { sessionStore.getAccessToken() } returns "worker-token"
+        val owner = sessionStore.currentSession()
+        val mutation = localStore.queueReadStateMutation("rejected-owner", true)
+        coEvery { api.markRead(any(), any(), session = any()) } throws httpError(401, "rejected")
+        every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns true
+        val result = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository).doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        coVerify(exactly = 1) { sessionStore.clear() }
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        assertEquals(listOf(mutation), database.localStoreDao()
+            .readArchivedReadStateMutations(owner.ownerId).map { it.mutation })
     }
 
     @Test
@@ -1276,11 +1304,19 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `Room and memory article reads finish while queued delivery is blocked`() = runTest {
+    fun `cached subscriptions and articles return while queued delivery is blocked`() = runTest {
         val articleId = "cached-during-sync"
         val detail = sampleArticleDetail(articleId, isRead = false)
         every { sessionStore.getAccessToken() } returns "test-session"
         localStore.writeArticleDetail(detail)
+        val category = sampleCategory("cache-category")
+        val feed = sampleFeed("cache-feed")
+        localStore.writeCategories(listOf(category))
+        localStore.writeFeeds(listOf(feed))
+        coEvery { api.categories(any()) } returns ApiEnvelope(
+            com.selffeed.android.network.CategoryTreeResponse(listOf(category), totalUnread = 0),
+        )
+        coEvery { api.feeds(any(), any()) } returns ApiEnvelope(listOf(feed))
         localStore.queueReadStateMutation(articleId, read = true)
         localStore.queueSavedStateMutation(articleId, saved = true)
         val deliveryStarted = CompletableDeferred<Unit>()
@@ -1305,6 +1341,8 @@ class RssRepositoryTest {
                     assertEquals(expected, repository.article(articleId))
                     assertEquals(expected, repository.article(articleId))
                     assertEquals(expected, repository.prefetchArticle(articleId))
+                    assertEquals(AppResult.Success(listOf(category)), repository.categories())
+                    assertEquals(AppResult.Success(listOf(feed)), repository.feeds(null))
                 }
             }
             assertEquals(articleId, localStore.readPendingReadStateMutations().single().articleId)
@@ -1317,6 +1355,59 @@ class RssRepositoryTest {
         assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
         coVerify(exactly = 1) { api.markRead(articleId, any(), session = any()) }
         coVerify(exactly = 1) { api.setSaved(articleId, any(), session = any()) }
+    }
+
+    @Test
+    fun `read and saved actions return durable intent without delivering on the caller`() = runTest {
+        val articleId = "local-intent"
+        localStore.writeArticleDetail(sampleArticleDetail(articleId, isRead = false))
+        val readTransport = CompletableDeferred<Unit>()
+        val savedTransport = CompletableDeferred<Unit>()
+        coEvery { api.markRead(articleId, any(), session = any()) } coAnswers {
+            readTransport.complete(Unit)
+            awaitCancellation()
+        }
+        coEvery { api.setSaved(articleId, any(), session = any()) } coAnswers {
+            savedTransport.complete(Unit)
+            awaitCancellation()
+        }
+
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                assertEquals(AppResult.Success(true), repository.markRead(articleId, true))
+                assertEquals(AppResult.Success(true), repository.setSaved(articleId, true))
+            }
+        }
+
+        assertEquals(true, localStore.readPendingReadStateMutations().single().read)
+        assertEquals(true, localStore.readPendingSavedStateMutations().single().saved)
+        assertEquals(false, readTransport.isCompleted)
+        assertEquals(false, savedTransport.isCompleted)
+    }
+
+    @Test
+    fun `manual retry cannot block account replacement while scheduling waits`() = runTest {
+        every { sessionStore.getAccessToken() } returns "test-token"
+        val scheduling = CompletableDeferred<Unit>()
+        mockkObject(ArticleStateSyncWorker.Companion)
+        coEvery { ArticleStateSyncWorker.kickOnce(any()) } coAnswers {
+            scheduling.complete(Unit)
+            awaitCancellation()
+        }
+        val retry = launch { repository.retryPendingArticleChanges() }
+        try {
+            scheduling.await()
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    assertTrue(repository.setApiBaseUrl("https://replacement.example/api/v1/") is AppResult.Success)
+                }
+            }
+            retry.join()
+            assertTrue(retry.isCancelled)
+        } finally {
+            retry.cancelAndJoin()
+            unmockkObject(ArticleStateSyncWorker.Companion)
+        }
     }
 
     @Test
