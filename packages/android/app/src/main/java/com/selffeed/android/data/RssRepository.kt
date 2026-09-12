@@ -525,7 +525,10 @@ class RssRepository @Inject constructor(
                             forceInitialRefresh = query.generation > 0L,
                             readRemoteKey = { account.commit(session) { localStore.readArticleRemoteKey(queryKey) } },
                             storeRemotePage = { payload, clearExisting ->
-                                account.commit(session) { localStore.writeArticleRemotePage(queryKey, payload, clearExisting) }
+                                account.commit(session) {
+                                    val effective = localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
+                                    effective.forEach { projectCachedArticleState(it.id) }
+                                }
                             },
                             onCompletedRefresh = {
                                 if (query.savedOnly) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
@@ -572,27 +575,30 @@ class RssRepository @Inject constructor(
             val confirmed = coroutineScope {
                 batch.map { snapshot ->
                     async {
-                        val saved = try {
-                            withRetry(session) { articleRemote.article(snapshot.articleId, session = session) }.isSaved
+                        val detail = try {
+                            withRetry(session) { articleRemote.article(snapshot.articleId, session = session) }
                         } catch (error: HttpException) {
-                            if (error.code() == 404) false else throw error
+                            if (error.code() == 404) null else throw error
                         }
-                        snapshot to saved
+                        snapshot to detail
                     }
                 }.awaitAll()
             }
-            for ((snapshot, saved) in confirmed) {
-                if (!saved) {
-                    articleStateProjectionMutex.withLock {
-                        account.commit(session) {
+            for ((snapshot, detail) in confirmed) {
+                articleStateProjectionMutex.withLock {
+                    account.commit(session) {
+                        if (detail == null) {
                             if (localStore.clearSavedStateIfUnchanged(snapshot)) {
                                 val key = "article:${snapshot.articleId}"
-                                runtime.getCached<ArticleDetail>(key)?.let { detail ->
-                                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = false))
+                                runtime.getCached<ArticleDetail>(key)?.let { cached ->
+                                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = false))
                                 }
-                                runtime.invalidateByPrefix("search")
                             }
+                        } else {
+                            localStore.updateArticleSavedState(snapshot.articleId, detail.isSaved, detail.savedRevision)
                         }
+                        projectCachedArticleState(snapshot.articleId)
+                        runtime.invalidateByPrefix("search")
                     }
                 }
             }
@@ -723,9 +729,9 @@ class RssRepository @Inject constructor(
         val remoteDetail = withRetry(session) { articleRemote.article(articleId, session = session) }
         return articleStateProjectionMutex.withLock {
             account.commit(session) {
+                offlineReadStore.writeArticleDetail(remoteDetail)
                 localStore.applyPendingArticleState(remoteDetail).also { detail ->
                     runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-                    offlineReadStore.writeArticleDetail(detail)
                 }
             }
         }
@@ -866,32 +872,30 @@ class RssRepository @Inject constructor(
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =
         safeReadCall { session ->
-            if (!cursor.isNullOrBlank()) {
-                return@safeReadCall withRetry(session) {
-                    searchRemote.search(
-                        query = query,
-                        categoryId = categoryId,
-                        cursor = cursor,
-                        session = session,
-                    )
+            suspend fun fetch(): ApiListResponse<ArticleListItem> {
+                val payload = withRetry(session) {
+                    searchRemote.search(query, categoryId, cursor, session = session)
                 }
+                account.commit(session) {
+                    localStore.reconcileArticleSnapshots(payload.data)
+                    payload.data.forEach { projectCachedArticleState(it.id) }
+                }
+                // Cache the remote payload, never an optimistic local projection.
+                return payload
             }
-
-            val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
             try {
-                runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) {
-                    withRetry(session) {
-                        searchRemote.search(
-                            query = query,
-                            categoryId = categoryId,
-                            cursor = cursor,
-                            session = session,
-                        )
-                    }
+                val payload = if (!cursor.isNullOrBlank()) fetch() else {
+                    val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
+                    runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) { fetch() }
+                }
+                account.commit(session) {
+                    payload.copy(data = localStore.projectArticleSnapshots(payload.data))
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 account.requireCurrent(session)
+                // A later page cannot restart the first local page under an old cursor.
+                if (!cursor.isNullOrBlank()) throw error
                 val cached = account.commit(session) { localStore.searchArticles(query, categoryId) }
                 if (cached.isEmpty()) throw error
                 ApiListResponse(data = cached, cursor = null, hasMore = false)
@@ -1164,14 +1168,19 @@ class RssRepository @Inject constructor(
         // durable query rows atomically when the user asks for fresh content.
     }
 
-    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean = account.withSession { session ->
+    /** Called inside an account commit, after Room has reconciled the server response. */
+    private suspend fun projectCachedArticleState(articleId: String) {
+        val key = "article:$articleId"
+        runtime.getCached<ArticleDetail>(key)?.let { cached ->
+            runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, localStore.applyPendingArticleState(cached))
+        }
+    }
+
+    override suspend fun updateCachedReadState(articleId: String, read: Boolean, revision: Int?): Boolean? = account.withSession { session ->
         articleStateProjectionMutex.withLock {
             account.commit(session) {
                 val visibleState = localStore.updateArticleReadState(articleId, read, revision)
-                val key = "article:$articleId"
-                runtime.getCached<ArticleDetail>(key)?.let { cached ->
-                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isRead = visibleState))
-                }
+                projectCachedArticleState(articleId)
                 visibleState
             }
         }
@@ -1180,23 +1189,20 @@ class RssRepository @Inject constructor(
     override suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int?) = account.withSession { session ->
         articleStateProjectionMutex.withLock {
             account.commit(session) {
-                val visibleState = localStore.updateArticleSavedState(articleId, saved, revision)
-                val key = "article:$articleId"
-                runtime.getCached<ArticleDetail>(key)?.let { cached ->
-                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = visibleState))
-                }
+                localStore.updateArticleSavedState(articleId, saved, revision)
+                projectCachedArticleState(articleId)
+                runtime.invalidateByPrefix("articles")
+                runtime.invalidateByPrefix("search")
             }
-        }
-        account.commit(session) {
-            runtime.invalidateByPrefix("articles")
-            runtime.invalidateByPrefix("search")
         }
     }
 
     override suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation = account.withSession { session ->
         val reconciliation = account.commit(session) {
             runtime.invalidateByPrefix("search")
-            localStore.markArticlesReadByFeeds(feedIds)
+            localStore.markArticlesReadByFeeds(feedIds).also { result ->
+                result.affectedArticleIds.forEach { projectCachedArticleState(it) }
+            }
         }
         reconciliation
     }
@@ -1273,20 +1279,16 @@ class RssRepository @Inject constructor(
                         )
                     }
                     if (response.conflict) {
-                        account.commit(session) { localStore.rebaseReadStateMutation(mutation, response.revision) }
+                        account.commit(session) {
+                            localStore.rebaseReadStateMutation(mutation, response.revision, response.read)
+                            projectCachedArticleState(mutation.articleId)
+                        }
                     } else {
                         val authoritative = response.read ?: mutation.read
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
-                                if (localStore.acknowledgeReadStateMutation(mutation, authoritative, response.revision)) {
-                                    runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
-                                        runtime.putCached(
-                                            "article:${mutation.articleId}",
-                                            ARTICLE_DETAIL_TTL_MS,
-                                            detail.copy(isRead = authoritative),
-                                        )
-                                    }
-                                }
+                                localStore.acknowledgeReadStateMutation(mutation, authoritative, response.revision)
+                                projectCachedArticleState(mutation.articleId)
                             }
                         }
                     }
@@ -1302,20 +1304,16 @@ class RssRepository @Inject constructor(
                         )
                     }
                     if (response.conflict) {
-                        account.commit(session) { localStore.rebaseSavedStateMutation(mutation, response.revision) }
+                        account.commit(session) {
+                            localStore.rebaseSavedStateMutation(mutation, response.revision, response.saved)
+                            projectCachedArticleState(mutation.articleId)
+                        }
                     } else {
                         val authoritative = response.saved ?: mutation.saved
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
-                                if (localStore.acknowledgeSavedStateMutation(mutation, authoritative, response.revision)) {
-                                    runtime.getCached<ArticleDetail>("article:${mutation.articleId}")?.let { detail ->
-                                        runtime.putCached(
-                                            "article:${mutation.articleId}",
-                                            ARTICLE_DETAIL_TTL_MS,
-                                            detail.copy(isSaved = authoritative),
-                                        )
-                                    }
-                                }
+                                localStore.acknowledgeSavedStateMutation(mutation, authoritative, response.revision)
+                                projectCachedArticleState(mutation.articleId)
                             }
                         }
                     }
@@ -1334,23 +1332,21 @@ class RssRepository @Inject constructor(
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
                                 localStore.discardReadStateMutation(read)
+                                projectCachedArticleState(read.articleId)
                             }
                         }
                     } else if (saved != null) {
-                        val restored = articleStateProjectionMutex.withLock {
+                        articleStateProjectionMutex.withLock {
                             account.commit(session) {
-                                localStore.discardSavedStateMutation(saved)?.let { restored ->
-                                    val key = "article:${saved.articleId}"
-                                    runtime.getCached<ArticleDetail>(key)?.let { detail ->
-                                        runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, detail.copy(isSaved = restored))
-                                    }
+                                val rejected = localStore.discardSavedStateMutation(saved)
+                                if (rejected.removedMatchingIntent) {
+                                    projectCachedArticleState(saved.articleId)
                                     runtime.invalidateByPrefix("search")
-                                    restored
+                                    savedStateRejectionEvents.tryEmit(
+                                        SessionEvent(session, SavedStateRejection(saved.articleId, rejected.effectiveState)),
+                                    )
                                 }
                             }
-                        }
-                        restored?.let {
-                            savedStateRejectionEvents.emit(SessionEvent(session, SavedStateRejection(saved.articleId, it)))
                         }
                     }
                     return@repeat

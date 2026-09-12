@@ -234,6 +234,53 @@ abstract class LocalDatabaseMigrationContract {
     }
 
     @Test
+    fun version8DoesNotPromoteUnversionedFlagsIntoConfirmedRevisionPairs() = runBlocking {
+        val name = "state-provenance-v8"
+        helper.createDatabase(name, 8).use { database ->
+            database.execSQL("INSERT INTO current_local_owner VALUES ('current', 'owner-8', 'https://example.invalid/api/v1/', 'user-8')")
+            for (id in listOf("row", "pending", "unversioned")) {
+                database.execSQL("""
+                    INSERT INTO articles(id, feedId, feedTitle, title, isRead, isSaved, contentStatus, contentVersion)
+                    VALUES (?, 'feed', 'Feed', 'Cached', 0, 0, 'feed_ready', 1)
+                """.trimIndent(), arrayOf(id))
+                database.execSQL("INSERT INTO article_state_revisions VALUES (?, ?, ?)",
+                    arrayOf<Any?>(id, if (id == "unversioned") null else 10, if (id == "unversioned") null else 10))
+                database.execSQL("INSERT INTO article_details VALUES (?, 'feed', ?, 42)",
+                    arrayOf(id, "{opaque cached bytes for $id"))
+            }
+            database.execSQL("""
+                INSERT INTO pending_read_state_mutations VALUES ('pending', 1, 'read-m', 'manual', 10, 0, 17)
+            """.trimIndent())
+            database.execSQL("INSERT INTO pending_saved_state_mutations VALUES ('pending', 1, 'saved-m', 10, 0, 18)")
+        }
+        helper.runMigrationsAndValidate(name, LOCAL_DATABASE_VERSION, true, *LOCAL_DATABASE_MIGRATIONS).close()
+        val database = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), LocalDatabase::class.java, name)
+            .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
+        try {
+            val dao = database.localStoreDao()
+            val store = LocalStore(database, NetworkModule.provideMoshi())
+            assertEquals("owner-8", store.readOwner()?.ownerId)
+            for (id in listOf("row", "pending")) {
+                val state = requireNotNull(dao.readArticleStateRevision(id))
+                assertEquals(10, state.readRevision)
+                assertEquals(10, state.savedRevision)
+                assertEquals(null, state.confirmedReadState)
+                assertEquals(null, state.confirmedSavedState)
+                assertEquals("{opaque cached bytes for $id", dao.readArticleDetail(id)?.payloadJson)
+                assertEquals(42L, dao.readArticleDetail(id)?.writtenAt)
+                store.updateArticleReadState(id, true, 10)
+                store.updateArticleSavedState(id, true, 10)
+                assertEquals(true, dao.readArticleStateRevision(id)?.confirmedReadState)
+                assertEquals(true, dao.readArticleStateRevision(id)?.confirmedSavedState)
+            }
+            assertEquals("read-m", store.readPendingReadStateMutations().single().mutationId)
+            assertEquals("saved-m", store.readPendingSavedStateMutations().single().mutationId)
+            assertEquals(false, dao.readArticleStateRevision("unversioned")?.confirmedReadState)
+            assertEquals(false, dao.readArticleStateRevision("unversioned")?.confirmedSavedState)
+        } finally { database.close() }
+    }
+
+    @Test
     fun everySupportedUpgradePreservesExistingRowsAndCachedBytes() {
         for (version in 1 until LOCAL_DATABASE_VERSION) {
             val name = "populated-migration-$version"
@@ -247,7 +294,7 @@ abstract class LocalDatabaseMigrationContract {
                 }
                 database.query("SELECT COUNT(*) FROM current_local_owner").use { cursor ->
                     assertTrue(cursor.moveToFirst())
-                    assertEquals("Migration must not invent an account", 0, cursor.getInt(0))
+                    assertEquals("Migration must preserve existing owners", before["current_local_owner"]?.size ?: 0, cursor.getInt(0))
                 }
             }
         }

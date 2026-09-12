@@ -467,6 +467,27 @@ class RepositoryAccountOwnershipTest {
     }
 
     @Test
+    fun `a rejected save with unknown prior state still publishes its failure`() = runBlocking {
+        val api = mockk<RssApi>(relaxed = true)
+        val repository = repository(api)
+        repository.prepareSession()
+        local.queueSavedStateMutation("unknown", true)
+        coEvery { api.setSaved(any(), any(), session = any()) } throws retrofit2.HttpException(
+            retrofit2.Response.error<Unit>(404, "unavailable".toResponseBody()),
+        )
+        val failure = async(start = CoroutineStart.UNDISPATCHED) { repository.savedStateRejections().first() }
+        try {
+            online.value = true
+            assertTrue(repository.flushPendingArticleStateMutations())
+            val rejected = withTimeout(5_000) { failure.await() }
+            assertEquals("unknown", rejected.articleId)
+            assertNull(rejected.restoredSaved)
+            assertTrue(local.readPendingSavedStateMutations().isEmpty())
+            assertNull(local.queueSavedStateMutation("unknown", false).previousState)
+        } finally { failure.cancelAndJoin() }
+    }
+
+    @Test
     fun `buffered saved rejection does not cross into a replacement account`() = runBlocking {
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)

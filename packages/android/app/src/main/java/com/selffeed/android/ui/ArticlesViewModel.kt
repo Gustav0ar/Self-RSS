@@ -146,11 +146,14 @@ class ArticlesViewModel @Inject constructor(
 
         viewModelScope.launch {
             repository.savedStateRejections().collect { rejection ->
-                applyArticleSavedState(rejection.articleId, rejection.restoredSaved)
+                rejection.restoredSaved?.let { restored ->
+                    applyArticleSavedState(rejection.articleId, restored)
+                    _events.emit(ArticleFeatureEvent.ArticleSavedStateChanged(rejection.articleId, restored))
+                }
                 _state.update {
                     it.copy(errorMessage = PresentationText.resource(R.string.article_update_saved_failed))
                 }
-                _events.emit(ArticleFeatureEvent.ArticleSavedStateChanged(rejection.articleId, rejection.restoredSaved))
+                if (rejection.restoredSaved == null) _events.emit(ArticleFeatureEvent.ArticlesChanged(rejection.articleId))
             }
         }
 

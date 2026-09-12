@@ -138,6 +138,12 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/test/java/com/selffeed/android/data/local/LocalStoreTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/ui/articles/ReadStateManagerTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/ui/ArticlesViewModelTest.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/network/ApiModels.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/local/LocalDatabaseMigrations.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/local/ArticleStateReconciliation.kt`
+- `packages/android/app/schemas/com.selffeed.android.data.local.LocalDatabase/9.json`
+- `packages/android/app/src/sharedTest/java/com/selffeed/android/data/local/LocalDatabaseMigrationContract.kt`
+- `packages/android/app/src/test/java/com/selffeed/android/data/RepositoryAccountOwnershipTest.kt`
 - This plan and its row in `plans/README.md`.
 
 The additive article snapshot prerequisite below is the only API source expansion. Keep web behavior, live databases, deployment workflows, and the installed daily-driver app outside scope. Execute app work in an isolated checkout. Use synthetic fixtures and `com.selffeed.android.devicetest` for behavior tests. Set `ANDROID_REVIEW_SERIAL` to the explicitly identified test device; the wrapper from plan 033 must reject ambiguous targets. Performance installs must use its separately identified performance target. Never run a command that clears the normal app or shared device logs.
@@ -240,3 +246,16 @@ All seven selected Android checks pass in `/tmp/android-outbox-device.log`: the 
 
 
 The snapshot prerequisite passes actual SQLite reads, Redis cache-hit authority and HTTP validators, including mixed-version payload safety. Review findings were reproduced and resolved. Full final API integration: 138 passing; API unit: 734 passing with 32 affected cases repeated after the last payload-format change; web unit: 403 passing; all package types, repository lint/architecture and web production build pass. The added cache-hit query is bounded to returned article IDs; physical Android performance remains unrelated and pending. Android Room/UI reconciliation and durable counts remain incomplete.
+
+
+### Android confirmed-state reconciliation
+
+The Room 9 change will retain the last confirmed read/save value with its existing revision, independently of the pending local overlay. It must preserve all old columns, archived queues and cached bytes, including both version-6 paths. Unknown legacy confirmed values remain nullable until existing metadata/body or a versioned response can establish them. Ordinary snapshots from older servers remain readable but cannot lower a known revision. Conflict/ack/rejection updates must match the captured mutation ID, retain newer intent and publish the effective local state. This slice does not complete durable counts or final UI command ordering.
+
+Review found that schema 8 flags and revisions do not always describe the same response: old unversioned writes could replace flags while preserving revisions. Migration 8 to 9 therefore leaves confirmed values unknown for every existing nonnull revision. Existing unversioned metadata may seed a value; a missing prior state remains unknown. Once initialized, unknown records are never rehydrated from a rejected optimistic projection. Matching rejection reports removal independently of whether a safe rollback value exists. Bulk events without article revisions preserve known versioned state and act as refresh hints.
+
+The reconciliation implementation uses the local database as state authority and leaves delivery with WorkManager, consistent with [Android's offline-first guidance](https://developer.android.com/topic/architecture/data-layer/offline-first). The added snapshot checks skip unchanged or stale state before reading full cached bodies. A real Room query callback test covers twenty large cached bodies, and a loaded PagingSource test verifies rejected stale search metadata does not invalidate it. Bulk initialization reuses one-time baseline recovery so legacy queued bookmarks are not readmitted as confirmed flags.
+
+All 538 JVM tests pass in `/tmp/android-confirmed-state-final-build.log`; lint, APK builds and device migrations are still running. The exported Room 8 schema remains byte-identical. This slice covers Room/repository reconciliation. UI command ordering, permanent read-rejection publication, authoritative refresh after a versionless bulk hint, durable unread counts, and queued mutation recovery after actual process death remain separate plan 036 work. Main-safe body preparation and cache budgets remain plans 037/041.
+
+Final validation for the Room/repository slice passes: all 538 JVM tests, Android lint and both isolated APK pairs in `/tmp/android-confirmed-state-final-build.log`; all 30 selected emulator tests in `/tmp/android-confirmed-state-device.log`. The shared migration contract runs on API 36.1 and covers clean creation, every supported starting version, historical version-6 preservation, and the schema-8 mismatched-state fixture. Independent source review is complete. These checks do not establish physical memory or frame-time budgets.
