@@ -14,6 +14,7 @@ import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.NetworkModule
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.channels.Channel
@@ -424,6 +425,8 @@ class LocalStoreTest {
         )
 
         val pagingSource = store.articlePagingSource("query-read-state", ownerId = null)
+        val invalidated = CompletableDeferred<Unit>()
+        pagingSource.registerInvalidatedCallback { invalidated.complete(Unit) }
         pagingSource.load(
             PagingSource.LoadParams.Refresh<Int>(
                 key = null,
@@ -439,7 +442,9 @@ class LocalStoreTest {
         assertTrue(pending.first().read)
 
         assertEquals(mapOf("a-1" to true), store.readArticleReadOverrides())
-        assertEquals(true, pagingSource.invalid)
+        // Room dispatches invalidation after commit on its query executor.
+        withTimeout(5_000) { invalidated.await() }
+        assertTrue(pagingSource.invalid)
 
         val result = store.articlePagingSource("query-read-state", ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(
