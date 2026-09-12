@@ -1,6 +1,6 @@
 # Plan 037: Keep networking, document reads, and body preparation off Main
 
-- Status: TODO
+- Status: IN PROGRESS
 - Priority: P1
 - Effort: M
 - Implementation risk: MED
@@ -199,3 +199,15 @@ Main-safety belongs in reusable IO/preparation functions so future callers remai
 - Device/performance evidence: pending where applicable
 - Design selection: pending where applicable
 - Remaining limitations: pending
+
+### Reconciliation and storage/error slice
+
+Base `d2e3d48`, after #67. Main already moves cookie-only refresh to IO and uses cancellable bounded OPML stream acquisition. Existing parser functions still run in composition, cached detail/categories/preferences decoding resumes on the caller, and HTTP error-body acquisition/parsing runs in the HttpException catch on that caller. A secondary body-read exception escapes that catch.
+
+First review slice makes the public stored-body/snapshot and HTTP-error boundaries main-safe, retaining existing Room transactions and state ordering. Error text is bounded before decoding; unreadable/oversized bodies use the status fallback, with cancellation preserved. Scope adds shared `LocalStoreMainSafeContract.kt` and JVM/device wrappers plus `data/repository/RepositoryRuntimeTest.kt` to prove those concrete boundaries. It does not add a transaction to move parsing off Main. Existing state reconciliation still serializes some body updates; normalization and bounded maintenance remain plan 041. Reader preparation, feature-owned import acquisition and actual reader responsiveness remain subsequent work within 037.
+
+The five storage/error reproductions fail in `/tmp/android-main-safe-storage-red.log`. The complete JVM suite then passes 588 cases, lint and both isolated APK pairs in `/tmp/android-main-safe-storage-build.log`, including a blocked-read cancellation/close case. JSON and blocking-read dispatchers are constructor dependencies with production defaults, following [Android coroutine guidance](https://developer.android.com/kotlin/coroutines/coroutines-best-practices). A subsequent focused/device gate will verify those final constructor changes. The 64 KiB error-text cap bounds this error-handler read and parse; Retrofit may already have buffered the transport response, so this is not a network download budget.
+
+Further source review finds OPML export writing and stale-export cleanup on Main in `ui/components/ExternalActions.kt` and Application startup. Expand the remaining OPML slice to that existing helper, `SelfFeedApplication.kt`, export collection in `SelfFeedAppRoute.kt`, and focused stream/file lifecycle tests. Keep this work separate from the current storage/error PR.
+
+Final storage/error checks pass the six affected JVM cases, lint and isolated builds in `/tmp/android-main-safe-storage-final-build.log`. Both shared Room cases pass on Android Main in `/tmp/android-main-safe-storage-device.log` on API 35. The prior complete suite passes 588 JVM tests. These are dispatcher/cancellation checks; reader responsiveness, StrictMode journeys and physical timing remain open. No schema or added transaction.

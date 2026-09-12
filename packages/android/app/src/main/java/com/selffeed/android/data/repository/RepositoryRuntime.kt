@@ -9,6 +9,10 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -20,6 +24,8 @@ class RepositoryRuntime(
     maxMemoryCacheEntries: Int,
     private val logTag: String,
     private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val processingDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
@@ -35,8 +41,8 @@ class RepositoryRuntime(
         try {
             AppResult.Success(block())
         } catch (e: HttpException) {
-            val rawBody = e.response()?.errorBody()?.string()
-            val structuredMessage = rawBody?.let(::extractApiErrorMessage)
+            val rawBody = readErrorBody(e)
+            val structuredMessage = withContext(processingDispatcher) { rawBody?.let(::extractApiErrorMessage) }
             val plainBodyMessage = rawBody
                 ?.trim()
                 ?.takeIf { it.isNotBlank() && !it.startsWith("{") }
@@ -160,6 +166,21 @@ class RepositoryRuntime(
         Log.d(logTag, message)
     }
 
+    /** A broken or oversized response must not replace the original HTTP failure. */
+    private suspend fun readErrorBody(error: HttpException): String? = try {
+        runInterruptible(ioDispatcher) {
+            error.response()?.errorBody()?.use { body ->
+                val source = body.source()
+                if (source.request(MAX_ERROR_BODY_BYTES + 1)) null
+                else source.readString(body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
+            }
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
+
     private fun extractApiErrorMessage(rawBody: String): String? {
         val parsed = runCatching { apiErrorAdapter.fromJson(rawBody) }.getOrNull()
         return parsed?.error?.message?.trim()?.takeIf { it.isNotEmpty() }
@@ -193,3 +214,5 @@ class RepositoryRuntime(
         val RETRIABLE_HTTP_CODES = setOf(408, 425, 429, 500, 502, 503, 504)
     }
 }
+
+private const val MAX_ERROR_BODY_BYTES = 64L * 1024
