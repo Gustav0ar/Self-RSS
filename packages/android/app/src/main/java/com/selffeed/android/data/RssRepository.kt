@@ -1059,8 +1059,12 @@ class RssRepository @Inject constructor(
             val session = owner ?: return result
             account.requireCurrent(session)
             if (isAuthenticationLost(result.cause)) {
-                account.clearIfCurrent(session)?.let { cleared ->
-                    authLostEvents.tryEmit(SessionEvent(cleared, AUTH_LOST_MESSAGE))
+                // Clearing retires the caller too. Publish before cancellation can
+                // resume it out of Room's final transaction handoff.
+                withContext(NonCancellable) {
+                    account.clearIfCurrent(session)?.let { cleared ->
+                        authLostEvents.tryEmit(SessionEvent(cleared, AUTH_LOST_MESSAGE))
+                    }
                 }
                 return AppResult.Error(AUTH_LOST_MESSAGE, result.cause)
             }
