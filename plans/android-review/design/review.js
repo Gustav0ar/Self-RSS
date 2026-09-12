@@ -1,0 +1,350 @@
+const directions = {
+	dense: 'Queue first',
+	editorial: 'Reading first',
+	adaptive: 'Library and reader',
+};
+const direction = document.body.dataset.direction;
+const articles = [
+	{
+		title: 'The quiet work of making software last',
+		feed: 'Systems Weekly',
+		time: '18 min ago',
+		category: 'Engineering',
+		excerpt: 'Small, explicit boundaries make systems easier to understand and repair.',
+		saved: true,
+		offline: true,
+	},
+	{
+		title: 'A new look at the ocean beneath Europa',
+		feed: 'Orbital Journal',
+		time: '42 min ago',
+		category: 'Science',
+		excerpt: 'What a changing ice shell can tell us about a hidden ocean.',
+		saved: false,
+		offline: true,
+	},
+	{
+		title: 'Why a useful interface leaves room to read',
+		feed: 'Field Notes',
+		time: '1 hr ago',
+		category: 'Design',
+		excerpt: 'On typography, attention, and the controls that earn their place.',
+		saved: false,
+		offline: false,
+	},
+	{
+		title: 'A practical guide to running a smaller home server',
+		feed: 'Systems Weekly',
+		time: '2 hr ago',
+		category: 'Engineering',
+		excerpt: 'Measure the workload before adding another service.',
+		saved: true,
+		offline: true,
+	},
+	{
+		title: 'Mapping the places where trees return',
+		feed: 'Open Landscape',
+		time: '3 hr ago',
+		category: 'Science',
+		excerpt: 'Long observations reveal how a forest begins again.',
+		saved: false,
+		offline: false,
+	},
+	{
+		title: 'The case for keeping your own reading archive',
+		feed: 'Field Notes',
+		time: '4 hr ago',
+		category: 'Design',
+		excerpt: 'A library should remain useful when the connection disappears.',
+		saved: false,
+		offline: true,
+	},
+	{
+		title: 'Reading a database query plan',
+		feed: 'Systems Weekly',
+		time: 'Yesterday',
+		category: 'Engineering',
+		excerpt: 'Find the unnecessary work before changing the query.',
+		saved: false,
+		offline: false,
+		read: true,
+	},
+	{
+		title: 'Watching a star change over a lifetime',
+		feed: 'Orbital Journal',
+		time: 'Yesterday',
+		category: 'Science',
+		excerpt: 'Patient measurements offer a different view of the sky.',
+		saved: true,
+		offline: true,
+		read: true,
+	},
+];
+let view = 'queue',
+	selected = 0,
+	origin = 'queue',
+	scenario = 'ready',
+	filter = 'all',
+	query = '',
+	playing = false,
+	refreshTimer,
+	toastTimer,
+	refreshStep = 0;
+const app = document.querySelector('#app');
+document.querySelector('#direction-name').textContent = directions[direction];
+const labels = {
+	queue: 'Articles',
+	saved: 'Saved',
+	offline: 'Offline',
+	search: 'Search',
+	feeds: 'Subscriptions',
+	settings: 'Settings',
+};
+function escapeHtml(s) {
+	return s.replace(
+		/[&<>"']/g,
+		(c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+	);
+}
+function announce(message) {
+	const n = document.querySelector('#toast');
+	n.textContent = message;
+	n.hidden = false;
+	clearTimeout(toastTimer);
+	toastTimer = setTimeout(() => (n.hidden = true), 2400);
+}
+function status() {
+	if (refreshStep)
+		return [
+			'Starting refresh',
+			'Refreshing 2 of 8 subscriptions',
+			'Refreshing 6 of 8 subscriptions',
+			'Updating articles',
+		][refreshStep - 1];
+	return (
+		{
+			cached: 'Updating articles. Your saved content is ready.',
+			offline: 'Offline. Showing content on this device.',
+			missing: 'Offline. This article has no downloaded body.',
+			failure: 'Refresh failed. Your existing articles are still here.',
+			pending: '3 changes waiting for a connection.',
+			download: 'Downloading 2 of 4 articles.',
+			partial: 'Text available offline. 2 images could not be downloaded.',
+			searching: 'Searching. Previous results remain below.',
+			searcherror: 'Search failed. Try again.',
+		}[scenario] || ''
+	);
+}
+function rows() {
+	let list = articles.map((a, i) => ({ ...a, i }));
+	if (view === 'saved') list = list.filter((a) => a.saved);
+	if (view === 'offline' || filter === 'offline') list = list.filter((a) => a.offline);
+	if (filter === 'unread') list = list.filter((a) => !a.read);
+	if (view === 'search' && query)
+		list = list.filter((a) =>
+			`${a.title} ${a.feed} ${a.excerpt}`.toLowerCase().includes(query.toLowerCase()),
+		);
+	if (scenario === 'empty') list = [];
+	return list.length
+		? list
+				.map(
+					(a) =>
+						`<div class="article-row ${a.read ? 'read' : ''}"><button class="article-open" data-open="${a.i}" aria-label="${a.read ? 'Read' : 'Unread'}: ${escapeHtml(a.title)}"><div class="meta">${!a.read ? '<span class="unread" aria-hidden="true"></span>' : ''}${a.feed} <span class="article-time">${a.time}</span></div><h2>${a.title}</h2><div class="excerpt">${a.excerpt}</div>${a.offline ? '<small>Available offline</small>' : ''}</button><button class="bookmark" data-save="${a.i}" aria-label="${a.saved ? 'Unsave' : 'Save'} ${escapeHtml(a.title)}" aria-pressed="${a.saved}">${a.saved ? '▣' : '▢'}</button></div>`,
+				)
+				.join('')
+		: `<div class="empty"><h2>${view === 'search' ? 'No matching articles' : 'You are caught up'}</h2><p>${view === 'search' ? 'Try a different search. Offline search includes downloaded articles.' : 'Choose another subscription or show read articles.'}</p><button data-action="reset">Show all articles</button></div>`;
+}
+function reader() {
+	const a = articles[selected];
+	let body = `<p>Good software leaves its reader with fewer things to hold in mind. The shape of the system should explain where work happens, who owns it, and when it is finished.</p><p>A reader is a useful example. The article belongs to your library. Its current view belongs to a screen. When that screen disappears, the view can be released while the article stays available.</p><h2>A place for each decision</h2><p>Keep the reading position, the downloaded text, and the changes that have not reached the server. Let temporary resources go when their owner no longer needs them.</p><figure><div class="media"><button data-action="play" aria-pressed="${playing}">${playing ? 'Pause audio' : 'Play audio excerpt'}</button></div><figcaption>${playing ? 'Playing. Moving to another article pauses playback.' : 'Audio remains paused until you choose to play.'}</figcaption></figure><p>Loading should describe one operation. A refresh can bring in new content without repeatedly hiding the article you are already reading.</p><h2>Leave the page in a useful state</h2><p>When a request fails, the next action should be clear. Keep what is already available. Offer a retry for the part that failed.</p><p class="callout">A useful library is still a useful library without a connection.</p><p>The details matter most when conditions are imperfect: a slow network, a large document, or a process that has to start again.</p>`;
+	if (scenario === 'missing')
+		body = `<div class="error"><h2>Article unavailable offline</h2><p>The summary is on this device. Download the full article when you are connected.</p><p>${a.excerpt}</p><button data-action="retry">Retry</button></div>`;
+	if (scenario === 'detailerror')
+		body = `<div class="error"><h2>Could not load the full article</h2><p>${a.excerpt}</p><button data-action="retry">Retry article</button></div>`;
+	return `<div class="reader-tools"><button data-action="back" aria-label="Back to ${labels[origin]}">‹ ${labels[origin]}</button><button data-action="read">${a.read ? 'Mark unread' : 'Mark read'}</button><button data-save="${selected}" aria-pressed="${a.saved}">${a.saved ? 'Saved' : 'Save'}</button><button data-action="next" aria-label="Next article">Next ›</button></div><article class="reading"><div class="meta">${a.feed} · ${a.time} · 4 min read</div><h1>${a.title}</h1><div class="meta">${a.offline ? 'Text and images available offline' : 'Summary available'} <button data-action="original">Open original</button></div>${body}</article>`;
+}
+function subscriptions() {
+	return `<div class="section"><h2>Subscriptions</h2>${['Engineering', 'Science', 'Design']
+		.map(
+			(c, i) =>
+				`<details open><summary class="setting">${c}<span>${[12, 8, 6][i]}</span></summary>${articles
+					.filter((a) => a.category === c)
+					.slice(0, 2)
+					.map(
+						(a) =>
+							`<div class="setting"><button data-action="subscription">${a.feed}</button><button data-action="edit" aria-label="Edit ${a.feed}">Edit</button></div>`,
+					)
+					.join('')}</details>`,
+		)
+		.join(
+			'',
+		)}<button class="primary" data-action="edit">Add subscription</button><button data-action="import">Import OPML</button><form class="editor" id="editor" hidden><h2>Add subscription</h2><label>Feed URL<input name="url" type="url" value="https://example.org/feed.xml" required></label><label>Name<input name="name" value="New reading source" required></label><p id="editor-error" class="error-text" hidden>Could not save. Your draft is still here.</p><button class="primary" type="submit">Save subscription</button><button type="button" data-action="cancel-edit">Cancel</button></form></div>`;
+}
+function settings() {
+	return `<div class="section"><h2>Reading</h2><div class="setting"><label for="density">Article density</label><select id="density"><option>Comfortable</option><option>Compact</option></select></div><div class="setting"><label for="size">Text size</label><input id="size" type="range" min="16" max="28" value="18"></div><div class="setting"><label for="hide-read">Hide read articles</label><input id="hide-read" type="checkbox"></div><h2>Offline library</h2><div class="setting"><div>4 articles<small>Text and images use 18 MB</small></div><button data-action="offline">View</button></div><div class="setting"><label for="wifi">Download images on Wi-Fi</label><input id="wifi" type="checkbox" checked></div><div class="setting"><div>Temporary cache<small>12 MB. Saved downloads are kept.</small></div><button data-action="clear-cache">Clear cache</button></div><div class="setting"><div>Downloaded content<small>Removing downloads keeps bookmarks.</small></div><button data-action="remove-downloads">Remove</button></div><h2>Account</h2><div class="setting"><span>reader@example.org</span><button data-action="sessions">Sessions</button></div><div class="setting"><span>Server</span><button data-action="server">reader.example.org</button></div><button data-action="signout">Sign out</button></div>`;
+}
+function render() {
+	const s = status();
+	app.classList.toggle('reader-open', view === 'reader');
+	app.innerHTML = `<header class="app-header"><button data-action="feeds" aria-label="Open subscriptions">☰</button><h1>${labels[view] || 'Articles'}${view === 'queue' ? '<span class="count">26 unread</span>' : ''}</h1><button data-action="refresh" aria-label="Refresh articles">Refresh</button></header><div class="main"><aside class="sidebar"><button data-view="queue">All articles <span style="float:right">26</span></button><button data-view="saved">Saved</button><button data-view="offline">Offline</button><button data-view="search">Search</button><details open><summary class="setting">Subscriptions</summary>${['Engineering', 'Science', 'Design'].map((c) => `<button class="child" data-action="subscription">${c}</button>`).join('')}</details><div class="bottom"><button data-view="feeds">Manage subscriptions</button><button data-view="settings">Settings</button></div></aside><main class="workspace"><div class="status" role="status" ${s ? '' : 'hidden'}>${s}${refreshStep ? `<progress max="4" value="${refreshStep}" aria-label="Refresh progress"></progress>` : ''}${['failure', 'searcherror', 'partial'].includes(scenario) ? '<button data-action="retry">Retry</button>' : ''}</div><section class="view" ${['reader', 'feeds', 'settings'].includes(view) ? 'hidden' : ''}>${view === 'search' ? `<label class="search-box">Search<input id="query" type="search" placeholder="Search articles" value="${escapeHtml(query)}" aria-label="Search articles"></label><div class="meta section">${scenario === 'searching' ? 'Updating results' : scenario === 'offline' ? 'Downloaded articles on this device' : 'All subscriptions'}</div>` : `<div class="queue-tools"><select id="filter" aria-label="Filter articles"><option value="all" ${filter === 'all' ? 'selected' : ''}>All articles</option><option value="unread" ${filter === 'unread' ? 'selected' : ''}>Unread</option><option value="offline" ${filter === 'offline' ? 'selected' : ''}>Available offline</option></select><span class="spacer"></span><button data-action="compact">Density</button></div>`}<div class="rows">${scenario === 'initial' ? '<div class="empty" role="status"><h2>Loading articles</h2><p>Connecting to your subscriptions.</p><button data-action="retry">Finish loading</button></div>' : rows()}</div></section><section class="view reader" ${view === 'reader' ? '' : 'hidden'}>${view === 'reader' ? reader() : ''}</section><section class="view" ${view === 'feeds' ? '' : 'hidden'}>${view === 'feeds' ? subscriptions() : ''}</section><section class="view" ${view === 'settings' ? '' : 'hidden'}>${view === 'settings' ? settings() : ''}</section></main><aside class="split-reader" aria-label="Article reader">${reader()}</aside></div><nav class="nav" aria-label="Main navigation">${['queue', 'saved', 'search', 'feeds', 'settings'].map((v) => `<button data-view="${v}" aria-current="${view === v ? 'page' : 'false'}">${v === 'feeds' ? 'Feeds' : labels[v]}</button>`).join('')}</nav>`;
+}
+function navigate(next) {
+	playing = false;
+	view = next;
+	render();
+}
+document.addEventListener('click', (e) => {
+	const b = e.target.closest('button');
+	if (!b) return;
+	if (b.dataset.view) {
+		navigate(b.dataset.view);
+		return;
+	}
+	if (b.dataset.open !== undefined) {
+		origin = view;
+		selected = Number(b.dataset.open);
+		navigate('reader');
+		return;
+	}
+	if (b.dataset.save !== undefined) {
+		const a = articles[Number(b.dataset.save)];
+		a.saved = !a.saved;
+		render();
+		announce(a.saved ? 'Saved. Text will be kept offline.' : 'Removed from Saved');
+		return;
+	}
+	switch (b.dataset.action) {
+		case 'back':
+			navigate(origin);
+			break;
+		case 'next':
+			selected = (selected + 1) % articles.length;
+			playing = false;
+			render();
+			break;
+		case 'read':
+			articles[selected].read = !articles[selected].read;
+			render();
+			break;
+		case 'play':
+			playing = !playing;
+			render();
+			break;
+		case 'refresh':
+			clearInterval(refreshTimer);
+			refreshStep = 1;
+			render();
+			refreshTimer = setInterval(() => {
+				refreshStep++;
+				if (refreshStep > 4) {
+					clearInterval(refreshTimer);
+					refreshStep = 0;
+					scenario = 'ready';
+					announce('Articles updated');
+				}
+				render();
+			}, 1000);
+			break;
+		case 'retry':
+			scenario = 'ready';
+			document.querySelector('#scenario').value = 'ready';
+			render();
+			break;
+		case 'feeds':
+			navigate('feeds');
+			break;
+		case 'offline':
+			navigate('offline');
+			break;
+		case 'subscription':
+			filter = 'all';
+			navigate('queue');
+			break;
+		case 'edit':
+			document.querySelector('#editor').hidden = false;
+			document.querySelector('#editor input').focus();
+			break;
+		case 'cancel-edit':
+			document.querySelector('#editor').hidden = true;
+			break;
+		case 'compact':
+			document.documentElement.classList.toggle('compact');
+			break;
+		case 'reset':
+			scenario = 'ready';
+			filter = 'all';
+			query = '';
+			render();
+			break;
+		case 'clear-cache':
+			announce('Temporary cache cleared. Saved downloads kept.');
+			break;
+		case 'remove-downloads':
+			articles.forEach((a) => {
+				a.offline = false;
+			});
+			announce('Downloads removed. Bookmarks kept.');
+			break;
+		case 'import':
+			announce('Imported 12 subscriptions. 1 duplicate skipped.');
+			break;
+		case 'original':
+			announce('Opens the publisher in your browser.');
+			break;
+		case 'sessions':
+			announce('This device is signed in. Session management remains available.');
+			break;
+		case 'server':
+			announce('Server changes require account confirmation.');
+			break;
+		case 'signout':
+			announce('Queued changes will be shown before signing out.');
+			break;
+	}
+});
+document.addEventListener('change', (e) => {
+	if (e.target.id === 'scenario') {
+		scenario = e.target.value;
+		playing = false;
+		clearInterval(refreshTimer);
+		refreshStep = 0;
+		render();
+	}
+	if (e.target.id === 'filter') {
+		filter = e.target.value;
+		render();
+	}
+	if (e.target.id === 'large-text')
+		document.documentElement.classList.toggle('large-text', e.target.checked);
+	if (e.target.id === 'motion')
+		document.documentElement.classList.toggle('no-motion', e.target.checked);
+	if (e.target.id === 'density')
+		document.documentElement.classList.toggle('compact', e.target.value === 'Compact');
+	if (e.target.id === 'size')
+		document.querySelectorAll('.reading').forEach((n) => {
+			n.style.fontSize = `${e.target.value}px`;
+		});
+});
+document.addEventListener('input', (e) => {
+	if (e.target.id === 'query') {
+		query = e.target.value;
+		document.querySelector('.rows').innerHTML = rows();
+	}
+});
+document.addEventListener('submit', (e) => {
+	if (e.target.id !== 'editor') return;
+	e.preventDefault();
+	if (scenario === 'editorerror') {
+		document.querySelector('#editor-error').hidden = false;
+	} else {
+		e.target.hidden = true;
+		announce('Subscription saved');
+	}
+});
+document.addEventListener('visibilitychange', () => {
+	if (document.hidden) {
+		playing = false;
+		render();
+	}
+});
+render();
