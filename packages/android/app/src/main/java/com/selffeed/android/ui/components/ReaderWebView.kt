@@ -26,7 +26,7 @@ import java.util.UUID
 internal class ReaderWebView(context: Context) : WebView(context) {
     private val callbacks = Handler(Looper.getMainLooper())
     private var documentToken = ""
-    private var documentKey: String? = null
+    private var documentKey: Pair<String, String>? = null
     private var active = false
     private var lifecycleApplied = false
     private var fullscreen: ReaderFullscreenMedia? = null
@@ -119,7 +119,7 @@ internal class ReaderWebView(context: Context) : WebView(context) {
 
     fun loadDocument(baseUrl: String, html: String, backgroundColor: Int) {
         if (released) return
-        val key = "$baseUrl\n$html"
+        val key = baseUrl to html
         if (documentKey == key) return
         runCatching { fullscreen?.close() }
         documentToken = UUID.randomUUID().toString()

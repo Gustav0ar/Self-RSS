@@ -12,7 +12,6 @@ import android.content.pm.ActivityInfo
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +41,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -242,8 +243,19 @@ private fun ArticleDetailView(
     LaunchedEffect(article.contentVersion, article.contentHtml, article.contentText, article.media) {
         retainedContent = retainedContent.mergeNonRegressive(article)
     }
-    val scrollState = rememberSaveable(article.id, saver = ScrollState.Saver) {
-        ScrollState(initial = 0)
+    val scrollPosition = rememberSaveable(article.id, saver = ReaderScrollPosition.Saver) {
+        ReaderScrollPosition()
+    }
+    val scrollState = scrollPosition.scrollState
+    var bodyPrepared by remember(article.id, preferHtml, allowRenderer) { mutableStateOf(false) }
+    var placedBody by remember(article.id, preferHtml, allowRenderer) { mutableIntStateOf(0) }
+    val bodyLaidOut = placedBody > 0
+    val placedGeneration = placedBody
+    LaunchedEffect(placedGeneration, scrollPosition) {
+        if (placedGeneration > 0) {
+            scrollPosition.restoreAfterBodyLayout()
+            onBodyReady()
+        }
     }
     var fullscreenMedia by remember { mutableStateOf<ReaderFullscreenMedia?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
@@ -252,8 +264,8 @@ private fun ArticleDetailView(
         if (isActive) onDisplayed()
     }
 
-    LaunchedEffect(article.id, isActive, scrollState) {
-        if (!isActive) return@LaunchedEffect
+    LaunchedEffect(article.id, isActive, scrollState, bodyLaidOut) {
+        if (!isActive || !bodyLaidOut) return@LaunchedEffect
         delay(5_000)
         snapshotFlow {
             if (scrollState.maxValue <= 0) 1f
@@ -332,19 +344,21 @@ private fun ArticleDetailView(
             }
         }
 
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth().onGloballyPositioned {
+            // Preparation/Chromium callbacks do not prove the scroll container
+            // has remeasured. Release restoration only after the body is placed.
+            if (bodyPrepared && placedBody == 0) placedBody = 1
+        }) {
             val html = retainedContent.html
             if (preferHtml && html != null && allowRenderer) {
-                // Show a skeleton placeholder first so the reader opens
-                // instantly. The WebView (which does the HTML load +
-                // layout + JS height callback) swaps in once it has a
-                // first frame ready. This avoids a blank pane while the
-                // article body is rendering.
-                var htmlReady by rememberSaveable(article.id) { mutableStateOf(false) }
-                if (!htmlReady) {
+                // Keep the static placeholder until the renderer has a
+                // measured first frame. Restoration follows its removal
+                // and the placement of the resulting body layout.
+                if (!bodyPrepared) {
                     ArticleHtmlSkeleton()
                 }
                 ReaderHtmlContent(
+                    documentId = article.id,
                     html = html,
                     backgroundColor = backgroundColor,
                     textColor = textColor,
@@ -357,10 +371,11 @@ private fun ArticleDetailView(
                     isActive = isActive,
                     onFullscreen = { fullscreenMedia = it },
                     onReady = {
-                        htmlReady = true
-                        onBodyReady()
+                        // The first body must replace the skeleton before
+                        // restoring. Later documents keep that placed body.
+                        if (placedBody > 0) placedBody++ else bodyPrepared = true
                     },
-                    onRendererFailure = { htmlReady = false },
+                    onRendererFailure = { bodyPrepared = false; placedBody = 0 },
                 )
             } else if (preferHtml && article.isRichContentPending()) {
                 // Keep Rich selected while the next article's detail request
@@ -372,10 +387,12 @@ private fun ArticleDetailView(
                 // only to retain headings, paragraphs, and lists; embedded
                 // images and video are removed before the text is rendered.
                 ReaderTextContent(
+                    documentId = article.id,
                     html = retainedContent.html,
                     text = retainedContent.text,
                     fallback = article.excerpt,
                     appearance = appearance,
+                    onReady = { bodyPrepared = true; placedBody++ },
                 )
             }
         }
@@ -438,10 +455,10 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
 }
 
 /**
- * Lightweight shimmer-style placeholder for the article body. Renders
+ * Static placeholder for the article body. Renders
  * a stack of rounded grey blocks sized to look like paragraphs so the
  * reader pane doesn't show a blank gap while the WebView is loading
- * the full HTML. The renderer's visual-state callback signals when the
+ * the full HTML. Height and visual-state callbacks signal when the
  * rich document can replace it (see [ReaderHtmlContent]).
  */
 @Composable
@@ -471,6 +488,7 @@ private fun ArticleHtmlSkeleton(modifier: Modifier = Modifier) {
 
 @Composable
 internal fun ReaderHtmlContent(
+    documentId: String,
     html: String,
     backgroundColor: Color,
     textColor: Color,
@@ -485,31 +503,20 @@ internal fun ReaderHtmlContent(
     onFullscreen: (ReaderFullscreenMedia?) -> Unit = { it?.close() },
     onReady: () -> Unit = {},
     onRendererFailure: () -> Unit = {},
+    preparer: ReaderContentPreparer = LocalReaderContentPreparer.current,
 ) {
-    var webViewHeightDp by remember(html) { mutableIntStateOf(600) }
+    var webViewHeightDp by remember(documentId) { mutableIntStateOf(600) }
 
-    val processedHtml = remember(
-        html,
-        backgroundColor,
-        textColor,
-        surfaceColor,
-        mutedTextColor,
-        linkColor,
-        appearance,
-        textScale,
-    ) {
-        buildReaderHtmlDocument(
-            html = html,
-            colors = readerHtmlColors(
-                backgroundColor = backgroundColor,
-                textColor = textColor,
-                surfaceColor = surfaceColor,
-                mutedTextColor = mutedTextColor,
-                linkColor = linkColor,
-            ),
-            appearance = appearance,
-            textScale = textScale,
+    val input = remember(html, backgroundColor, textColor, surfaceColor, mutedTextColor, linkColor, appearance, textScale, documentBaseUrl) {
+        ReaderHtmlInput(
+            html, readerHtmlColors(backgroundColor, textColor, surfaceColor, mutedTextColor, linkColor),
+            appearance, textScale, documentBaseUrl, backgroundColor.toArgb(),
         )
+    }
+    val prepared by key(documentId) {
+        produceState<PreparedReaderHtml?>(null, input, preparer) {
+            value = preparer.html(input)
+        }
     }
 
     var view by remember { mutableStateOf<ReaderWebView?>(null) }
@@ -521,10 +528,17 @@ internal fun ReaderHtmlContent(
     // One automatic replacement tolerates a renderer killed under pressure.
     // A second failure keeps the retained text instead of a crash/recreate loop.
     if (failures > 1) {
-        ReaderTextContent(html = html, text = null, fallback = null, appearance = appearance)
+        ReaderTextContent(documentId = documentId, html = html, text = null, fallback = null, appearance = appearance, preparer = preparer, onReady = { ready() })
         return
     }
-    key(failures) {
+    val document = prepared ?: return
+    key(documentId, failures) {
+        var hasMeasuredHeight by remember(document) { mutableStateOf(false) }
+        var visualReady by remember(document) { mutableStateOf(false) }
+        LaunchedEffect(document) {
+            snapshotFlow { hasMeasuredHeight && visualReady }.first { it }
+            ready()
+        }
         AndroidView(
             modifier = Modifier.fillMaxWidth().height((fixedHeightDp ?: webViewHeightDp).dp),
             factory = { context ->
@@ -533,15 +547,18 @@ internal fun ReaderHtmlContent(
             update = { renderer ->
                 // Enrichment can replace remembered document state without
                 // replacing this view. Every callback must target that state.
-                renderer.onHeight = { height -> if (height != webViewHeightDp) webViewHeightDp = height }
-                renderer.onReady = { ready() }
+                renderer.onHeight = { height ->
+                    webViewHeightDp = height
+                    hasMeasuredHeight = true
+                }
+                renderer.onReady = { visualReady = true }
                 renderer.onFullscreen = { fullscreen(it) }
                 renderer.onRendererGone = {
                     view = null
                     failures += 1
                     failed()
                 }
-                renderer.loadDocument(documentBaseUrl, processedHtml, backgroundColor.toArgb())
+                renderer.loadDocument(document.input.baseUrl, document.document, document.input.backgroundColor)
             },
             onRelease = { renderer ->
                 renderer.releaseReaderResources()

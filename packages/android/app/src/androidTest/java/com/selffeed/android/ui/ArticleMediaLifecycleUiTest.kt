@@ -9,10 +9,12 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
@@ -24,6 +26,9 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.components.ArticleReaderPane
 import com.selffeed.android.ui.components.ReaderWebView
+import com.selffeed.android.ui.components.ReaderPreparationGate
+import com.selffeed.android.ui.components.ReaderContentPreparer
+import com.selffeed.android.ui.components.LocalReaderContentPreparer
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,21 +68,39 @@ class ArticleMediaLifecycleUiTest {
 
     @Test
     fun backgroundAndHiddenTabPauseVideoAndTextModeReleasesTheRenderer() {
-        val fixture = showReader("video")
-        val reader = mediaReader(fixture)
-        play(reader)
-        composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
-        composeRule.waitUntil(3_000) { paused(reader) }
-        composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
-        assertTrue(paused(reader))
-        play(reader)
-        composeRule.runOnIdle { fixture.windowVisible = false }
-        composeRule.waitUntil(3_000) { paused(reader) }
-        composeRule.runOnIdle { fixture.windowVisible = true }
-        assertTrue(paused(reader))
-        composeRule.runOnIdle { fixture.rich = false }
-        composeRule.waitUntil(3_000) { reader.released }
-        assertEquals(0, composeRule.runOnIdle { webViews(composeRule.activity.window.decorView).count() })
+        verifyBackgroundAndTextSwitch(holdPreparation = false)
+    }
+
+    @Test
+    fun switchingBothPagesToTextKeepsLayoutAttachedWhilePreparationIsPending() {
+        verifyBackgroundAndTextSwitch(holdPreparation = true)
+    }
+
+    private fun verifyBackgroundAndTextSwitch(holdPreparation: Boolean) {
+        val gate = ReaderPreparationGate()
+        val fixture = showReader("video", preparationGate = gate)
+        try {
+            val reader = mediaReader(fixture)
+            play(reader)
+            composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+            composeRule.waitUntil(3_000) { paused(reader) }
+            composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+            assertTrue(paused(reader))
+            play(reader)
+            composeRule.runOnIdle { fixture.windowVisible = false }
+            composeRule.waitUntil(3_000) { paused(reader) }
+            composeRule.runOnIdle { fixture.windowVisible = true }
+            assertTrue(paused(reader))
+            val readyBeforeText = fixture.ready.getValue("media-1")
+            if (holdPreparation) gate.pause()
+            composeRule.runOnIdle { fixture.rich = false }
+            if (holdPreparation) composeRule.waitUntil(3_000) { gate.pendingCount > 0 }
+            composeRule.waitUntil(3_000) { reader.released }
+            assertEquals(0, composeRule.runOnIdle { webViews(composeRule.activity.window.decorView).count() })
+            gate.release()
+            composeRule.waitUntil(5_000) { (fixture.ready["media-1"] ?: 0) > readyBeforeText }
+            composeRule.onNodeWithText("Local playback fixture").assertIsDisplayed()
+        } finally { gate.release() }
     }
 
     @Test
@@ -155,8 +178,9 @@ class ArticleMediaLifecycleUiTest {
         val ready = ConcurrentHashMap<String, Int>()
     }
 
-    private fun showReader(type: String, count: Int = 2): Fixture {
+    private fun showReader(type: String, count: Int = 2, preparationGate: ReaderPreparationGate? = null): Fixture {
         val fixture = Fixture()
+        val preparer = preparationGate?.let(::ReaderContentPreparer) ?: ReaderContentPreparer()
         val asset = if (type == "audio") "tone.wav" else "motion.mp4"
         val mime = if (type == "audio") "audio/wav" else "video/mp4"
         val bytes = InstrumentationRegistry.getInstrumentation().context.assets.open("android-review/$asset").use { it.readBytes() }
@@ -173,18 +197,20 @@ class ArticleMediaLifecycleUiTest {
             )
         }
         composeRule.setContent {
-            SelfFeedTheme {
-                if (fixture.show) ArticleReaderPane(
-                    articles = items, selectedArticle = details.getValue("media-1").let {
-                        it.copy(contentHtml = it.contentHtml + fixture.extraHtml)
-                    },
-                    isVisible = fixture.windowVisible, preferHtml = fixture.rich,
-                    onPreferHtmlChanged = { fixture.rich = it },
-                    prefetchedArticles = details, onOpenOriginal = {}, onBackToList = {},
-                    // Hold the selected detail at A while the pager advances to B.
-                    onArticleSelected = {}, onVisibleArticleChanged = { fixture.visible = it },
-                    onArticleBodyReady = { fixture.ready.merge(it, 1, Int::plus) },
-                )
+            CompositionLocalProvider(LocalReaderContentPreparer provides preparer) {
+                SelfFeedTheme {
+                    if (fixture.show) ArticleReaderPane(
+                        articles = items, selectedArticle = details.getValue("media-1").let {
+                            it.copy(contentHtml = it.contentHtml + fixture.extraHtml)
+                        },
+                        isVisible = fixture.windowVisible, preferHtml = fixture.rich,
+                        onPreferHtmlChanged = { fixture.rich = it },
+                        prefetchedArticles = details, onOpenOriginal = {}, onBackToList = {},
+                        // Hold the selected detail at A while the pager advances to B.
+                        onArticleSelected = {}, onVisibleArticleChanged = { fixture.visible = it },
+                        onArticleBodyReady = { fixture.ready.merge(it, 1, Int::plus) },
+                    )
+                }
             }
         }
         return fixture

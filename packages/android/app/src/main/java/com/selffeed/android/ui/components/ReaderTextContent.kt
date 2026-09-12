@@ -9,8 +9,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -19,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.selffeed.android.R
 import androidx.core.text.HtmlCompat
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
 import com.selffeed.android.ui.ReaderAppearance
 
 /** A distraction-free, media-free representation of an article. */
@@ -55,13 +65,28 @@ internal fun readerTextBlocks(
 
 @Composable
 internal fun ReaderTextContent(
+    documentId: String,
     html: String?,
     text: String?,
     fallback: String?,
     appearance: ReaderAppearance = ReaderAppearance(),
     modifier: Modifier = Modifier,
+    preparer: ReaderContentPreparer = LocalReaderContentPreparer.current,
+    onReady: () -> Unit = {},
 ) {
-    val blocks = remember(html, text, fallback) { readerTextBlocks(html, text, fallback) }
+    val prepared by key(documentId) {
+        produceState<List<ReaderTextBlock>?>(null, html, text, fallback, preparer) {
+            value = preparer.text(html, text, fallback)
+        }
+    }
+    val blocks = prepared
+    var readyReported by remember(documentId, blocks) { mutableStateOf(false) }
+    val latestOnReady by rememberUpdatedState(onReady)
+    LaunchedEffect(documentId, blocks) {
+        if (blocks == null) return@LaunchedEffect
+        snapshotFlow { readyReported }.first { it }
+        latestOnReady()
+    }
     val paragraphStyle = MaterialTheme.typography.bodyLarge.copy(
         fontFamily = appearance.font.composeFontFamily,
         fontSize = appearance.boundedTextSizeSp.sp,
@@ -75,12 +100,20 @@ internal fun ReaderTextContent(
         fontWeight = FontWeight.SemiBold,
     )
 
+    // Keep the body layout present during preparation. Returning no node here
+    // leaves the Rich-to-Text transition without a replacement layout child.
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .testTag("reader-text-content"),
+            .then(if (blocks != null) Modifier.testTag("reader-text-content") else Modifier)
+            .onGloballyPositioned {
+                if (blocks != null && !readyReported) {
+                    readyReported = true
+                }
+            },
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        if (blocks == null) return@Column
         if (blocks.isEmpty()) {
             Text(
                 text = stringResource(R.string.reader_no_text_content),
