@@ -5,13 +5,17 @@ Gustavo authorized further review, fixes and merging PRs #46–73 on 2026-09-12.
 ## Reviewed candidate
 
 - Main: `cd802e546d030ebfb98b0e01d37905b5b254ac7a`.
-- Combined implementation: `5cc2ad7980259768d2c0bbc31176073fb01bf8d0`, plus the restoration fixture correction below.
+- Combined implementation: `76793558ad5ebdc5de9438210c37b96942e681ee`, including both test synchronization corrections below. Production packages match the fully device-tested candidate `f394bd4`; the only package difference is the outbox test correction.
 - PR #47 contains design alternatives and an explicitly pending selection. Merging those documents does not select or implement a layout.
 - Root owns all edits and test/device execution. Three independent read-only reviewers completed fresh passes over migrations, account/data consistency and reader/media lifetime. None found a new blocker. Root also reviewed the API cache/state response contracts and their cross-client callers.
 
 ## Findings and resolution
 
 PR #69's latest documentation commit had a failed reader restoration test in CI run `34698147650`. Its assertion expected offset 600 before asynchronous body preparation finished. The controlled reproduction in `/tmp/android-premerge-restoration-red-4.log` fails with the same actual offset 0. Earlier reproduction attempts timed out because the fixture awaited dispatch before synchronizing Navigation's layout. The corrected test first establishes the restored reader shell, holds preparation, then waits for the production body-ready callback before asserting the exact original offset. `/tmp/android-premerge-restoration-green.log` passes all four restoration cases. No delay or production workaround was added.
+
+Fresh CI runs `34703218677` and `34703294671` exposed a second timing assumption in the outbox receipt test. `runCurrent()` drains the test scheduler but cannot guarantee that Room's executor has returned the action. The test now awaits the receipt with a bounded real-time timeout while its WorkManager gate stays closed, then verifies the persisted mutation ID. The focused suite passes. A temporary production mutation that joins worker scheduling makes the corrected test fail with the expected timeout in `/tmp/android-premerge-outbox-receipt-mutant.log`; the mutation was removed. The complete PR #69 suite passes all 593 cases in `/tmp/android-premerge-pr69-final-unit.log`. No production scheduling change was needed.
+
+Combining PR #47 exposed existing mock JS/CSS lint errors. Formatting, statement callbacks and equivalent template strings fix them. A timestamp class replaces an inline float plus its overriding CSS. All six before/after phone/tablet screenshots are pixel-identical, and search, text size, download removal and bookmark preservation pass in `/tmp/android-premerge-design-comparison.log`. Repository Biome checks pass in `/tmp/android-premerge-design-fixed.log`. The design choice remains pending.
 
 All 28 GitHub review records were inspected, including discussion and inline threads. Each has only a Copilot quota notice; there are no inline findings or unresolved threads. This is not automated-review approval. Main's ruleset requires one approving GitHub review and provides an administrator bypass. Merge authorization does not fabricate an approving review.
 
@@ -38,7 +42,7 @@ The shared migration contract checks populated upgrades from versions 1 through 
 | API/web builds | Passed | `/tmp/android-premerge-repo-build.log` |
 | Generated OpenAPI and Android contract mapping | Passed, no generated diff | `/tmp/android-premerge-openapi.log` |
 | Security | All four jobs passed at `5cc2ad7` | Run `34702966192` |
-| Repository CI | Running at `5cc2ad7` | Run `34702960705` |
+| Repository CI | All five jobs passed at `5cc2ad7`; final design tree pending | Run `34702960705` |
 | Latest combined Android CI | All required jobs passed at `5cc2ad7` | Run `34701826679` |
 
 The disposable device is emulator-5568, API 35, WebView 124.0.6367.219, 320 × 640 at density 160, with animations disabled. Only isolated test package IDs are installed. Main pushes trigger container publication and queue the production deployment workflow; the production job requires Gustavo's explicit environment approval. No deployment approval is part of this review.
@@ -51,4 +55,4 @@ Physical frame, battery and native/WebView memory measurements remain in plans 0
 
 No PR has been merged during this review yet. Record final head checks, review findings, merge commits and post-merge validation here before declaring the merge task complete.
 
-PR #69 receives the fixture correction as `aa53fa9`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-unit.log`. PRs #70–73 are rebased on that correction. Their resulting package tree matches the combined candidate tested locally, verified with `git diff --exit-code f394bd4 HEAD -- packages`. No production code or persistent schema changed during this further review. Fresh PR CI is required on the rewritten branches.
+PR #69 receives the restoration correction as `aa53fa9` and the outbox assertion correction as `04131a1`; its own complete 593-case JVM suite passes in `/tmp/android-premerge-pr69-unit.log`. PRs #70–73 are rebased on that correction. Their production package tree matches the combined candidate tested locally. The only package difference from `f394bd4` is the outbox assertion correction in `RssRepositoryTest.kt`. No production code or persistent schema changed during this further review. Fresh PR CI is required on the rewritten branches.
