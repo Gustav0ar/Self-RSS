@@ -38,10 +38,23 @@ import okhttp3.OkHttpClient
 import okio.Path.Companion.toOkioPath
 import java.io.File
 import javax.inject.Singleton
+import javax.inject.Qualifier
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class ApplicationCoroutineScope
 
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+    @Provides
+    @Singleton
+    @ApplicationCoroutineScope
+    fun provideApplicationCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Provides
     @Singleton
     fun provideSessionStore(@ApplicationContext context: Context): SessionStore = SessionStore(context)

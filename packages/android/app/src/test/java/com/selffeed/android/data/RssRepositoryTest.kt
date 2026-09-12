@@ -57,6 +57,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -81,27 +82,55 @@ class RssRepositoryTest {
     private lateinit var sessionStore: SessionStore
     private lateinit var sessionRefreshCoordinator: SessionRefreshCoordinator
     private lateinit var localStore: LocalStore
+    private lateinit var database: com.selffeed.android.data.local.LocalDatabase
+    private val databaseName = "repository-test-${java.util.UUID.randomUUID()}"
     private lateinit var offlineReadStore: OfflineReadStore
     private lateinit var imageLoader: ImageLoader
     private lateinit var networkMonitor: NetworkMonitor
     private lateinit var onlineState: MutableStateFlow<Boolean>
     private lateinit var repository: RssRepository
+    private val backgroundJob = kotlinx.coroutines.SupervisorJob()
+    private val backgroundScope = kotlinx.coroutines.CoroutineScope(backgroundJob + Dispatchers.Unconfined)
+
+    @After
+    fun closeBackgroundJobs() {
+        runBlocking { backgroundJob.cancel(); backgroundJob.join() }
+        database.close()
+        context.deleteDatabase(databaseName)
+    }
 
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
         api = mockk(relaxed = true)
         sessionStore = mockk(relaxed = true)
+        var owner = ApiSession(0, "https://a.example/api/v1/", java.util.UUID.randomUUID().toString())
+        every { sessionStore.currentSession() } answers { owner }
+        every { sessionStore.loadedSession() } answers { owner }
+        every { sessionStore.getApiBaseUrl() } answers { owner.apiBaseUrl }
+        every { sessionStore.isCurrentSession(any()) } answers { firstArg<ApiSession>() == owner }
+        coEvery { sessionStore.clear() } coAnswers {
+            owner = owner.copy(generation = owner.generation + 1, ownerId = java.util.UUID.randomUUID().toString())
+        }
+        coEvery { sessionStore.beginAuthentication() } coAnswers {
+            owner = owner.copy(generation = owner.generation + 1, ownerId = java.util.UUID.randomUUID().toString())
+            owner
+        }
+        coEvery { sessionStore.setAccessTokenIfCurrent(any(), any()) } coAnswers { firstArg<ApiSession>() == owner }
+        coEvery { sessionStore.setApiBaseUrl(any()) } coAnswers {
+            owner = ApiSession(owner.generation + 1, firstArg(), java.util.UUID.randomUUID().toString())
+            owner.apiBaseUrl
+        }
         sessionRefreshCoordinator = mockk(relaxed = true)
         // The production Moshi includes the reflective
         // KotlinJsonAdapterFactory as a fallback for DTOs whose generated
         // adapters aren't on the test classpath. The test suite uses the
         // same Moshi so writes through LocalStore can encode payloads.
         val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
-        localStore = LocalStore(context, moshi)
-        runBlocking {
-            localStore.clearAll()
-        }
+        database = androidx.room.Room.databaseBuilder(
+            context, com.selffeed.android.data.local.LocalDatabase::class.java, databaseName,
+        ).build()
+        localStore = LocalStore(database, moshi)
         offlineReadStore = localStore
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
@@ -123,14 +152,24 @@ class RssRepositoryTest {
             imageRequestContext = context,
             imageLoader = imageLoader,
             networkMonitor = networkMonitor,
+            refreshScope = backgroundScope,
         )
+    }
+
+    @Test
+    fun `analytics persistence failure cannot turn a successful login into an error`() = runTest {
+        coEvery { api.login(any(), any()) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.AuthResponse(sampleUser(), com.selffeed.android.network.AccessTokenOnly("new-token")),
+        )
+        coEvery { sessionStore.enqueueProductAnalyticsEvent(any()) } throws java.io.IOException("storage unavailable")
+        assertEquals(AppResult.Success(sampleUser()), repository.login("reader@example.com", "password"))
+        coVerify { sessionStore.recordAuthenticated(any()) }
     }
 
     @Test
     fun `login response after logout cannot restore the access token`() = runTest {
         val session = ApiSession(0, "rss.example.com", "test-owner")
         val response = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.AuthResponse>>()
-        coEvery { sessionStore.beginAuthentication() } returns session
         coEvery { sessionStore.setAccessTokenIfCurrent(session, any()) } returns false
         coEvery { api.login(any(), any()) } coAnswers { response.await() }
 
@@ -141,7 +180,8 @@ class RssRepositoryTest {
             com.selffeed.android.network.AuthResponse(sampleUser(), com.selffeed.android.network.AccessTokenOnly("late-token")),
         ))
 
-        assertTrue(login.await() is AppResult.Error)
+        login.join()
+        assertTrue(login.isCancelled)
         coVerify(exactly = 0) { sessionStore.setAccessToken(any()) }
         coVerify(exactly = 0) { sessionStore.recordAuthenticated(any()) }
     }
@@ -151,8 +191,8 @@ class RssRepositoryTest {
         val articleId = "saved-rollback"
         val detail = sampleArticleDetail(articleId, isRead = false).copy(isEnriched = true)
         every { sessionStore.getAccessToken() } returns "test-session"
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
-        coEvery { api.setSaved(articleId, any()) } throws httpError(404, "Article unavailable")
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.setSaved(articleId, any(), session = any()) } throws httpError(404, "Article unavailable")
         onlineState.value = false
         val viewModel = ArticlesViewModel(
             repository, ReadStateManager(repository), EnrichmentManager(repository), ArticleWarmingManager(repository),
@@ -182,7 +222,7 @@ class RssRepositoryTest {
     @Test
     fun `trimMemoryCaches clears the in-memory map and reports an invalidation`() {
         // Populate the cache via a successful call.
-        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.me(session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             data = com.selffeed.android.network.User(
                 id = "u-1",
                 email = "x@x.com",
@@ -216,7 +256,7 @@ class RssRepositoryTest {
         // cachedArticleDetail through a manual cache put via the public API
         // (we don't expose putCached, so we exercise the path via a successful
         // article fetch).
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         every { sessionStore.getAccessToken() } returns "token"
 
         val fetched = repository.article(articleId)
@@ -231,6 +271,7 @@ class RssRepositoryTest {
             api.markRead(
                 articleId,
                 match { it.read && it.source == "manual" && it.mutationId != null },
+                session = any(),
             )
         } throws
             java.net.SocketTimeoutException("simulated timeout")
@@ -247,12 +288,13 @@ class RssRepositoryTest {
     fun `markRead with successful server response retains the warmed article cache`() = runTest {
         val articleId = "article-2"
         val detail = sampleArticleDetail(id = articleId, isRead = false)
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         every { sessionStore.getAccessToken() } returns "token"
         coEvery {
             api.markRead(
                 articleId,
                 match { it.read && it.source == "manual" && it.mutationId != null },
+                session = any(),
             )
         } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.MarkReadResponse(success = true, read = true, revision = 1),
@@ -268,7 +310,7 @@ class RssRepositoryTest {
         assertEquals(true, repository.cachedArticleDetail(articleId)?.isRead)
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
         coVerify {
-            api.markRead(articleId, match { it.read && it.source == "manual" && it.mutationId != null })
+            api.markRead(articleId, match { it.read && it.source == "manual" && it.mutationId != null }, session = any())
         }
     }
 
@@ -277,14 +319,14 @@ class RssRepositoryTest {
         val articleId = "article-read-replaced"
         val detail = sampleArticleDetail(articleId, isRead = false)
         every { sessionStore.getAccessToken() } returns "token"
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         repository.article(articleId)
 
         val oldDeliveryStarted = CompletableDeferred<Unit>()
         val releaseOldDelivery = CompletableDeferred<Unit>()
         val newDeliveryStarted = CompletableDeferred<Unit>()
         val releaseNewDelivery = CompletableDeferred<Unit>()
-        coEvery { api.markRead(articleId, any()) } coAnswers {
+        coEvery { api.markRead(articleId, any(), session = any()) } coAnswers {
             if (secondArg<com.selffeed.android.network.MarkReadRequest>().read) {
                 oldDeliveryStarted.complete(Unit)
                 releaseOldDelivery.await()
@@ -323,14 +365,14 @@ class RssRepositoryTest {
         val articleId = "article-save-replaced"
         val detail = sampleArticleDetail(articleId, isRead = false)
         every { sessionStore.getAccessToken() } returns "token"
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         repository.article(articleId)
 
         val oldDeliveryStarted = CompletableDeferred<Unit>()
         val releaseOldDelivery = CompletableDeferred<Unit>()
         val newDeliveryStarted = CompletableDeferred<Unit>()
         val releaseNewDelivery = CompletableDeferred<Unit>()
-        coEvery { api.setSaved(articleId, any()) } coAnswers {
+        coEvery { api.setSaved(articleId, any(), session = any()) } coAnswers {
             if (secondArg<com.selffeed.android.network.SaveArticleRequest>().saved) {
                 oldDeliveryStarted.complete(Unit)
                 releaseOldDelivery.await()
@@ -372,6 +414,7 @@ class RssRepositoryTest {
             api.markRead(
                 articleId,
                 match { it.read && it.source == "auto_open" && it.mutationId != null },
+                session = any(),
             )
         } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.MarkReadResponse(success = true, read = true, revision = 1),
@@ -381,7 +424,7 @@ class RssRepositoryTest {
 
         assertTrue(result is AppResult.Success)
         coVerify {
-            api.markRead(articleId, match { it.read && it.source == "auto_open" && it.mutationId != null })
+            api.markRead(articleId, match { it.read && it.source == "auto_open" && it.mutationId != null }, session = any())
         }
     }
 
@@ -395,7 +438,7 @@ class RssRepositoryTest {
             clearExisting = true,
         )
 
-        val pagingSource = localStore.articlePagingSource(queryKey)
+        val pagingSource = localStore.articlePagingSource(queryKey, ownerId = null)
         pagingSource.load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(
                 key = null,
@@ -412,7 +455,7 @@ class RssRepositoryTest {
         withContext(Dispatchers.Default) { withTimeout(5_000) { invalidated.await() } }
         assertEquals(true, pagingSource.invalid)
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
-        val page = localStore.articlePagingSource(queryKey).load(
+        val page = localStore.articlePagingSource(queryKey, ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -435,7 +478,7 @@ class RssRepositoryTest {
             ),
             clearExisting = true,
         )
-        val pagingSource = localStore.articlePagingSource(queryKey)
+        val pagingSource = localStore.articlePagingSource(queryKey, ownerId = null)
 
         repository.invalidateArticleContentCaches()
 
@@ -459,7 +502,7 @@ class RssRepositoryTest {
             clearExisting = true,
         )
         coEvery {
-            api.markAllRead(com.selffeed.android.network.MarkAllReadRequest(feedId = "f-local"))
+            api.markAllRead(com.selffeed.android.network.MarkAllReadRequest(feedId = "f-local"), session = any())
         } returns com.selffeed.android.network.ApiEnvelope(
             MarkAllReadResponse(markedCount = 1, feedIds = listOf("f-local")),
         )
@@ -467,7 +510,7 @@ class RssRepositoryTest {
         val result = repository.markAllRead(feedId = "f-local", categoryId = null)
 
         assertTrue(result is AppResult.Success)
-        val page = localStore.articlePagingSource(queryKey).load(
+        val page = localStore.articlePagingSource(queryKey, ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(
                 key = null,
                 loadSize = 30,
@@ -493,15 +536,15 @@ class RssRepositoryTest {
 
         assertTrue(queuedResult is AppResult.Success)
         assertEquals(1, localStore.readPendingReadStateMutations().size)
-        coVerify(exactly = 0) { api.markRead(any(), any()) }
+        coVerify(exactly = 0) { api.markRead(any(), any(), session = any()) }
 
         onlineState.value = true
         coEvery {
-            api.markRead(articleId, match { it.read && it.mutationId != null })
+            api.markRead(articleId, match { it.read && it.mutationId != null }, session = any())
         } returns com.selffeed.android.network.ApiEnvelope(
             MarkReadResponse(success = true, read = true, revision = 1),
         )
-        coEvery { api.categories() } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.categories(session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.CategoryTreeResponse(categories = emptyList(), totalUnread = 0),
         )
 
@@ -510,7 +553,7 @@ class RssRepositoryTest {
         assertTrue(readResult is AppResult.Success)
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }) }
+        coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }, session = any()) }
     }
 
     @Test
@@ -518,7 +561,7 @@ class RssRepositoryTest {
         val articleId = "article-reconnect"
         localStore.queueReadStateMutation(articleId, read = true)
         coEvery {
-            api.markRead(articleId, match { it.read && it.mutationId != null })
+            api.markRead(articleId, match { it.read && it.mutationId != null }, session = any())
         } returns com.selffeed.android.network.ApiEnvelope(
             MarkReadResponse(success = true, read = true, revision = 1),
         )
@@ -527,14 +570,14 @@ class RssRepositoryTest {
 
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         assertTrue(localStore.readArticleReadOverrides().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }) }
+        coVerify(exactly = 1) { api.markRead(articleId, match { it.read && it.mutationId != null }, session = any()) }
     }
 
     @Test
     fun `reconnect invalidation preserves pending read state when the server flush fails`() = runTest {
         val articleId = "article-reconnect-failure"
         localStore.queueReadStateMutation(articleId, read = true)
-        coEvery { api.markRead(articleId, match { it.read && it.mutationId != null }) } throws
+        coEvery { api.markRead(articleId, match { it.read && it.mutationId != null }, session = any()) } throws
             java.net.SocketTimeoutException("still offline")
 
         repository.invalidateReadStateCaches()
@@ -547,7 +590,7 @@ class RssRepositoryTest {
     fun `unauthorized mutation remains queued when token refresh is unavailable`() = runTest {
         val articleId = "article-refresh-unavailable"
         localStore.queueReadStateMutation(articleId, read = true)
-        coEvery { api.markRead(articleId, match { it.mutationId != null }) } throws
+        coEvery { api.markRead(articleId, match { it.mutationId != null }, session = any()) } throws
             httpError(401, "expired")
         every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns false
 
@@ -573,7 +616,7 @@ class RssRepositoryTest {
 
         onlineState.value = true
         coEvery {
-            api.syncAllFeeds(match { it.isNotBlank() }, null, null)
+            api.syncAllFeeds(match { it.isNotBlank() }, null, null, session = any())
         } returns com.selffeed.android.network.ApiEnvelope(
             SyncResponse(status = "queued", totalFeeds = 1),
         )
@@ -584,7 +627,7 @@ class RssRepositoryTest {
         val pending = localStore.readPendingReadStateMutations()
         assertEquals(1, pending.size)
         assertEquals(articleId, pending.first().articleId)
-        coVerify(exactly = 0) { api.markRead(any(), any()) }
+        coVerify(exactly = 0) { api.markRead(any(), any(), session = any()) }
     }
 
     @Test
@@ -599,8 +642,8 @@ class RssRepositoryTest {
             ),
             clearExisting = true,
         )
-        val pagingSource = localStore.articlePagingSource(queryKey)
-        coEvery { api.syncAllFeedsStatus(any()) } returns com.selffeed.android.network.ApiEnvelope(
+        val pagingSource = localStore.articlePagingSource(queryKey, ownerId = null)
+        coEvery { api.syncAllFeedsStatus(any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             FeedSyncAllStatus(
                 queued = false,
                 running = false,
@@ -626,7 +669,7 @@ class RssRepositoryTest {
     @Test
     fun `missing persisted refresh request falls back to latest status once`() = runTest {
         every { sessionStore.getFeedRefreshRequestId() } returns "old-request"
-        coEvery { api.syncAllFeedsStatus("old-request") } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.syncAllFeedsStatus("old-request", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             FeedSyncAllStatus(
                 requestId = null,
                 status = "completed",
@@ -636,7 +679,7 @@ class RssRepositoryTest {
                 stale = false,
             ),
         )
-        coEvery { api.syncAllFeedsStatus(null) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.syncAllFeedsStatus(null, session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             FeedSyncAllStatus(
                 requestId = "latest-request",
                 status = "running",
@@ -650,8 +693,8 @@ class RssRepositoryTest {
         val result = repository.syncAllFeedsStatus()
 
         assertEquals("latest-request", (result as AppResult.Success).data.requestId)
-        coVerify { api.syncAllFeedsStatus("old-request") }
-        coVerify(exactly = 1) { api.syncAllFeedsStatus(null) }
+        coVerify { api.syncAllFeedsStatus("old-request", session = any()) }
+        coVerify(exactly = 1) { api.syncAllFeedsStatus(null, session = any()) }
         coVerify { sessionStore.setFeedRefreshRequestId("latest-request") }
     }
 
@@ -690,7 +733,7 @@ class RssRepositoryTest {
 
     @Test
     fun `debug snapshot resets counters`() = runTest {
-        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.me(session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.User("u", "x@x.com", "user", true),
         )
         every { sessionStore.getAccessToken() } returns null
@@ -715,7 +758,7 @@ class RssRepositoryTest {
             com.selffeed.android.network.CategoryOrderUpdate("first", 1),
         )
         val request = com.selffeed.android.network.ReorderCategoriesRequest(updates)
-        coEvery { api.reorderCategories(request) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.reorderCategories(request, session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.ReorderCategoriesResponse(2),
         )
 
@@ -723,7 +766,7 @@ class RssRepositoryTest {
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(4, localStore.readCategories().last().unreadCount)
-        coVerify(exactly = 1) { api.reorderCategories(request) }
+        coVerify(exactly = 1) { api.reorderCategories(request, session = any()) }
     }
 
     @Test
@@ -733,7 +776,7 @@ class RssRepositoryTest {
         val pending = CompletableDeferred<Unit>()
         val started = CompletableDeferred<Unit>()
         var requests = 0
-        coEvery { api.categories() } coAnswers {
+        coEvery { api.categories(session = any()) } coAnswers {
             requests++
             val response = if (requests == 1) {
                 started.complete(Unit)
@@ -742,7 +785,7 @@ class RssRepositoryTest {
             } else updated
             com.selffeed.android.network.ApiEnvelope(com.selffeed.android.network.CategoryTreeResponse(response, 0))
         }
-        coEvery { api.reorderCategories(any()) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.reorderCategories(any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.ReorderCategoriesResponse(2),
         )
         val loading = async { repository.categories() }
@@ -756,13 +799,13 @@ class RssRepositoryTest {
         assertEquals(AppResult.Success(updated), loading.await())
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
         assertEquals(listOf("second", "first"), localStore.readCategories().map { it.id })
-        coVerify(exactly = 2) { api.categories() }
+        coVerify(exactly = 2) { api.categories(session = any()) }
     }
 
     @Test
     fun `categories return sqlite data before network refresh`() = runTest {
         localStore.writeCategories(listOf(sampleCategory("c-local")))
-        coEvery { api.categories() } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.categories(session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             com.selffeed.android.network.CategoryTreeResponse(
                 categories = listOf(sampleCategory("c-network")),
                 totalUnread = 0,
@@ -778,7 +821,7 @@ class RssRepositoryTest {
     @Test
     fun `feeds return sqlite data before network refresh`() = runTest {
         localStore.writeFeeds(listOf(sampleFeed("f-local")))
-        coEvery { api.feeds(null) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.feeds(null, session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             listOf(sampleFeed("f-network")),
         )
 
@@ -791,7 +834,7 @@ class RssRepositoryTest {
     @Test
     fun `refreshFeeds bypasses stale sqlite feed health`() = runTest {
         localStore.writeFeeds(listOf(sampleFeed("f-local")))
-        coEvery { api.feeds(null) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.feeds(null, session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             listOf(
                 sampleFeed("f-network").copy(
                     syncStatus = "error",
@@ -808,7 +851,7 @@ class RssRepositoryTest {
         assertEquals("error", feed.syncStatus)
         assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
         assertEquals(listOf("f-network"), localStore.readFeeds().map { it.id })
-        coVerify(exactly = 1) { api.feeds(null) }
+        coVerify(exactly = 1) { api.feeds(null, session = any()) }
     }
 
     @Test
@@ -843,7 +886,7 @@ class RssRepositoryTest {
             assertEquals(0, event.unreadDelta)
             assertEquals(0, event.readDelta)
 
-            coEvery { api.markRead(article.id, any()) } returns com.selffeed.android.network.ApiEnvelope(
+            coEvery { api.markRead(article.id, any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
                 MarkReadResponse(success = true, read = true, revision = 4),
             )
             onlineState.value = true
@@ -970,7 +1013,7 @@ class RssRepositoryTest {
     @Test
     fun `scoped feed refresh merges into the complete offline snapshot`() = runTest {
         localStore.writeFeeds(listOf(sampleFeed("f-existing", categoryId = "c-other")))
-        coEvery { api.feeds("c-target") } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.feeds("c-target", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             listOf(sampleFeed("f-target", categoryId = "c-target")),
         )
 
@@ -1014,48 +1057,48 @@ class RssRepositoryTest {
     fun `restoreSession uses saved access token before refreshing`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns "access-token"
-        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
+        coEvery { api.me(session = any()) } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
 
         val result = repository.restoreSession()
 
         assertTrue(result is AppResult.Success)
-        io.mockk.verify(exactly = 0) { sessionRefreshCoordinator.refreshAccessToken() }
+        io.mockk.verify(exactly = 0) { sessionRefreshCoordinator.refreshAccessToken(any()) }
     }
 
     @Test
     fun `restoreSession refreshes through the shared coordinator when only a refresh cookie exists`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken() } returns
+        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns
             SessionRefreshResult.Success("new-access-token")
-        coEvery { api.me() } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
+        coEvery { api.me(session = any()) } returns com.selffeed.android.network.ApiEnvelope(sampleUser())
 
         val result = repository.restoreSession()
 
         assertTrue(result is AppResult.Success)
-        io.mockk.verify(exactly = 1) { sessionRefreshCoordinator.refreshAccessToken() }
-        coVerify(exactly = 1) { api.me() }
+        io.mockk.verify(exactly = 1) { sessionRefreshCoordinator.refreshAccessToken(any()) }
+        coVerify(exactly = 1) { api.me(session = any()) }
     }
 
     @Test
     fun `restoreSession clears the local session when refresh session is rejected`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken() } returns SessionRefreshResult.Rejected
+        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns SessionRefreshResult.Rejected
 
         val result = repository.restoreSession()
 
         assertTrue(result is AppResult.Error)
         assertEquals("Authentication was lost. Please sign in again.", (result as AppResult.Error).message)
         coVerify(exactly = 1) { sessionStore.clear() }
-        coVerify(exactly = 0) { api.me() }
+        coVerify(exactly = 0) { api.me(session = any()) }
     }
 
     @Test
     fun `restoreSession keeps the local session when refresh is temporarily unavailable`() = runTest {
         every { sessionStore.getRefreshCookie() } returns "refresh-cookie"
         every { sessionStore.getAccessToken() } returns null
-        every { sessionRefreshCoordinator.refreshAccessToken() } returns
+        every { sessionRefreshCoordinator.refreshAccessToken(any()) } returns
             SessionRefreshResult.Unavailable(java.io.IOException("network unavailable"))
 
         val result = repository.restoreSession()
@@ -1063,7 +1106,7 @@ class RssRepositoryTest {
         assertTrue(result is AppResult.Error)
         assertEquals("Unable to refresh session. Please check your connection.", (result as AppResult.Error).message)
         coVerify(exactly = 0) { sessionStore.clear() }
-        coVerify(exactly = 0) { api.me() }
+        coVerify(exactly = 0) { api.me(session = any()) }
     }
 
     @Test
@@ -1076,15 +1119,15 @@ class RssRepositoryTest {
         localStore.queueSavedStateMutation(articleId, saved = true)
         val deliveryStarted = CompletableDeferred<Unit>()
         val releaseDelivery = CompletableDeferred<Unit>()
-        coEvery { api.markRead(articleId, any()) } coAnswers {
+        coEvery { api.markRead(articleId, any(), session = any()) } coAnswers {
             deliveryStarted.complete(Unit)
             releaseDelivery.await()
             com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
         }
-        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.setSaved(articleId, any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             MarkReadResponse(success = true, saved = true, revision = 1),
         )
-        coEvery { api.article(articleId) } returns com.selffeed.android.network.ApiEnvelope(detail)
+        coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
         val delivery = async { worker.doWork() }
         deliveryStarted.await()
@@ -1106,8 +1149,8 @@ class RssRepositoryTest {
         }
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
         assertTrue(localStore.readPendingSavedStateMutations().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, any()) }
-        coVerify(exactly = 1) { api.setSaved(articleId, any()) }
+        coVerify(exactly = 1) { api.markRead(articleId, any(), session = any()) }
+        coVerify(exactly = 1) { api.setSaved(articleId, any(), session = any()) }
     }
 
     @Test
@@ -1117,7 +1160,7 @@ class RssRepositoryTest {
         val deliveryStarted = CompletableDeferred<Unit>()
         val duplicateStarted = CompletableDeferred<Unit>()
         val releaseDelivery = CompletableDeferred<Unit>()
-        coEvery { api.markRead(articleId, any()) } coAnswers {
+        coEvery { api.markRead(articleId, any(), session = any()) } coAnswers {
             if (!deliveryStarted.complete(Unit)) duplicateStarted.complete(Unit)
             releaseDelivery.await()
             com.selffeed.android.network.ApiEnvelope(MarkReadResponse(success = true, read = true, revision = 1))
@@ -1136,7 +1179,7 @@ class RssRepositoryTest {
             assertTrue(second.await())
         }
         assertTrue(localStore.readPendingReadStateMutations().isEmpty())
-        coVerify(exactly = 1) { api.markRead(articleId, any()) }
+        coVerify(exactly = 1) { api.markRead(articleId, any(), session = any()) }
     }
 
     @Test
@@ -1145,14 +1188,14 @@ class RssRepositoryTest {
         every { sessionStore.getAccessToken() } returns "test-session"
         localStore.writeArticleDetail(sampleArticleDetail(articleId, isRead = false))
         localStore.queueSavedStateMutation(articleId, saved = true)
-        coEvery { api.setSaved(articleId, any()) } throws java.net.SocketTimeoutException("temporarily offline")
+        coEvery { api.setSaved(articleId, any(), session = any()) } throws java.net.SocketTimeoutException("temporarily offline")
         val worker = ArticleStateSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
 
         assertEquals(ListenableWorker.Result.retry(), worker.doWork())
         assertEquals(articleId, localStore.readPendingSavedStateMutations().single().articleId)
         assertEquals(true, localStore.readArticleDetail(articleId)?.isSaved)
 
-        coEvery { api.setSaved(articleId, any()) } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.setSaved(articleId, any(), session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             MarkReadResponse(success = true, saved = true, revision = 1),
         )
         assertEquals(ListenableWorker.Result.success(), worker.doWork())
@@ -1166,7 +1209,7 @@ class RssRepositoryTest {
         every { sessionStore.getRefreshCookie() } returns "rss_refresh_token=refresh; Path=/"
         val remoteResponse = CompletableDeferred<com.selffeed.android.network.ApiEnvelope<com.selffeed.android.network.SuccessResponse>>()
         coEvery {
-            api.logout("Bearer access", "rss_refresh_token=refresh")
+            api.logout("Bearer access", "rss_refresh_token=refresh", session = any())
         } coAnswers { remoteResponse.await() }
 
         val result = repository.logout()
@@ -1182,7 +1225,7 @@ class RssRepositoryTest {
 
     @Test
     fun `unauthorized protected call without auth lost signal does not clear the local session`() = runTest {
-        coEvery { api.me() } throws httpError(
+        coEvery { api.me(session = any()) } throws httpError(
             code = 401,
             message = "Invalid or expired token",
         )
@@ -1197,7 +1240,7 @@ class RssRepositoryTest {
 
     @Test
     fun `auth lost response without refresh rejection keeps the local session`() = runTest {
-        coEvery { api.me() } throws httpError(
+        coEvery { api.me(session = any()) } throws httpError(
             code = 401,
             message = "Authentication was lost. Please sign in again.",
         )
@@ -1212,7 +1255,7 @@ class RssRepositoryTest {
 
     @Test
     fun `auth lost response after refresh rejection clears the local session`() = runTest {
-        coEvery { api.me() } throws httpError(
+        coEvery { api.me(session = any()) } throws httpError(
             code = 401,
             message = "Authentication was lost. Please sign in again.",
         )
@@ -1255,28 +1298,33 @@ class RssRepositoryTest {
     fun `saved reconciliation confirms remote unsaves and deletions while retaining cached content`() = runTest {
         cacheSavedArticles("unsaved", "deleted")
         every { sessionStore.getAccessToken() } returns "test-session"
-        coEvery { api.article("unsaved") } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.article("unsaved", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             sampleArticleDetail("unsaved", false).copy(isSaved = true),
         )
         repository.refreshArticleDetail("unsaved")
-        coEvery { api.article("unsaved") } returns com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("unsaved", false))
-        coEvery { api.article("deleted") } throws httpError(404, "Article unavailable")
+        coEvery { api.article("unsaved", session = any()) } returns com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("unsaved", false))
+        coEvery { api.article("deleted", session = any()) } throws httpError(404, "Article unavailable")
 
         assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Success)
 
-        val reopened = LocalStore(context, com.selffeed.android.network.NetworkModule.provideMoshi())
-        assertTrue(reopened.savedArticlesMissingFromQuery("saved-current").isEmpty())
-        assertEquals(false, reopened.readArticleDetail("unsaved")?.isSaved)
-        assertEquals(false, reopened.readArticleDetail("deleted")?.isSaved)
-        assertEquals("<p>Body</p>", reopened.readArticleDetail("deleted")?.contentHtml)
-        assertEquals(false, repository.cachedArticleDetail("unsaved")?.isSaved)
+        val reopenedDatabase = androidx.room.Room.databaseBuilder(
+            context, com.selffeed.android.data.local.LocalDatabase::class.java, databaseName,
+        ).build()
+        try {
+            val reopened = LocalStore(reopenedDatabase, com.selffeed.android.network.NetworkModule.provideMoshi())
+            assertTrue(reopened.savedArticlesMissingFromQuery("saved-current").isEmpty())
+            assertEquals(false, reopened.readArticleDetail("unsaved")?.isSaved)
+            assertEquals(false, reopened.readArticleDetail("deleted")?.isSaved)
+            assertEquals("<p>Body</p>", reopened.readArticleDetail("deleted")?.contentHtml)
+            assertEquals(false, repository.cachedArticleDetail("unsaved")?.isSaved)
+        } finally { reopenedDatabase.close() }
     }
 
     @Test
     fun `saved reconciliation preserves queued intent and articles still saved beyond the list cutoff`() = runTest {
         cacheSavedArticles("pending", "still-saved")
         localStore.queueSavedStateMutation("pending", true)
-        coEvery { api.article("still-saved") } returns com.selffeed.android.network.ApiEnvelope(
+        coEvery { api.article("still-saved", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
             sampleArticleDetail("still-saved", false).copy(isSaved = true),
         )
 
@@ -1285,17 +1333,17 @@ class RssRepositoryTest {
         assertEquals(true, localStore.readArticleDetail("pending")?.isSaved)
         assertEquals(1, localStore.readPendingSavedStateMutations().size)
         assertEquals(true, localStore.readArticleDetail("still-saved")?.isSaved)
-        coVerify(exactly = 0) { api.article("pending") }
+        coVerify(exactly = 0) { api.article("pending", session = any()) }
     }
 
     @Test
     fun `saved reconciliation cannot erase new pending or acknowledged saves during confirmation`() = runTest {
         cacheSavedArticles("pending", "acknowledged")
-        coEvery { api.article("pending") } coAnswers {
+        coEvery { api.article("pending", session = any()) } coAnswers {
             localStore.queueSavedStateMutation("pending", true)
             com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("pending", false))
         }
-        coEvery { api.article("acknowledged") } coAnswers {
+        coEvery { api.article("acknowledged", session = any()) } coAnswers {
             val mutation = localStore.queueSavedStateMutation("acknowledged", true)
             localStore.acknowledgeSavedStateMutation(mutation, true, revision = 7)
             com.selffeed.android.network.ApiEnvelope(sampleArticleDetail("acknowledged", false))
@@ -1311,7 +1359,7 @@ class RssRepositoryTest {
     @Test
     fun `unavailable saved-state confirmation keeps the offline collection intact`() = runTest {
         cacheSavedArticles("unconfirmed")
-        coEvery { api.article("unconfirmed") } throws java.net.SocketTimeoutException("offline")
+        coEvery { api.article("unconfirmed", session = any()) } throws java.net.SocketTimeoutException("offline")
 
         assertTrue(repository.reconcileSavedArticles("saved-current") is AppResult.Error)
 
@@ -1342,12 +1390,12 @@ class RssRepositoryTest {
         every { sessionStore.getAccessToken() } returns "test-session"
         val refreshStarted = CompletableDeferred<Unit>()
         val refreshResponse = CompletableDeferred<Unit>()
-        coEvery { api.preferences() } coAnswers {
+        coEvery { api.preferences(session = any()) } coAnswers {
             refreshStarted.complete(Unit)
             refreshResponse.await()
             com.selffeed.android.network.ApiEnvelope(initial)
         }
-        coEvery { api.updatePreferences(any()) } returns
+        coEvery { api.updatePreferences(any(), session = any()) } returns
             com.selffeed.android.network.ApiEnvelope(initial.copy(textSize = 22))
         assertEquals(initial, (repository.preferences() as AppResult.Success).data)
         refreshStarted.await()
@@ -1355,7 +1403,7 @@ class RssRepositoryTest {
             repository.updatePreferences(com.selffeed.android.network.UpdatePreferencesRequest(textSize = 22))
         }
         runCurrent()
-        coVerify(exactly = 0) { api.updatePreferences(any()) }
+        coVerify(exactly = 0) { api.updatePreferences(any(), session = any()) }
         refreshResponse.complete(Unit)
         assertTrue(save.await() is AppResult.Success)
         assertEquals(22, localStore.readPreferences()?.textSize)

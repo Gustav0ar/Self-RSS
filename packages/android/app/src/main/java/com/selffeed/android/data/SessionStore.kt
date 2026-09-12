@@ -178,6 +178,8 @@ class SessionStore internal constructor(
                 prefs.remove(KEY_ACCESS_TOKEN)
                 prefs.remove(KEY_REFRESH_COOKIE)
                 prefs.remove(KEY_LAST_AUTHENTICATED_AT)
+                prefs.remove(KEY_FEED_REFRESH_REQUEST_ID)
+                prefs.remove(KEY_PRODUCT_ANALYTICS_EVENTS)
                 prefs[KEY_OWNER_ID] = ownerId
             }
             synchronized(cacheLock) {
@@ -186,6 +188,7 @@ class SessionStore internal constructor(
                 cachedAccessToken = null
                 cachedRefreshCookie = null
                 cachedLastAuthenticatedAt = null
+                cachedFeedRefreshRequestId = null
                 accessTokenLoaded = true
                 refreshCookieLoaded = true
                 ApiSession(sessionGeneration, getApiBaseUrl(), sessionOwnerId)
@@ -195,6 +198,11 @@ class SessionStore internal constructor(
 
     fun currentSession(): ApiSession = synchronized(cacheLock) {
         ApiSession(sessionGeneration, getApiBaseUrl(), sessionOwnerId)
+    }
+
+    /** An operation captures this before suspending; null is only the initial preload state. */
+    fun loadedSession(): ApiSession? = synchronized(cacheLock) {
+        if (preloaded) ApiSession(sessionGeneration, getApiBaseUrl(), sessionOwnerId) else null
     }
 
     fun isCurrentSession(session: ApiSession): Boolean = synchronized(cacheLock) {

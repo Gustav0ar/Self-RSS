@@ -1,6 +1,6 @@
 # Plan 035: End account and reader sessions without accepting stale work
 
-- Status: IN PROGRESS; reader request ownership and durable session ID implemented, repository/account storage and foreground boundaries pending
+- Status: IN PROGRESS; reader, durable owner, storage, cache and repository boundaries implemented; authentication actions, feature lifetimes and foreground work pending
 - Priority: P1
 - Effort: L
 - Implementation risk: MED
@@ -100,7 +100,12 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/main/java/com/selffeed/android/ui/ResumeRefreshObserver.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/ui/articles/`
 - `packages/android/app/src/main/java/com/selffeed/android/data/RssRepository.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/AccountSessionBoundary.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/remote/RemoteDataSources.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/network/RssApi.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/ArticleRemoteMediator.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/local/LocalStore.kt`
+- `packages/android/app/src/main/java/com/selffeed/android/data/local/LocalDatabase.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/MemoryCache.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/SessionStore.kt`
 - `packages/android/app/src/main/java/com/selffeed/android/data/repository/`
@@ -112,6 +117,8 @@ Allowed implementation paths, including explicitly proposed new files/directorie
 - `packages/android/app/src/androidTest/java/com/selffeed/android/ui/AndroidSessionLifecycleUiTest.kt`
 - `packages/android/app/src/test/java/com/selffeed/android/data/SessionStoreTest.kt`
 - `packages/android/app/src/androidTest/java/com/selffeed/android/data/SessionOwnerMigrationDeviceTest.kt`
+- `packages/android/app/src/androidTest/java/com/selffeed/android/data/AccountSessionBoundaryDeviceTest.kt`
+- `packages/android/app/src/sharedTest/java/com/selffeed/android/data/AccountSessionBoundaryContract.kt`
 - `packages/android/app/src/performanceTest/java/com/selffeed/android/RecoveryFixtureActivity.kt`
 - `packages/android/macrobenchmark/src/main/java/com/selffeed/android/macrobenchmark/AndroidProcessHarnessTest.kt`
 - This plan and its row in `plans/README.md`.
@@ -220,3 +227,17 @@ Every new account-scoped repository write must join the same owner. Treat server
 - A short global monitor now protects entries, LRU order and load-ticket admission/publication. Per-key coroutine mutexes coalesce callers without holding the global monitor across network suspension or callbacks. Invalidation revokes old tickets immediately; final cleanup checks ticket identity and reference counts so old callers cannot remove a replacement ticket. Completed, failed and cancelled requests release coordination.
 - Nine added cases cover stale publication, admission, failed/cancelled cleanup, non-cooperative cancellation, waiting callers and successful coalescing. Diagnostics distinguish stored entries, registered load keys and still-running/waiting loads. A zero registered-key count after clearing does not imply that all earlier requests finished.
 - This cache primitive does not validate explicit future repository writes or prevent an old caller from using its returned response. The shared repository owner/commit boundary remains required.
+
+### Repository ownership integration
+
+- Extend the allowed paths to the shared account boundary and explicit remote/API session parameters. Every logical request retains its original owner across retries; local reads and writes serialize with owner replacement. HTTP and retry delays stay outside the local commit lock.
+- Reconcile persisted DataStore and Room ownership before exposing cached data. Cancel old request children without joining them under the commit lock. Complete the short local owner handoff despite caller cancellation; process interruption is repaired on the next preparation.
+- Preserve accepted offline intent through the Room 8 archive on logout, server replacement and new authentication. Guard authentication loss by the originating owner.
+
+## Repository ownership implementation
+
+The repository now binds each operation, retry, paging factory and realtime connection to an immutable account session. A shared boundary admits requests and serializes short local commits with account replacement; network work runs outside that lock. Replacement cancels old work without joining it, archives queued mutations through Room 8, clears memory, and repairs an interrupted DataStore/Room handoff on preparation. Authentication-loss and saved-rejection events retain their emitting owner. New authentication clears old account analytics and refresh metadata.
+
+Verification: 481 JVM tests, lint, both isolated APK pairs and 37 emulator checks passed. The shared boundary contract runs against real DataStore and Room on JVM and Android. Delayed preferences, retries, stale 401s, queue acknowledgements, buffered notifications, paging ownership, cancelled handoffs and structured child work have controlled coverage. The external process harness passes after its fixture was changed to use the production server-switch boundary before seeding content. Logs: `/tmp/android-account-final-{build,lint,device}.log` and `/tmp/android-account-process-boundary.log`.
+
+This completes repository admission and publication ownership. UI actions queued before repository admission, superseding authentication commands and foreground-only collection remain separate implementation slices. The process fixture proves cached body, owner ID and task-state recovery, not complete production navigation restoration or physical memory behavior.

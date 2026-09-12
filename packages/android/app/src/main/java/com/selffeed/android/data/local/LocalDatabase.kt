@@ -298,19 +298,21 @@ interface LocalStoreDao {
         SELECT articles.* FROM article_query_entries
         INNER JOIN articles ON articles.id = article_query_entries.articleId
         WHERE article_query_entries.queryKey = :queryKey
+          AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
         ORDER BY article_query_entries.position ASC
         """,
     )
-    fun articlePagingSource(queryKey: String): PagingSource<Int, ArticleListItem>
+    fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem>
 
     @Query(
         """
         SELECT * FROM articles
         WHERE isSaved = 1
+          AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
         ORDER BY COALESCE(displayedAt, publishedAt) DESC, id DESC
         """,
     )
-    fun savedArticlePagingSource(): PagingSource<Int, ArticleListItem>
+    fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem>
 
     @Query(
         """

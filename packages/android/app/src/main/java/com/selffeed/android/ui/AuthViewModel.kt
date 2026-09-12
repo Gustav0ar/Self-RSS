@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -43,15 +44,17 @@ class AuthViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.authEvents().collect { message ->
-                val enabled = loadRegistrationEnabled()
-                _state.value = AuthUiState(
+            repository.authEvents().collectLatest { message ->
+                val signedOut = AuthUiState(
                     loading = false,
                     isAuthenticated = false,
                     apiBaseUrl = repository.getApiBaseUrl(),
-                    registrationEnabled = enabled,
                     errorMessage = PresentationText.dynamic(message),
                 )
+                _state.value = signedOut
+                val enabled = loadRegistrationEnabled()
+                // Registration metadata must not replace a login or edit made while it loaded.
+                _state.compareAndSet(signedOut, signedOut.copy(registrationEnabled = enabled))
             }
         }
     }

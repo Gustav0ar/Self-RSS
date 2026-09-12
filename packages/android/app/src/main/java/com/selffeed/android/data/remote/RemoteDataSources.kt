@@ -46,51 +46,54 @@ import java.util.UUID
 class AuthRemoteDataSource @Inject constructor(
     private val api: RssApi,
 ) {
-    suspend fun registrationStatus(): RegistrationStatusResponse = api.registrationStatus().data
+    suspend fun registrationStatus(session: ApiSession): RegistrationStatusResponse = api.registrationStatus(session = session).data
     suspend fun login(email: String, password: String, session: ApiSession): AuthResponse =
         api.login(LoginRequest(email, password), session).data
 
     suspend fun register(email: String, password: String, session: ApiSession): AuthResponse =
         api.register(RegisterRequest(email, password), session).data
 
-    suspend fun logout(accessToken: String?, refreshCookie: String?): Boolean = api.logout(
+    suspend fun logout(accessToken: String?, refreshCookie: String?, session: ApiSession): Boolean = api.logout(
         authorization = accessToken?.takeIf(String::isNotBlank)?.let { "Bearer $it" },
         cookie = refreshCookie
             ?.substringBefore(';')
             ?.trim()
             ?.takeIf { it.isNotBlank() && '=' in it },
+        session = session,
     ).data.success
-    suspend fun me(): User = api.me().data
-    suspend fun changePassword(currentPassword: String, newPassword: String): AuthResponse =
-        api.changePassword(ChangePasswordRequest(currentPassword, newPassword)).data
+    suspend fun me(session: ApiSession): User = api.me(session = session).data
+    suspend fun changePassword(currentPassword: String, newPassword: String, session: ApiSession): AuthResponse =
+        api.changePassword(ChangePasswordRequest(currentPassword, newPassword), session = session).data
 }
 
 class FeedRemoteDataSource @Inject constructor(
     private val api: RssApi,
 ) {
-    suspend fun categories(): List<CategoryWithCounts> = api.categories().data.categories
-    suspend fun createCategory(name: String, parentCategoryId: String?): CategoryWithCounts =
-        api.createCategory(CreateCategoryRequest(name, parentCategoryId)).data
+    suspend fun categories(session: ApiSession): List<CategoryWithCounts> = api.categories(session = session).data.categories
+    suspend fun createCategory(name: String, parentCategoryId: String?, session: ApiSession): CategoryWithCounts =
+        api.createCategory(CreateCategoryRequest(name, parentCategoryId), session = session).data
 
     suspend fun updateCategory(
         id: String,
         name: String?,
-        parentCategoryId: String?
+        parentCategoryId: String?,
+        session: ApiSession,
     ): CategoryWithCounts =
-        api.updateCategory(id, UpdateCategoryRequest(name, parentCategoryId)).data
+        api.updateCategory(id, UpdateCategoryRequest(name, parentCategoryId), session = session).data
 
-    suspend fun reorderCategories(updates: List<CategoryOrderUpdate>): Int =
-        api.reorderCategories(com.selffeed.android.network.ReorderCategoriesRequest(updates)).data.updatedCount
+    suspend fun reorderCategories(updates: List<CategoryOrderUpdate>, session: ApiSession): Int =
+        api.reorderCategories(com.selffeed.android.network.ReorderCategoriesRequest(updates), session = session).data.updatedCount
 
-    suspend fun deleteCategory(id: String): Boolean = api.deleteCategory(id).data.success
-    suspend fun feeds(categoryId: String?): List<FeedWithCounts> = api.feeds(categoryId).data
-    suspend fun createFeed(feedUrl: String, categoryId: String, title: String?): FeedWithCounts =
+    suspend fun deleteCategory(id: String, session: ApiSession): Boolean = api.deleteCategory(id, session = session).data.success
+    suspend fun feeds(categoryId: String?, session: ApiSession): List<FeedWithCounts> = api.feeds(categoryId, session = session).data
+    suspend fun createFeed(feedUrl: String, categoryId: String, title: String?, session: ApiSession): FeedWithCounts =
         api.createFeed(
             CreateFeedRequest(
                 feedUrl = feedUrl,
                 categoryId = categoryId,
                 title = title
-            )
+            ),
+            session = session,
         ).data
 
     suspend fun updateFeed(
@@ -99,6 +102,7 @@ class FeedRemoteDataSource @Inject constructor(
         categoryId: String?,
         title: String?,
         pollingIntervalMinutes: Int?,
+        session: ApiSession,
     ): FeedWithCounts = api.updateFeed(
         id,
         UpdateFeedRequest(
@@ -107,26 +111,27 @@ class FeedRemoteDataSource @Inject constructor(
             title = title,
             pollingIntervalMinutes = pollingIntervalMinutes,
         ),
+        session = session,
     ).data
 
-    suspend fun deleteFeed(id: String): Boolean = api.deleteFeed(id).data.success
-    suspend fun syncFeed(id: String): SyncResponse = api.syncFeed(id, UUID.randomUUID().toString()).data
-    suspend fun syncAllFeeds(feedId: String?, categoryId: String?): SyncResponse =
-        api.syncAllFeeds(UUID.randomUUID().toString(), feedId, categoryId).data
+    suspend fun deleteFeed(id: String, session: ApiSession): Boolean = api.deleteFeed(id, session = session).data.success
+    suspend fun syncFeed(id: String, session: ApiSession): SyncResponse = api.syncFeed(id, UUID.randomUUID().toString(), session = session).data
+    suspend fun syncAllFeeds(feedId: String?, categoryId: String?, session: ApiSession): SyncResponse =
+        api.syncAllFeeds(UUID.randomUUID().toString(), feedId, categoryId, session = session).data
 
-    suspend fun syncAllFeedsStatus(requestId: String?): FeedSyncAllStatus =
-        api.syncAllFeedsStatus(requestId).data
+    suspend fun syncAllFeedsStatus(requestId: String?, session: ApiSession): FeedSyncAllStatus =
+        api.syncAllFeedsStatus(requestId, session = session).data
 
-    suspend fun feedSyncHistory(feedId: String): FeedSyncHistoryResponse =
-        api.feedSyncRuns(feedId, limit = 20, cursor = null).data
+    suspend fun feedSyncHistory(feedId: String, session: ApiSession): FeedSyncHistoryResponse =
+        api.feedSyncRuns(feedId, limit = 20, cursor = null, session = session).data
 
-    suspend fun discoveryCandidates(requestId: String) = api.discoveryCandidates(requestId).data
-    suspend fun selectDiscoveryCandidate(candidateId: String) =
-        api.selectDiscoveryCandidate(candidateId).data
+    suspend fun discoveryCandidates(requestId: String, session: ApiSession) = api.discoveryCandidates(requestId, session = session).data
+    suspend fun selectDiscoveryCandidate(candidateId: String, session: ApiSession) =
+        api.selectDiscoveryCandidate(candidateId, session = session).data
 
-    suspend fun cancelFeedReplacement(feedId: String) = api.cancelFeedReplacement(feedId).data
-    suspend fun importOpml(part: MultipartBody.Part): OpmlImportSummary = api.importOpml(part).data
-    suspend fun exportOpml(): Response<ResponseBody> = api.exportOpml()
+    suspend fun cancelFeedReplacement(feedId: String, session: ApiSession) = api.cancelFeedReplacement(feedId, session = session).data
+    suspend fun importOpml(part: MultipartBody.Part, session: ApiSession): OpmlImportSummary = api.importOpml(part, session = session).data
+    suspend fun exportOpml(session: ApiSession): Response<ResponseBody> = api.exportOpml(session = session)
 }
 
 class ArticleRemoteDataSource @Inject constructor(
@@ -140,12 +145,13 @@ class ArticleRemoteDataSource @Inject constructor(
         sort: String?,
         limit: Int?,
         cursor: String?,
+        session: ApiSession,
     ): ApiListResponse<ArticleListItem> =
-        api.articles(feedId, categoryId, unreadOnly, savedOnly, sort, limit, cursor)
+        api.articles(feedId, categoryId, unreadOnly, savedOnly, sort, limit, cursor, session = session)
 
-    suspend fun article(articleId: String): ArticleDetail = api.article(articleId).data
-    suspend fun enrichArticle(articleId: String): EnrichArticleResponse =
-        api.enrichArticle(articleId).data
+    suspend fun article(articleId: String, session: ApiSession): ArticleDetail = api.article(articleId, session = session).data
+    suspend fun enrichArticle(articleId: String, session: ApiSession): EnrichArticleResponse =
+        api.enrichArticle(articleId, session = session).data
 
     suspend fun markRead(
         articleId: String,
@@ -153,9 +159,11 @@ class ArticleRemoteDataSource @Inject constructor(
         source: String = "manual",
         mutationId: String? = null,
         baseRevision: Int? = null,
+        session: ApiSession,
     ) = api.markRead(
         articleId,
         MarkReadRequest(read, source, mutationId, baseRevision),
+        session = session,
     ).data
 
     suspend fun setSaved(
@@ -163,13 +171,15 @@ class ArticleRemoteDataSource @Inject constructor(
         saved: Boolean,
         mutationId: String? = null,
         baseRevision: Int? = null,
+        session: ApiSession,
     ) = api.setSaved(
         articleId,
         SaveArticleRequest(saved, mutationId, baseRevision),
+        session = session,
     ).data
 
-    suspend fun markAllRead(feedId: String?, categoryId: String?) =
-        api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId)).data
+    suspend fun markAllRead(feedId: String?, categoryId: String?, session: ApiSession) =
+        api.markAllRead(MarkAllReadRequest(feedId = feedId, categoryId = categoryId), session = session).data
 }
 
 class SearchRemoteDataSource @Inject constructor(
@@ -179,33 +189,34 @@ class SearchRemoteDataSource @Inject constructor(
         query: String,
         categoryId: String?,
         cursor: String?,
+        session: ApiSession,
     ): ApiListResponse<ArticleListItem> =
-        api.search(query = query, categoryId = categoryId, cursor = cursor)
+        api.search(query = query, categoryId = categoryId, cursor = cursor, session = session)
 }
 
 class SettingsRemoteDataSource @Inject constructor(
     private val api: RssApi,
 ) {
-    suspend fun preferences(): UserPreferences = api.preferences().data
-    suspend fun updatePreferences(request: UpdatePreferencesRequest): UserPreferences =
-        api.updatePreferences(request).data
+    suspend fun preferences(session: ApiSession): UserPreferences = api.preferences(session = session).data
+    suspend fun updatePreferences(request: UpdatePreferencesRequest, session: ApiSession): UserPreferences =
+        api.updatePreferences(request, session = session).data
 
-    suspend fun stats(): StatsResponse = api.stats().data
-    suspend fun recordProductAnalyticsEvents(request: RecordProductAnalyticsEventsRequest): Int =
-        api.recordProductAnalyticsEvents(request).data.accepted
-    suspend fun authSessions(): List<AuthSession> = api.authSessions().data.sessions
-    suspend fun revokeAuthSession(id: String): Boolean = api.revokeAuthSession(id).data.success
-    suspend fun adminSettings(): AppSettingsResponse = api.adminSettings().data
-    suspend fun updateAdminSettings(registrationLocked: Boolean): AppSettingsResponse =
-        api.updateAdminSettings(UpdateAppSettingsRequest(registrationLocked)).data
+    suspend fun stats(session: ApiSession): StatsResponse = api.stats(session = session).data
+    suspend fun recordProductAnalyticsEvents(request: RecordProductAnalyticsEventsRequest, session: ApiSession): Int =
+        api.recordProductAnalyticsEvents(request, session = session).data.accepted
+    suspend fun authSessions(session: ApiSession): List<AuthSession> = api.authSessions(session = session).data.sessions
+    suspend fun revokeAuthSession(id: String, session: ApiSession): Boolean = api.revokeAuthSession(id, session = session).data.success
+    suspend fun adminSettings(session: ApiSession): AppSettingsResponse = api.adminSettings(session = session).data
+    suspend fun updateAdminSettings(registrationLocked: Boolean, session: ApiSession): AppSettingsResponse =
+        api.updateAdminSettings(UpdateAppSettingsRequest(registrationLocked), session = session).data
 
-    suspend fun adminUsers(): AdminUsersResponse = api.adminUsers().data
-    suspend fun adminCreateUser(email: String, password: String, role: String): User =
-        api.adminCreateUser(AdminCreateUserRequest(email, password, role)).data
+    suspend fun adminUsers(session: ApiSession): AdminUsersResponse = api.adminUsers(session = session).data
+    suspend fun adminCreateUser(email: String, password: String, role: String, session: ApiSession): User =
+        api.adminCreateUser(AdminCreateUserRequest(email, password, role), session = session).data
 
-    suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?): User =
-        api.adminUpdateUser(id, AdminUpdateUserRequest(role, isActive)).data
+    suspend fun adminUpdateUser(id: String, role: String?, isActive: Boolean?, session: ApiSession): User =
+        api.adminUpdateUser(id, AdminUpdateUserRequest(role, isActive), session = session).data
 
-    suspend fun adminResetPassword(id: String, password: String): User =
-        api.adminResetPassword(id, AdminResetPasswordRequest(password)).data
+    suspend fun adminResetPassword(id: String, password: String, session: ApiSession): User =
+        api.adminResetPassword(id, AdminResetPasswordRequest(password), session = session).data
 }

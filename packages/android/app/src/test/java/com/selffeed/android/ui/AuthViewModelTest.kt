@@ -16,6 +16,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -56,6 +57,50 @@ class AuthViewModelTest {
     @After
     fun teardown() {
         Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `a delayed auth loss lookup cannot reset a newer successful login`() = runTest {
+        val events = kotlinx.coroutines.flow.MutableSharedFlow<String>()
+        every { repository.authEvents() } returns events
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { repository.registrationStatus() } coAnswers {
+            entered.complete(Unit)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+            AppResult.Success(RegistrationStatusResponse(true))
+        }
+        val viewModel = AuthViewModel(repository)
+        val owner = androidx.lifecycle.ViewModelStore().apply { put("auth", viewModel) }
+        try {
+            events.emit("Expired")
+            entered.await()
+            viewModel.login("new@example.com", "password", DEFAULT_API_BASE_URL)
+            assertTrue(viewModel.state.value.isAuthenticated)
+            release.complete(Unit)
+            runCurrent()
+            assertTrue(viewModel.state.value.isAuthenticated)
+        } finally { release.complete(Unit); owner.clear() }
+    }
+
+    @Test
+    fun `cancelled registration lookup does not stop later authentication loss events`() = runTest {
+        val events = kotlinx.coroutines.flow.MutableSharedFlow<String>()
+        every { repository.authEvents() } returns events
+        coEvery { repository.registrationStatus() } throws kotlinx.coroutines.CancellationException("Session changed")
+        val viewModel = AuthViewModel(repository)
+        val owner = androidx.lifecycle.ViewModelStore().apply { put("auth", viewModel) }
+        try {
+            events.emit("Expired")
+            runCurrent()
+            coEvery { repository.registrationStatus() } returns AppResult.Success(RegistrationStatusResponse(true))
+            viewModel.login("new@example.com", "password", DEFAULT_API_BASE_URL)
+            assertTrue(viewModel.state.value.isAuthenticated)
+            events.emit("Expired again")
+            runCurrent()
+            assertFalse(viewModel.state.value.isAuthenticated)
+            assertEquals(PresentationText.dynamic("Expired again"), viewModel.state.value.errorMessage)
+        } finally { owner.clear() }
     }
 
     @Test

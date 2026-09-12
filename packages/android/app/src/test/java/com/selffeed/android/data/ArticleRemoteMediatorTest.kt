@@ -46,9 +46,9 @@ class ArticleRemoteMediatorTest {
     fun `refresh then append stores every page in query order`() = runBlocking {
         val cursors = mutableListOf<String?>()
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = true,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, cursor ->
                 cursors += cursor
                 AppResult.Success(
@@ -73,7 +73,7 @@ class ArticleRemoteMediatorTest {
         assertTrue(mediator.load(LoadType.APPEND, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Success)
 
         assertEquals(listOf(null, "next-page"), cursors)
-        val page = store.articlePagingSource(QUERY_KEY).load(
+        val page = store.articlePagingSource(QUERY_KEY, ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh(
                 key = null,
                 loadSize = 30,
@@ -91,9 +91,9 @@ class ArticleRemoteMediatorTest {
             clearExisting = true,
         )
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = false,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, _ -> error("fresh Room data must not fetch during initialization") },
         )
 
@@ -111,14 +111,14 @@ class ArticleRemoteMediatorTest {
             clearExisting = true,
         )
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = true,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, _ -> AppResult.Error("network unavailable") },
         )
 
         assertTrue(mediator.load(LoadType.REFRESH, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Error)
-        val page = store.articlePagingSource(QUERY_KEY).load(
+        val page = store.articlePagingSource(QUERY_KEY, ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh(
                 key = null,
                 loadSize = 30,
@@ -138,9 +138,9 @@ class ArticleRemoteMediatorTest {
         val requestedCursors = mutableListOf<String?>()
         val cursorError = mockk<HttpException>().also { every { it.code() } returns 409 }
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = false,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, cursor ->
                 requestedCursors += cursor
                 if (cursor != null) {
@@ -157,7 +157,7 @@ class ArticleRemoteMediatorTest {
 
         assertTrue(result is androidx.paging.RemoteMediator.MediatorResult.Success)
         assertEquals(listOf("old-cursor", null), requestedCursors)
-        val page = store.articlePagingSource(QUERY_KEY).load(
+        val page = store.articlePagingSource(QUERY_KEY, ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh(
                 key = null,
                 loadSize = 30,
@@ -175,16 +175,16 @@ class ArticleRemoteMediatorTest {
             clearExisting = true,
         )
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = true,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, _ -> AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false)) },
             onCompletedRefresh = ::confirmRemovals,
         )
 
         mediator.load(LoadType.REFRESH, pagingState())
 
-        val saved = store.savedArticlePagingSource().load(
+        val saved = store.savedArticlePagingSource(ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as androidx.paging.PagingSource.LoadResult.Page
         assertTrue(saved.data.isEmpty())
@@ -198,9 +198,9 @@ class ArticleRemoteMediatorTest {
             clearExisting = true,
         )
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = true,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, cursor ->
                 if (cursor == null) AppResult.Success(
                     ApiListResponse(data = listOf(article("first").copy(isSaved = true)), cursor = "next", hasMore = true),
@@ -215,9 +215,9 @@ class ArticleRemoteMediatorTest {
 
         store = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideMoshi())
         val restarted = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = false,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, cursor ->
                 assertEquals("next", cursor)
                 AppResult.Success(ApiListResponse(data = listOf(article("last").copy(isSaved = true)), cursor = null, hasMore = false))
@@ -234,9 +234,9 @@ class ArticleRemoteMediatorTest {
         var confirmations = 0
         var pageLoads = 0
         val mediator = ArticleRemoteMediator(
-            queryKey = QUERY_KEY,
             forceInitialRefresh = true,
-            localStore = store,
+            readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
+            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
             loadPage = { _, _ ->
                 pageLoads++
                 AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false))
@@ -259,7 +259,7 @@ class ArticleRemoteMediatorTest {
     }
 
     private suspend fun savedIds(): Set<String> {
-        val page = store.savedArticlePagingSource().load(
+        val page = store.savedArticlePagingSource(ownerId = null).load(
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(key = null, loadSize = 30, placeholdersEnabled = false),
         ) as androidx.paging.PagingSource.LoadResult.Page
         return page.data.map(ArticleListItem::id).toSet()
