@@ -1,5 +1,6 @@
 package com.selffeed.android.data
 
+import com.selffeed.android.data.repository.LocalArticleState
 import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.AccountAccess
@@ -676,6 +677,37 @@ class RssRepository @Inject constructor(
         }
     }
 
+    override fun observeArticleStates(articleIds: Set<String>): Flow<AppResult<Map<String, LocalArticleState>>> {
+        val ids = articleIds.toSet()
+        val expected = sessionStore.loadedSession()
+        return flow<AppResult<Map<String, LocalArticleState>>> {
+            account.withSession(expected) { session ->
+                localStore.observeArticleStates(ids, session.ownerId).collect { states ->
+                    account.requireCurrent(session)
+                    emit(AppResult.Success(states))
+                }
+            }
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            emit(AppResult.Error("Stored article state unavailable", error))
+        }
+    }
+
+    override suspend fun refreshArticleStates(articleIds: Set<String>): AppResult<Unit> {
+        val batches = articleIds.toList().chunked(ArticleRemoteDataSource.STATE_LOOKUP_BATCH_SIZE)
+        return safeReadCall { session ->
+            batches.forEach { ids ->
+                val response = withRetry(session) { articleRemote.articleStates(ids, session) }
+                articleStateProjectionMutex.withLock {
+                    account.commit(session) {
+                        localStore.reconcileArticleStates(response.states).forEach { projectCachedArticleState(it) }
+                        // Missing IDs do not revoke cached content or discard pending user choices.
+                    }
+                }
+            }
+        }
+    }
+
     override suspend fun localArticleState(articleId: String) = safeReadCall { session ->
         account.commit(session) { localStore.readArticleState(articleId) }
     }
@@ -1348,9 +1380,9 @@ class RssRepository @Inject constructor(
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
                                 val rejected = localStore.discardReadStateMutation(read)
-                                if (rejected.removedMatchingIntent) {
+                                if (rejected != null) {
                                     projectCachedArticleState(read.articleId)
-                                    readStateRejectionEvents.tryEmit(SessionEvent(session, ReadStateRejection(read.articleId, read.mutationId)))
+                                    readStateRejectionEvents.tryEmit(SessionEvent(session, ReadStateRejection(read.articleId, rejected.mutationId)))
                                 }
                             }
                         }
@@ -1358,11 +1390,11 @@ class RssRepository @Inject constructor(
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
                                 val rejected = localStore.discardSavedStateMutation(saved)
-                                if (rejected.removedMatchingIntent) {
+                                if (rejected != null) {
                                     projectCachedArticleState(saved.articleId)
                                     runtime.invalidateByPrefix("search")
                                     savedStateRejectionEvents.tryEmit(
-                                        SessionEvent(session, SavedStateRejection(saved.articleId, rejected.effectiveState, saved.mutationId)),
+                                        SessionEvent(session, SavedStateRejection(saved.articleId, rejected.effectiveState, rejected.mutationId)),
                                     )
                                 }
                             }

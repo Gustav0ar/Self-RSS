@@ -7,6 +7,8 @@ import com.selffeed.android.network.AdminResetPasswordRequest
 import com.selffeed.android.network.AdminUpdateUserRequest
 import com.selffeed.android.network.AdminUsersResponse
 import com.selffeed.android.network.AppSettingsResponse
+import com.selffeed.android.network.ArticleStateLookupRequest
+import com.selffeed.android.network.ArticleStateLookupResponse
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.AuthResponse
@@ -148,6 +150,18 @@ class ArticleRemoteDataSource @Inject constructor(
         session: ApiSession,
     ): ApiListResponse<ArticleListItem> =
         api.articles(feedId, categoryId, unreadOnly, savedOnly, sort, limit, cursor, session = session)
+
+    companion object { const val STATE_LOOKUP_BATCH_SIZE = 100 }
+
+    suspend fun articleStates(articleIds: List<String>, session: ApiSession): ArticleStateLookupResponse {
+        require(articleIds.size in 1..STATE_LOOKUP_BATCH_SIZE && articleIds.distinct().size == articleIds.size)
+        val response = api.articleStates(ArticleStateLookupRequest(articleIds), session = session).data
+        val returnedIds = response.states.map { it.id } + response.missingIds
+        check(response.states.all { it.readRevision >= 0 && it.savedRevision >= 0 } &&
+            returnedIds.size == articleIds.size && returnedIds.toSet() == articleIds.toSet()
+        ) { "Invalid article state response" }
+        return response
+    }
 
     suspend fun article(articleId: String, session: ApiSession): ArticleDetail = api.article(articleId, session = session).data
     suspend fun enrichArticle(articleId: String, session: ApiSession): EnrichArticleResponse =

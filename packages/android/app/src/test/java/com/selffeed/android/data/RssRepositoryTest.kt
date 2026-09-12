@@ -15,6 +15,9 @@ import com.selffeed.android.data.remote.SettingsRemoteDataSource
 import com.selffeed.android.data.repository.AuthenticatedSession
 import com.selffeed.android.data.repository.ArticleRepository
 import com.selffeed.android.network.ApiListResponse
+import com.selffeed.android.network.ArticleStateLookupRequest
+import com.selffeed.android.network.ArticleStateLookupResponse
+import com.selffeed.android.network.ArticleStateSnapshot
 import com.selffeed.android.network.ApiEnvelope
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
@@ -1715,6 +1718,82 @@ class RssRepositoryTest {
 
         assertEquals(true, localStore.readArticleDetail("unconfirmed")?.isSaved)
         assertEquals(listOf("unconfirmed"), localStore.savedArticlesMissingFromQuery("saved-current").map { it.articleId })
+    }
+
+    @Test
+    fun `state lookup partitions requests without reading article bodies or removing missing offline entries`() = runTest {
+        repository.prepareSession()
+        val ids = (0 until 205).map { "lookup-$it" }.toSet()
+        val missing = ids.first()
+        localStore.writeArticleDetail(sampleArticleDetail(missing, false).copy(isSaved = true))
+        val pending = localStore.queueReadStateMutation(missing, true)
+        val requests = mutableListOf<List<String>>()
+        coEvery { api.articleStates(any(), session = any()) } coAnswers {
+            val requested = firstArg<ArticleStateLookupRequest>().articleIds
+            requests += requested
+            ApiEnvelope(ArticleStateLookupResponse(
+                requested.filter { it != missing }.map { ArticleStateSnapshot(it, true, true, 8, 9) },
+                requested.filter { it == missing },
+            ))
+        }
+        assertEquals(AppResult.Success(Unit), repository.refreshArticleStates(ids))
+        assertEquals(listOf(100, 100, 5), requests.map { it.size })
+        assertEquals(ids, requests.flatten().toSet())
+        assertEquals(205, requests.flatten().size)
+        assertEquals(pending, localStore.readPendingReadStateMutations().single())
+        assertEquals(true, localStore.readArticleDetail(missing)?.isSaved)
+        val state = localStore.readArticleState(ids.last())
+        assertEquals(true, state.isRead)
+        assertEquals(true, state.isSaved)
+        assertEquals(8, state.readRevision)
+        assertEquals(9, state.savedRevision)
+        coVerify(exactly = 0) { api.article(any(), session = any()) }
+        assertEquals(AppResult.Success(Unit), repository.refreshArticleStates(emptySet()))
+        coVerify(exactly = 3) { api.articleStates(any(), session = any()) }
+    }
+
+    @Test
+    fun `malformed state batches cannot partially change durable flags`() = runTest {
+        repository.prepareSession()
+        val first = ArticleStateSnapshot("first", true, true, 7, 7)
+        val second = first.copy(id = "second")
+        val malformed = listOf(
+            ArticleStateLookupResponse(listOf(first, first), emptyList()),
+            ArticleStateLookupResponse(listOf(first), emptyList()),
+            ArticleStateLookupResponse(listOf(first, second.copy(id = "foreign")), emptyList()),
+            ArticleStateLookupResponse(listOf(first, second.copy(readRevision = -1)), emptyList()),
+            ArticleStateLookupResponse(listOf(first, second.copy(savedRevision = -1)), emptyList()),
+            ArticleStateLookupResponse(listOf(first, second), listOf("second")),
+            ArticleStateLookupResponse(emptyList(), listOf("first", "first")),
+        )
+        for (response in malformed) {
+            coEvery { api.articleStates(any(), session = any()) } returns ApiEnvelope(response)
+            assertTrue(repository.refreshArticleStates(setOf("first", "second")) is AppResult.Error)
+            assertNull(database.localStoreDao().readArticleStateRevision("first"))
+            assertNull(database.localStoreDao().readArticleStateRevision("second"))
+        }
+    }
+
+    @Test
+    fun `state refresh projects current pending choices into memory and keeps later revisions`() = runTest {
+        repository.prepareSession()
+        coEvery { api.article("article", session = any()) } returns ApiEnvelope(sampleArticleDetail("article", false))
+        assertTrue(repository.article("article", forceRefresh = true) is AppResult.Success)
+        val pending = localStore.queueSavedStateMutation("article", true)
+        coEvery { api.articleStates(any(), session = any()) } returns ApiEnvelope(ArticleStateLookupResponse(
+            listOf(ArticleStateSnapshot("article", true, false, 8, 9)), emptyList(),
+        ))
+        assertEquals(AppResult.Success(Unit), repository.refreshArticleStates(setOf("article")))
+        assertEquals(true, repository.cachedArticleDetail("article")?.isSaved)
+        assertEquals(true, repository.cachedArticleDetail("article")?.isRead)
+        assertEquals(pending.mutationId, localStore.readPendingSavedStateMutations().single().mutationId)
+        coEvery { api.articleStates(any(), session = any()) } returns ApiEnvelope(ArticleStateLookupResponse(
+            listOf(ArticleStateSnapshot("article", false, true, 7, 8)), emptyList(),
+        ))
+        assertEquals(AppResult.Success(Unit), repository.refreshArticleStates(setOf("article")))
+        assertEquals(true, repository.cachedArticleDetail("article")?.isRead)
+        assertEquals(8, localStore.readArticleState("article").readRevision)
+        assertEquals(false, localStore.discardSavedStateMutation(localStore.readPendingSavedStateMutations().single())?.effectiveState)
     }
 
     private suspend fun cacheSavedArticles(vararg ids: String) {

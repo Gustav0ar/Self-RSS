@@ -171,7 +171,7 @@ class LocalStoreTest {
         val result = store.markArticlesReadByFeeds(setOf("f-1"))
         assertEquals(mapOf("bulk-versioned" to "f-1"), result.unreadArticleFeeds)
         assertEquals(false, store.readPendingReadStateMutations().single().previousState)
-        assertEquals(false, store.discardReadStateMutation(pending).effectiveState)
+        assertEquals(false, store.discardReadStateMutation(pending)?.effectiveState)
         reopenStore()
         assertEquals(false, store.readArticleDetail("bulk-versioned")?.isRead)
         assertEquals(true, store.updateArticleReadState("bulk-versioned", true, 21))
@@ -184,8 +184,8 @@ class LocalStoreTest {
         dao.upsertArticleStateRevision(ArticleStateRevisionEntity("legacy-unknown", null, null))
         val read = store.queueReadStateMutation("legacy-unknown", true)
         val saved = store.queueSavedStateMutation("legacy-unknown", true)
-        assertEquals(ArticleStateMutationResult(true, null), store.discardReadStateMutation(read))
-        assertEquals(ArticleStateMutationResult(true, null), store.discardSavedStateMutation(saved))
+        assertEquals(RejectedArticleMutation(read.mutationId, null), store.discardReadStateMutation(read))
+        assertEquals(RejectedArticleMutation(saved.mutationId, null), store.discardSavedStateMutation(saved))
         reopenStore()
         assertNotNull(store.readArticleDetail("legacy-unknown"))
         assertNull(store.queueReadStateMutation("legacy-unknown", false).previousState)
@@ -201,7 +201,7 @@ class LocalStoreTest {
         val pending = store.queueReadStateMutation("legacy-version", false)
         assertEquals(20, pending.baseRevision)
         assertNull(pending.previousState)
-        assertEquals(ArticleStateMutationResult(true, null), store.discardReadStateMutation(pending))
+        assertEquals(RejectedArticleMutation(pending.mutationId, null), store.discardReadStateMutation(pending))
         assertEquals(true, store.updateArticleReadState("legacy-version", true, 20))
         assertEquals(true, store.updateArticleSavedState("legacy-version", true, 20))
         reopenStore()
@@ -219,7 +219,7 @@ class LocalStoreTest {
         assertEquals(current.mutationId, remaining.mutationId)
         assertEquals(false, remaining.read)
         assertEquals(true, remaining.previousState)
-        assertEquals(true, store.discardReadStateMutation(current).effectiveState)
+        assertEquals(true, store.discardReadStateMutation(current)?.effectiveState)
         assertEquals(true, store.readArticleDetail("late-conflict")?.isRead)
     }
 
@@ -258,7 +258,7 @@ class LocalStoreTest {
         val pending = store.queueSavedStateMutation("legacy-bulk-save", false)
         database.localStoreDao().clearArticleStateRevisions()
         store.markArticlesReadByFeeds(setOf("f-1"))
-        assertEquals(true, store.discardSavedStateMutation(pending).effectiveState)
+        assertEquals(true, store.discardSavedStateMutation(pending)?.effectiveState)
         assertEquals(true, store.readArticleDetail("legacy-bulk-save")?.isSaved)
     }
 
@@ -269,7 +269,7 @@ class LocalStoreTest {
         store.markArticlesReadByFeeds(setOf("f-1"))
         val pending = store.queueSavedStateMutation("legacy-bulk-body", false)
         assertEquals(true, pending.previousState)
-        assertEquals(true, store.discardSavedStateMutation(pending).effectiveState)
+        assertEquals(true, store.discardSavedStateMutation(pending)?.effectiveState)
         assertEquals(true, store.readArticleDetail("legacy-bulk-body")?.isSaved)
     }
 
@@ -527,7 +527,7 @@ class LocalStoreTest {
         val old = store.queueSavedStateMutation("newer-save", saved = true)
         val current = store.queueSavedStateMutation("newer-save", saved = false)
 
-        assertFalse(store.discardSavedStateMutation(old).removedMatchingIntent)
+        assertNull(store.discardSavedStateMutation(old))
         assertEquals(current.mutationId, store.readPendingSavedStateMutations().single().mutationId)
         assertEquals(false, store.readArticleDetail("newer-save")?.isSaved)
     }
