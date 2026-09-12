@@ -232,6 +232,9 @@ data class ScopedArticleState(
     val hasStateRecord: Boolean,
 )
 
+/** Eviction ordering only; rowid is not a persistent timestamp or domain identity. */
+data class OrphanArticleStateRow(val articleId: String, val writeOrder: Long)
+
 @Dao
 interface LocalStoreDao {
     @Query("SELECT * FROM current_local_owner WHERE `key` = 'current'")
@@ -248,6 +251,9 @@ interface LocalStoreDao {
 
     @Query("SELECT * FROM feeds WHERE id = :feedId")
     suspend fun readFeed(feedId: String): FeedEntity?
+
+    @Query("DELETE FROM feeds WHERE id = :feedId")
+    suspend fun deleteFeed(feedId: String)
 
     @Query("UPDATE feeds SET unreadCount = unreadCount + :delta WHERE id = :feedId")
     suspend fun applyFeedUnreadDelta(feedId: String, delta: Int)
@@ -420,6 +426,39 @@ interface LocalStoreDao {
     @Query("SELECT * FROM article_state_revisions WHERE articleId = :articleId LIMIT 1")
     suspend fun readArticleStateRevision(articleId: String): ArticleStateRevisionEntity?
 
+    @Query("SELECT * FROM article_state_revisions WHERE articleId IN (:articleIds)")
+    suspend fun readArticleStateRevisions(articleIds: List<String>): List<ArticleStateRevisionEntity>
+
+    @Query("""
+        SELECT articleId, rowid AS writeOrder FROM article_state_revisions
+        WHERE (:beforeRowId IS NULL OR rowid < :beforeRowId)
+          AND articleId NOT IN (SELECT id FROM articles)
+          AND articleId NOT IN (SELECT id FROM article_details)
+          AND articleId NOT IN (SELECT articleId FROM pending_read_state_mutations)
+          AND articleId NOT IN (SELECT articleId FROM pending_saved_state_mutations)
+          AND articleId NOT IN (SELECT articleId FROM legacy_offline_articles)
+        ORDER BY rowid DESC LIMIT :limit
+    """)
+    suspend fun readOrphanArticleStates(beforeRowId: Long?, limit: Int): List<OrphanArticleStateRow>
+
+    @Query("DELETE FROM article_state_revisions WHERE articleId IN (:articleIds)")
+    suspend fun deleteArticleStateRevisions(articleIds: List<String>): Int
+
+    @Query("""
+        SELECT articleId, rowid AS writeOrder FROM article_read_overrides
+        WHERE (:beforeRowId IS NULL OR rowid < :beforeRowId)
+          AND articleId NOT IN (SELECT id FROM articles)
+          AND articleId NOT IN (SELECT id FROM article_details)
+          AND articleId NOT IN (SELECT articleId FROM pending_read_state_mutations)
+          AND articleId NOT IN (SELECT articleId FROM pending_saved_state_mutations)
+          AND articleId NOT IN (SELECT articleId FROM legacy_offline_articles)
+        ORDER BY rowid DESC LIMIT :limit
+    """)
+    suspend fun readOrphanArticleReadOverrides(beforeRowId: Long?, limit: Int): List<OrphanArticleStateRow>
+
+    @Query("DELETE FROM article_read_overrides WHERE articleId IN (:articleIds)")
+    suspend fun deleteArticleReadOverrides(articleIds: List<String>)
+
     @Query("""
         SELECT ids.articleId,
             COALESCE(pendingRead.read, CASE WHEN state.articleId IS NOT NULL
@@ -458,6 +497,9 @@ interface LocalStoreDao {
             SELECT articleId AS id, articleFeedId AS feedId FROM article_state_revisions
             WHERE articleId NOT IN (SELECT id FROM articles)
               AND articleId NOT IN (SELECT id FROM article_details)
+              AND (articleId IN (SELECT articleId FROM pending_read_state_mutations)
+                OR articleId IN (SELECT articleId FROM pending_saved_state_mutations)
+                OR articleId IN (SELECT articleId FROM legacy_offline_articles))
         ) items
         LEFT JOIN articles ON articles.id = items.id
         LEFT JOIN article_state_revisions state ON state.articleId = items.id

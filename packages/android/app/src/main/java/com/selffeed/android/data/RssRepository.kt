@@ -68,6 +68,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -104,6 +105,7 @@ class RssRepository @Inject constructor(
         maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
         logTag = "RssRepository",
         apiBaseUrl = sessionStore::getApiBaseUrl,
+        cacheEpoch = { localStore.articleStateRetentionEpoch },
     )
     private val readStateStreamClient = ReadStateStreamClient(
         okHttpClient = okHttpClient,
@@ -116,7 +118,7 @@ class RssRepository @Inject constructor(
     private val authLostEvents = MutableSharedFlow<SessionEvent<String>>(extraBufferCapacity = 1)
     private val analyticsSessionLock = Any()
     private val categoryCacheMutex = Mutex()
-    private val categoryOrderRevision = AtomicLong()
+    private val libraryMetadataRevision = AtomicLong()
     private val completedArticleIds = mutableSetOf<String>()
     private var appOpenRecordedOn: String? = null
     private val account = AccountSessionBoundary(sessionStore, localStore, ::clearSessionMemory)
@@ -351,26 +353,26 @@ class RssRepository @Inject constructor(
 
     private suspend fun fetchCategorySnapshot(session: ApiSession): List<CategoryWithCounts> {
         while (true) {
-            val revision = categoryOrderRevision.get()
+            val revision = libraryMetadataRevision.get()
             val ticket = account.commit(session) { localStore.captureCountSnapshot() }
             val categories = withRetry(session) { feedRemote.categories(session = session) }
-            categoryCacheMutex.withLock {
-                // A reorder completed while this snapshot was in flight. Fetch
-                // again rather than putting the old order back into either cache.
-                if (revision == categoryOrderRevision.get()) {
-                    return account.commit(session) {
+            val accepted = categoryCacheMutex.withLock {
+                account.commit(session) {
+                    if (revision != libraryMetadataRevision.get()) null else {
                         localStore.writeRemoteCategories(categories, ticket).also {
                             runtime.putCached("categories", CATEGORIES_TTL_MS, it)
                         }
                     }
                 }
             }
+            if (accepted != null) return accepted
         }
     }
 
     override suspend fun createCategory(name: String, parentCategoryId: String?) = safeCall { session ->
         feedRemote.createCategory(name, parentCategoryId, session = session).also {
             account.commit(session) {
+                libraryMetadataRevision.incrementAndGet()
                 runtime.invalidateByPrefix("categories")
                 runtime.invalidateByPrefix("feeds")
             }
@@ -388,7 +390,7 @@ class RssRepository @Inject constructor(
         check(feedRemote.reorderCategories(updates, session = session) == updates.size) { "Category order was not fully saved" }
         categoryCacheMutex.withLock {
             account.commit(session) {
-                categoryOrderRevision.incrementAndGet()
+                libraryMetadataRevision.incrementAndGet()
                 localStore.reorderCategories(updates)
                 runtime.invalidateByPrefix("categories")
             }
@@ -397,7 +399,7 @@ class RssRepository @Inject constructor(
 
     override suspend fun deleteCategory(id: String) = safeCall { session ->
         feedRemote.deleteCategory(id, session = session).also {
-            invalidateFeedAndArticleCaches(session)
+            invalidateFeedAndArticleCaches(session) { localStore.removeCategoryMetadata(id) }
         }
     }
 
@@ -456,7 +458,7 @@ class RssRepository @Inject constructor(
 
     override suspend fun deleteFeed(id: String) = safeCall { session ->
         feedRemote.deleteFeed(id, session = session).also {
-            invalidateFeedAndArticleCaches(session)
+            invalidateFeedAndArticleCaches(session) { localStore.removeFeedMetadata(id) }
         }
     }
 
@@ -540,28 +542,31 @@ class RssRepository @Inject constructor(
                         remoteMediator = ArticleRemoteMediator(
                             forceInitialRefresh = query.generation > 0L,
                             readRemoteKey = { account.commit(session) { localStore.readArticleRemoteKey(queryKey) } },
-                            storeRemotePage = { payload, clearExisting ->
-                                account.commit(session) {
-                                    val effective = localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
-                                    effective.forEach { projectCachedArticleState(it.id) }
-                                }
-                            },
                             onCompletedRefresh = {
                                 if (query.savedOnly) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
                             },
-                            loadPage = { limit, cursor ->
+                            loadAndStorePage = { limit, cursor, clearExisting ->
                                 safeReadCall(session) {
-                                    withRetry(session) {
-                                        articleRemote.articles(
-                                            feedId = query.feedId,
-                                            categoryId = query.categoryId,
-                                            unreadOnly = query.unreadOnly,
-                                            savedOnly = query.savedOnly,
-                                            sort = query.sort,
-                                            limit = limit,
-                                            cursor = cursor,
-                                            session = session,
-                                        )
+                                    fetchArticleSnapshot(
+                                        session,
+                                        fetch = {
+                                            withRetry(session) {
+                                                articleRemote.articles(
+                                                    feedId = query.feedId,
+                                                    categoryId = query.categoryId,
+                                                    unreadOnly = query.unreadOnly,
+                                                    savedOnly = query.savedOnly,
+                                                    sort = query.sort,
+                                                    limit = limit,
+                                                    cursor = cursor,
+                                                    session = session,
+                                                )
+                                            }
+                                        },
+                                    ) { payload ->
+                                        val effective = localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
+                                        effective.forEach { projectCachedArticleState(it.id) }
+                                        payload
                                     }
                                 }
                             },
@@ -583,49 +588,54 @@ class RssRepository @Inject constructor(
     ): AppResult<Unit> = safeReadCall(expected) { session ->
         val missing = account.commit(session) { localStore.savedArticlesMissingFromQuery(queryKey) }
         for (batch in missing.chunked(4)) {
-            val confirmed = coroutineScope {
-                batch.map { snapshot ->
-                    async {
-                        val detail = try {
-                            withRetry(session) { articleRemote.article(snapshot.articleId, session = session) }
-                        } catch (error: HttpException) {
-                            if (error.code() == 404) null else throw error
-                        }
-                        snapshot to detail
-                    }
-                }.awaitAll()
-            }
-            for ((snapshot, detail) in confirmed) {
-                articleStateProjectionMutex.withLock {
-                    account.commit(session) {
-                        if (detail == null) {
-                            if (localStore.clearSavedStateIfUnchanged(snapshot)) {
-                                val key = "article:${snapshot.articleId}"
-                                runtime.getCached<ArticleDetail>(key)?.let { cached ->
-                                    runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = false))
+            fetchArticleSnapshot(
+                session,
+                fetch = {
+                    coroutineScope {
+                        batch.map { snapshot ->
+                            async {
+                                val detail = try {
+                                    withRetry(session) { articleRemote.article(snapshot.articleId, session = session) }
+                                } catch (error: HttpException) {
+                                    if (error.code() == 404) null else throw error
                                 }
+                                snapshot to detail
                             }
-                        } else {
-                            localStore.updateArticleSavedState(snapshot.articleId, detail.isSaved, detail.savedRevision)
-                        }
-                        projectCachedArticleState(snapshot.articleId)
-                        runtime.invalidateByPrefix("search")
+                        }.awaitAll()
                     }
+                },
+            ) { confirmed ->
+                for ((snapshot, detail) in confirmed) {
+                    if (detail == null) {
+                        if (localStore.clearSavedStateIfUnchanged(snapshot)) {
+                            val key = "article:${snapshot.articleId}"
+                            runtime.getCached<ArticleDetail>(key)?.let { cached ->
+                                runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, cached.copy(isSaved = false))
+                            }
+                        }
+                    } else {
+                        localStore.updateArticleSavedState(snapshot.articleId, detail.isSaved, detail.savedRevision)
+                    }
+                    projectCachedArticleState(snapshot.articleId)
                 }
+                runtime.invalidateByPrefix("search")
             }
         }
     }
 
     override suspend fun article(articleId: String, forceRefresh: Boolean) = safeReadCall { session ->
         if (forceRefresh) {
-            val stale = runtime.getCached<ArticleDetail>("article:$articleId")
-                ?: account.commit(session) { offlineReadStore.readArticleDetail(articleId) }
             return@safeReadCall try {
                 fetchAndStoreArticle(articleId, session)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 account.requireCurrent(session)
-                stale ?: throw error
+                articleStateProjectionMutex.withLock {
+                    account.commit(session) {
+                        offlineReadStore.readArticleDetail(articleId)?.let { localStore.applyPendingArticleState(it) }
+                            ?: runtime.getCached<ArticleDetail>("article:$articleId")
+                    }
+                } ?: throw error
             }
         }
 
@@ -688,12 +698,9 @@ class RssRepository @Inject constructor(
         val batches = articleIds.toList().chunked(ArticleRemoteDataSource.STATE_LOOKUP_BATCH_SIZE)
         return safeReadCall { session ->
             batches.forEach { ids ->
-                val response = withRetry(session) { articleRemote.articleStates(ids, session) }
-                articleStateProjectionMutex.withLock {
-                    account.commit(session) {
-                        localStore.reconcileArticleStates(response.states).forEach { projectCachedArticleState(it) }
-                        // Missing IDs do not revoke cached content or discard pending user choices.
-                    }
+                fetchArticleSnapshot(session, fetch = { withRetry(session) { articleRemote.articleStates(ids, session) } }) { response ->
+                    localStore.reconcileArticleStates(response.states).forEach { projectCachedArticleState(it) }
+                    // Missing IDs do not revoke cached content or discard pending user choices.
                 }
             }
         }
@@ -757,15 +764,31 @@ class RssRepository @Inject constructor(
         }
 
     private suspend fun fetchAndStoreArticle(articleId: String, session: ApiSession): ArticleDetail {
-        val remoteDetail = withRetry(session) { articleRemote.article(articleId, session = session) }
-        return articleStateProjectionMutex.withLock {
-            account.commit(session) {
-                offlineReadStore.writeArticleDetail(remoteDetail)
-                localStore.applyPendingArticleState(remoteDetail).also { detail ->
-                    runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
-                }
+        return fetchArticleSnapshot(session, fetch = { withRetry(session) { articleRemote.article(articleId, session = session) } }) { remoteDetail ->
+            offlineReadStore.writeArticleDetail(remoteDetail)
+            localStore.applyPendingArticleState(remoteDetail).also { detail ->
+                runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
             }
         }
+    }
+
+    /** Evicting revision history also retires snapshots dispatched under that history. */
+    private suspend fun <Remote, Result : Any> fetchArticleSnapshot(
+        session: ApiSession,
+        fetch: suspend () -> Remote,
+        accept: suspend (Remote) -> Result,
+    ): Result {
+        repeat(3) {
+            val epoch = localStore.articleStateRetentionEpoch
+            val payload = fetch()
+            val accepted = articleStateProjectionMutex.withLock {
+                account.commit(session) {
+                    localStore.acceptArticleSnapshot(epoch) { accept(payload) }
+                }
+            }
+            if (accepted != null) return accepted
+        }
+        throw IOException("Article state changed while loading. Please try again.")
     }
 
     override fun prefetchHeroImages(imageUrls: Iterable<String?>) {
@@ -905,25 +928,34 @@ class RssRepository @Inject constructor(
 
     override suspend fun search(query: String, categoryId: String?, cursor: String?) =
         safeReadCall { session ->
-            suspend fun fetch(): ApiListResponse<ArticleListItem> {
-                val payload = withRetry(session) {
-                    searchRemote.search(query, categoryId, cursor, session = session)
+            val cacheKey = if (cursor.isNullOrBlank()) "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:" else null
+            suspend fun fetch(): SearchSnapshot = fetchArticleSnapshot(
+                session,
+                fetch = { withRetry(session) { searchRemote.search(query, categoryId, cursor, session = session) } },
+            ) { payload ->
+                localStore.reconcileArticleSnapshots(payload.data)
+                payload.data.forEach { projectCachedArticleState(it.id) }
+                // Admission may prune older history. Its own result belongs to the resulting epoch.
+                SearchSnapshot(payload, localStore.articleStateRetentionEpoch).also { snapshot ->
+                    cacheKey?.let { runtime.putCached(it, SEARCH_TTL_MS, snapshot) }
                 }
-                account.commit(session) {
-                    localStore.reconcileArticleSnapshots(payload.data)
-                    payload.data.forEach { projectCachedArticleState(it.id) }
-                }
-                // Cache the remote payload, never an optimistic local projection.
-                return payload
             }
             try {
-                val payload = if (!cursor.isNullOrBlank()) fetch() else {
-                    val key = "search:${query.trim().lowercase()}:${categoryId.orEmpty()}:"
-                    runtime.cachedGet(key = key, ttlMs = SEARCH_TTL_MS) { fetch() }
+                repeat(3) {
+                    val snapshot = if (cacheKey == null) fetch() else {
+                        runtime.cachedGet(key = cacheKey, ttlMs = SEARCH_TTL_MS) { fetch() }
+                    }
+                    val projected = articleStateProjectionMutex.withLock {
+                        account.commit(session) {
+                            localStore.acceptArticleSnapshot(snapshot.epoch) {
+                                // Cached server facts are projected, never admitted as a fresh response.
+                                snapshot.payload.copy(data = localStore.projectArticleSnapshots(snapshot.payload.data))
+                            }
+                        }
+                    }
+                    if (projected != null) return@safeReadCall projected
                 }
-                account.commit(session) {
-                    payload.copy(data = localStore.projectArticleSnapshots(payload.data))
-                }
+                throw IOException("Article state changed while searching. Please try again.")
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 account.requireCurrent(session)
@@ -1254,11 +1286,16 @@ class RssRepository @Inject constructor(
         runtime.clearCache()
     }
 
-    private suspend fun invalidateFeedAndArticleCaches(session: ApiSession) {
-        invalidateFeedAndArticleRuntimeCaches(session)
+    private suspend fun invalidateFeedAndArticleCaches(session: ApiSession, updateMetadata: suspend () -> Unit = {}) {
         account.commit(session) {
+            libraryMetadataRevision.incrementAndGet()
+            updateMetadata()
+            runtime.invalidateByPrefix("feeds")
+            runtime.invalidateByPrefix("articles")
+            runtime.invalidateByPrefix("search")
+            runtime.invalidateByPrefix("categories")
             runtime.invalidateByPrefix("article:")
-            // Keep count baselines while invalidating membership affected by feed/category edits.
+            // Keep unrelated count baselines and queued intents when membership changes.
             offlineReadStore.clearArticleLists()
         }
     }
@@ -1411,13 +1448,21 @@ class RssRepository @Inject constructor(
         status == 408 || status == 425 || status == 429 || status >= 500
 
     private suspend fun fetchFeeds(categoryId: String?, session: ApiSession): List<FeedWithCounts> = feedReadMutex.withLock {
-        val ticket = account.commit(session) { localStore.captureCountSnapshot() }
-        val feeds = withRetry(session) { feedRemote.feeds(categoryId, session) }
-        return account.commit(session) {
-            localStore.writeRemoteFeeds(feeds, ticket, merge = categoryId != null).also {
-                runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, it)
+        while (true) {
+            val revision = libraryMetadataRevision.get()
+            val ticket = account.commit(session) { localStore.captureCountSnapshot() }
+            val feeds = withRetry(session) { feedRemote.feeds(categoryId, session) }
+            val accepted = account.commit(session) {
+                if (revision != libraryMetadataRevision.get()) null else {
+                    localStore.writeRemoteFeeds(feeds, ticket, merge = categoryId != null).also {
+                        runtime.putCached("feeds:${categoryId.orEmpty()}", FEEDS_TTL_MS, it)
+                    }
+                }
             }
+            if (accepted != null) return accepted
         }
+        @Suppress("UNREACHABLE_CODE")
+        error("Feed snapshot loop exited")
     }
 
     private suspend fun filterCachedFeeds(
@@ -1450,6 +1495,8 @@ class RssRepository @Inject constructor(
         } while (changed)
         return feeds.filter { it.categoryId in includedCategoryIds }
     }
+
+    private data class SearchSnapshot(val payload: ApiListResponse<ArticleListItem>, val epoch: Long)
 
     private companion object {
         const val USER_TTL_MS = 30_000L

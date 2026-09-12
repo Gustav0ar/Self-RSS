@@ -13,8 +13,7 @@ import retrofit2.HttpException
 class ArticleRemoteMediator(
     private val forceInitialRefresh: Boolean,
     private val readRemoteKey: suspend () -> ArticleRemoteKeyEntity?,
-    private val storeRemotePage: suspend (ApiListResponse<ArticleListItem>, Boolean) -> Unit,
-    private val loadPage: suspend (limit: Int, cursor: String?) -> AppResult<ApiListResponse<ArticleListItem>>,
+    private val loadAndStorePage: suspend (limit: Int, cursor: String?, clearExisting: Boolean) -> AppResult<ApiListResponse<ArticleListItem>>,
     private val onCompletedRefresh: suspend () -> AppResult<Unit> = { AppResult.Success(Unit) },
 ) : RemoteMediator<Int, ArticleListItem>() {
     override suspend fun load(
@@ -34,8 +33,8 @@ class ArticleRemoteMediator(
         }
 
         val pageSize = state.config.pageSize.coerceAtMost(MAX_PAGE_SIZE)
-        return when (val result = loadPage(pageSize, cursor)) {
-            is AppResult.Success -> storePage(result.data, clearExisting = loadType == LoadType.REFRESH)
+        return when (val result = loadAndStorePage(pageSize, cursor, loadType == LoadType.REFRESH)) {
+            is AppResult.Success -> completePage(result.data)
 
             is AppResult.Error -> {
                 // Cursor formats can legitimately change across server
@@ -43,8 +42,8 @@ class ArticleRemoteMediator(
                 // from page one and only replace the visible queue after that
                 // request succeeds, preserving the stale list if it does not.
                 if (loadType == LoadType.APPEND && (result.cause as? HttpException)?.code() == 409) {
-                    when (val restarted = loadPage(pageSize, null)) {
-                        is AppResult.Success -> storePage(restarted.data, clearExisting = true)
+                    when (val restarted = loadAndStorePage(pageSize, null, true)) {
+                        is AppResult.Success -> completePage(restarted.data)
 
                         is AppResult.Error -> MediatorResult.Error(
                             restarted.cause ?: IllegalStateException(restarted.message),
@@ -57,8 +56,7 @@ class ArticleRemoteMediator(
         }
     }
 
-    private suspend fun storePage(payload: ApiListResponse<ArticleListItem>, clearExisting: Boolean): MediatorResult {
-        storeRemotePage(payload, clearExisting)
+    private suspend fun completePage(payload: ApiListResponse<ArticleListItem>): MediatorResult {
         return if (!payload.hasMore || payload.cursor.isNullOrBlank()) {
             completeRefresh()
         } else {

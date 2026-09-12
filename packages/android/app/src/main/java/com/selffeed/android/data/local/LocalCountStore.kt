@@ -73,6 +73,17 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
         if (changed.isNotEmpty()) dao.upsertCategories(changed)
     }
 
+    /** A deleted feed no longer contributes to any count baseline, even if delivery later fails. */
+    suspend fun forgetFeedScope(feedId: String) {
+        val retired = scopeAdapter.toJson(ReadCountScope(null, emptySet(), false))
+        dao.readPendingReadStateMutations().forEach { mutation ->
+            val scope = mutation.countScopeJson?.let { runCatching { scopeAdapter.fromJson(it) }.getOrNull() }
+            if (scope?.feedId == feedId) {
+                dao.upsertPendingReadStateMutation(mutation.copy(countScopeJson = retired))
+            }
+        }
+    }
+
     /** Remote state is a freshness hint for totals; it is not another local count delta. */
     suspend fun invalidateCountSnapshot() {
         val current = state()

@@ -170,6 +170,179 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `acknowledged feed deletion is absent from offline feeds`() = runTest {
+        repository.prepareSession()
+        localStore.writeFeeds(listOf(sampleFeed("deleted")))
+        coEvery { api.deleteFeed("deleted", session = any()) } returns com.selffeed.android.network.ApiEnvelope(
+            com.selffeed.android.network.SuccessResponse(true),
+        )
+        coEvery { api.feeds(any(), any()) } throws java.io.IOException("Offline after successful deletion")
+        assertTrue(repository.deleteFeed("deleted") is AppResult.Success)
+        val result = repository.feedUpdates().toList()
+        val visible = result.filterIsInstance<AppResult.Success<List<com.selffeed.android.network.FeedWithCounts>>>()
+            .flatMap { it.data }.map { it.id }
+        assertTrue("A successfully deleted feed is emitted as cached success offline: $visible", "deleted" !in visible)
+    }
+
+    @Test
+    fun `feed snapshot started before deletion cannot restore deleted metadata`() = runTest {
+        repository.prepareSession()
+        val feed = sampleFeed("deleted")
+        localStore.writeFeeds(listOf(feed))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { api.feeds(any(), any()) } coAnswers {
+            calls++
+            if (calls == 1) {
+                started.complete(Unit)
+                release.await()
+                ApiEnvelope(listOf(feed))
+            } else ApiEnvelope(emptyList())
+        }
+        coEvery { api.deleteFeed("deleted", session = any()) } returns ApiEnvelope(
+            com.selffeed.android.network.SuccessResponse(true),
+        )
+        val refresh = async { repository.refreshFeeds(null) }
+        started.await()
+        assertTrue(repository.deleteFeed("deleted") is AppResult.Success)
+        release.complete(Unit)
+        assertEquals(AppResult.Success(emptyList<FeedWithCounts>()), refresh.await())
+        assertTrue(localStore.readFeeds().isEmpty())
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `article page started before feed deletion cannot restore its query membership`() = runTest {
+        repository.prepareSession()
+        localStore.writeFeeds(listOf(sampleFeed("f-local")))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val query = ArticlePageQuery(generation = 1)
+        var calls = 0
+        coEvery { api.articles(any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            calls++
+            if (calls == 1) {
+                started.complete(Unit)
+                release.await()
+                ApiListResponse(listOf(sampleArticle("deleted-article")), null, false)
+            } else ApiListResponse(emptyList(), null, false)
+        }
+        coEvery { api.deleteFeed("f-local", session = any()) } returns ApiEnvelope(
+            com.selffeed.android.network.SuccessResponse(true),
+        )
+        val presenter = object : androidx.paging.PagingDataPresenter<ArticleListItem>(Dispatchers.Main) {
+            override suspend fun presentPagingDataEvent(event: androidx.paging.PagingDataEvent<ArticleListItem>) = Unit
+        }
+        val collection = launch {
+            repository.articlePagingData(query).collect { presenter.collectFrom(it) }
+        }
+        try {
+            started.await()
+            assertTrue(repository.deleteFeed("f-local") is AppResult.Success)
+            release.complete(Unit)
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    presenter.loadStateFlow.first { it?.mediator?.refresh is androidx.paging.LoadState.NotLoading }
+                }
+            }
+            assertEquals(2, calls)
+            val page = localStore.articlePagingSource(query.remoteKey(), sessionStore.loadedSession()!!.ownerId).load(
+                androidx.paging.PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+            ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+            assertTrue(page.data.isEmpty())
+        } finally {
+            release.complete(Unit)
+            collection.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `detail response dispatched before state eviction is fetched again`() = runTest {
+        repository.prepareSession()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { api.article("evicted", session = any()) } coAnswers {
+            calls++
+            if (calls == 1) {
+                started.complete(Unit)
+                release.await()
+                ApiEnvelope(sampleArticleDetail("evicted", false).copy(readRevision = 1))
+            } else ApiEnvelope(sampleArticleDetail("evicted", true).copy(readRevision = 2))
+        }
+        val fetch = async { repository.article("evicted", forceRefresh = true) }
+        started.await()
+        localStore.updateArticleReadState("evicted", true, revision = 2)
+        evictOrphanStateHistory()
+        assertNull(database.localStoreDao().readArticleStateRevision("evicted"))
+        release.complete(Unit)
+        val detail = (fetch.await() as AppResult.Success).data
+        assertTrue(detail.isRead)
+        assertEquals(2, detail.readRevision)
+        assertEquals(2, calls)
+        assertEquals(true, localStore.readArticleState("evicted").isRead)
+    }
+
+    @Test
+    fun `search cache cannot reuse raw flags after their revision history is evicted`() = runTest {
+        repository.prepareSession()
+        var calls = 0
+        coEvery { api.search(any(), any(), any(), any(), any()) } coAnswers {
+            calls++
+            ApiListResponse(listOf(sampleArticle("evicted").copy(isRead = calls > 1, readRevision = calls)), null, false)
+        }
+        assertTrue(repository.search("evicted") is AppResult.Success)
+        localStore.updateArticleReadState("evicted", true, revision = 2)
+        evictOrphanStateHistory()
+        assertNull(database.localStoreDao().readArticleStateRevision("evicted"))
+        val result = (repository.search("evicted") as AppResult.Success).data.data.single()
+        assertTrue(result.isRead)
+        assertEquals(2, result.readRevision)
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `search pagination returns its admitted page without fetching it twice under cache pressure`() = runTest {
+        repository.prepareSession()
+        evictOrphanStateHistory()
+        val page = ApiListResponse(listOf(sampleArticle("new-page").copy(readRevision = 1, savedRevision = 1)), null, false)
+        var calls = 0
+        coEvery { api.search("next", categoryId = null, cursor = "cursor", session = any()) } coAnswers {
+            calls++
+            if (calls == 1) page else throw java.io.IOException("Connection lost after the valid response")
+        }
+        assertEquals(AppResult.Success(page), repository.search("next", null, "cursor"))
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `failed force refresh returns state updated while the request was pending`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleDetail(sampleArticleDetail("cached", false).copy(readRevision = 1))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { api.article("cached", session = any()) } coAnswers {
+            started.complete(Unit)
+            release.await()
+            throw java.io.IOException("Offline")
+        }
+        val refresh = async { repository.article("cached", forceRefresh = true) }
+        started.await()
+        localStore.updateArticleReadState("cached", true, revision = 2)
+        release.complete(Unit)
+        val result = (refresh.await() as AppResult.Success).data
+        assertTrue(result.isRead)
+        assertEquals(2, result.readRevision)
+    }
+
+    private suspend fun evictOrphanStateHistory() {
+        localStore.reconcileArticleSnapshots((0..LocalStore.MAX_ORPHAN_ARTICLE_STATES).map { index ->
+            sampleArticle("pressure-$index").copy(readRevision = 1, savedRevision = 1)
+        })
+    }
+
+    @Test
     fun `worker cancellation releases a blocked poll without reporting success`() = runTest {
         every { sessionStore.getAccessToken() } returns "worker-access-token"
         val polling = CompletableDeferred<Unit>()
@@ -662,7 +835,8 @@ class RssRepositoryTest {
     @Test
     fun `feed deletion invalidates cached query membership while retaining queued count baselines`() = runTest {
         repository.prepareSession()
-        localStore.writeFeeds(listOf(sampleFeed("f-local").copy(unreadCount = 2)))
+        localStore.writeFeeds(listOf(sampleFeed("f-local").copy(unreadCount = 2), sampleFeed("unrelated").copy(unreadCount = 9)))
+        localStore.writeCategories(listOf(sampleCategory("c-local").copy(feedCount = 2, unreadCount = 11)))
         val article = sampleArticle("deleted-feed-article").copy(feedId = "f-local")
         localStore.writeArticleRemotePage("deleted-feed-query", ApiListResponse(listOf(article), null, false), true)
         val queued = localStore.queueReadStateMutation(article.id, true)
@@ -674,8 +848,17 @@ class RssRepositoryTest {
             androidx.paging.PagingSource.LoadParams.Refresh<Int>(null, 30, false),
         ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
         assertTrue(page.data.isEmpty())
-        assertEquals(1, localStore.readFeeds().single().unreadCount)
-        assertEquals(listOf(queued), localStore.readPendingReadStateMutations())
+        assertEquals("unrelated", localStore.readFeeds().single().id)
+        assertEquals(9, localStore.readFeeds().single().unreadCount)
+        assertEquals(9, localStore.readCategories().single().unreadCount)
+        assertEquals(1, localStore.readCategories().single().feedCount)
+        val retained = localStore.readPendingReadStateMutations().single()
+        assertEquals(queued.mutationId, retained.mutationId)
+        assertEquals(queued.read, retained.read)
+        // Delivery may still hold the original scope captured before deletion.
+        localStore.discardReadStateMutation(queued)
+        assertEquals(9, localStore.readCategories().single().unreadCount)
+        assertEquals(9, localStore.readFeeds().single().unreadCount)
     }
 
     @Test

@@ -44,14 +44,18 @@ class ArticleRemoteMediatorTest {
 
     @Test
     fun `refresh then append stores every page in query order`() = runBlocking {
+        store.writeArticleRemotePage(
+            QUERY_KEY,
+            ApiListResponse(data = listOf(article("stale")), cursor = null, hasMore = false),
+            clearExisting = true,
+        )
         val cursors = mutableListOf<String?>()
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = true,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, cursor ->
+            loadAndStorePage = { _, cursor, clearExisting ->
                 cursors += cursor
-                AppResult.Success(
+                storePage(
                     if (cursor == null) {
                         ApiListResponse(
                             data = listOf(article("one"), article("two")),
@@ -65,6 +69,7 @@ class ArticleRemoteMediatorTest {
                             hasMore = false,
                         )
                     },
+                    clearExisting,
                 )
             },
         )
@@ -93,8 +98,7 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = false,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, _ -> error("fresh Room data must not fetch during initialization") },
+            loadAndStorePage = { _, _, _ -> error("fresh Room data must not fetch during initialization") },
         )
 
         assertEquals(
@@ -113,8 +117,7 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = true,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, _ -> AppResult.Error("network unavailable") },
+            loadAndStorePage = { _, _, _ -> AppResult.Error("network unavailable") },
         )
 
         assertTrue(mediator.load(LoadType.REFRESH, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Error)
@@ -140,14 +143,14 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = false,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, cursor ->
+            loadAndStorePage = { _, cursor, clearExisting ->
                 requestedCursors += cursor
                 if (cursor != null) {
                     AppResult.Error("Restart pagination", cursorError)
                 } else {
-                    AppResult.Success(
+                    storePage(
                         ApiListResponse(data = listOf(article("fresh")), cursor = null, hasMore = false),
+                        clearExisting,
                     )
                 }
             },
@@ -177,8 +180,9 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = true,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, _ -> AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false)) },
+            loadAndStorePage = { _, _, clearExisting ->
+                storePage(ApiListResponse(data = emptyList(), cursor = null, hasMore = false), clearExisting)
+            },
             onCompletedRefresh = ::confirmRemovals,
         )
 
@@ -200,10 +204,10 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = true,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, cursor ->
-                if (cursor == null) AppResult.Success(
+            loadAndStorePage = { _, cursor, clearExisting ->
+                if (cursor == null) storePage(
                     ApiListResponse(data = listOf(article("first").copy(isSaved = true)), cursor = "next", hasMore = true),
+                    clearExisting,
                 ) else AppResult.Error("offline")
             },
             onCompletedRefresh = ::confirmRemovals,
@@ -217,10 +221,12 @@ class ArticleRemoteMediatorTest {
         val restarted = ArticleRemoteMediator(
             forceInitialRefresh = false,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, cursor ->
+            loadAndStorePage = { _, cursor, clearExisting ->
                 assertEquals("next", cursor)
-                AppResult.Success(ApiListResponse(data = listOf(article("last").copy(isSaved = true)), cursor = null, hasMore = false))
+                storePage(
+                    ApiListResponse(data = listOf(article("last").copy(isSaved = true)), cursor = null, hasMore = false),
+                    clearExisting,
+                )
             },
             onCompletedRefresh = ::confirmRemovals,
         )
@@ -236,10 +242,9 @@ class ArticleRemoteMediatorTest {
         val mediator = ArticleRemoteMediator(
             forceInitialRefresh = true,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },
-            storeRemotePage = { payload, clearExisting -> store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting) },
-            loadPage = { _, _ ->
+            loadAndStorePage = { _, _, clearExisting ->
                 pageLoads++
-                AppResult.Success(ApiListResponse(data = emptyList(), cursor = null, hasMore = false))
+                storePage(ApiListResponse(data = emptyList(), cursor = null, hasMore = false), clearExisting)
             },
             onCompletedRefresh = {
                 confirmations++
@@ -251,6 +256,14 @@ class ArticleRemoteMediatorTest {
         assertTrue(mediator.load(LoadType.APPEND, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Success)
         assertEquals(2, confirmations)
         assertEquals(1, pageLoads)
+    }
+
+    private suspend fun storePage(
+        payload: ApiListResponse<ArticleListItem>,
+        clearExisting: Boolean,
+    ): AppResult<ApiListResponse<ArticleListItem>> {
+        store.writeArticleRemotePage(QUERY_KEY, payload, clearExisting)
+        return AppResult.Success(payload)
     }
 
     private suspend fun confirmRemovals(): AppResult<Unit> {

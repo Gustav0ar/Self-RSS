@@ -6,6 +6,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
 import okio.Buffer
@@ -15,6 +18,7 @@ import okio.Timeout
 import okio.buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,6 +32,58 @@ import java.util.concurrent.atomic.AtomicLong
 
 class RepositoryRuntimeTest {
     private val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test")
+
+    @Test fun `cache epoch invalidates values while preserving prefix invalidation`() = runTest {
+        val epoch = AtomicLong()
+        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = epoch::get)
+        runtime.putCached("feeds", 60_000, "old")
+        assertEquals("old", runtime.getCached<String>("feeds"))
+
+        epoch.incrementAndGet()
+
+        assertNull(runtime.getCached<String>("feeds"))
+        assertEquals("new", runtime.cachedGet("feeds", 60_000) { "new" })
+        assertEquals("new", runtime.getCached<String>("feeds"))
+        runtime.invalidateByPrefix("feeds")
+        assertNull(runtime.getCached<String>("feeds"))
+        assertEquals(0L, runtime.snapshot().getValue("memoryCacheEntries"))
+    }
+
+    @Test fun `a cache lookup cannot return a value after its epoch changes`() {
+        val epoch = AtomicLong()
+        var advanceEpoch = false
+        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = {
+            epoch.get().also { if (advanceEpoch) epoch.incrementAndGet() }
+        })
+        runtime.putCached("feeds", 60_000, "old")
+        advanceEpoch = true
+
+        assertNull(runtime.getCached<String>("feeds"))
+    }
+
+    @Test fun `a superseded in-flight load cannot populate the current cache epoch`() = runTest {
+        val epoch = AtomicLong()
+        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = epoch::get)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val oldRequest = async {
+            runtime.cachedGet("feeds", 60_000) {
+                entered.complete(Unit)
+                release.await()
+                "old"
+            }
+        }
+        entered.await()
+        epoch.incrementAndGet()
+        val freshValue = withTimeout(1_000) { runtime.cachedGet("feeds", 60_000) { "new" } }
+        assertEquals("new", freshValue)
+        release.complete(Unit)
+
+        assertEquals("old", oldRequest.await())
+        assertEquals("new", runtime.getCached<String>("feeds"))
+        assertEquals(0L, runtime.snapshot().getValue("memoryCacheLoadKeys"))
+        assertEquals(0L, runtime.snapshot().getValue("memoryCacheActiveLoads"))
+    }
 
     @Test fun `http error bodies read off the caller and close`() = runBlocking {
         val caller = Thread.currentThread()

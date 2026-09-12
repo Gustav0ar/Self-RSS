@@ -77,6 +77,75 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `a remote save receipt needs article metadata for Saved membership`() = runBlocking {
+        store.updateArticleSavedState("unseen-saved", true, revision = 1)
+        assertEquals(true, store.readArticleState("unseen-saved")?.isSaved)
+        val page = store.savedArticlePagingSource(ownerId = null).load(
+            PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+        ) as PagingSource.LoadResult.Page<Int, ArticleListItem>
+        assertTrue("A state-only receipt has no article content to show in Saved", page.data.isEmpty())
+    }
+
+    @Test
+    fun `discarded query history stays outside bulk reconciliation`() = runBlocking {
+        repeat(100) { index ->
+            store.writeArticleRemotePage("one-query", ApiListResponse(listOf(sampleArticle("historical-$index")), null, false), true)
+        }
+        store.clearArticleLists()
+        reopenStore()
+        val sql = database.openHelper.readableDatabase
+        fun count(table: String): Int = sql.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getInt(0) }
+        assertEquals(0, count("articles"))
+        val revisions = count("article_state_revisions")
+        val affected = store.markArticlesReadByFeeds(setOf("f-1")).affectedArticleIds.size
+        val overrides = count("article_read_overrides")
+        assertEquals("orphan revisions=$revisions; bulk affected=$affected; overrides=$overrides", 0, affected)
+        assertEquals(0, overrides)
+    }
+
+    @Test
+    fun `local state reads and existing read receipts do not scan retention history`() = runBlocking {
+        store.writeArticleDetail(sampleDetail("retained"))
+        queries.clear()
+        captureQueries = true
+        try {
+            repeat(10) { revision ->
+                store.readArticleState("retained")
+                store.readArticleState("absent-$revision")
+                store.updateArticleReadState("retained", true, revision)
+            }
+        } finally { captureQueries = false }
+
+        assertNull(database.localStoreDao().readArticleStateRevision("absent-0"))
+        assertFalse(queries.any { it.contains("AS writeOrder", ignoreCase = true) })
+    }
+
+    @Test
+    fun `feed deletion subtracts signed count scopes once and rejects an older captured intent safely`() = runBlocking {
+        val child = sampleCategory("c-1", "Child").copy(parentCategoryId = "root", feedCount = 2)
+        store.writeCategories(listOf(sampleCategory("root", "Root").copy(feedCount = 2, children = listOf(child))))
+        store.writeFeeds(listOf(sampleFeed("f-1", "c-1"), sampleFeed("f-2", "c-1")))
+        store.writeArticleDetail(sampleDetail("deleted-feed-body").copy(contentText = "Keep offline text"))
+        val capturedBeforeDeletion = store.queueReadStateMutation("deleted-feed-body", true)
+        assertEquals(-1, database.localStoreDao().readCategories().single().unreadCount)
+
+        store.removeFeedMetadata("f-1")
+        store.removeFeedMetadata("f-1")
+
+        assertEquals(listOf("f-2"), store.readFeeds().map { it.id })
+        assertEquals(0, database.localStoreDao().readCategories().single().unreadCount)
+        assertEquals(1, store.readCategories().single().feedCount)
+        assertEquals(1, store.readCategories().single().children?.single()?.feedCount)
+        assertEquals(capturedBeforeDeletion.mutationId, store.readPendingReadStateMutations().single().mutationId)
+        assertEquals("Keep offline text", store.readArticleDetail("deleted-feed-body")?.contentText)
+
+        store.discardReadStateMutation(capturedBeforeDeletion)
+
+        assertEquals(0, database.localStoreDao().readCategories().single().unreadCount)
+        assertEquals(0, store.readCategories().single().children?.single()?.unreadCount)
+    }
+
+    @Test
     fun `an older read receipt cannot replace newer state or lower the next mutation revision`() = runBlocking {
         store.writeArticleDetail(sampleDetail("ordered-read"))
         store.updateArticleReadState("ordered-read", true, revision = 10)

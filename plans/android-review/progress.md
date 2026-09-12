@@ -2,6 +2,10 @@
 
 Implementation started from `cd802e5`. Gustavo authorized separate PRs, further review and merging, then confirmed the administrator override after GitHub required an approving review. The 27 roadmap, implementation and testing PRs #46 and #48–73 are merged through `a0279a63`. The final integration also includes the post-merge corrections in #74 and #75. PR #47 integrates the design alternatives and this final record; the layout selection remains pending. Every merged tree matches its reviewed candidate. Production deployment requires a separate environment approval, which remains untouched. The original checkout and its uncommitted plans are preserved.
 
+## Post-merge regression recovery
+
+The follow-up on `fix/android-regression-recovery` repairs reconnect and Saved membership refresh, deleted-feed offline metadata, unbounded orphan article state and reader position across mode changes. Further review also corrected Text readiness after memory trimming and delayed snapshot/count rollback races. All 646 JVM tests pass. Device, process-recovery and hosted checks are tracked by the follow-up PR before merge. [Implementation and acceptance details](regression-recovery.md). This does not close the remaining roadmap rows below.
+
 ## Review stack
 
 | Change | Plan | Branch | PR | State |
