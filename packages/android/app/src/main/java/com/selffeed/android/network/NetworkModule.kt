@@ -3,6 +3,15 @@ package com.selffeed.android.network
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import androidx.annotation.WorkerThread
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.ApiSession
@@ -43,82 +52,85 @@ sealed interface SessionRefreshResult {
 class SessionRefreshCoordinator(
     private val sessionStore: SessionStore,
     moshi: Moshi,
+    private val refreshClientFactory: () -> OkHttpClient = ::createRefreshClient,
 ) {
-    private val lock = Any()
+    private val refreshes = Mutex()
     private val responseAdapter: JsonAdapter<ApiEnvelope<RefreshData>> = moshi.adapter(
         Types.apiEnvelopeRefreshType,
     )
-    private val refreshClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .apply {
-                TokenAuthenticator.certificatePinner?.let { pinner ->
-                    certificatePinner(pinner)
-                }
-            }
-            .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .callTimeout(REFRESH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build()
-    }
+    private val refreshClient: OkHttpClient by lazy(refreshClientFactory)
 
     @Volatile
     private var lastRejection: Pair<ApiSession, Long>? = null
 
-    fun refreshAccessToken(): SessionRefreshResult = refreshAccessToken(sessionStore.currentSession())
+    /** OkHttp's Authenticator is synchronous and invokes this adapter on its worker thread. */
+    @WorkerThread
+    fun refreshAccessToken(session: ApiSession = sessionStore.currentSession()): SessionRefreshResult =
+        runBlocking { refresh(session) }
 
-    fun refreshAccessToken(session: ApiSession): SessionRefreshResult = synchronized(lock) {
-        if (!sessionStore.isCurrentSession(session)) return@synchronized staleSession()
-        val refreshCookie = runCatching { sessionStore.getRefreshCookieIfCurrent(session) }
-            .getOrElse { error -> return@synchronized SessionRefreshResult.Unavailable(error) }
-        if (refreshCookie.isNullOrBlank()) {
-            return@synchronized SessionRefreshResult.Unavailable(
-                IOException("No refresh cookie is stored"),
-            )
-        }
+    /** Main-safe refresh with cancellable lock admission and ownership of the entire HTTP call. */
+    suspend fun refresh(session: ApiSession): SessionRefreshResult = withContext(Dispatchers.IO) {
+        refreshes.withLock {
+            if (!sessionStore.isCurrentSession(session)) return@withLock staleSession()
+            val refreshCookie = runCatching { sessionStore.getRefreshCookieIfCurrent(session) }
+                .getOrElse { error -> return@withLock SessionRefreshResult.Unavailable(error) }
+            if (refreshCookie.isNullOrBlank()) {
+                return@withLock SessionRefreshResult.Unavailable(IOException("No refresh cookie is stored"))
+            }
 
-        val request = Request.Builder()
-            .url(apiEndpointUrl(session.apiBaseUrl, "auth/refresh"))
-            .post("{}".toRequestBody("application/json".toMediaType()))
-            .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
-            .header("X-Self-Feed-Device-Name", androidDeviceName())
-            .header("User-Agent", androidUserAgent())
-            .build()
-
-        runCatching {
-            refreshClient.newBuilder()
+            val request = Request.Builder()
+                .url(apiEndpointUrl(session.apiBaseUrl, "auth/refresh"))
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .header("X-Self-Feed-Client-Id", sessionStore.getClientId())
+                .header("X-Self-Feed-Device-Name", androidDeviceName())
+                .header("User-Agent", androidUserAgent())
+                .build()
+            val call = refreshClient.newBuilder()
                 .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
-                .build().newCall(request).execute().use { response ->
-                if (!sessionStore.isCurrentSession(session)) return@use staleSession()
-                when {
-                    response.code == 401 -> {
-                        markRejected(session)
-                        SessionRefreshResult.Rejected
-                    }
-                    !response.isSuccessful -> SessionRefreshResult.Unavailable(
-                        IOException("Refresh failed with HTTP ${response.code}"),
-                    )
-                    else -> {
-                        val body = response.body?.string()
-                            ?: return@use SessionRefreshResult.Unavailable(
-                                IOException("Refresh response was empty"),
-                            )
-                        val parsed = responseAdapter.fromJson(body)
-                            ?: return@use SessionRefreshResult.Unavailable(
-                                IOException("Refresh response was empty or invalid"),
-                            )
-                        val accessToken = parsed.data.tokens.accessToken
-                        val stored = runBlocking(Dispatchers.IO) {
-                            sessionStore.setAccessTokenIfCurrent(session, accessToken)
+                .build().newCall(request)
+            try {
+                coroutineScope {
+                    val response = async(Dispatchers.IO) {
+                        call.execute().use { response ->
+                            currentCoroutineContext().ensureActive()
+                            if (!sessionStore.isCurrentSession(session)) return@use staleSession()
+                            when {
+                                response.code == 401 -> {
+                                    markRejected(session)
+                                    SessionRefreshResult.Rejected
+                                }
+                                !response.isSuccessful -> SessionRefreshResult.Unavailable(
+                                    IOException("Refresh failed with HTTP ${response.code}"),
+                                )
+                                else -> {
+                                    val body = response.body?.string()
+                                        ?: return@use SessionRefreshResult.Unavailable(IOException("Refresh response was empty"))
+                                    currentCoroutineContext().ensureActive()
+                                    val parsed = responseAdapter.fromJson(body)
+                                        ?: return@use SessionRefreshResult.Unavailable(IOException("Refresh response was empty or invalid"))
+                                    currentCoroutineContext().ensureActive()
+                                    val token = parsed.data.tokens.accessToken
+                                    if (!sessionStore.setAccessTokenIfCurrent(session, token)) return@use staleSession()
+                                    lastRejection = null
+                                    SessionRefreshResult.Success(token)
+                                }
+                            }
                         }
-                        if (!stored) return@use staleSession()
-                        lastRejection = null
-                        SessionRefreshResult.Success(accessToken)
+                    }
+                    try {
+                        response.await()
+                    } catch (cancelled: CancellationException) {
+                        // Cancelling await must close the socket before waiting for its IO child.
+                        // This also covers a body read blocked after headers have arrived.
+                        call.cancel()
+                        throw cancelled
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                SessionRefreshResult.Unavailable(error)
             }
-        }.getOrElse { error ->
-            SessionRefreshResult.Unavailable(error)
         }
     }
 
@@ -141,6 +153,14 @@ class SessionRefreshCoordinator(
         const val REFRESH_WRITE_TIMEOUT_SECONDS = 10L
         const val REFRESH_CALL_TIMEOUT_SECONDS = 15L
         const val RECENT_REFRESH_REJECTION_WINDOW_MS = 10_000L
+
+        fun createRefreshClient(): OkHttpClient = OkHttpClient.Builder()
+            .apply { TokenAuthenticator.certificatePinner?.let(::certificatePinner) }
+            .connectTimeout(REFRESH_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(REFRESH_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(REFRESH_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(REFRESH_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
     }
 }
 

@@ -171,7 +171,7 @@ Verify with `bash scripts/android-review-device.sh 'com.selffeed.android.ui.Andr
 
 ## Test and acceptance contract
 
-- [ ] The cookie-only restore reaches the real refresh implementation without synchronous networking on Main.
+- [x] The cookie-only restore reaches the real refresh implementation without synchronous networking on Main.
 - [x] ContentResolver reads and full cached-body decoding occur off Main; all streams close after failure/cancellation.
 - [x] Preparing long reader documents does not run inside composition and obsolete prepared results cannot replace the current article/version.
 - [ ] No StrictMode disk/network Main violation occurs for the scoped fixture journeys.
@@ -257,3 +257,18 @@ All 48 focused JVM checks and isolated app APKs pass in `/tmp/android-opml-expor
 Final export validation: all 610 JVM tests and both isolated APK pairs pass in `/tmp/android-opml-export-final-apks.log`. Both isolated variants' lint checks pass in `/tmp/android-opml-export-final-lint.log`. The first combined lint/build invocation failed while lint read generated benchmark files during KSP regeneration; `/tmp/android-opml-export-final-build.log` retains that failure. Running generation/builds before lint, in separate invocations, passes without changing build settings or disabling checks. The exact build-tool race remains a verification-infrastructure follow-up.
 
 All 28 affected API 35 device cases pass in `/tmp/android-opml-export-final-device.log`. Both actual process recovery cases pass in `/tmp/android-opml-export-process.log`, exercising the production Application and its new injected store in the minified isolated package. The gated unit case verifies pending-file preservation after a stopped handoff and invalidation when the account is cleared during retention renewal. Independent review findings are addressed. No Room schema changed; physical heap/frame/battery acceptance remains plan 049.
+
+
+### Cookie-only bootstrap cancellation
+
+Base `bbd6d73` (#71). The real HTTP/SessionStore/NetworkModule/AuthViewModel fixture in `data/CookieOnlyBootstrapTest.kt` confirms that cookie-only restoration already runs the blocking refresh off Main. It reproduces delayed cancellation in `/tmp/android-cookie-bootstrap-red.log`: cancelling the ViewModel does not finish while the server withholds headers. The old `withContext(IO)` call does not cancel OkHttp, and the coordinator uses an uncancellable monitor for serialization.
+
+Extend this slice to the new fixture, the existing network/repository tests and coordinator within `NetworkModule.kt`. Replace the monitor with one coroutine Mutex shared by the suspend refresh and synchronous Authenticator adapter. Cancellation must stop the owned Call, including blocked response-body reads, and reject late credential publication. Keep certificate pinning, cookie ownership, existing timeouts and the single coordinator. Inject only the refresh transport factory for actual HTTP/thread/closure assertions. Reader StrictMode acceptance remains separate.
+
+
+The blocked-body and cancelled-waiter checks also pass in `/tmp/android-cookie-bootstrap-body-lock.log`. Add `androidTest/.../network/SessionRefreshLifecycleDeviceTest.kt` for actual Android Main, AndroidKeyStore-backed SessionStore and socket cancellation. Its small server binds only loopback. Add a `deviceTest`-only network security resource allowing `127.0.0.1`, matching the existing performance-test fixture restriction; production/debug security resources remain unchanged. The synchronous Authenticator adapter still has a bounded refresh lifetime independent of cancellation of its original API call, and existing owner-checked cookie persistence may finish once started. Do not describe this slice as cancellation of every authentication callback.
+
+
+Final refresh validation: all 614 JVM tests and both isolated APK pairs pass in `/tmp/android-session-refresh-final-build.log`. Both isolated lint variants pass in `/tmp/android-session-refresh-final-lint.log`. All 30 selected API 35 device cases pass in `/tmp/android-session-refresh-final-device.log`, including the two actual socket cases, account/Activity recreation, authentication, and OPML import/export. `/tmp/android-cookie-bootstrap-device.log` also passes the two standalone socket cases. Their StrictMode checks report no Main disk/network violations; cancellation finishes while the fixture server still withholds headers/body. The JVM AuthViewModel fixture reaches the real coordinator and HTTP transport; only AndroidKeyStore lookup is substituted there, while the Android test uses the real encrypted SessionStore.
+
+Independent source review found no new blocker. Its two additional recommendations, stalled body and cancelled mutex waiter, pass. The waiter test also proves the synchronous adapter and suspend path share the same coordinator and permit a later refresh. No persistent schema, application network policy or configured production timeout changes. Test cleartext permission is restricted to loopback in the isolated device-test variant. Reader StrictMode journeys and physical frame comparison remain pending, so plan 037 is still IN PROGRESS.
