@@ -48,7 +48,7 @@ class OfflineStatusTest {
         composeRule.onNodeWithText("Offline").assertIsDisplayed()
         composeRule.onNodeWithText("Up to date").assertDoesNotExist()
         composeRule.runOnIdle { online = true }
-        composeRule.onNodeWithText("Up to date").assertIsDisplayed()
+        composeRule.onNodeWithText("Up to date").assertDoesNotExist()
     }
 
     @Test

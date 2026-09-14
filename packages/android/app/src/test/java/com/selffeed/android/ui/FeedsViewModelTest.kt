@@ -591,12 +591,13 @@ class FeedsViewModelTest {
     }
 
     @Test
-    fun `syncAllFeeds sets loading flag and populates lastSyncSummary`() = runTest {
+    fun `syncAllFeeds clears manual refresh after completion`() = runTest {
         val viewModel = FeedsViewModel(repository, opmlReader, opmlExportStore)
         viewModel.syncAllFeeds()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
         val s = viewModel.state.value
         assertEquals(false, s.loading)
+        assertEquals(false, s.manualRefreshInProgress)
         assertEquals(3, s.lastSyncSummary?.syncedFeeds)
         assertEquals(1L, s.syncRevision)
     }
@@ -617,7 +618,7 @@ class FeedsViewModelTest {
     }
 
     @Test
-    fun `queue response timeout releases foreground loading without cancelling the refresh`() = runTest {
+    fun `queue response timeout keeps one continuous manual refresh`() = runTest {
         val delayedResponse = CompletableDeferred<AppResult<SyncResponse>>()
         coEvery { repository.syncAllFeeds() } coAnswers { delayedResponse.await() }
         val viewModel = FeedsViewModel(repository, opmlReader, opmlExportStore)
@@ -628,6 +629,7 @@ class FeedsViewModelTest {
         runCurrent()
 
         assertEquals(false, viewModel.state.value.loading)
+        assertEquals(true, viewModel.state.value.manualRefreshInProgress)
         assertEquals(true, viewModel.state.value.syncInBackground)
         assertEquals(
             PresentationText.resource(R.string.feeds_sync_checking),
@@ -639,6 +641,7 @@ class FeedsViewModelTest {
         runCurrent()
 
         assertEquals(1L, viewModel.state.value.syncRevision)
+        assertEquals(false, viewModel.state.value.manualRefreshInProgress)
         coVerify { repository.syncAllFeedsStatus() }
     }
 
@@ -681,6 +684,7 @@ class FeedsViewModelTest {
         assertEquals(1, viewModel.state.value.syncCompletedFeeds)
         assertEquals(2, viewModel.state.value.syncNewArticles)
         assertEquals(0L, viewModel.state.value.syncRevision)
+        assertEquals(true, viewModel.state.value.manualRefreshInProgress)
 
         viewModel.syncAllFeeds()
 
@@ -692,7 +696,7 @@ class FeedsViewModelTest {
     }
 
     @Test
-    fun `reconcileSyncStatus restores loading UX for a backend refresh`() = runTest {
+    fun `reconcileSyncStatus does not show manual refresh for background work`() = runTest {
         val active = FeedSyncAllStatus(
             queued = false,
             running = true,
@@ -712,6 +716,7 @@ class FeedsViewModelTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals(false, viewModel.state.value.manualRefreshInProgress)
         assertEquals(6, viewModel.state.value.syncTotalFeeds)
         assertEquals(2, viewModel.state.value.syncCompletedFeeds)
         assertEquals(9L, viewModel.state.value.articleRevision)
@@ -724,7 +729,7 @@ class FeedsViewModelTest {
     }
 
     @Test
-    fun `transient status failure keeps the backend refresh animation visible`() = runTest {
+    fun `transient status failure keeps manual refresh continuous`() = runTest {
         val active = FeedSyncAllStatus(
             queued = false,
             running = true,
@@ -744,6 +749,7 @@ class FeedsViewModelTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(true, viewModel.state.value.syncInBackground)
+        assertEquals(true, viewModel.state.value.manualRefreshInProgress)
         assertEquals(
             PresentationText.resource(R.string.feeds_sync_background),
             viewModel.state.value.statusMessage,
@@ -758,6 +764,7 @@ class FeedsViewModelTest {
         advanceTimeBy(750L)
         runCurrent()
         assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals(false, viewModel.state.value.manualRefreshInProgress)
     }
 
     @Test
@@ -773,6 +780,7 @@ class FeedsViewModelTest {
         runCurrent()
 
         assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals(false, viewModel.state.value.manualRefreshInProgress)
         assertNull(viewModel.state.value.errorMessage)
         assertEquals(
             PresentationText.resource(R.string.feeds_sync_continues),
@@ -791,6 +799,7 @@ class FeedsViewModelTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.observeForeground() }
 
         assertEquals(false, viewModel.state.value.syncInBackground)
+        assertEquals(false, viewModel.state.value.manualRefreshInProgress)
         assertNull(viewModel.state.value.errorMessage)
         assertEquals(
             PresentationText.resource(R.string.feeds_sync_stale),

@@ -46,6 +46,7 @@ import javax.inject.Inject
 
 data class FeedsUiState(
     val loading: Boolean = false,
+    val manualRefreshInProgress: Boolean = false,
     val reorderingCategories: Boolean = false,
     val categories: List<CategoryWithCounts> = emptyList(),
     val feeds: List<FeedWithCounts> = emptyList(),
@@ -204,7 +205,7 @@ class FeedsViewModel @Inject constructor(
         }
     }
 
-    /** Restores refresh UX for work started by another client or WorkManager. */
+    /** Reconciles work started elsewhere without showing manual-refresh UI. */
     suspend fun reconcileSyncStatus() {
         if (syncSubmission != null) return
         val revision = syncSubmissionRevision
@@ -216,6 +217,7 @@ class FeedsViewModel @Inject constructor(
                     updateState {
                         it.copy(
                             loading = false,
+                            manualRefreshInProgress = false,
                             syncInBackground = false,
                             syncStatus = status.data,
                             statusMessage = PresentationText.resource(R.string.feeds_sync_stale),
@@ -464,16 +466,21 @@ class FeedsViewModel @Inject constructor(
             return
         }
         val submission = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            updateState { it.copy(loading = true, errorMessage = null) }
+            updateState {
+                it.copy(
+                    loading = true,
+                    manualRefreshInProgress = true,
+                    errorMessage = null,
+                )
+            }
             val queueRequest = async { repository.syncAllFeeds(feedId, categoryId) }
             val result = withTimeoutOrNull(REFRESH_QUEUE_TIMEOUT_MS) {
                 queueRequest.await()
             }
             if (result == null) {
                 // The queue endpoint is intentionally tiny, but a saturated
-                // VPS can still delay the response. Release pull-to-refresh,
-                // but keep the request alive so a slow response cannot silently
-                // cancel the refresh the user explicitly requested.
+                // VPS can still delay the response. Keep the manual indicator
+                // continuous while the request remains alive.
                 updateState {
                     it.copy(
                         loading = false,
@@ -492,6 +499,7 @@ class FeedsViewModel @Inject constructor(
                     }
                     is AppResult.Error -> updateState {
                         it.copy(
+                            manualRefreshInProgress = false,
                             syncInBackground = false,
                             errorMessage = PresentationText.dynamic(eventualResult.message),
                         )
@@ -516,6 +524,7 @@ class FeedsViewModel @Inject constructor(
                 is AppResult.Error -> updateState {
                     it.copy(
                         loading = false,
+                        manualRefreshInProgress = false,
                         errorMessage = PresentationText.dynamic(result.message),
                     )
                 }
@@ -557,6 +566,7 @@ class FeedsViewModel @Inject constructor(
                 updateState {
                     it.copy(
                         loading = false,
+                        manualRefreshInProgress = false,
                         syncInBackground = false,
                         statusMessage = PresentationText.resource(R.string.feeds_sync_continues),
                     )
@@ -568,6 +578,7 @@ class FeedsViewModel @Inject constructor(
                     if (status.data.stale) {
                         updateState {
                             it.copy(
+                                manualRefreshInProgress = false,
                                 syncInBackground = false,
                                 syncStatus = status.data,
                                 statusMessage = PresentationText.resource(R.string.feeds_sync_stale),
@@ -642,6 +653,7 @@ class FeedsViewModel @Inject constructor(
         updateState {
             it.copy(
                 loading = false,
+                manualRefreshInProgress = false,
                 syncInBackground = false,
                 syncRevision = it.syncRevision + 1,
                 syncTotalFeeds = status.totalFeeds,
