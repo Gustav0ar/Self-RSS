@@ -71,7 +71,6 @@
     <string name="article_mark_unread">Mark unread</string>
     <string name="article_mark_as_read">Mark as read</string>
     <string name="article_mark_as_unread">Mark as unread</string>
-    <string name="article_marked_read">Marked as read</string>
     <string name="article_marked_unread">Marked as unread</string>
     <string name="article_update_read_failed">Failed to update read state</string>
     <string name="article_update_saved_failed">Failed to update saved state</string>

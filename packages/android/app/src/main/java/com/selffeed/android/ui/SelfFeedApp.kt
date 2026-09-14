@@ -119,6 +119,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import androidx.compose.runtime.key
 import com.selffeed.android.ui.components.ArticleSyncStatusLine
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -208,6 +209,7 @@ fun SelfFeedApp(
     val drawerState =
         androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val unreadUndoScope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeTab = state.chrome.activeTab
     val selectedArticle = state.articles.selectedArticle
@@ -215,34 +217,34 @@ fun SelfFeedApp(
     val selectedCategoryId = state.articles.selectedCategoryId
     val readerFeedTitle = state.articles.currentReaderFeedTitle()
     var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
-    val markedReadMessage = stringResource(R.string.article_marked_read)
     val markedUnreadMessage = stringResource(R.string.article_marked_unread)
     val undoLabel = stringResource(R.string.action_undo)
-    val offerReadUndo: (String, Boolean, Boolean) -> Unit = remember(
+    val offerUnreadUndo: (String) -> Unit = remember(
         actions,
         snackbarHostState,
-        scope,
-        markedReadMessage,
+        unreadUndoScope,
         markedUnreadMessage,
         undoLabel,
     ) {
-        { articleId, previousRead, read ->
-            scope.launch {
-                val message = if (read) markedReadMessage else markedUnreadMessage
-                if (snackbarHostState.showSnackbar(
-                        message = message,
-                        actionLabel = undoLabel
+        { articleId ->
+            unreadUndoScope.coroutineContext.cancelChildren()
+            unreadUndoScope.launch {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                if (
+                    snackbarHostState.showSnackbar(
+                        message = markedUnreadMessage,
+                        actionLabel = undoLabel,
                     ) == androidx.compose.material3.SnackbarResult.ActionPerformed
                 ) {
-                    actions.onToggleRead(articleId, previousRead)
+                    actions.onToggleRead(articleId, true)
                 }
             }
         }
     }
-    val toggleReadWithUndo: (String, Boolean) -> Unit = remember(actions, offerReadUndo) {
+    val toggleReadWithUndo: (String, Boolean) -> Unit = remember(actions, offerUnreadUndo) {
         { articleId, read ->
             actions.onToggleRead(articleId, read)
-            offerReadUndo(articleId, !read, read)
+            if (shouldOfferUnreadUndo(read)) offerUnreadUndo(articleId)
         }
     }
     val topBarText = remember(
@@ -475,16 +477,14 @@ fun SelfFeedApp(
             onRetryFeedSync = actions.onRetryFeedSync,
         )
     }
-    val articleActions = remember(actions, snackbarHostState, scope) {
+    val articleActions = remember(actions, offerUnreadUndo) {
         ArticleTabActions(
             onRefresh = actions.onRefreshArticles,
             onOpenArticle = actions.onOpenArticle,
             onOpenArticleFromQueue = actions.onOpenArticleFromQueue,
             onToggleRead = actions.onToggleRead,
             onToggleSaved = actions.onToggleSaved,
-            onReadStateChanged = { articleId, previousRead ->
-                offerReadUndo(articleId, previousRead, !previousRead)
-            },
+            onMarkedUnread = offerUnreadUndo,
             onArticleSnapshot = actions.onArticleSnapshot,
             onVisibleArticles = actions.onVisibleArticles,
         )
@@ -721,6 +721,8 @@ internal fun shouldPrefetchNextReaderPage(
     val visibleIndex = readerQueue.indexOfFirst { it.id == visibleArticleId }
     return visibleIndex >= 0 && visibleIndex >= readerQueue.size - READER_PAGE_PREFETCH_DISTANCE
 }
+
+internal fun shouldOfferUnreadUndo(isRead: Boolean): Boolean = !isRead
 
 private fun <T : Any> androidx.paging.compose.LazyPagingItems<T>.lastIndexOrNull(): Int? =
     (itemCount - 1).takeIf { it >= 0 }

@@ -193,8 +193,13 @@ fun ArticleReaderPane(
 
     HorizontalPager(
         state = pagerState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
         beyondViewportPageCount = 1,
+        // Stretch overscroll deforms the whole article at the queue boundary
+        // and exposes the pager surface as a grey strip along the edge.
+        overscrollEffect = null,
         key = { page -> readerArticles[page].id },
     ) { page ->
         if (readerArticles.isEmpty()) return@HorizontalPager
