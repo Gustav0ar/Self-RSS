@@ -83,7 +83,7 @@ data class ArticleTabActions(
     },
     val onToggleRead: (String, Boolean) -> Unit,
     val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
-    val onReadStateChanged: (String, Boolean) -> Unit = { _, _ -> },
+    val onMarkedUnread: (String) -> Unit = {},
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
     val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
 )

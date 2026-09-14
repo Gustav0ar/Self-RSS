@@ -66,4 +66,10 @@ class ArticleSnapshotSynchronizationTest {
     fun `reader ignores prefetch checks for an article outside its queue`() {
         assertFalse(shouldPrefetchNextReaderPage("missing", listOf(tappedArticle)))
     }
+
+    @Test
+    fun `undo feedback is offered only for an unread target state`() {
+        assertTrue(shouldOfferUnreadUndo(isRead = false))
+        assertFalse(shouldOfferUnreadUndo(isRead = true))
+    }
 }

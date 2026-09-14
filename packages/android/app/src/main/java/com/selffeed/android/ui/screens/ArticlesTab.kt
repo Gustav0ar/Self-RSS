@@ -81,6 +81,7 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.articles.withArticleFlags
 import com.selffeed.android.ui.resolve
+import com.selffeed.android.ui.shouldOfferUnreadUndo
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -276,7 +277,7 @@ fun ArticlesTab(
                         onToggleRead = { read ->
                             actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
                             actions.onToggleRead(article.id, read)
-                            actions.onReadStateChanged(article.id, !read)
+                            if (shouldOfferUnreadUndo(read)) actions.onMarkedUnread(article.id)
                         },
                         onToggleSaved = {
                             actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
