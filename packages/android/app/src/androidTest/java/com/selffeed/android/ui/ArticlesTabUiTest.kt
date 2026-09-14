@@ -180,7 +180,7 @@ class ArticlesTabUiTest {
         )
 
         composeRule.runOnUiThread {
-            state = state.copy(isStartingFeedSync = true)
+            state = state.copy(isManualRefreshInProgress = true)
         }
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithTag("articles-refresh-indicator").fetchSemanticsNodes().size == 1
@@ -209,7 +209,7 @@ class ArticlesTabUiTest {
                         articles = emptyList(),
                         selectedArticleId = null,
                         isSyncingFeeds = false,
-                        isStartingFeedSync = true,
+                        isManualRefreshInProgress = true,
                     ),
                     actions = noOpArticleActions(),
                 )
@@ -224,7 +224,7 @@ class ArticlesTabUiTest {
     }
 
     @Test
-    fun articlesTab_backgroundSyncUsesNonBlockingProgressOverlay() {
+    fun articlesTab_backgroundSyncDoesNotShowAnAnimatedIndicator() {
         composeRule.setContent {
             SelfFeedTheme {
                 ArticlesTabWithStaticPaging(
@@ -232,9 +232,7 @@ class ArticlesTabUiTest {
                         articles = listOf(sampleArticle("article-1", "Visible Article")),
                         selectedArticleId = null,
                         isSyncingFeeds = true,
-                        isStartingFeedSync = false,
-                        syncCompletedFeeds = 3,
-                        syncTotalFeeds = 10,
+                        isManualRefreshInProgress = false,
                     ),
                     actions = noOpArticleActions(),
                 )
@@ -242,10 +240,10 @@ class ArticlesTabUiTest {
         }
 
         composeRule.onNodeWithText("Visible Article").assertIsDisplayed()
-        composeRule.onNodeWithTag("articles-background-sync").assertIsDisplayed()
+        composeRule.onNodeWithTag("articles-background-sync").assertDoesNotExist()
         composeRule
-            .onNodeWithContentDescription("Refreshing feeds in background, 3 of 10 complete")
-            .assertIsDisplayed()
+            .onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(0)
     }
 
     @Test

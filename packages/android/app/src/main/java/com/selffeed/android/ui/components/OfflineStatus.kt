@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Refresh
@@ -40,6 +39,9 @@ internal fun ArticleSyncStatusLine(
     onRetry: () -> Unit,
 ) {
     val count by pendingChanges.collectAsStateWithLifecycle(initialValue = null)
+    val pending = count?.takeIf { it > 0 }
+    if (online && pending == null) return
+
     Column(Modifier.fillMaxWidth().background(Color.Black)) {
         HorizontalDivider(color = Color(0xFF303030))
         Row(
@@ -47,40 +49,31 @@ internal fun ArticleSyncStatusLine(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val pending = count?.takeIf { it > 0 }
-            if (pending != null || !online || count == 0) {
-                Icon(
-                    imageVector = when {
-                        !online -> Icons.Outlined.CloudOff
-                        pending != null -> Icons.Outlined.Refresh
-                        else -> Icons.Outlined.Check
-                    },
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp),
+            Icon(
+                imageVector = if (online) Icons.Outlined.Refresh else Icons.Outlined.CloudOff,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                Text(
+                    text = pending?.let {
+                        pluralStringResource(R.plurals.sync_pending_changes, it, it)
+                    } ?: stringResource(R.string.cd_offline),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
                 )
-                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                if (pending != null && !online) {
                     Text(
-                        text = when {
-                            pending != null -> pluralStringResource(R.plurals.sync_pending_changes, pending, pending)
-                            !online -> stringResource(R.string.cd_offline)
-                            else -> stringResource(R.string.sync_up_to_date)
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
+                        stringResource(R.string.sync_when_online),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFB8B8B8),
                     )
-                    if (pending != null && !online) {
-                        Text(
-                            stringResource(R.string.sync_when_online),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFB8B8B8),
-                        )
-                    }
                 }
-                if (pending != null && online) {
-                    TextButton(onClick = onRetry) {
-                        Text(stringResource(R.string.action_retry), color = Color.White)
-                    }
+            }
+            if (pending != null && online) {
+                TextButton(onClick = onRetry) {
+                    Text(stringResource(R.string.action_retry), color = Color.White)
                 }
             }
         }
