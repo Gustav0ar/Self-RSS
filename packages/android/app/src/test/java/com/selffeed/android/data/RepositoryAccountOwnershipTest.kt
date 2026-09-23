@@ -183,6 +183,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `account replacement cancels a lookup before commit or the next batch`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -228,6 +229,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `verified restore keeps its original identity after a later replacement`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -260,6 +262,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `confirmed authentication rejection cannot use an otherwise valid offline lease`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -276,6 +279,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `failed lease renewal preserves a valid offline session`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -325,6 +329,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `incompatible verified user cannot become offline admission`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -348,6 +353,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `old restore cannot borrow a replacement account offline lease`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -374,6 +380,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `old preferences cannot replace the new account snapshot`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -414,6 +421,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `a retry retains its original owner and stops when that owner leaves`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -434,6 +442,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `a delayed unauthorized response cannot log out the next account`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()
@@ -594,6 +603,7 @@ class RepositoryAccountOwnershipTest {
 
     @Test
     fun `buffered authentication loss belongs to the exact cleared session`() = runBlocking {
+        online.value = true
         val api = mockk<RssApi>(relaxed = true)
         val repository = repository(api)
         repository.prepareSession()

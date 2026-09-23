@@ -170,6 +170,73 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `cancelling prefetch does not cancel the open article sharing its response`() = runTest {
+        repository.prepareSession()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val response = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { api.article("shared", session = any()) } coAnswers {
+            entered.complete(Unit)
+            response.await()
+            ApiEnvelope(sampleArticleDetail("shared", false))
+        }
+        val warming = async { repository.prefetchArticle("shared") }
+        entered.await()
+        val opened = async(Dispatchers.Default) { repository.article("shared") }
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                while (repository.getDebugResilienceSnapshot()["articleInFlightReaders"] != 2L) kotlinx.coroutines.delay(10)
+            }
+        }
+        warming.cancelAndJoin()
+        response.complete(Unit)
+        assertTrue(opened.await() is AppResult.Success)
+        coVerify(exactly = 1) { api.article("shared", session = any()) }
+    }
+
+    @Test
+    fun `invalidated pending disk content returns the fetched body instead of another placeholder`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleDetail(sampleArticleDetail("pending", false).copy(
+            contentHtml = null, contentText = null, contentStatus = "enrichment_pending",
+        ))
+        repository.invalidateArticleContentCaches("pending")
+        coEvery { api.article("pending", session = any()) } returns ApiEnvelope(
+            sampleArticleDetail("pending", false).copy(contentHtml = "<p>Full text</p>", contentStatus = "full_ready"),
+        )
+        val result = repository.article("pending") as AppResult.Success
+        assertEquals("<p>Full text</p>", result.data.contentHtml)
+    }
+
+    @Test
+    fun `opening an article joins its in-flight prefetch`() = runTest {
+        repository.prepareSession()
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val response = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { api.article("shared", session = any()) } coAnswers {
+            entered.complete(Unit)
+            response.await()
+            ApiEnvelope(sampleArticleDetail("shared", false))
+        }
+        val warming = async { repository.prefetchArticle("shared") }
+        entered.await()
+        val opened = async { repository.article("shared") }
+        runCurrent()
+        response.complete(Unit)
+        assertTrue(opened.await() is AppResult.Success)
+        assertTrue(warming.await() is AppResult.Success)
+        coVerify(exactly = 1) { api.article("shared", session = any()) }
+    }
+
+    @Test
+    fun `fresh durable article opens without background network work`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleDetail(sampleArticleDetail("disk", false))
+        assertTrue(repository.article("disk") is AppResult.Success)
+        runCurrent()
+        coVerify(exactly = 0) { api.article("disk", session = any()) }
+    }
+
+    @Test
     fun `acknowledged feed deletion is absent from offline feeds`() = runTest {
         repository.prepareSession()
         localStore.writeFeeds(listOf(sampleFeed("deleted")))
@@ -343,13 +410,12 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `worker cancellation releases a blocked poll without reporting success`() = runTest {
+    fun `worker cancellation releases a blocked submission without reporting success`() = runTest {
         every { sessionStore.getAccessToken() } returns "worker-access-token"
-        val polling = CompletableDeferred<Unit>()
+        val submitting = CompletableDeferred<Unit>()
         val released = CompletableDeferred<Unit>()
-        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } returns ApiEnvelope(SyncResponse(status = "queued"))
-        coEvery { api.syncAllFeedsStatus(any(), any()) } coAnswers {
-            polling.complete(Unit)
+        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } coAnswers {
+            submitting.complete(Unit)
             try { awaitCancellation() } finally { released.complete(Unit) }
         }
         var completed = false
@@ -357,39 +423,29 @@ class RssRepositoryTest {
             FeedSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository).doWork()
             completed = true
         }
-        polling.await()
+        submitting.await()
         running.cancelAndJoin()
         released.await()
         assertTrue(running.isCancelled)
         assertEquals(false, completed)
-        coVerify(exactly = 1) { api.syncAllFeedsStatus(any(), any()) }
+        coVerify(exactly = 1) { api.syncAllFeeds(any(), any(), any(), any()) }
     }
 
     @Test
-    fun `feed worker cannot adopt a replacement account between status polls`() = runTest {
+    fun `feed worker cannot adopt a replacement account during submission`() = runTest {
         every { sessionStore.getAccessToken() } returns "worker-access-token"
         val firstOwner = sessionStore.currentSession()
-        val firstPoll = CompletableDeferred<Unit>()
+        val submitting = CompletableDeferred<Unit>()
         val owners = mutableListOf<ApiSession>()
-        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } returns
-            com.selffeed.android.network.ApiEnvelope(SyncResponse(status = "queued"))
-        coEvery { api.syncAllFeedsStatus(any(), any()) } coAnswers {
-            val owner = secondArg<ApiSession>()
-            owners += owner
-            firstPoll.complete(Unit)
-            com.selffeed.android.network.ApiEnvelope(FeedSyncAllStatus(
-                queued = false, running = owner == firstOwner, active = owner == firstOwner, stale = false,
-            ))
+        coEvery { api.syncAllFeeds(any(), any(), any(), any()) } coAnswers {
+            owners += arg<ApiSession>(3)
+            submitting.complete(Unit)
+            awaitCancellation()
         }
         val worker = FeedSyncWorker(context, mockk<WorkerParameters>(relaxed = true), repository)
         val running = async { worker.doWork() }
-        firstPoll.await()
-        runCurrent()
-
+        submitting.await()
         repository.setApiBaseUrl("https://replacement.example/api/v1/")
-        advanceTimeBy(1_000)
-        runCurrent()
-
         assertEquals(ListenableWorker.Result.success(), running.await())
         assertEquals(listOf(firstOwner), owners)
     }
@@ -590,6 +646,10 @@ class RssRepositoryTest {
         every { sessionStore.getAccessToken() } returns "test-session"
         coEvery { api.article(articleId, session = any()) } returns com.selffeed.android.network.ApiEnvelope(detail)
         coEvery { api.setSaved(articleId, any(), session = any()) } throws httpError(404, "Article unavailable")
+        coEvery { api.markRead(articleId, any(), session = any()) } returns ApiEnvelope(
+            MarkReadResponse(success = true, read = true, revision = 1),
+        )
+        assertTrue(repository.article(articleId) is AppResult.Success)
         onlineState.value = false
         val viewModel = ArticlesViewModel(
             repository, ReadStateManager(repository), EnrichmentManager(repository), ArticleWarmingManager(repository),
@@ -2033,6 +2093,119 @@ class RssRepositoryTest {
         assertEquals(true, repository.cachedArticleDetail("article")?.isRead)
         assertEquals(8, localStore.readArticleState("article").readRevision)
         assertEquals(false, localStore.discardSavedStateMutation(localStore.readPendingSavedStateMutations().single())?.effectiveState)
+    }
+
+    @Test
+    fun `offline feed query uses cached articles from other lists without fetching`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleRemotePage("all-cached", ApiListResponse(listOf(
+            sampleArticle("cached-feed").copy(feedId = "selected", isRead = false),
+            sampleArticle("other-feed").copy(feedId = "other", isRead = false),
+        ), null, false), true)
+        onlineState.value = false
+        val query = ArticlePageQuery(feedId = "selected", unreadOnly = true)
+        val presenter = object : androidx.paging.PagingDataPresenter<ArticleListItem>(Dispatchers.Main) {
+            override suspend fun presentPagingDataEvent(event: androidx.paging.PagingDataEvent<ArticleListItem>) = Unit
+        }
+        val collection = launch { repository.articlePagingData(query).collect { presenter.collectFrom(it) } }
+        try {
+            withContext(Dispatchers.Default) {
+                withTimeout(5_000) {
+                    while (localStore.readArticleRemoteKey(query.remoteKey()) == null) kotlinx.coroutines.delay(10)
+                }
+            }
+            val page = localStore.articlePagingSource(query.remoteKey(), sessionStore.loadedSession()!!.ownerId).load(
+                androidx.paging.PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+            ) as androidx.paging.PagingSource.LoadResult.Page<Int, ArticleListItem>
+            assertEquals(listOf("cached-feed"), page.data.map { it.id })
+            coVerify(exactly = 0) { api.articles(any(), any(), any(), any(), any(), any(), any(), any()) }
+            assertEquals(0L, localStore.readArticleRemoteKey(query.remoteKey())?.updatedAt)
+        } finally { collection.cancelAndJoin() }
+    }
+
+    @Test
+    fun `offline cache misses do not attempt requests or retries`() = runTest {
+        onlineState.value = false
+        coEvery { api.article("missing-offline", session = any()) } throws java.net.ConnectException()
+        assertTrue(repository.article("missing-offline") is AppResult.Error)
+        coVerify(exactly = 0) { api.article(any(), session = any()) }
+        assertEquals(0L, repository.getDebugResilienceSnapshot().getValue("retryCount"))
+    }
+
+    @Test
+    fun `offline mark all queues only unread cached articles in the selected feed`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleRemotePage("offline-bulk", ApiListResponse(listOf(
+            sampleArticle("one").copy(feedId = "selected", isRead = false),
+            sampleArticle("already-read").copy(feedId = "selected", isRead = true),
+            sampleArticle("other").copy(feedId = "other", isRead = false),
+        ), null, false), true)
+        onlineState.value = false
+        val result = repository.markAllRead("selected", null)
+        assertEquals(AppResult.Success(MarkAllReadResponse(1, listOf("selected"))), result)
+        assertEquals(listOf("one"), localStore.readPendingReadStateMutations().map { it.articleId })
+        assertEquals(true, localStore.readArticleState("one").isRead)
+        assertEquals(false, localStore.readArticleState("other").isRead)
+        coVerify(exactly = 0) { api.markAllRead(any(), session = any()) }
+    }
+
+    @Test
+    fun `worker resumes a missing saved body after its mutation was already acknowledged`() = runTest {
+        repository.prepareSession()
+        every { sessionStore.getAccessToken() } returns "test-session"
+        localStore.writeArticleRemotePage("saved-offline", ApiListResponse(listOf(
+            sampleArticle("download").copy(isSaved = true),
+        ), null, false), true)
+        coEvery { api.article("download", session = any()) } throws java.net.SocketTimeoutException()
+        val parameters = mockk<WorkerParameters>(relaxed = true)
+        every { parameters.inputData } returns androidx.work.workDataOf(ArticleStateSyncWorker.DOWNLOAD_SAVED to true)
+        val worker = ArticleStateSyncWorker(context, parameters, repository)
+        assertEquals(ListenableWorker.Result.retry(), worker.doWork())
+        assertNull(localStore.readArticleDetail("download"))
+        coEvery { api.article("download", session = any()) } returns ApiEnvelope(
+            sampleArticleDetail("download", false).copy(isSaved = true),
+        )
+        assertEquals(ListenableWorker.Result.success(), worker.doWork())
+        assertNotNull(localStore.readArticleDetail("download"))
+        coVerify(exactly = 0) { api.setSaved(any(), any(), session = any()) }
+    }
+
+    @Test
+    fun `large offline bulk queue drains without treating remaining work as a failure`() = runTest {
+        repository.prepareSession()
+        val articles = (1..105).map { sampleArticle("bulk-$it").copy(isRead = false) }
+        localStore.writeArticleRemotePage("large-bulk", ApiListResponse(articles, null, false), true)
+        onlineState.value = false
+        assertTrue(repository.markAllRead(null, null) is AppResult.Success)
+        assertEquals(105, localStore.readPendingReadStateMutations().size)
+        coEvery { api.markRead(any(), any(), session = any()) } returns ApiEnvelope(
+            MarkReadResponse(success = true, read = true, revision = 1),
+        )
+        onlineState.value = true
+        assertTrue(repository.flushPendingArticleStateMutations())
+        assertTrue(localStore.readPendingReadStateMutations().isEmpty())
+        coVerify(exactly = 105) { api.markRead(any(), any(), session = any()) }
+    }
+
+    @Test
+    fun `repeated server conflicts retain the queue and stop instead of spinning`() = runTest {
+        repository.prepareSession()
+        localStore.queueReadStateMutation("conflict", true)
+        coEvery { api.markRead(any(), any(), session = any()) } returns ApiEnvelope(
+            MarkReadResponse(success = false, conflict = true, read = false, revision = 4),
+        )
+        assertEquals(false, repository.flushPendingArticleStateMutations())
+        assertEquals(1, localStore.readPendingReadStateMutations().size)
+        coVerify(exactly = 10) { api.markRead(any(), any(), session = any()) }
+    }
+
+    @Test
+    fun `saved download skips bodies already available and articles unsaved before work runs`() = runTest {
+        repository.prepareSession()
+        cacheSavedArticles("ready", "unsaved")
+        localStore.queueSavedStateMutation("unsaved", false)
+        assertTrue(repository.downloadMissingSavedArticles())
+        coVerify(exactly = 0) { api.article(any(), session = any()) }
     }
 
     private suspend fun cacheSavedArticles(vararg ids: String) {

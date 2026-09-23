@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.Flow
 /** Joined projection only. It does not add a persistent schema or decode reader bodies. */
 data class LocalArticleStateRow(val articleId: String, @Embedded val state: LocalArticleState)
 
+data class SavedArticleContentRow(val id: String, val payloadJson: String?)
+
 object LocalTables {
     const val CATEGORIES = "categories"
     const val FEEDS = "feeds"
@@ -325,6 +327,19 @@ interface LocalStoreDao {
     @Query("SELECT * FROM articles WHERE id = :articleId LIMIT 1")
     suspend fun readArticle(articleId: String): ArticleEntity?
 
+    @Query("SELECT articles.id, article_details.payloadJson FROM articles LEFT JOIN article_details ON article_details.id = articles.id WHERE articles.isSaved = 1")
+    suspend fun readSavedArticleContent(): List<SavedArticleContentRow>
+
+    @Query("""
+        SELECT id FROM articles
+        WHERE (:allFeeds OR feedId IN (:feedIds))
+          AND (NOT :unreadOnly OR isRead = 0)
+          AND (NOT :savedOnly OR isSaved = 1)
+        ORDER BY CASE WHEN :oldest THEN COALESCE(displayedAt, publishedAt) END ASC,
+                 CASE WHEN NOT :oldest THEN COALESCE(displayedAt, publishedAt) END DESC, id DESC
+    """)
+    suspend fun cachedArticleIds(feedIds: List<String>, allFeeds: Boolean, unreadOnly: Boolean, savedOnly: Boolean, oldest: Boolean): List<String>
+
     @Query("UPDATE articles SET isSaved = :saved WHERE id = :articleId AND isSaved != :saved")
     suspend fun updateArticleSavedState(articleId: String, saved: Boolean)
 
@@ -402,6 +417,9 @@ interface LocalStoreDao {
     @Query("SELECT * FROM pending_read_state_mutations ORDER BY updatedAt ASC")
     suspend fun readPendingReadStateMutations(): List<PendingReadStateMutationEntity>
 
+    @Query("SELECT * FROM pending_read_state_mutations ORDER BY updatedAt ASC LIMIT 1")
+    suspend fun firstPendingReadStateMutation(): PendingReadStateMutationEntity?
+
     @Query("SELECT * FROM pending_read_state_mutations WHERE articleId = :articleId LIMIT 1")
     suspend fun readPendingReadStateMutation(articleId: String): PendingReadStateMutationEntity?
 
@@ -413,6 +431,9 @@ interface LocalStoreDao {
 
     @Query("SELECT * FROM pending_saved_state_mutations ORDER BY updatedAt ASC")
     suspend fun readPendingSavedStateMutations(): List<PendingSavedStateMutationEntity>
+
+    @Query("SELECT * FROM pending_saved_state_mutations ORDER BY updatedAt ASC LIMIT 1")
+    suspend fun firstPendingSavedStateMutation(): PendingSavedStateMutationEntity?
 
     @Query("SELECT * FROM pending_saved_state_mutations WHERE articleId = :articleId LIMIT 1")
     suspend fun readPendingSavedStateMutation(articleId: String): PendingSavedStateMutationEntity?
@@ -547,6 +568,9 @@ interface LocalStoreDao {
 
     @Query("SELECT * FROM article_details WHERE id = :articleId LIMIT 1")
     suspend fun readArticleDetail(articleId: String): ArticleDetailEntity?
+
+    @Query("SELECT writtenAt FROM article_details WHERE id = :articleId")
+    suspend fun articleDetailWrittenAt(articleId: String): Long?
 
     @Query("DELETE FROM article_details WHERE id = :articleId AND id NOT IN (SELECT articleId FROM legacy_offline_articles)")
     suspend fun clearArticleDetail(articleId: String)

@@ -36,6 +36,21 @@ class ArticleStateSyncWorkerTest {
         coEvery { repository.flushPendingArticleStateMutations() } returns true
 
         assertEquals(ListenableWorker.Result.success(), worker(repository).doWork())
+        coVerify(exactly = 0) { repository.downloadMissingSavedArticles() }
+    }
+
+    @Test
+    fun `saved download job retries independently of mutation delivery`() = runBlocking {
+        val repository = mockk<RssRepository>()
+        coEvery { repository.withAuthenticatedAccount<ListenableWorker.Result>(any()) } coAnswers {
+            firstArg<suspend () -> ListenableWorker.Result>().invoke()
+        }
+        coEvery { repository.downloadMissingSavedArticles() } returns false
+        val parameters = mockk<WorkerParameters>(relaxed = true)
+        io.mockk.every { parameters.inputData } returns androidx.work.workDataOf(ArticleStateSyncWorker.DOWNLOAD_SAVED to true)
+        val worker = ArticleStateSyncWorker(ApplicationProvider.getApplicationContext(), parameters, repository)
+        assertEquals(ListenableWorker.Result.retry(), worker.doWork())
+        coVerify(exactly = 0) { repository.flushPendingArticleStateMutations() }
     }
 
     @Test

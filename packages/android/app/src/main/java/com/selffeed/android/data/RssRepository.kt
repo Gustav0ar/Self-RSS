@@ -43,6 +43,8 @@ import com.squareup.moshi.Moshi
 import coil3.ImageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -60,6 +62,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -96,6 +100,11 @@ class RssRepository @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     @param:ApplicationCoroutineScope private val refreshScope: CoroutineScope,
 ) : SelfFeedRepository {
+    private class ArticleLoad(val result: Deferred<ArticleDetail>, var readers: Int = 0)
+    private val articleLoadsLock = Any()
+    private val articleLoads = mutableMapOf<Pair<ApiSession, String>, ArticleLoad>()
+    // Only cached articles need an invalidation hint; successful reads retire it.
+    private val staleArticleDetails = mutableSetOf<String>()
     private val preferencesMutex = Mutex()
     private val feedReadMutex = Mutex()
     private val categoryReadMutex = Mutex()
@@ -106,6 +115,7 @@ class RssRepository @Inject constructor(
         logTag = "RssRepository",
         apiBaseUrl = sessionStore::getApiBaseUrl,
         cacheEpoch = { localStore.articleStateRetentionEpoch },
+        isOnline = { networkMonitor.online.value },
     )
     private val readStateStreamClient = ReadStateStreamClient(
         okHttpClient = okHttpClient,
@@ -477,6 +487,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun syncAllFeedsStatus(requestId: String?) = safeReadCall { session ->
+        runtime.requireNetwork()
         val trackedRequestId =
             requestId ?: sessionStore.getFeedRefreshRequestId()?.takeIf(String::isNotBlank)
         val trackedStatus = feedRemote.syncAllFeedsStatus(trackedRequestId, session = session)
@@ -492,6 +503,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun feedSyncHistory(feedId: String) = safeReadCall { session ->
+        runtime.requireNetwork()
         feedRemote.feedSyncHistory(feedId, session = session)
     }
 
@@ -543,10 +555,15 @@ class RssRepository @Inject constructor(
                             forceInitialRefresh = query.generation > 0L,
                             readRemoteKey = { account.commit(session) { localStore.readArticleRemoteKey(queryKey) } },
                             onCompletedRefresh = {
-                                if (query.savedOnly) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
+                                if (query.savedOnly && networkMonitor.online.value) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
                             },
                             loadAndStorePage = { limit, cursor, clearExisting ->
                                 safeReadCall(session) {
+                                    if (!networkMonitor.online.value) {
+                                        val feedIds = cachedScopeFeedIds(query.feedId, query.categoryId, session)
+                                        account.commit(session) { localStore.writeOfflineArticleQuery(query, feedIds) }
+                                        return@safeReadCall ApiListResponse<ArticleListItem>(emptyList(), null, false)
+                                    }
                                     fetchArticleSnapshot(
                                         session,
                                         fetch = {
@@ -644,12 +661,7 @@ class RssRepository @Inject constructor(
             runtime.getCached<ArticleDetail>("article:$articleId")?.let { return@safeReadCall it }
         }
 
-        // Warm path: durable offline storage has a fresh copy. Return it
-        // now and refresh from the network in the background so the reader
-        // opens instantly for any article the user has ever opened. The
-        // background refresh updates the in-memory cache and durable store
-        // on success; on failure the cached copy stays valid until its own
-        // expiry.
+        // Return durable content immediately. Revalidate only stale bodies.
         val cachedDetail = articleStateProjectionMutex.withLock {
             account.commit(session) {
                 offlineReadStore.readArticleDetail(articleId)?.let { cached ->
@@ -660,11 +672,18 @@ class RssRepository @Inject constructor(
             }
         }
         if (cachedDetail != null) {
-            // Detached background refresh — does not block the caller.
-            // We swallow the result here on purpose: the caller already
-            // has a usable ArticleDetail. Errors are surfaced on the next
-            // explicit open or pull-to-refresh.
-            backgroundRefreshArticle(articleId, session = session)
+            val fresh = account.commit(session) {
+                localStore.isArticleDetailFresh(articleId, ARTICLE_DETAIL_TTL_MS) &&
+                    synchronized(articleLoadsLock) { articleId !in staleArticleDetails }
+            }
+            if (!fresh && networkMonitor.online.value) {
+                // An obsolete placeholder is not usable offline content. Wait for its
+                // replacement so the caller receives the body, not another skeleton.
+                if (cachedDetail.contentHtml.isNullOrBlank() && cachedDetail.contentText.isNullOrBlank()) {
+                    return@safeReadCall fetchAndStoreArticle(articleId, session)
+                }
+                backgroundRefreshArticle(articleId, session = session)
+            }
             return@safeReadCall cachedDetail
         }
 
@@ -764,8 +783,30 @@ class RssRepository @Inject constructor(
         }
 
     private suspend fun fetchAndStoreArticle(articleId: String, session: ApiSession): ArticleDetail {
+        val key = session to articleId
+        val load = synchronized(articleLoadsLock) {
+            articleLoads.getOrPut(key) {
+                ArticleLoad(refreshScope.async(start = CoroutineStart.LAZY) {
+                    account.withSession(session) { fetchArticleDetail(articleId, session) }
+                })
+            }.also { it.readers++ }
+        }
+        try {
+            return load.result.await()
+        } finally {
+            synchronized(articleLoadsLock) {
+                if (--load.readers == 0) {
+                    if (articleLoads[key] === load) articleLoads.remove(key)
+                    load.result.cancel()
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchArticleDetail(articleId: String, session: ApiSession): ArticleDetail {
         return fetchArticleSnapshot(session, fetch = { withRetry(session) { articleRemote.article(articleId, session = session) } }) { remoteDetail ->
             offlineReadStore.writeArticleDetail(remoteDetail)
+            synchronized(articleLoadsLock) { staleArticleDetails.remove(articleId) }
             localStore.applyPendingArticleState(remoteDetail).also { detail ->
                 runtime.putCached("article:$articleId", ARTICLE_DETAIL_TTL_MS, detail)
             }
@@ -826,6 +867,7 @@ class RssRepository @Inject constructor(
     }
 
     override suspend fun enrichArticle(articleId: String, invalidateCaches: Boolean) = safeCall { session ->
+        runtime.requireNetwork()
         articleRemote.enrichArticle(articleId, session = session).also {
             if (it.success || it.reason == "already_enriched") {
                 if (invalidateCaches) {
@@ -863,6 +905,19 @@ class RssRepository @Inject constructor(
         markRead(articleId, read, source = "manual")
 
     override suspend fun markAllRead(feedId: String?, categoryId: String?) = safeCall { session ->
+        if (!networkMonitor.online.value) {
+            return@safeCall withContext(NonCancellable) {
+                val feedIds = cachedScopeFeedIds(feedId, categoryId, session)
+                val marked = articleStateProjectionMutex.withLock {
+                    account.commit(session) {
+                        localStore.queueCachedArticlesRead(feedIds, allFeeds = feedId == null && categoryId == null)
+                            .also { ids -> ids.forEach { projectCachedArticleState(it) } }
+                    }
+                }
+                scheduleArticleStateDelivery()
+                com.selffeed.android.network.MarkAllReadResponse(marked.size, feedIds)
+            }
+        }
         articleRemote.markAllRead(feedId, categoryId, session = session).also {
             account.commit(session) {
                 localStore.invalidateCountSnapshots()
@@ -896,10 +951,10 @@ class RssRepository @Inject constructor(
                     ArticleMutationReceipt(pending.mutationId) to cached
                 }
             }
-            scheduleArticleStateDelivery()
+            scheduleArticleStateDelivery(downloadSaved = saved)
             committed
         }
-        if (saved) {
+        if (saved && networkMonitor.online.value) {
             if (previous == null) backgroundRefreshArticle(articleId, cacheImages = true, session = session)
             else refreshScope.launch {
                 safeReadCall(session) {
@@ -914,11 +969,14 @@ class RssRepository @Inject constructor(
 
     override fun clientId(): String = sessionStore.getClientId()
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     override fun readStateEvents(): Flow<ReadStateSyncEvent> {
         val expected = sessionStore.loadedSession()
         return flow {
             account.withSession(expected) { session ->
-                readStateStreamClient.events(session, ::isLoggedIn).collect { event ->
+                networkMonitor.online.flatMapLatest { online ->
+                    if (online) readStateStreamClient.events(session, ::isLoggedIn) else emptyFlow()
+                }.collect { event ->
                     account.requireCurrent(session)
                     emit(event)
                 }
@@ -1110,7 +1168,12 @@ class RssRepository @Inject constructor(
 
     override fun observeOnline(): Flow<Boolean> = networkMonitor.online
 
-    override fun getDebugResilienceSnapshot(): Map<String, Long> = runtime.snapshot()
+    override fun getDebugResilienceSnapshot(): Map<String, Long> = runtime.snapshot() + synchronized(articleLoadsLock) {
+        mapOf(
+            "articleInFlightLoads" to articleLoads.size.toLong(),
+            "articleInFlightReaders" to articleLoads.values.sumOf { it.readers }.toLong(),
+        )
+    }
 
     override fun resetDebugResilienceMetrics() = runtime.resetMetrics()
 
@@ -1162,7 +1225,7 @@ class RssRepository @Inject constructor(
         block: suspend (ApiSession) -> T,
     ): AppResult<T> = runtime.safeCall { account.withSession(expected, block) }
 
-    private suspend fun <T> withRetry(session: ApiSession, block: suspend () -> T): T = runtime.withRetry {
+    private suspend fun <T> withRetry(session: ApiSession, block: suspend () -> T): T = runtime.withRetry(requestScope = "${session.apiBaseUrl}:${session.ownerId}") {
         currentCoroutineContext().ensureActive()
         account.requireCurrent(session)
         block().also {
@@ -1205,7 +1268,14 @@ class RssRepository @Inject constructor(
     }
 
     private suspend fun invalidateArticleDetailCache(articleId: String, session: ApiSession) {
-        account.commit(session) { runtime.invalidateByPrefix("article:$articleId") }
+        account.commit(session) {
+            runtime.invalidateByPrefix("article:$articleId")
+            // A response dispatched before this content event cannot satisfy its refresh.
+            synchronized(articleLoadsLock) { articleLoads.remove(session to articleId)?.result?.cancel() }
+            if (localStore.articleDetailWrittenAt(articleId) != null) {
+                synchronized(articleLoadsLock) { staleArticleDetails.add(articleId) }
+            }
+        }
         // Keep the durable copy as a stale fallback until a successful fetch
         // replaces it. Realtime invalidation is only a freshness hint and can
         // arrive immediately before connectivity is lost.
@@ -1223,6 +1293,7 @@ class RssRepository @Inject constructor(
     override suspend fun invalidateArticleContentCaches(articleId: String?) = account.withSession { session ->
         if (articleId != null) {
             invalidateArticleDetailCache(articleId, session)
+            return@withSession
         } else {
             account.commit(session) { runtime.invalidateByPrefix("article:") }
         }
@@ -1284,6 +1355,11 @@ class RssRepository @Inject constructor(
             appOpenRecordedOn = null
         }
         runtime.clearCache()
+        synchronized(articleLoadsLock) {
+            articleLoads.values.forEach { it.result.cancel() }
+            articleLoads.clear()
+            staleArticleDetails.clear()
+        }
     }
 
     private suspend fun invalidateFeedAndArticleCaches(session: ApiSession, updateMetadata: suspend () -> Unit = {}) {
@@ -1314,12 +1390,13 @@ class RssRepository @Inject constructor(
         }
     }
 
-    private fun scheduleArticleStateDelivery() {
+    private fun scheduleArticleStateDelivery(downloadSaved: Boolean = false) {
         // The application owns scheduling after Room accepts the edit. A slow
         // WorkManager query must not hold the caller's durable receipt.
         refreshScope.launch {
             try {
                 ArticleStateSyncWorker.kickOnce(imageRequestContext)
+                if (downloadSaved) ArticleStateSyncWorker.kickOnce(imageRequestContext, downloadSaved = true)
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -1336,18 +1413,50 @@ class RssRepository @Inject constructor(
         is AppResult.Error -> false
     }
 
+    /** Missing saved bodies are durable work derived from Room, including after a process restart. */
+    suspend fun downloadMissingSavedArticles(): Boolean {
+        val result = safeReadCall { session ->
+            runtime.requireNetwork()
+            val missing = account.commit(session) { localStore.savedArticleIdsWithoutText() }
+            var complete = true
+            for (id in missing) {
+                currentCoroutineContext().ensureActive()
+                if (account.commit(session) { localStore.readArticleState(id).isSaved } != true) continue
+                try {
+                    val detail = fetchAndStoreArticle(id, session)
+                    if (detail.isSaved) {
+                        account.commit(session) { cacheArticleImages(detail) }
+                        if (detail.contentHtml.isNullOrBlank() && detail.contentText.isNullOrBlank() &&
+                            detail.contentStatus != "failed"
+                        ) complete = false
+                    }
+                } catch (error: HttpException) {
+                    // A deleted/inaccessible article cannot be downloaded. Transient failures retain work.
+                    if (error.code() != 404 && error.code() != 403) throw error
+                }
+            }
+            complete
+        }
+        return when (result) {
+            is AppResult.Success -> result.data
+            is AppResult.Error -> false
+        }
+    }
+
     private suspend fun drainPendingArticleStateMutations(session: ApiSession): Boolean {
         if (!networkMonitor.online.value) return false
-        repeat(MAX_OUTBOX_FLUSH_ATTEMPTS) {
-            val read = account.commit(session) { localStore.readPendingReadStateMutations() }.firstOrNull()
-            val saved = account.commit(session) { localStore.readPendingSavedStateMutations() }.firstOrNull()
+        var consecutiveConflicts = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val read = account.commit(session) { localStore.firstPendingReadStateMutation() }
+            val saved = account.commit(session) { localStore.firstPendingSavedStateMutation() }
             if (read == null && saved == null) return true
             try {
                 if (saved == null || (read != null && read.updatedAt <= saved.updatedAt)) {
                     val mutation = requireNotNull(read)
                     if (mutation.mutationId.isBlank()) {
                         account.commit(session) { localStore.rebaseReadStateMutation(mutation, mutation.baseRevision ?: 0) }
-                        return@repeat
+                        continue
                     }
                     val response = withRetry(session) {
                         articleRemote.markRead(
@@ -1364,7 +1473,9 @@ class RssRepository @Inject constructor(
                             localStore.rebaseReadStateMutation(mutation, response.revision, response.read)
                             projectCachedArticleState(mutation.articleId)
                         }
+                        if (++consecutiveConflicts >= MAX_OUTBOX_CONFLICTS) return false
                     } else {
+                        consecutiveConflicts = 0
                         val authoritative = response.read ?: mutation.read
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
@@ -1389,7 +1500,9 @@ class RssRepository @Inject constructor(
                             localStore.rebaseSavedStateMutation(mutation, response.revision, response.saved)
                             projectCachedArticleState(mutation.articleId)
                         }
+                        if (++consecutiveConflicts >= MAX_OUTBOX_CONFLICTS) return false
                     } else {
+                        consecutiveConflicts = 0
                         val authoritative = response.saved ?: mutation.saved
                         articleStateProjectionMutex.withLock {
                             account.commit(session) {
@@ -1433,7 +1546,8 @@ class RssRepository @Inject constructor(
                             }
                         }
                     }
-                    return@repeat
+                    consecutiveConflicts = 0
+                    continue
                 }
                 runtime.debugLog(
                     "Offline mutation flush paused: ${error.message ?: error::class.java.simpleName}",
@@ -1441,7 +1555,6 @@ class RssRepository @Inject constructor(
                 return false
             }
         }
-        return false
     }
 
     private fun isRetriableMutationStatus(status: Int): Boolean =
@@ -1464,6 +1577,11 @@ class RssRepository @Inject constructor(
         @Suppress("UNREACHABLE_CODE")
         error("Feed snapshot loop exited")
     }
+
+    private suspend fun cachedScopeFeedIds(feedId: String?, categoryId: String?, session: ApiSession): List<String> =
+        if (feedId != null) listOf(feedId) else if (categoryId != null) {
+            filterCachedFeeds(account.commit(session) { offlineReadStore.readFeeds() }, categoryId, session).map { it.id }
+        } else emptyList()
 
     private suspend fun filterCachedFeeds(
         feeds: List<FeedWithCounts>,
@@ -1503,12 +1621,8 @@ class RssRepository @Inject constructor(
         const val CATEGORIES_TTL_MS = 60_000L
         const val FEEDS_TTL_MS = 60_000L
 
-        // Article details change rarely once published (only on enrichment
-        // or read-state flip, both of which invalidate explicitly). Keep
-        // them in the in-memory cache for a full day so reopening an old
-        // article is instant — durable offline storage is the source, this
-        // just avoids re-parsing on every cold start.
-        const val ARTICLE_DETAIL_TTL_MS = 24L * 60 * 60 * 1000
+        // Reuse recent bodies without network work. Room retains older text for offline use.
+        const val ARTICLE_DETAIL_TTL_MS = 5L * 60 * 1000
         const val SEARCH_TTL_MS = 30_000L
         const val PREFERENCES_TTL_MS = 60_000L
         const val AUTH_SESSIONS_TTL_MS = 15_000L
@@ -1519,7 +1633,7 @@ class RssRepository @Inject constructor(
         const val MAX_MEMORY_CACHE_ENTRIES = 160
         const val ARTICLE_PAGE_SIZE = 30
         const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
-        const val MAX_OUTBOX_FLUSH_ATTEMPTS = 100
+        const val MAX_OUTBOX_CONFLICTS = 10
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
         const val SESSION_REFRESH_UNAVAILABLE_MESSAGE =
             "Session could not be refreshed. Please try again."
