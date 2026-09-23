@@ -49,10 +49,20 @@ class AppWorkflowCoordinatorTest {
         assertEquals(1, sink.syncRefreshes)
     }
 
+    @Test
+    fun `background article content events do not refetch library metadata or counts`() {
+        val sink = RecordingSink()
+        repeat(40) { coordinator.onArticleEvent(ArticleFeatureEvent.ArticlesChanged("background-$it"), sink) }
+        assertEquals(0, sink.contentRefreshes)
+        coordinator.onArticleEvent(ArticleFeatureEvent.ArticlesChanged(), sink)
+        assertEquals(1, sink.contentRefreshes)
+    }
+
     private class RecordingSink : AppWorkflowSink {
         var authenticatedRefreshes = 0
         var unauthenticatedClears = 0
         var syncRefreshes = 0
+        var contentRefreshes = 0
         val preferenceUpdates = mutableListOf<Triple<String, Boolean, String>>()
 
         override fun refreshAuthenticatedSession() {
@@ -72,6 +82,6 @@ class AppWorkflowCoordinatorTest {
         }
 
         override fun refreshArticleState() = Unit
-        override fun refreshArticleContent() = Unit
+        override fun refreshArticleContent() { contentRefreshes++ }
     }
 }
