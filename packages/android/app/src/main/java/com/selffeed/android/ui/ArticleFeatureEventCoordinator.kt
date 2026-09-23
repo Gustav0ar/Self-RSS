@@ -10,7 +10,8 @@ class ArticleFeatureEventCoordinator {
     fun handle(event: ArticleFeatureEvent, sink: ArticleFeatureEventSink) {
         when (event) {
             ArticleFeatureEvent.ArticleStateRefreshRequested -> sink.refreshArticleState()
-            is ArticleFeatureEvent.ArticlesChanged -> sink.refreshArticleContent()
+            // Individual body updates do not change library membership or counts.
+            is ArticleFeatureEvent.ArticlesChanged -> if (event.articleId == null) sink.refreshArticleContent()
         }
     }
 }
