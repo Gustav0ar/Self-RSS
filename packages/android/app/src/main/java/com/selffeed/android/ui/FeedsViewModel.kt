@@ -612,13 +612,13 @@ class FeedsViewModel @Inject constructor(
             // large feed collection can legitimately take longer, so keep
             // monitoring at a lower cadence instead of losing the completion
             // signal and leaving the list stale.
-            if (poll == SYNC_STATUS_MAX_FAST_POLLS && !reportedLongRunningSync) {
+            if (_state.value.manualRefreshInProgress && poll == SYNC_STATUS_MAX_FAST_POLLS && !reportedLongRunningSync) {
                 reportedLongRunningSync = true
                 updateState {
                     it.copy(statusMessage = PresentationText.resource(R.string.feeds_sync_slow))
                 }
             }
-            val delayMs = if (poll < SYNC_STATUS_MAX_FAST_POLLS) {
+            val delayMs = if (_state.value.manualRefreshInProgress && poll < SYNC_STATUS_MAX_FAST_POLLS) {
                 SYNC_STATUS_FAST_POLL_MS
             } else {
                 SYNC_STATUS_SLOW_POLL_MS
