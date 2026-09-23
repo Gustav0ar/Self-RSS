@@ -15,7 +15,6 @@ import androidx.work.WorkerParameters
 import androidx.hilt.work.HiltWorker
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.delay
 import retrofit2.HttpException
 import java.util.concurrent.TimeUnit
 
@@ -33,7 +32,9 @@ class FeedSyncWorker @AssistedInject constructor(
 
     private suspend fun syncFeeds(): Result {
         return when (val result = repository.syncAllFeeds()) {
-            is AppResult.Success -> awaitQueuedSync()
+            // The server owns the durable job after acceptance. Keeping a worker
+            // alive to observe completion adds wakeups without downloading content.
+            is AppResult.Success -> Result.success()
             is AppResult.Error -> {
                 val cause = result.cause
                 when {
@@ -56,27 +57,11 @@ class FeedSyncWorker @AssistedInject constructor(
         }
     }
 
-    private suspend fun awaitQueuedSync(): Result {
-        repeat(SYNC_STATUS_MAX_POLLS) {
-            when (val status = repository.syncAllFeedsStatus()) {
-                is AppResult.Success -> {
-                    if (status.data.stale) return Result.retry()
-                    if (!status.data.active) return Result.success()
-                }
-                is AppResult.Error -> return Result.retry()
-            }
-            delay(SYNC_STATUS_POLL_MS)
-        }
-        return Result.retry()
-    }
-
     companion object {
         private const val TAG = "FeedSyncWorker"
         private const val PERIODIC_WORK_NAME = "rss-feed-sync"
         private const val ONE_SHOT_WORK_NAME = "rss-feed-sync-kick"
         private const val SYNC_INTERVAL_MINUTES = 30L
-        private const val SYNC_STATUS_POLL_MS = 1_000L
-        private const val SYNC_STATUS_MAX_POLLS = 600
         private val RETRIABLE_CLIENT_STATUSES = setOf(408, 425, 429)
 
         fun schedule(context: Context) {

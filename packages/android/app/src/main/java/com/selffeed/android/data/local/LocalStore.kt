@@ -10,6 +10,8 @@ import com.selffeed.android.data.repository.LibraryCounts
 import com.selffeed.android.data.repository.LocalArticleState
 import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.data.applyCategoryOrder
+import com.selffeed.android.data.ArticlePageQuery
+import com.selffeed.android.data.remoteKey
 import com.selffeed.android.network.CategoryOrderUpdate
 import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleStateSnapshot
@@ -378,6 +380,18 @@ class LocalStore internal constructor(
     fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem> =
         dao.savedArticlePagingSource(ownerId)
 
+    /** Build an offline view from known metadata without claiming a fresh server snapshot. */
+    suspend fun writeOfflineArticleQuery(query: ArticlePageQuery, feedIds: List<String>) = database.withTransaction {
+        val ids = dao.cachedArticleIds(
+            feedIds, query.feedId == null && query.categoryId == null,
+            query.unreadOnly, query.savedOnly, query.sort == "oldest",
+        )
+        val key = query.remoteKey()
+        dao.clearArticleQueryEntries(key)
+        dao.upsertArticleQueryEntries(ids.mapIndexed { index, id -> ArticleQueryEntryEntity(key, id, index) })
+        dao.upsertArticleRemoteKey(ArticleRemoteKeyEntity(key, nextCursor = null, endReached = true, updatedAt = 0))
+    }
+
     suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot> =
         dao.savedArticlesMissingFromQuery(queryKey)
 
@@ -565,38 +579,57 @@ class LocalStore internal constructor(
         read: Boolean,
         source: String = "manual",
     ): PendingReadStateMutationEntity {
-        lateinit var queued: PendingReadStateMutationEntity
-        database.withTransaction {
-            val previous = dao.readPendingReadStateMutation(articleId)
-            val state = stateRecord(articleId)
-            val revision = state.readRevision
-            val detailEntity = dao.readArticleDetail(articleId)
-            val detail = detailEntity?.let {
-                runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
-            }
-            queued = PendingReadStateMutationEntity(
-                articleId = articleId,
-                read = read,
-                mutationId = UUID.randomUUID().toString(),
-                source = source,
-                baseRevision = listOfNotNull(previous?.baseRevision, revision).maxOrNull(),
-                previousState = state.confirmedReadState,
-                updatedAt = System.currentTimeMillis(),
-                countScopeJson = if (previous == null && state.confirmedReadState != null) counts.captureReadScope(articleFeedId(articleId)) else previous?.countScopeJson,
-            )
-            dao.upsertArticleReadOverride(articleId.toReadOverride(read))
-            dao.updateArticleReadState(articleId, read)
-            if (detailEntity != null && detail != null) {
-                dao.upsertArticleDetail(
-                    detailEntity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = read))),
-                )
-            }
-            dao.upsertPendingReadStateMutation(queued)
-            dao.upsertArticleStateRevision(state.copy(lastReadMutationId = queued.mutationId))
-            counts.recordLocalReadChange(queued.countScopeJson, previous?.read ?: state.confirmedReadState, read)
-            pruneArticleStateHistory()
+        val queued = database.withTransaction {
+            queueReadStateInTransaction(articleId, read, source).also { pruneArticleStateHistory() }
         }
         notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+        return queued
+    }
+
+    /** The offline bulk choice is atomic and covers only articles available in the chosen scope. */
+    suspend fun queueCachedArticlesRead(feedIds: List<String>, allFeeds: Boolean): List<String> {
+        val marked = database.withTransaction {
+            val pending = dao.readPendingReadStateMutations().associateBy { it.articleId }
+            val unread = dao.readArticleStatesByFeeds(feedIds, allFeeds).filter { row ->
+                (allFeeds || row.feedId in feedIds) &&
+                    (pending[row.state.articleId]?.read ?: row.state.confirmedReadState ?: row.cachedReadState) == false
+            }
+            unread.forEach { queueReadStateInTransaction(it.state.articleId, true, "manual") }
+            pruneArticleStateHistory()
+            unread.map { it.state.articleId }
+        }
+        notifyInvalidation(TABLE_ARTICLE_READ_OVERRIDES)
+        return marked
+    }
+
+    private suspend fun queueReadStateInTransaction(articleId: String, read: Boolean, source: String): PendingReadStateMutationEntity {
+        val previous = dao.readPendingReadStateMutation(articleId)
+        val state = stateRecord(articleId)
+        val revision = state.readRevision
+        val detailEntity = dao.readArticleDetail(articleId)
+        val detail = detailEntity?.let {
+            runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
+        }
+        val queued = PendingReadStateMutationEntity(
+            articleId = articleId,
+            read = read,
+            mutationId = UUID.randomUUID().toString(),
+            source = source,
+            baseRevision = listOfNotNull(previous?.baseRevision, revision).maxOrNull(),
+            previousState = state.confirmedReadState,
+            updatedAt = System.currentTimeMillis(),
+            countScopeJson = if (previous == null && state.confirmedReadState != null) counts.captureReadScope(articleFeedId(articleId)) else previous?.countScopeJson,
+        )
+        dao.upsertArticleReadOverride(articleId.toReadOverride(read))
+        dao.updateArticleReadState(articleId, read)
+        if (detailEntity != null && detail != null) {
+            dao.upsertArticleDetail(
+                detailEntity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = read))),
+            )
+        }
+        dao.upsertPendingReadStateMutation(queued)
+        dao.upsertArticleStateRevision(state.copy(lastReadMutationId = queued.mutationId))
+        counts.recordLocalReadChange(queued.countScopeJson, previous?.read ?: state.confirmedReadState, read)
         return queued
     }
 
@@ -714,6 +747,10 @@ class LocalStore internal constructor(
 
     suspend fun readPendingSavedStateMutations(): List<PendingSavedStateMutationEntity> =
         dao.readPendingSavedStateMutations()
+
+    suspend fun firstPendingReadStateMutation() = dao.firstPendingReadStateMutation()
+
+    suspend fun firstPendingSavedStateMutation() = dao.firstPendingSavedStateMutation()
 
     suspend fun deletePendingReadStateMutation(articleId: String) {
         database.withTransaction {
@@ -857,6 +894,15 @@ class LocalStore internal constructor(
             mergeReadState(detail.id, detail.isRead, detail.readRevision)
             mergeSavedState(detail.id, detail.isSaved, detail.savedRevision)
             val stored = projectArticleDetail(detail)
+            // A content event updates an existing row without refetching or reordering its page.
+            dao.readArticle(stored.id)?.takeIf { it.contentVersion <= stored.contentVersion }?.let { row ->
+                val updated = row.copy(
+                    title = stored.title, author = stored.author, excerpt = stored.excerpt,
+                    heroImageUrl = stored.heroImageUrl, contentStatus = stored.contentStatus,
+                    contentVersion = stored.contentVersion,
+                )
+                if (updated != row) dao.upsertArticles(listOf(updated))
+            }
             dao.upsertArticleDetail(
                 ArticleDetailEntity(
                     id = stored.id,
@@ -913,6 +959,18 @@ class LocalStore internal constructor(
         // Android represents images with an object replacement character.
         return text.any { !it.isWhitespace() && it != '\uFFFC' }
     }
+
+    suspend fun articleDetailWrittenAt(articleId: String): Long? = dao.articleDetailWrittenAt(articleId)
+
+    suspend fun savedArticleIdsWithoutText(): List<String> = withContext(processingDispatcher) {
+        dao.readSavedArticleContent().mapNotNull { row ->
+            val detail = row.payloadJson?.let { runCatching { articleDetailAdapter.fromJson(it) }.getOrNull() }
+            row.id.takeUnless { detail?.hasReadableText() == true || detail?.contentStatus == "failed" }
+        }
+    }
+
+    suspend fun isArticleDetailFresh(articleId: String, maxAgeMs: Long): Boolean =
+        articleDetailWrittenAt(articleId)?.let { System.currentTimeMillis() - it < maxAgeMs } == true
 
     override suspend fun readArticleDetail(articleId: String): ArticleDetail? = withContext(processingDispatcher) {
         readableArticleDetail(dao.readArticleDetail(articleId))

@@ -2,7 +2,6 @@ package com.selffeed.android.data
 
 import androidx.test.core.app.ApplicationProvider
 import com.selffeed.android.network.SyncResponse
-import com.selffeed.android.network.FeedSyncAllStatus
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -19,7 +18,7 @@ import retrofit2.HttpException
 @Config(sdk = [33])
 class FeedSyncWorkerTest {
     @Test
-    fun `doWork returns success when sync succeeds`() = runBlocking {
+    fun `accepted server work completes without keeping the device awake to poll`() = runBlocking {
         val worker = buildWorker(
             loggedIn = true,
             syncResult = AppResult.Success(SyncResponse(syncedFeeds = 3, failedFeeds = 0)),
@@ -105,14 +104,7 @@ class FeedSyncWorkerTest {
         }
         if (syncResult != null) {
             coEvery { repo.syncAllFeeds() } returns syncResult
-            coEvery { repo.syncAllFeedsStatus() } returns AppResult.Success(
-                FeedSyncAllStatus(
-                    queued = false,
-                    running = false,
-                    active = false,
-                    stale = false,
-                ),
-            )
+            coEvery { repo.syncAllFeedsStatus() } throws AssertionError("Accepted server work does not need client polling")
         }
         val params = mockk<androidx.work.WorkerParameters>(relaxed = true)
         return FeedSyncWorker(ApplicationProvider.getApplicationContext(), params, repo)

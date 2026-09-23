@@ -201,7 +201,7 @@ class CookieOnlyBootstrapTest {
                 store.setRefreshCookie("rss_refresh_token=stored-cookie; Path=/api/v1/auth")
             }
             val api = NetworkModule.provideApi(client, moshi, store)
-            val monitor = mockk<NetworkMonitor> { every { online } returns MutableStateFlow(false) }
+            val monitor = mockk<NetworkMonitor> { every { online } returns MutableStateFlow(true) }
             repository = RssRepository(
                 AuthRemoteDataSource(api), FeedRemoteDataSource(api), ArticleRemoteDataSource(api),
                 SearchRemoteDataSource(api), SettingsRemoteDataSource(api), store, coordinator,
