@@ -98,8 +98,12 @@ fun ArticlesTab(
     val pullToRefreshState = rememberPullToRefreshState()
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
     var wasRefreshing by remember { mutableStateOf(false) }
-    val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
+    val refreshState = pagedArticles.loadState.refresh
     val articleCount = pagedArticles.itemCount
+    var settledEmpty by remember(state.queryKey) { mutableStateOf(false) }
+    if ((refreshState is LoadState.NotLoading && !state.isManualRefreshInProgress) || articleCount > 0) {
+        settledEmpty = articleCount == 0
+    }
 
     LaunchedEffect(listState, pagedArticles) {
         snapshotFlow {
@@ -116,7 +120,9 @@ fun ArticlesTab(
     // Automatic paging and backend reconciliation never drive this indicator.
     // A manual refresh owns it continuously until that operation completes.
     val isRefreshing = state.isManualRefreshInProgress
-    val isEmpty = articleCount == 0 && !isRefreshing && !isPagingInitialLoad
+    // An empty result is content too. Keep it mounted while the same query
+    // revalidates, without claiming a new query is empty before it has loaded.
+    val isEmpty = articleCount == 0 && refreshState !is LoadState.Error && settledEmpty
 
     LaunchedEffect(isRefreshing, articleCount) {
         if (!wasRefreshing && isRefreshing && listState.firstVisibleItemIndex == 0) {

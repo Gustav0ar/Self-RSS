@@ -164,6 +164,11 @@ class ArticleMediaLifecycleUiTest {
         composeRule.waitUntil(5_000) {
             composeRule.runOnIdle { webViews(composeRule.activity.window.decorView).count() == 1 }
         }
+        composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        composeRule.waitUntil(5_000) {
+            composeRule.runOnIdle { webViews(composeRule.activity.window.decorView).count() == 2 }
+        }
         composeRule.runOnIdle { fixture.show = false }
         composeRule.waitUntil(3_000) { seen.all { it.released } }
         assertEquals(0, composeRule.runOnIdle { webViews(composeRule.activity.window.decorView).count() })
@@ -233,7 +238,9 @@ class ArticleMediaLifecycleUiTest {
 
     private fun tapDocumentButton(view: WebView, action: String, fullscreen: Boolean = false) {
         val id = if (fullscreen) "fixture-fullscreen" else "fixture-play"
-        val position = if (fullscreen) "right:0" else "left:0"
+        // innerWidth is integer-rounded, while the layout viewport can have a
+        // fractional CSS pixel at this device density. Keep the target inside both.
+        val position = if (fullscreen) "right:1px" else "left:0"
         javascript(view, """
             var button = document.getElementById('$id') || document.createElement('button');
             button.id = '$id';

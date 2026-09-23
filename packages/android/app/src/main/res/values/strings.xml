@@ -65,6 +65,7 @@
     <string name="article_choose_detail">Its reader will appear here.</string>
     <string name="article_mark_all_title">Mark all as read?</string>
     <string name="article_mark_all_detail">This marks every article in the current feed or category as read.</string>
+    <string name="article_mark_all_offline_detail">This marks cached articles in the current feed or category as read. Changes sync when you are online.</string>
     <string name="article_mark_all_action">Mark all read</string>
     <string name="article_mark_all_cd">Mark all as read</string>
     <string name="article_mark_read">Mark read</string>
