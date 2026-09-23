@@ -16,3 +16,6 @@ packages/api/data/
 *.db-journal
 *.db-shm
 *.db-wal
+
+# Local Android trace analysis tool
+/trace_processor
