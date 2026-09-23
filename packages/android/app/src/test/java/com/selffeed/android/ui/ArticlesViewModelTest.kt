@@ -149,6 +149,61 @@ class ArticlesViewModelTest {
     }
 
     @Test
+    fun `failed article load remains actionable and retry clears its error`() = runTest {
+        val model = createViewModel()
+        primeArticleQueue(model)
+        coEvery { repository.article("a1", false) } returns AppResult.Error("Connection unavailable")
+        model.openArticle("a1")
+        runCurrent()
+        assertEquals(PresentationText.dynamic("Connection unavailable"), model.state.value.articleLoadError)
+        assertEquals(null, model.state.value.errorMessage)
+        coEvery { repository.article("a1", false) } returns AppResult.Success(sampleDetail("a1"))
+        model.openArticle("a1")
+        runCurrent()
+        assertEquals(null, model.state.value.articleLoadError)
+    }
+
+    @Test
+    fun `reconnect retries the selected article that could not load offline`() = runTest {
+        val events = MutableSharedFlow<ReadStateSyncEvent>()
+        every { repository.readStateEvents() } returns events
+        val model = createViewModel()
+        primeArticleQueue(model)
+        coEvery { repository.article("a1", false) } returns AppResult.Error("Offline")
+        model.openArticle("a1")
+        runCurrent()
+        val foreground = backgroundScope.launch { model.observeReadStateSync() }
+        runCurrent()
+        coEvery { repository.article("a1", true) } returns AppResult.Success(sampleDetail("a1"))
+        events.emit(com.selffeed.android.network.RealtimeConnectedEvent())
+        runCurrent()
+        coVerify(exactly = 1) { repository.article("a1", true) }
+        assertEquals(null, model.state.value.articleLoadError)
+        foreground.cancel()
+    }
+
+    @Test
+    fun `unrelated body events do not restart read-state reconciliation`() = runTest {
+        val events = MutableSharedFlow<ReadStateSyncEvent>()
+        every { repository.readStateEvents() } returns events
+        val model = createViewModel()
+        primeArticleQueue(model)
+        val foreground = backgroundScope.launch { model.observeReadStateSync() }
+        runCurrent()
+        io.mockk.clearMocks(repository, answers = false, recordedCalls = true)
+        repeat(40) { index ->
+            events.emit(com.selffeed.android.network.ArticleUpdatedEvent(
+                eventId = "update-$index", articleId = "unrelated-$index", feedId = "other",
+                contentStatus = "failed", contentVersion = 2, updatedAt = "",
+            ))
+        }
+        runCurrent()
+        coVerify(exactly = 0) { repository.refreshArticleStates(any()) }
+        coVerify(exactly = 0) { repository.refreshArticleDetail(any()) }
+        foreground.cancel()
+    }
+
+    @Test
     fun `foreground reader renders committed Room flags without a payload event`() = runTest {
         val flags = kotlinx.coroutines.flow.MutableStateFlow<AppResult<Map<String, LocalArticleState>>>(
             AppResult.Success(mapOf("a1" to LocalArticleState(false, false))),

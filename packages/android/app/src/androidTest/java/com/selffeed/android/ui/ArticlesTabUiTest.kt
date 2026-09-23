@@ -5,6 +5,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
+import androidx.paging.PagingData
+import androidx.paging.compose.collectAsLazyPagingItems
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
@@ -42,6 +47,71 @@ class ArticlesTabUiTest {
             composeRule.activity.setShowWhenLocked(true)
             composeRule.activity.setTurnScreenOn(true)
         }
+    }
+
+    @Test
+    fun articlesTab_keepsConfirmedEmptyResultDuringBackgroundRefresh() {
+        fun page(refresh: LoadState, articles: List<ArticleListItem> = emptyList()) =
+            PagingData.from(
+                articles,
+                sourceLoadStates = LoadStates(
+                    refresh = refresh,
+                    prepend = LoadState.NotLoading(true),
+                    append = LoadState.NotLoading(true),
+                ),
+            )
+        val pages = MutableStateFlow(page(LoadState.Loading))
+        var state by mutableStateOf(
+            ArticleTabState(
+                articles = emptyList(),
+                selectedArticleId = null,
+                isSyncingFeeds = false,
+                feedCount = 1,
+                queryKey = "unread:feed-1",
+            ),
+        )
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticlesTab(
+                    state = state,
+                    actions = noOpArticleActions(),
+                    pagedArticles = pages.collectAsLazyPagingItems(),
+                )
+            }
+        }
+        composeRule.onNodeWithText("No articles left to read").assertDoesNotExist()
+        composeRule.runOnIdle { pages.value = page(LoadState.NotLoading(true)) }
+        composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+        val emptyBounds = composeRule.onNodeWithText("No articles left to read")
+            .fetchSemanticsNode().boundsInRoot
+        repeat(3) {
+            composeRule.runOnIdle { pages.value = page(LoadState.Loading) }
+            composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+            assertEquals(emptyBounds, composeRule.onNodeWithText("No articles left to read")
+                .fetchSemanticsNode().boundsInRoot)
+            composeRule.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate))
+                .assertCountEquals(0)
+            composeRule.runOnIdle { pages.value = page(LoadState.NotLoading(true)) }
+            composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+        }
+        composeRule.runOnIdle { pages.value = page(LoadState.Error(Exception("Retry this request"))) }
+        composeRule.onNodeWithText("Retry this request").assertIsDisplayed()
+        composeRule.onNodeWithText("No articles left to read").assertDoesNotExist()
+        composeRule.runOnIdle { pages.value = page(LoadState.NotLoading(true)) }
+        composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+        composeRule.runOnIdle {
+            pages.value = page(LoadState.NotLoading(true), listOf(sampleArticle("new", "New article")))
+        }
+        composeRule.onNodeWithText("New article").assertIsDisplayed()
+        composeRule.onNodeWithText("No articles left to read").assertDoesNotExist()
+        composeRule.runOnIdle { pages.value = page(LoadState.NotLoading(true)) }
+        composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+        composeRule.runOnIdle { pages.value = page(LoadState.Loading) }
+        composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
+        composeRule.runOnIdle { state = state.copy(queryKey = "unread:feed-2") }
+        composeRule.onNodeWithText("No articles left to read").assertDoesNotExist()
+        composeRule.runOnIdle { pages.value = page(LoadState.NotLoading(true)) }
+        composeRule.onNodeWithText("No articles left to read").assertIsDisplayed()
     }
 
     @Test

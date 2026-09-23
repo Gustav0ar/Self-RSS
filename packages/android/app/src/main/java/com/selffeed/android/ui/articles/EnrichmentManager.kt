@@ -40,7 +40,7 @@ class EnrichmentManager @Inject constructor(
      * Returns immediately; enrichment happens asynchronously.
      */
     fun maybeEnrichSelectedArticle(article: ArticleDetail) {
-        if (article.isEnriched || article.canonicalUrl.isNullOrBlank()) return
+        if (article.isEnriched || article.contentStatus == "failed" || article.canonicalUrl.isNullOrBlank()) return
         enrichArticleJob?.cancel()
         enrichArticleJob = scope?.launch {
             when (repository.enrichArticle(article.id)) {

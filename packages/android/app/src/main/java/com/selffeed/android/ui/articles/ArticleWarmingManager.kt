@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.job
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
 
 /**
@@ -21,6 +23,8 @@ class ArticleWarmingManager @Inject constructor(
     private val repository: ArticleRepository,
 ) {
     private var scope: CoroutineScope? = null
+    private var neededIds: Set<String> = emptySet()
+    private val permits = Semaphore(2)
     private val warmingJobs = mutableMapOf<String, Job>()
     private var lastVisibleArticleIds: List<String> = emptyList()
     private var onArticlesWarmed: suspend (List<ArticleDetail>) -> Unit = {}
@@ -52,7 +56,7 @@ class ArticleWarmingManager @Inject constructor(
         val articlesToWarm = (next + previous).distinctBy { it.id }
         if (articlesToWarm.isEmpty()) return
 
-        warmArticles(articlesToWarm, enrichPending = true)
+        warmArticles(articlesToWarm, selectedId = articleId)
     }
 
     /**
@@ -66,21 +70,25 @@ class ArticleWarmingManager @Inject constructor(
         if (candidateIds.isEmpty() || candidateIds == lastVisibleArticleIds) return
         lastVisibleArticleIds = candidateIds
 
-        warmArticles(candidates, enrichPending = true)
+        warmArticles(candidates)
     }
 
     /**
      * Cancels any pending warming job.
      */
     fun cancelWarming() {
+        neededIds = emptySet()
         val jobs = warmingJobs.values.toList()
         warmingJobs.clear()
         jobs.forEach(Job::cancel)
         lastVisibleArticleIds = emptyList()
     }
 
-    private fun warmArticles(candidates: List<ArticleListItem>, enrichPending: Boolean) {
-        repository.prefetchHeroImages(candidates.map { it.heroImageUrl })
+    private fun warmArticles(candidates: List<ArticleListItem>, selectedId: String? = null) {
+        val needed = candidates.mapTo(mutableSetOf()) { it.id }
+        selectedId?.let(needed::add)
+        neededIds = needed
+        warmingJobs.filterKeys { it !in needed }.values.toList().forEach(Job::cancel)
 
         val cached = candidates.mapNotNull { repository.cachedArticleDetail(it.id) }
 
@@ -90,16 +98,19 @@ class ArticleWarmingManager @Inject constructor(
 
             val job = activeScope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    val cachedDetail = cached.firstOrNull { it.id == article.id }
-                    val detail = cachedDetail ?: when (val prefetched = repository.prefetchArticle(article.id)) {
-                        is AppResult.Success -> prefetched.data
-                        is AppResult.Error -> null
-                    }
-                    coroutineContext.ensureActive()
-                    if (detail != null) {
-                        publishWarmed(listOf(detail))
-                        if (cachedDetail == null && enrichPending && detail.contentStatus == "enrichment_pending") {
-                            repository.enrichArticle(detail.id, invalidateCaches = false)
+                    permits.withPermit {
+                        if (article.id !in neededIds) return@withPermit
+                        val cachedDetail = cached.firstOrNull { it.id == article.id }
+                        val detail = cachedDetail ?: when (val prefetched = repository.prefetchArticle(article.id)) {
+                            is AppResult.Success -> prefetched.data
+                            is AppResult.Error -> null
+                        }
+                        coroutineContext.ensureActive()
+                        if (detail != null) {
+                            publishWarmed(listOf(detail))
+                            if (cachedDetail == null && detail.contentStatus == "enrichment_pending") {
+                                repository.enrichArticle(detail.id, invalidateCaches = false)
+                            }
                         }
                     }
                 } finally {
@@ -129,8 +140,8 @@ class ArticleWarmingManager @Inject constructor(
     }
 
     private companion object {
-        const val NEXT_ARTICLE_WARM_LIMIT = 6
-        const val PREVIOUS_ARTICLE_WARM_LIMIT = 4
-        const val VISIBLE_ARTICLE_WARM_LIMIT = 8
+        const val NEXT_ARTICLE_WARM_LIMIT = 3
+        const val PREVIOUS_ARTICLE_WARM_LIMIT = 1
+        const val VISIBLE_ARTICLE_WARM_LIMIT = 4
     }
 }
