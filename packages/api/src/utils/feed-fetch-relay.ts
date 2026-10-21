@@ -1,5 +1,5 @@
 import { cancelResponseBody, raceWithAbort } from './bounded-response.js';
-import { resolveFeedFetchUrl } from './feed-source-url.js';
+import { resolveFeedFetchUrl, revalidateKnownStaleFeed } from './feed-source-url.js';
 import { fetchWithValidatedRedirects, type RemoteFetchSecurityOptions } from './safe-fetch.js';
 
 export interface FeedFetchRelayConfig {
@@ -55,8 +55,9 @@ export async function fetchFeedWithRelayFallback(
 ) {
 	const directFetch = deps.directFetch ?? fetchWithValidatedRedirects;
 	const targetUrl = resolveFeedFetchUrl(input);
+	const request = revalidateKnownStaleFeed(targetUrl, init);
 	const directResponse = await raceWithAbort(
-		directFetch(targetUrl, init, securityOptions),
+		directFetch(targetUrl, request, securityOptions),
 		init.signal ?? undefined,
 	);
 	if (!RELAY_HTTP_STATUSES.has(directResponse.status) || !canUseRelay(config)) {
@@ -68,7 +69,7 @@ export async function fetchFeedWithRelayFallback(
 		const relayResponse = await raceWithAbort(
 			(deps.fetchImpl ?? fetch)(config.relayUrl!, {
 				method: 'GET',
-				headers: relayHeaders(init, config.relayToken!, targetUrl),
+				headers: relayHeaders(request, config.relayToken!, targetUrl),
 				redirect: 'error',
 				signal: init.signal,
 			}),

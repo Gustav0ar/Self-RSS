@@ -6,7 +6,7 @@ import {
 } from '../utils/bounded-response.js';
 import type { FeedFetchRelayConfig } from '../utils/feed-fetch-relay.js';
 import { publisherTargetForRelayResponse } from '../utils/feed-fetch-relay.js';
-import { resolveFeedFetchUrl } from '../utils/feed-source-url.js';
+import { requiresUnconditionalFeedFetch, resolveFeedFetchUrl } from '../utils/feed-source-url.js';
 import { createDurableFeedFetcher } from './durable-feed-fetcher.js';
 import type { DurablePublisherOutcome } from './durable-ingestion-ops.types.js';
 import { withLeaseHeartbeat } from './durable-worker-loop.js';
@@ -179,11 +179,15 @@ export class DurableFeedWorker {
 				return;
 			}
 
+			const publisherRequestUrl = resolveFeedFetchUrl(
+				claim.source.resolvedUrl ?? claim.source.requestedUrl,
+			);
 			const hasValidators = Boolean(claim.source.etag || claim.source.lastModified);
 			const forceUnconditional =
-				hasValidators &&
-				(!claim.source.lastUnconditionalFetchAt ||
-					now.getTime() - claim.source.lastUnconditionalFetchAt.getTime() >= WEEK_MS);
+				requiresUnconditionalFeedFetch(publisherRequestUrl) ||
+				(hasValidators &&
+					(!claim.source.lastUnconditionalFetchAt ||
+						now.getTime() - claim.source.lastUnconditionalFetchAt.getTime() >= WEEK_MS));
 			if (forceUnconditional) {
 				unconditionalAttempt = true;
 				await this.repository.recordUnconditionalFetchAttempt(claim.job.id, this.workerId, now);
@@ -202,9 +206,6 @@ export class DurableFeedWorker {
 			} catch {
 				// Telemetry must never alter publisher work.
 			}
-			const publisherRequestUrl = resolveFeedFetchUrl(
-				claim.source.resolvedUrl ?? claim.source.requestedUrl,
-			);
 			const response = await raceWithAbort(
 				this.fetchSource(
 					publisherRequestUrl,

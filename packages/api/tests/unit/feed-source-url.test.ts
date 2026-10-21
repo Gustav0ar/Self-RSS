@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	type FeedSourceUrlError,
 	normalizeFeedSourceUrl,
+	requiresUnconditionalFeedFetch,
 	resolveFeedFetchUrl,
 } from '../../src/utils/feed-source-url.js';
 
@@ -22,6 +23,19 @@ describe('resolveFeedFetchUrl', () => {
 		'not a URL',
 	])('leaves unrelated sources unchanged for %s', (input) => {
 		expect(resolveFeedFetchUrl(input)).toBe(input);
+	});
+});
+
+describe('requiresUnconditionalFeedFetch', () => {
+	it.each([
+		['http://www.melhoresdestinos.com.br/feed', true],
+		['https://melhoresdestinos.com.br/feed/atom/?cache=stale', true],
+		['https://www.melhoresdestinos.com.br/article/feed', false],
+		['https://www.melhoresdestinos.com.br.attacker.example/feed/atom', false],
+		['https://publisher.example/feed/atom', false],
+		['not a URL', false],
+	])('limits unconditional polling to known stale endpoints: %s', (url, expected) => {
+		expect(requiresUnconditionalFeedFetch(url)).toBe(expected);
 	});
 });
 
