@@ -40,6 +40,30 @@ export function resolveFeedFetchUrl(input: string) {
 	return input;
 }
 
+/** Melhores Destinos can serve days-old cached bodies to conditional polls, even on Atom. */
+export function requiresUnconditionalFeedFetch(input: string) {
+	try {
+		const url = new URL(input);
+		return (
+			MELHORES_DESTINOS_HOSTS.has(url.hostname.toLowerCase()) &&
+			/^\/feed(?:\/atom)?\/?$/.test(url.pathname)
+		);
+	} catch {
+		return false;
+	}
+}
+
+export function revalidateKnownStaleFeed(input: string, init: RequestInit): RequestInit {
+	if (!requiresUnconditionalFeedFetch(input)) return init;
+
+	const headers = new Headers(init.headers);
+	headers.delete('if-none-match');
+	headers.delete('if-modified-since');
+	headers.set('cache-control', 'no-cache');
+	headers.set('pragma', 'no-cache');
+	return { ...init, headers };
+}
+
 /**
  * Canonicalizes only URL syntax with deterministic WHATWG parsing. It does not
  * infer redirects, reorder query parameters, fold paths, or remove trailing slashes.

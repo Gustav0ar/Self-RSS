@@ -23,9 +23,43 @@ describe('fetchFeedWithRelayFallback', () => {
 
 		expect(directFetch).toHaveBeenCalledWith(
 			'https://www.melhoresdestinos.com.br/feed/atom',
-			{},
+			{ headers: new Headers({ 'cache-control': 'no-cache', pragma: 'no-cache' }) },
 			securityOptions,
 		);
+	});
+
+	it('revalidates Melhores Destinos through the relay without forwarding stale validators', async () => {
+		const directFetch = vi.fn(
+			async (_url: string, _init: RequestInit) => new Response(null, { status: 403 }),
+		);
+		const relayFetch = vi.fn(
+			async (_url: string | URL | Request, _init?: RequestInit) =>
+				new Response('<feed />', { headers: { 'x-self-feed-relay': 'generic' } }),
+		);
+		const headers = new Headers({
+			'if-none-match': '"old-feed"',
+			'if-modified-since': 'Sat, 17 Oct 2026 18:29:41 GMT',
+			accept: 'application/atom+xml',
+		});
+		const signal = new AbortController().signal;
+		await fetchFeedWithRelayFallback(
+			'http://www.melhoresdestinos.com.br/feed/atom',
+			{ headers, signal },
+			securityOptions,
+			relayConfig,
+			{ directFetch, fetchImpl: Object.assign(relayFetch, { preconnect: fetch.preconnect }) },
+		);
+
+		for (const init of [directFetch.mock.calls[0]?.[1], relayFetch.mock.calls[0]?.[1]]) {
+			const sent = new Headers(init?.headers);
+			expect(sent.has('if-none-match')).toBe(false);
+			expect(sent.has('if-modified-since')).toBe(false);
+			expect(sent.get('cache-control')).toBe('no-cache');
+			expect(sent.get('pragma')).toBe('no-cache');
+			expect(sent.get('accept')).toBe('application/atom+xml');
+			expect(init?.signal).toBe(signal);
+		}
+		expect(headers.get('if-none-match')).toBe('"old-feed"');
 	});
 
 	it('settles when an injected direct fetch ignores the caller abort', async () => {

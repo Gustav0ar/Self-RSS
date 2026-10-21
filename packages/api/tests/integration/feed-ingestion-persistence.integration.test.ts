@@ -14,6 +14,7 @@ import { CategoryRepository } from '../../src/repositories/category.repository.j
 import { FeedRepository } from '../../src/repositories/feed.repository.js';
 import { FeedIngestionRepository } from '../../src/repositories/feed-ingestion.repository.js';
 import { DurableFeedFacadeService } from '../../src/services/durable-feed-facade.service.js';
+import { createDurableFeedFetcher } from '../../src/services/durable-feed-fetcher.js';
 import { DurableFeedScheduler } from '../../src/services/durable-feed-scheduler.js';
 import {
 	DurableFeedWorker,
@@ -2200,6 +2201,89 @@ describe('durable feed ingestion persistence', () => {
 				where: (row, { eq }) => eq(row.id, source.id),
 			}),
 		).toMatchObject({ normalizedUrl: rssUrl, requestedUrl: rssUrl, resolvedUrl: atomUrl });
+	});
+
+	it('discovers Melhores Destinos articles without getting pinned to cached conditional responses', async () => {
+		const { db, repository } = await setupDatabase();
+		let clock = new Date('2026-10-20T20:27:25Z');
+		const origin = await repository.upsertOrigin({
+			id: 'cached-publisher-origin',
+			scheme: 'http',
+			host: 'www.melhoresdestinos.com.br',
+			port: 80,
+		});
+		const source = await repository.upsertSource({
+			id: 'cached-publisher-source',
+			normalizedUrl: 'http://www.melhoresdestinos.com.br/feed',
+			requestedUrl: 'http://www.melhoresdestinos.com.br/feed',
+			resolvedUrl: 'http://www.melhoresdestinos.com.br/feed/atom',
+			originId: origin.id,
+			etag: '"d35102964e49d18792a3262a26ebd5c2"',
+			lastModified: 'Sat, 17 Oct 2026 18:29:41 GMT',
+			lastUnconditionalFetchAt: new Date('2026-10-17T12:10:23Z'),
+			nextFetchAt: clock,
+		});
+		subscribeSource(db, source);
+		const requestHeaders: Headers[] = [];
+		let latestId = 'latest';
+		const publisher = Bun.serve({
+			port: 0,
+			fetch: (request) => {
+				requestHeaders.push(request.headers);
+				// Production kept returning October 17 snapshots during October 20
+				// conditional polls. Replay that cache behavior over real HTTP.
+				const cached =
+					request.headers.has('if-none-match') || request.headers.has('if-modified-since');
+				const id = cached ? 'stale' : latestId;
+				const published = cached ? '2026-10-17T17:00:42Z' : clock.toISOString();
+				return new Response(
+					`<feed xmlns="http://www.w3.org/2005/Atom"><title>Melhores Destinos</title><entry><id>${id}</id><title>${id}</title><published>${published}</published></entry></feed>`,
+					{ headers: { 'content-type': 'application/atom+xml', etag: '"cached-validator"' } },
+				);
+			},
+		});
+		servers.push(publisher);
+		const worker = new DurableFeedWorker(repository, {
+			workerId: 'cached-publisher-worker',
+			originStartGapSeconds: 0,
+			now: () => clock,
+			fetch: createDurableFeedFetcher(
+				{},
+				{
+					directFetch: async (_url, init) => {
+						const response = await fetch(publisher.url, init);
+						return new Response(response.body, { headers: response.headers });
+					},
+				},
+			),
+		});
+		const scheduler = new DurableFeedScheduler(repository);
+		const delivery = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db));
+
+		for (const id of ['latest', 'next']) {
+			latestId = id;
+			await scheduler.tick(clock);
+			expect(await worker.drainOnce()).toBe(1);
+			expect(await delivery.drainOnce('cached-publisher-delivery', { now: clock })).toBe(1);
+			expect(
+				await db.query.articles.findFirst({ where: eq(schema.articles.guid, id) }),
+			).toMatchObject({
+				publishedAt: clock,
+			});
+			expect(
+				await db.query.feedSources.findFirst({ where: eq(schema.feedSources.id, source.id) }),
+			).toMatchObject({
+				lastUnconditionalFetchAt: clock,
+				nextFetchAt: new Date(clock.getTime() + 15 * 60_000),
+			});
+			clock = new Date(clock.getTime() + 15 * 60_000);
+		}
+		expect(requestHeaders).toHaveLength(2);
+		for (const headers of requestHeaders) {
+			expect(headers.has('if-none-match')).toBe(false);
+			expect(headers.has('if-modified-since')).toBe(false);
+			expect(headers.get('cache-control')).toBe('no-cache');
+		}
 	});
 
 	it('reuses a retained parsed snapshot when a user resubscribes without refetching', async () => {
