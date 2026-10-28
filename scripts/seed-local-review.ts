@@ -170,7 +170,8 @@ async function main() {
 
 	const articles = await api<ApiEnvelope<unknown[]>>('/articles?limit=5', { token });
 	const articleCount = Array.isArray(articles.data) ? articles.data.length : 0;
-	console.log(`Local review login: ${email} / ${password}`);
+	// Never log the review credentials; the email/password come from LOCAL_REVIEW_* env vars.
+	console.log(`Local review login: ${email}`);
 	console.log(`Review feeds ready: ${reviewFeeds.length}`);
 	console.log(`Latest articles returned by API: ${articleCount}`);
 	console.log('Open http://localhost:5173/ and sign in with the local review login.');
