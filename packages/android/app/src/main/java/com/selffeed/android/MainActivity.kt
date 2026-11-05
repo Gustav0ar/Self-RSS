@@ -56,12 +56,16 @@ class MainActivity : ComponentActivity() {
             window.decorView.post { ready = true }
         }
         performanceMetricsState = PerformanceMetricsState.getHolderForHierarchy(window.decorView)
-        jankStats = JankStats.createAndTrack(window) { frameData ->
-            if (BuildConfig.DEBUG && frameData.isJank) {
-                Log.d(
-                    TAG,
-                    "Jank frame durationMs=${frameData.frameDurationUiNanos / NANOS_PER_MILLISECOND} states=${frameData.states}",
-                )
+        // The consumer only logs debug frames. Avoid collecting and dispatching
+        // frame metrics in release builds when nothing consumes them.
+        if (BuildConfig.DEBUG) {
+            jankStats = JankStats.createAndTrack(window) { frameData ->
+                if (frameData.isJank) {
+                    Log.d(
+                        TAG,
+                        "Jank frame durationMs=${frameData.frameDurationUiNanos / NANOS_PER_MILLISECOND} states=${frameData.states}",
+                    )
+                }
             }
         }
         setContent {

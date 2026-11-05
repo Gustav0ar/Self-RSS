@@ -59,6 +59,7 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
             repository.withAuthenticatedAccount {
                 FeedSyncWorker.ensureScheduled(this@SelfFeedApplication)
                 ArticleStateSyncWorker.ensureScheduled(this@SelfFeedApplication)
+                ArticleStateSyncWorker.ensureScheduled(this@SelfFeedApplication, downloadSaved = true)
             }
         }
     }

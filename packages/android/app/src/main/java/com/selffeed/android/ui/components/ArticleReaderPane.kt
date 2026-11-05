@@ -34,9 +34,11 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.Composable
@@ -53,6 +55,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -85,6 +90,8 @@ import kotlin.math.abs
 fun ArticleReaderPane(
     articles: List<ArticleListItem>,
     isVisible: Boolean = true,
+    atFeedStart: Boolean = true,
+    atFeedEnd: Boolean = true,
     selectedArticle: ArticleDetail,
     prefetchedArticles: Map<String, ArticleDetail> = emptyMap(),
     articleStates: Map<String, ArticleFlags> = emptyMap(),
@@ -99,21 +106,37 @@ fun ArticleReaderPane(
     preferHtml: Boolean = true,
     onPreferHtmlChanged: (Boolean) -> Unit = {},
     observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
+    loadError: String? = null,
 ) {
-    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val lifecycleState by lifecycle.currentStateAsState()
     val foreground = isVisible && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
     var retainAdjacentRenderers by remember { mutableStateOf(true) }
+    LaunchedEffect(isVisible) {
+        if (isVisible) retainAdjacentRenderers = true
+    }
     val appContext = LocalContext.current.applicationContext
-    DisposableEffect(appContext) {
+    DisposableEffect(appContext, lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) retainAdjacentRenderers = true
+        }
         val callbacks = object : ComponentCallbacks2 {
             override fun onConfigurationChanged(config: Configuration) = Unit
             override fun onLowMemory() { retainAdjacentRenderers = false }
             override fun onTrimMemory(level: Int) {
-                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) retainAdjacentRenderers = false
+                // UI_HIDDEN is numerically above RUNNING_LOW, but only means
+                // the app went into the background. It is not memory pressure.
+                if (level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN &&
+                    level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+                ) retainAdjacentRenderers = false
             }
         }
         appContext.registerComponentCallbacks(callbacks)
-        onDispose { appContext.unregisterComponentCallbacks(callbacks) }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            appContext.unregisterComponentCallbacks(callbacks)
+        }
     }
     val readerArticles = remember(articles, selectedArticle) {
         articles.withSelectedArticle(selectedArticle)
@@ -128,6 +151,8 @@ fun ArticleReaderPane(
         ArticleDetailView(
             observeOfflineText = observeOfflineText,
             article = selectedArticle,
+            loadError = loadError,
+            onRetry = { onArticleSelected(selectedArticle.id) },
             isActive = foreground,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
@@ -191,38 +216,48 @@ fun ArticleReaderPane(
         }
     }
 
-    HorizontalPager(
-        state = pagerState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        beyondViewportPageCount = 1,
-        // Stretch overscroll deforms the whole article at the queue boundary
-        // and exposes the pager surface as a grey strip along the edge.
-        overscrollEffect = null,
-        key = { page -> readerArticles[page].id },
-    ) { page ->
-        if (readerArticles.isEmpty()) return@HorizontalPager
-        val articleItem = readerArticles[page].withArticleFlags(articleStates[readerArticles[page].id])
-        val article = selectedDetails[articleItem.id]?.withArticleFlags(articleStates[articleItem.id])
-        if (article != null) {
-            ArticleDetailView(
-                observeOfflineText = observeOfflineText,
-                article = article,
-                isActive = foreground && page == pagerState.currentPage,
-                allowRenderer = page == pagerState.currentPage ||
-                    (retainAdjacentRenderers && abs(page - pagerState.currentPage) <= 1),
-                onOpenOriginal = { onOpenOriginal(article) },
-                onDisplayed = { onArticleDisplayed(article.id) },
-                onCompleted = { onArticleCompleted(article.id) },
-                onBodyReady = { onArticleBodyReady(article.id) },
-                preferHtml = preferHtml,
-                onPreferHtmlChanged = onPreferHtmlChanged,
-                appearance = appearance,
-            )
-        } else {
-            // articleItem already has read state applied from the queue
-            ArticlePlaceholderView(article = articleItem)
+    val boundaryPull = rememberReaderBoundaryPull(pagerState, atFeedStart, atFeedEnd)
+    Box(
+        Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .clipToBounds()
+            .nestedScroll(boundaryPull),
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .graphicsLayer { translationX = boundaryPull.translation },
+            beyondViewportPageCount = 1,
+            // Boundary pull is handled outside the pager, including single-article feeds.
+            overscrollEffect = null,
+            key = { page -> readerArticles[page].id },
+        ) { page ->
+            if (readerArticles.isEmpty()) return@HorizontalPager
+            val articleItem = readerArticles[page].withArticleFlags(articleStates[readerArticles[page].id])
+            val article = selectedDetails[articleItem.id]?.withArticleFlags(articleStates[articleItem.id])
+            if (article != null) {
+                ArticleDetailView(
+                    observeOfflineText = observeOfflineText,
+                    article = article,
+                    loadError = loadError.takeIf { article.id == selectedArticle.id },
+                    onRetry = { onArticleSelected(article.id) },
+                    isActive = foreground && page == pagerState.currentPage,
+                    allowRenderer = page == pagerState.currentPage ||
+                        (retainAdjacentRenderers && abs(page - pagerState.currentPage) <= 1),
+                    onOpenOriginal = { onOpenOriginal(article) },
+                    onDisplayed = { onArticleDisplayed(article.id) },
+                    onCompleted = { onArticleCompleted(article.id) },
+                    onBodyReady = { onArticleBodyReady(article.id) },
+                    preferHtml = preferHtml,
+                    onPreferHtmlChanged = onPreferHtmlChanged,
+                    appearance = appearance,
+                )
+            } else {
+                // articleItem already has read state applied from the queue
+                ArticlePlaceholderView(article = articleItem)
+            }
         }
     }
 }
@@ -241,6 +276,8 @@ private fun ArticleDetailView(
     onPreferHtmlChanged: (Boolean) -> Unit,
     appearance: ReaderAppearance,
     observeOfflineText: (String) -> Flow<Boolean>,
+    loadError: String? = null,
+    onRetry: () -> Unit = {},
 ) {
     // Detail refreshes/enrichment can arrive out of order. Keep the rendered
     // snapshot monotonic so a late partial response cannot remove paragraphs,
@@ -252,7 +289,11 @@ private fun ArticleDetailView(
     val richHtml = retainedContent.html?.takeIf { preferHtml && allowRenderer }
     val bodyKind = when {
         richHtml != null -> ReaderBodyKind.Rich
-        preferHtml && article.isRichContentPending() -> ReaderBodyKind.PendingRich
+        loadError != null -> ReaderBodyKind.Error
+        // Pager prefetch can compose a page outside the retained WebView window.
+        // Keep that rich page lightweight instead of laying out its entire text
+        // fallback during the current swipe. Its renderer is enabled before entry.
+        preferHtml && (retainedContent.html != null || article.isRichContentPending()) -> ReaderBodyKind.PendingRich
         else -> ReaderBodyKind.Text
     }
     val scrollPosition = rememberSaveable(article.id, saver = ReaderScrollPosition.Saver) {
@@ -368,18 +409,12 @@ private fun ArticleDetailView(
             }
         }
 
-        Column(modifier = Modifier.fillMaxWidth().onGloballyPositioned {
+        Box(modifier = Modifier.fillMaxWidth().onGloballyPositioned {
             // Preparation/Chromium callbacks do not prove the scroll container
             // has remeasured. Release restoration only after the body is placed.
             if (bodyPrepared && placedBody == 0) placedBody = 1
         }) {
             if (richHtml != null) {
-                // Keep the static placeholder until the renderer has a
-                // measured first frame. Restoration follows its removal
-                // and the placement of the resulting body layout.
-                if (!bodyPrepared) {
-                    ArticleHtmlSkeleton()
-                }
                 ReaderHtmlContent(
                     documentId = article.id,
                     html = richHtml,
@@ -404,6 +439,18 @@ private fun ArticleDetailView(
                         placedBody = 0
                     },
                 )
+                // Cover the renderer until its first measured frame is ready.
+                // Stacking the placeholder above it moved the body upward when
+                // loading finished, including while an article was mid-swipe.
+                if (!bodyPrepared) {
+                    Box(Modifier.matchParentSize().background(backgroundColor))
+                    ArticleHtmlSkeleton()
+                }
+            } else if (bodyKind == ReaderBodyKind.Error) {
+                Column {
+                    Text(loadError.orEmpty(), modifier = Modifier.testTag("reader-load-error"))
+                    TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry_loading)) }
+                }
             } else if (bodyKind == ReaderBodyKind.PendingRich) {
                 // Keep Rich selected while the next article's detail request
                 // completes. Showing the text snapshot here made navigation
@@ -436,7 +483,7 @@ private fun ArticleDetailView(
     )
 }
 
-private enum class ReaderBodyKind { Rich, PendingRich, Text }
+private enum class ReaderBodyKind { Rich, PendingRich, Text, Error }
 
 private fun ArticleDetail.isRichContentPending(): Boolean =
     contentHtml.isNullOrBlank() &&
@@ -571,9 +618,15 @@ internal fun ReaderHtmlContent(
         AndroidView(
             modifier = Modifier.fillMaxWidth().height((fixedHeightDp ?: webViewHeightDp).dp),
             factory = { context ->
-                ReaderWebView(context).also { view = it }
+                ReaderWebView(context).also {
+                    // Chromium can submit its initial surface before Compose places
+                    // this body. The loading placeholder owns that interval.
+                    it.alpha = 0f
+                    view = it
+                }
             },
             update = { renderer ->
+                if (visualReady && hasMeasuredHeight) renderer.alpha = 1f
                 // Enrichment can replace remembered document state without
                 // replacing this view. Every callback must target that state.
                 renderer.onHeight = { height ->

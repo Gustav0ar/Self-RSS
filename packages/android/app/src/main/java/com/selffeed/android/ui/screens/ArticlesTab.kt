@@ -35,17 +35,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxDefaults
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -83,8 +86,9 @@ import com.selffeed.android.ui.articles.withArticleFlags
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.shouldOfferUnreadUndo
 import com.selffeed.android.ui.utils.formatPublishedAt
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,16 +102,28 @@ fun ArticlesTab(
     val pullToRefreshState = rememberPullToRefreshState()
     var keepTopAfterRefresh by remember { mutableStateOf(false) }
     var wasRefreshing by remember { mutableStateOf(false) }
-    val isPagingInitialLoad = pagedArticles.loadState.refresh is LoadState.Loading
+    val refreshState = pagedArticles.loadState.refresh
     val articleCount = pagedArticles.itemCount
+    var settledEmpty by remember(state.queryKey) { mutableStateOf(false) }
+    if ((refreshState is LoadState.NotLoading && !state.isManualRefreshInProgress) || articleCount > 0) {
+        settledEmpty = articleCount == 0
+    }
 
     LaunchedEffect(listState, pagedArticles) {
         snapshotFlow {
-            val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
-            listState.layoutInfo.visibleItemsInfo
-                .mapNotNull { item -> loadedArticlesById[item.key as? String] }
+            // Warming and state reconciliation belong to the settled viewport.
+            // Rows passing during a fling should not start network requests.
+            if (listState.isScrollInProgress) null else listState.layoutInfo.visibleItemsInfo
+                .mapNotNull { it.key as? String }
                 .take(100)
         }
+            .filterNotNull()
+            // Layout changes on every scroll frame. Resolve the loaded articles
+            // only when visible keys change, not for each pixel of movement.
+            .map { visibleKeys ->
+                val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
+                visibleKeys.mapNotNull(loadedArticlesById::get)
+            }
             .distinctUntilChanged { previous, current ->
                 previous.map { it.id } == current.map { it.id }
             }
@@ -116,7 +132,9 @@ fun ArticlesTab(
     // Automatic paging and backend reconciliation never drive this indicator.
     // A manual refresh owns it continuously until that operation completes.
     val isRefreshing = state.isManualRefreshInProgress
-    val isEmpty = articleCount == 0 && !isRefreshing && !isPagingInitialLoad
+    // An empty result is content too. Keep it mounted while the same query
+    // revalidates, without claiming a new query is empty before it has loaded.
+    val isEmpty = articleCount == 0 && refreshState !is LoadState.Error && settledEmpty
 
     LaunchedEffect(isRefreshing, articleCount) {
         if (!wasRefreshing && isRefreshing && listState.firstVisibleItemIndex == 0) {
@@ -392,29 +410,39 @@ private fun ArticleListRow(
     density: DensityPreference,
     observeOfflineText: (String) -> Flow<Boolean>,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState()
-    var pendingToggle by remember { mutableStateOf(false) }
-    // Snapshot the read state at the moment the user started the swipe so
-    // a fast double-swipe (or a recomposition that flips `isRead`) cannot
-    // toggle the article twice in a row.
-    val readAtSwipeStart = remember { mutableStateOf(isRead) }
+    val swipeDensity = LocalDensity.current
+    val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
+    // A saved dismissed position replays the toggle when this row returns to the viewport.
+    val dismissState = remember(swipeDensity) {
+        SwipeToDismissBoxState(
+            initialValue = SwipeToDismissBoxValue.Settled,
+            density = swipeDensity,
+            positionalThreshold = positionalThreshold,
+        )
+    }
+    var pendingRead by remember { mutableStateOf<Boolean?>(null) }
+    val currentIsRead by rememberUpdatedState(isRead)
+    val currentOnToggleRead by rememberUpdatedState(onToggleRead)
 
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart && !pendingToggle) {
-            readAtSwipeStart.value = isRead
-            pendingToggle = true
-            delay(250)
-            onToggleRead(!readAtSwipeStart.value)
-            dismissState.reset()
-            pendingToggle = false
+    LaunchedEffect(dismissState) {
+        snapshotFlow { dismissState.currentValue }.collect { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                val read = !currentIsRead
+                pendingRead = read
+                // Apply the action before resetting, since it can remove this row from the list.
+                currentOnToggleRead(read)
+                dismissState.reset()
+                pendingRead = null
+            }
         }
     }
 
-    val effectiveIsRead = if (pendingToggle) !isRead else isRead
+    val effectiveIsRead = pendingRead ?: isRead
 
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,
+        gesturesEnabled = pendingRead == null,
         backgroundContent = {
             val color =
                 if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
@@ -550,7 +578,10 @@ internal fun ArticleCard(
 ) {
     val isRead = isReadOverride ?: article.isRead
     val verticalPadding = if (density == DensityPreference.COMPACT) 8.dp else 12.dp
-    val heroSize = if (density == DensityPreference.COMPACT) 44.dp else 56.dp
+    val heroSize = dimensionResource(
+        if (density == DensityPreference.COMPACT) R.dimen.article_thumbnail_size_compact
+        else R.dimen.article_thumbnail_size,
+    )
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.background,

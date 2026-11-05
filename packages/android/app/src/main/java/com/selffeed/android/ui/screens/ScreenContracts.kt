@@ -71,6 +71,8 @@ data class ArticleTabState(
     val feedCount: Int = 0,
     val refreshBlockedGuidance: PresentationText? = null,
     val savedOnly: Boolean = false,
+    /** Feed and filter identity, excluding background refresh generations. */
+    val queryKey: String = "",
 )
 
 data class ArticleTabActions(

@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -68,6 +69,7 @@ data class ArticlesUiState(
     val autoMarkReadMode: AutoMarkReadPreference = AutoMarkReadPreference.ON_NAVIGATE,
     val statusMessage: PresentationText? = null,
     val errorMessage: PresentationText? = null,
+    val articleLoadError: PresentationText? = null,
 )
 
 sealed interface ArticleFeatureEvent {
@@ -116,6 +118,8 @@ class ArticlesViewModel @Inject constructor(
 
     private val openArticleSequence = AtomicLong(0)
     private var openArticleJob: Job? = null
+    private val contentRefreshJobs = mutableMapOf<String, Job>()
+    private val contentRefreshPermits = kotlinx.coroutines.sync.Semaphore(2)
     private data class SavedAction(val job: Job, val saved: Boolean, val projection: ArticleStateProjection.Action)
     private val savedActions = mutableMapOf<String, SavedAction>()
     private val readerPublicationMutex = Mutex()
@@ -199,6 +203,10 @@ class ArticlesViewModel @Inject constructor(
         if (sessionKey != null && readingSessionKey == sessionKey && readingSessionRestored) return
         val canRestore = sessionKey != null && savedStateHandle.get<String>("reading.session") == sessionKey
         val articleId = if (canRestore) savedStateHandle.get<String>("reading.article") else null
+        // Room restores the flag; the session must also restore why auto-read should leave it alone.
+        val manuallyUnread = if (canRestore) {
+            savedStateHandle.get<ArrayList<String>>("reading.manuallyUnread").orEmpty()
+        } else emptyList()
         val restored = if (canRestore) ArticlesUiState(
             selectedFeedId = savedStateHandle["reading.feed"],
             selectedCategoryId = savedStateHandle["reading.category"],
@@ -208,6 +216,7 @@ class ArticlesViewModel @Inject constructor(
         ) else ArticlesUiState()
         clearReadingSession()
         readingSessionKey = sessionKey
+        readStateManager.restoreManuallyUnread(manuallyUnread)
         preserveRestoredFiltersOnBootstrap = canRestore
         _state.value = restored
         refreshArticlePager()
@@ -253,6 +262,7 @@ class ArticlesViewModel @Inject constructor(
         savedStateHandle["reading.saved"] = current.savedOnly
         savedStateHandle["reading.sort"] = current.sort
         savedStateHandle["reading.hideRead"] = current.hideRead
+        savedStateHandle["reading.manuallyUnread"] = ArrayList(readStateManager.manuallyUnreadArticleIds())
     }
 
     fun setScope(feedId: String?, categoryId: String?) {
@@ -339,7 +349,7 @@ class ArticlesViewModel @Inject constructor(
 
     fun warmVisibleArticles(articles: List<ArticleListItem>) {
         visibleArticleIds.value = articles.take(100).map { it.id }.toSet()
-        articleWarmingManager.warmVisibleArticles(articles)
+        if (_state.value.selectedArticle == null) articleWarmingManager.warmVisibleArticles(articles)
     }
 
     /**
@@ -365,6 +375,7 @@ class ArticlesViewModel @Inject constructor(
         val openRequestId = openArticleSequence.incrementAndGet()
         openArticleJob?.cancel()
         enrichmentManager.cancelEnrichment()
+        _state.update { it.copy(articleLoadError = null) }
         val current = _state.value
         val activeQueue = current.readerQueue.takeIf { queue -> queue.any { it.id == id } }
             ?: current.items
@@ -400,7 +411,6 @@ class ArticlesViewModel @Inject constructor(
             // cache/database/network work for the canonical detail.
             yield()
             if (openRequestId != openArticleSequence.get()) return@launch
-            if (optimisticArticle != null) articleWarmingManager.warmAdjacentArticles(id, activeQueue)
             when (val result = repository.article(id, forceRefresh)) {
                 is AppResult.Success -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
@@ -414,7 +424,11 @@ class ArticlesViewModel @Inject constructor(
 
                 is AppResult.Error -> {
                     if (openRequestId != openArticleSequence.get()) return@launch
-                    _state.update { it.copy(errorMessage = PresentationText.dynamic(result.message)) }
+                    _state.update {
+                        val message = PresentationText.dynamic(result.message)
+                        if (it.selectedArticle?.id == id) it.copy(articleLoadError = message)
+                        else it.copy(errorMessage = message)
+                    }
                 }
             }
         }
@@ -465,6 +479,7 @@ class ArticlesViewModel @Inject constructor(
         _state.update {
             it.copy(
                 selectedArticle = null,
+                articleLoadError = null,
                 readerQueue = emptyList(),
                 readerQueueTracksPaging = false,
                 readerDetails = emptyMap(),
@@ -475,6 +490,8 @@ class ArticlesViewModel @Inject constructor(
     }
 
     private fun cancelReaderWork() {
+        contentRefreshJobs.values.toList().forEach(Job::cancel)
+        contentRefreshJobs.clear()
         openArticleSequence.incrementAndGet()
         openArticleJob?.cancel()
         openArticleJob = null
@@ -542,15 +559,18 @@ class ArticlesViewModel @Inject constructor(
             read = read,
             source = source,
             onError = {
+                saveReadingSession()
                 stateProjection.restartObservation()
                 _state.update {
                     it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed))
                 }
             },
             onConfirm = { confirmed, previous ->
+                saveReadingSession()
                 if (_state.value.hideRead && previous != confirmed) refreshArticlePager()
             },
         )
+        saveReadingSession()
     }
 
     fun markAllRead() {
@@ -651,9 +671,40 @@ class ArticlesViewModel @Inject constructor(
         when (event) {
             ArticleFeatureEvent.ArticleStateRefreshRequested -> stateProjection.restartObservation()
             is ArticleFeatureEvent.ArticlesChanged -> {
-                stateProjection.restartObservation()
-                val selectedId = _state.value.selectedArticle?.id
-                if (selectedId != null && event.articleId == selectedId) openArticle(selectedId, forceRefresh = true)
+                if (event.articleId == null) stateProjection.restartObservation()
+                val selected = _state.value.selectedArticle
+                val selectedId = selected?.id
+                val needsBody = selected != null && selected.contentHtml.isNullOrBlank() && selected.contentText.isNullOrBlank()
+                if (selectedId != null && (event.articleId == selectedId || (event.articleId == null && needsBody))) {
+                    openArticle(selectedId, forceRefresh = true)
+                } else if (event.articleId != null) {
+                    refreshVisibleArticleContent(event.articleId)
+                }
+            }
+        }
+    }
+
+    private fun refreshVisibleArticleContent(articleId: String) {
+        fun isVisible(): Boolean {
+            val current = _state.value
+            val selectedId = current.selectedArticle?.id
+                ?: return articleId in visibleArticleIds.value.orEmpty()
+            val index = current.readerQueue.indexOfFirst { it.id == selectedId }
+            return current.readerQueue.getOrNull(index - 1)?.id == articleId ||
+                current.readerQueue.getOrNull(index + 1)?.id == articleId
+        }
+        if (!isVisible() || contentRefreshJobs[articleId]?.isActive == true) return
+        contentRefreshJobs[articleId] = viewModelScope.launch {
+            try {
+                contentRefreshPermits.withPermit {
+                    if (!isVisible()) return@withPermit
+                    when (val result = repository.refreshArticleDetail(articleId)) {
+                        is AppResult.Success -> if (isVisible()) retainWarmedArticles(listOf(result.data))
+                        is AppResult.Error -> Unit // Keep any usable content; opening can retry.
+                    }
+                }
+            } finally {
+                contentRefreshJobs.remove(articleId)
             }
         }
     }

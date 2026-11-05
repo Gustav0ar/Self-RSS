@@ -131,16 +131,14 @@ internal class ReaderWebView(context: Context) : WebView(context) {
         loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", baseUrl)
     }
 
-    /** Resuming a view grants permission for a new gesture; it never resumes playback. */
+    /** Activating a page grants permission for a new gesture; it never resumes playback. */
     fun setReaderActive(value: Boolean) {
         if (released || (lifecycleApplied && active == value)) return
         lifecycleApplied = true
         active = value
-        if (value) onResume()
         evaluateJavascript("window.SelfFeedApp && window.SelfFeedApp.setActive($value);", null)
         if (!value) {
             runCatching { fullscreen?.close() }
-            onPause()
         }
     }
 
@@ -194,6 +192,22 @@ internal class ReaderFullscreenMedia(
 @Composable
 internal fun ReaderViewLifecycle(view: ReaderWebView?, primary: Boolean) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // Adjacent pages must keep rendering while the activity is visible. Pausing
+    // their WebViews blanks the incoming page until it crosses the swipe midpoint.
+    // Media permission is separate and remains limited to the primary page below.
+    DisposableEffect(view, lifecycle) {
+        fun updateRendering() {
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) view?.onResume()
+            else view?.onPause()
+        }
+        val observer = LifecycleEventObserver { _, _ -> updateRendering() }
+        lifecycle.addObserver(observer)
+        updateRendering()
+        onDispose {
+            lifecycle.removeObserver(observer)
+            view?.onPause()
+        }
+    }
     DisposableEffect(view, lifecycle, primary) {
         fun update() { view?.setReaderActive(primary && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
         val observer = LifecycleEventObserver { _, _ -> update() }

@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import com.selffeed.android.R
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.metrics.performance.PerformanceMetricsState
@@ -33,6 +34,10 @@ fun SelfFeedAppRoute(
         return
     }
     val authState by authViewModel.state.collectAsStateWithLifecycle()
+    val applicationContext = LocalContext.current.applicationContext
+    LaunchedEffect(authState.isAuthenticated, applicationContext) {
+        if (authState.isAuthenticated) prepareReaderWebView(applicationContext)
+    }
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
     LaunchedEffect(chromeState.sessionReady) {
         if (chromeState.sessionReady) authViewModel.bootstrap()
@@ -44,7 +49,7 @@ fun SelfFeedAppRoute(
         if (!authState.loading && session == null) appViewModel.clearReadingSession()
     }
     // Always compose the host, including its empty stack, so logout pops and clears old models.
-    AccountScreenScope(session?.ownerId) { ownerId ->
+    AccountScreenScope(session?.ownerId, restoring = authState.loading) { ownerId ->
         AuthenticatedAppRoute(
             accountOwnerId = ownerId,
             authState = authState,

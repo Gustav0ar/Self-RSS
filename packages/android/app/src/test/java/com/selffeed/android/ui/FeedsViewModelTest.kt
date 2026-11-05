@@ -723,6 +723,9 @@ class FeedsViewModelTest {
 
         advanceTimeBy(750L)
         runCurrent()
+        coVerify(exactly = 1) { repository.syncAllFeedsStatus() }
+        advanceTimeBy(9_250L)
+        runCurrent()
 
         assertEquals(false, viewModel.state.value.syncInBackground)
         assertEquals(1L, viewModel.state.value.syncRevision)

@@ -6,6 +6,7 @@ import com.selffeed.android.network.ReadStateEventPayload
 import com.selffeed.android.network.ReadStateSyncEvent
 import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.network.SseEventParser
+import com.selffeed.android.network.SseMessage
 import com.selffeed.android.network.toReadStateEvent
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -55,9 +56,12 @@ class ReadStateStreamClient(
     fun events(session: ApiSession, isLoggedIn: () -> Boolean): Flow<ReadStateSyncEvent> = flow {
         var attempt = 0
         while (coroutineContext.isActive && isLoggedIn()) {
+            var connectedAtNanos: Long? = null
             try {
                 eventsOnce(session).collect { event ->
-                    attempt = 0
+                    if (event is RealtimeConnectedEvent && connectedAtNanos == null) {
+                        connectedAtNanos = System.nanoTime()
+                    }
                     emit(event)
                 }
             } catch (e: CancellationException) {
@@ -67,6 +71,12 @@ class ReadStateStreamClient(
             }
 
             if (!coroutineContext.isActive || !isLoggedIn()) break
+            // An acknowledgement followed by an immediate disconnect is still
+            // a failed connection. Only a stable stream resets retry backoff.
+            if (connectedAtNanos?.let {
+                    System.nanoTime() - it >= TimeUnit.MILLISECONDS.toNanos(STABLE_CONNECTION_MS)
+                } == true
+            ) attempt = 0
             delay(readStateReconnectDelay(attempt))
             attempt++
         }
@@ -113,23 +123,29 @@ class ReadStateStreamClient(
                             return
                         }
                         lastEventTimestampMs.set(System.currentTimeMillis())
-                        this@stream.trySend(RealtimeConnectedEvent())
-
                         val parser = SseEventParser()
+                        var connected = false
+                        fun publish(message: SseMessage) {
+                            // The server can reject a subscription inside an HTTP 200
+                            // stream. Headers alone must not trigger a library refresh.
+                            when (message.eventName) {
+                                "read-state.error" -> throw IOException("Read-state subscription unavailable")
+                                "read-state.connected" -> if (!connected) {
+                                    connected = true
+                                    this@stream.trySend(RealtimeConnectedEvent())
+                                }
+                                else -> message.toReadStateEvent(readStateEventAdapter)
+                                    ?.let { this@stream.trySend(it) }
+                            }
+                        }
                         try {
                             val source = response.body.source()
                             while (!call.isCanceled()) {
                                 val line = source.readUtf8Line() ?: break
                                 lastEventTimestampMs.set(System.currentTimeMillis())
-                                parser.pushLine(line)
-                                    ?.toReadStateEvent(readStateEventAdapter)
-                                    ?.also { lastEventTimestampMs.set(System.currentTimeMillis()) }
-                                    ?.let { this@stream.trySend(it) }
+                                parser.pushLine(line)?.let(::publish)
                             }
-                            parser.flush()
-                                ?.toReadStateEvent(readStateEventAdapter)
-                                ?.also { lastEventTimestampMs.set(System.currentTimeMillis()) }
-                                ?.let { this@stream.trySend(it) }
+                            parser.flush()?.let(::publish)
                             this@stream.close()
                         } catch (e: IOException) {
                             if (call.isCanceled()) {
@@ -156,6 +172,7 @@ class ReadStateStreamClient(
     private companion object {
         const val READ_STATE_RECONNECT_INITIAL_DELAY_MS = 1_000L
         const val READ_STATE_RECONNECT_MAX_DELAY_MS = 30_000L
+        const val STABLE_CONNECTION_MS = 60_000L
         /** Interval between heartbeat checks for stuck connection detection. */
         const val HEARTBEAT_CHECK_INTERVAL_MS = 30_000L
 

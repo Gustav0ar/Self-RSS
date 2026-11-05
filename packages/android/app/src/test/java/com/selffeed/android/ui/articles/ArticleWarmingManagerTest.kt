@@ -38,10 +38,10 @@ class ArticleWarmingManagerTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) { repository.prefetchArticle("a6") }
-        (7..12).forEach { index ->
+        (7..9).forEach { index ->
             coVerify(exactly = 1) { repository.prefetchArticle("a$index") }
         }
-        (2..5).forEach { index ->
+        (5..5).forEach { index ->
             coVerify(exactly = 1) { repository.prefetchArticle("a$index") }
         }
         coVerify(exactly = 0) { repository.prefetchArticle("a0") }
@@ -69,39 +69,42 @@ class ArticleWarmingManagerTest {
         manager.warmVisibleArticles(items)
         advanceUntilIdle()
 
-        (0..5).forEach { index ->
+        (0..3).forEach { index ->
             coVerify(exactly = 1) { repository.prefetchArticle("a$index") }
             coVerify(exactly = 1) { repository.enrichArticle("a$index", false) }
         }
     }
 
     @Test
-    fun `rapid adjacent warming does not cancel an in-flight article needed for a swipe`() = runTest {
+    fun `new window cancels obsolete warming and limits concurrent requests`() = runTest {
         val repository = mockk<SelfFeedRepository>()
-        val firstArticle = CompletableDeferred<AppResult<ArticleDetail>>()
         every { repository.cachedArticleDetail(any()) } returns null
         every { repository.prefetchHeroImages(any()) } just Runs
-        coEvery { repository.prefetchArticle(any()) } answers {
-            AppResult.Success(detail(firstArg()))
+        val running = mutableSetOf<String>()
+        var peak = 0
+        coEvery { repository.prefetchArticle(any()) } coAnswers {
+            val id = firstArg<String>()
+            running.add(id)
+            peak = maxOf(peak, running.size)
+            try { kotlinx.coroutines.awaitCancellation() } finally { running.remove(id) }
         }
-        coEvery { repository.prefetchArticle("a1") } coAnswers { firstArticle.await() }
-        val warmedIds = mutableListOf<String>()
         val manager = ArticleWarmingManager(repository)
-        manager.setScope(this)
-        manager.setOnArticlesWarmed { details -> warmedIds += details.map { it.id } }
+        manager.setScope(backgroundScope)
         val items = (0..12).map { item("a$it") }
-
         manager.warmAdjacentArticles("a0", items)
+        runCurrent()
+        assertEquals(setOf("a1", "a2"), running)
         manager.warmAdjacentArticles("a6", items)
-        firstArticle.complete(AppResult.Success(detail("a1")))
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) { repository.prefetchArticle("a1") }
-        assertTrue(warmedIds.contains("a1"))
+        runCurrent()
+        assertEquals(setOf("a7", "a8"), running)
+        assertEquals(2, peak)
+        manager.cancelWarming()
+        runCurrent()
+        assertTrue(running.isEmpty())
     }
 
     @Test
-    fun `publishes warmed details and prefetches embedded article images`() = runTest {
+    fun `publishes warmed details but only prefetches list thumbnails`() = runTest {
         val repository = mockk<SelfFeedRepository>()
         val imageRequests = mutableListOf<Iterable<String?>>()
         every { repository.cachedArticleDetail(any()) } returns null
@@ -127,9 +130,7 @@ class ArticleWarmingManagerTest {
 
         assertEquals(listOf("a1"), warmed.map { it.id })
         val requestedUrls = imageRequests.flatMap { it.toList() }.filterNotNull()
-        assertTrue("https://example.com/hero.jpg" in requestedUrls)
-        assertTrue("https://example.com/body.jpg" in requestedUrls)
-        assertTrue("https://example.com/video.mp4" !in requestedUrls)
+        assertEquals(listOf("https://example.com/hero.jpg"), requestedUrls)
     }
 
     @Test
@@ -176,7 +177,7 @@ class ArticleWarmingManagerTest {
 
         manager.cancelWarming()
 
-        assertEquals(3, cancelled)
+        assertEquals(2, cancelled)
     }
 
     private fun item(id: String) = ArticleListItem(

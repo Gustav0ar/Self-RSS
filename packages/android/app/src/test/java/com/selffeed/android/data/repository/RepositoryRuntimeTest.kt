@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import okio.BufferedSource
 import okio.Source
@@ -30,8 +31,52 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 class RepositoryRuntimeTest {
     private val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test")
+
+    @Test fun `connectivity loss stops retrying before the next transport attempt`() = runTest {
+        var online = true
+        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", isOnline = { online })
+        var attempts = 0
+        val result = runtime.safeCall {
+            runtime.withRetry {
+                attempts++
+                online = false
+                throw IOException("Disconnected")
+            }
+        }
+        assertTrue(result is AppResult.Error)
+        assertEquals(1, attempts)
+    }
+
+    @Test fun `rate limiting does not trigger immediate retries`() = runTest {
+        var calls = 0
+        runtime.safeCall {
+            runtime.withRetry {
+                calls++
+                throw HttpException(Response.error<Unit>(429, "rate limited".toResponseBody()))
+            }
+        }
+        assertEquals(1, calls)
+    }
+
+    @Test fun `Retry-After pauses subsequent reads for the same account without blocking another account`() = runTest {
+        var now = 1_000L
+        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", nowMs = { now })
+        val raw = okhttp3.Response.Builder().request(okhttp3.Request.Builder().url("https://example.com").build())
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(429).message("Rate limited")
+            .header("Retry-After", "30").build()
+        val failure = HttpException(Response.error<Unit>("limited".toResponseBody(), raw))
+        var calls = 0
+        runtime.safeCall { runtime.withRetry(requestScope = "a") { calls++; throw failure } }
+        runtime.safeCall { runtime.withRetry(requestScope = "a") { calls++ } }
+        assertEquals(1, calls)
+        runtime.withRetry(requestScope = "b") { calls++ }
+        now += 30_000
+        runtime.withRetry(requestScope = "a") { calls++ }
+        assertEquals(3, calls)
+    }
 
     @Test fun `cache epoch invalidates values while preserving prefix invalidation`() = runTest {
         val epoch = AtomicLong()

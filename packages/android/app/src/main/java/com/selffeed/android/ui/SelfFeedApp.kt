@@ -5,6 +5,8 @@ import android.net.Uri
 import com.selffeed.android.ui.articles.withArticleFlags
 
 import com.selffeed.android.data.CategoryMoveDirection
+import com.selffeed.android.data.ArticlePageQuery
+import com.selffeed.android.data.remoteKey
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
@@ -213,6 +215,7 @@ fun SelfFeedApp(
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeTab = state.chrome.activeTab
     val selectedArticle = state.articles.selectedArticle
+    val readerVisible = selectedArticle != null && activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED)
     val selectedFeedId = state.articles.selectedFeedId
     val selectedCategoryId = state.articles.selectedCategoryId
     val readerFeedTitle = state.articles.currentReaderFeedTitle()
@@ -234,6 +237,7 @@ fun SelfFeedApp(
                     snackbarHostState.showSnackbar(
                         message = markedUnreadMessage,
                         actionLabel = undoLabel,
+                        duration = SnackbarDuration.Short,
                     ) == androidx.compose.material3.SnackbarResult.ActionPerformed
                 ) {
                     actions.onToggleRead(articleId, true)
@@ -334,6 +338,22 @@ fun SelfFeedApp(
     } else {
         articleSnapshot
     }
+    val pagingSettled = articlePagingItems.loadState.refresh is LoadState.NotLoading
+    // Paging can finish an append before its snapshot has reached the retained reader queue.
+    val readerHasLatestPage = articleSnapshot.lastOrNull()?.let { last ->
+        articleQueue.any { it.id == last.id }
+    } ?: true
+    val readerAtFeedStart = if (activeTab == HomeTab.SEARCH) {
+        !state.search.loading && state.search.errorMessage == null
+    } else {
+        pagingSettled && articlePagingItems.loadState.prepend.endOfPaginationReached
+    }
+    val readerAtFeedEnd = if (activeTab == HomeTab.SEARCH) {
+        !state.search.loading && !state.search.loadingMore && !state.search.hasMore &&
+            !state.search.resultLimitReached && state.search.errorMessage == null
+    } else {
+        pagingSettled && readerHasLatestPage && articlePagingItems.loadState.append.endOfPaginationReached
+    }
     val feedTabState = remember(
         state.feeds.categories,
         state.feeds.feeds,
@@ -384,6 +404,9 @@ fun SelfFeedApp(
         selectedFeedId,
         state.feeds.feeds,
         state.articles.savedOnly,
+        selectedCategoryId,
+        state.articles.hideRead,
+        state.articles.sort,
     ) {
         val selectedLifecycle = state.feeds.feeds
             .firstOrNull { it.id == selectedFeedId }
@@ -399,6 +422,13 @@ fun SelfFeedApp(
             feedCount = state.feeds.feeds.size,
             refreshBlockedGuidance = selectedLifecycle?.takeIf { it.refreshBlocked }?.refreshGuidance,
             savedOnly = state.articles.savedOnly,
+            queryKey = ArticlePageQuery(
+                feedId = selectedFeedId,
+                categoryId = selectedCategoryId,
+                unreadOnly = state.articles.hideRead,
+                savedOnly = state.articles.savedOnly,
+                sort = state.articles.sort,
+            ).remoteKey(),
         )
     }
     val searchTabState = remember(
@@ -527,11 +557,14 @@ fun SelfFeedApp(
         { preferHtml, onPreferHtmlChanged ->
             selectedArticle?.let { article ->
                 ArticleReaderPane(
-                    isVisible = activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED),
+                    isVisible = readerVisible,
+                    atFeedStart = readerAtFeedStart,
+                    atFeedEnd = readerAtFeedEnd,
                     onArticleBodyReady = onArticleBodyReady,
                     articles = articleQueue,
                     articleStates = state.articles.articleStates,
                     selectedArticle = article,
+                    loadError = state.articles.articleLoadError?.resolve(),
                     prefetchedArticles = state.articles.readerDetails,
                     observeOfflineText = scopedOfflineText,
                     onOpenOriginal = { openedArticle ->
@@ -592,8 +625,7 @@ fun SelfFeedApp(
                     currentLabel = topBarText,
                     showMarkAllRead = activeTab == HomeTab.ARTICLES &&
                             selectedArticle == null &&
-                            articleQueue.isNotEmpty() &&
-                            state.isOnline,
+                            articleQueue.isNotEmpty(),
                     isOnline = state.isOnline,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = { confirmMarkAllRead = true },
@@ -617,8 +649,12 @@ fun SelfFeedApp(
             },
             bottomBar = {
                 Column {
-                    key(state.auth.user?.id, state.auth.apiBaseUrl) {
-                        ArticleSyncStatusLine(state.isOnline, pendingArticleChanges, onRetryPendingChanges)
+                    // Automatic read updates briefly enter the sync queue on every
+                    // swipe. Showing that progress resizes the reader for no user action.
+                    if (!readerVisible || !state.isOnline) {
+                        key(state.auth.user?.id, state.auth.apiBaseUrl) {
+                            ArticleSyncStatusLine(state.isOnline, pendingArticleChanges, onRetryPendingChanges)
+                        }
                     }
                     AppBottomBar(
                         activeTab = activeTab,
@@ -691,7 +727,7 @@ fun SelfFeedApp(
         AlertDialog(
             onDismissRequest = { confirmMarkAllRead = false },
             title = { Text(stringResource(R.string.article_mark_all_title)) },
-            text = { Text(stringResource(R.string.article_mark_all_detail)) },
+            text = { Text(stringResource(if (state.isOnline) R.string.article_mark_all_detail else R.string.article_mark_all_offline_detail)) },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = { confirmMarkAllRead = false }) {
                     Text(stringResource(R.string.action_cancel))

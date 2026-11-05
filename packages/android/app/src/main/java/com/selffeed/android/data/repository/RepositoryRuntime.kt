@@ -17,6 +17,9 @@ import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
 class RepositoryRuntime(
@@ -27,7 +30,16 @@ class RepositoryRuntime(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val processingDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val cacheEpoch: () -> Long = { 0L },
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val isOnline: () -> Boolean = { true },
 ) {
+    private val rateLimitUntil = ConcurrentHashMap<String, Long>()
+    private class RateLimited : Exception("Too many requests. Please try again shortly.")
+    private class Offline : Exception("You're offline. Downloaded articles are still available.")
+
+    fun requireNetwork() {
+        if (!isOnline()) throw Offline()
+    }
     private val retryCount = AtomicLong(0)
     private val retryExhaustedCount = AtomicLong(0)
     private val cacheHitCount = AtomicLong(0)
@@ -67,19 +79,33 @@ class RepositoryRuntime(
 
     suspend fun <T> withRetry(
         maxAttempts: Int = READ_RETRY_MAX_ATTEMPTS,
+        requestScope: String = "default",
         initialDelayMs: Long = READ_RETRY_INITIAL_DELAY_MS,
         maxDelayMs: Long = READ_RETRY_MAX_DELAY_MS,
         block: suspend () -> T,
     ): T {
+        rateLimitUntil.entries.removeIf { it.value <= nowMs() }
+        if ((rateLimitUntil[requestScope] ?: 0L) > nowMs()) throw RateLimited()
         var currentDelayMs = initialDelayMs
         var attempt = 1
         var lastException: Exception? = null
 
         while (true) {
+            requireNetwork()
             try {
                 return block()
             } catch (e: Exception) {
                 lastException = e
+                if (e is HttpException && e.code() == 429) {
+                    val header = e.response()?.headers()?.get("Retry-After")
+                    val retryAt = header?.toLongOrNull()?.takeIf { it >= 0 }?.let {
+                        nowMs() + it.coerceAtMost(86_400) * 1_000
+                    } ?: header?.let {
+                        runCatching { ZonedDateTime.parse(it, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }.getOrNull()
+                    } ?: (nowMs() + 60_000)
+                    rateLimitUntil.merge(requestScope, retryAt.coerceAtLeast(nowMs() + 1_000), ::maxOf)
+                    throw e
+                }
                 val canRetry = attempt < maxAttempts && isRetriableException(e)
                 if (!canRetry) {
                     if (isRetriableException(e)) retryExhaustedCount.incrementAndGet()
@@ -221,7 +247,7 @@ class RepositoryRuntime(
         const val READ_RETRY_MAX_ATTEMPTS = 3
         const val READ_RETRY_INITIAL_DELAY_MS = 300L
         const val READ_RETRY_MAX_DELAY_MS = 2_000L
-        val RETRIABLE_HTTP_CODES = setOf(408, 425, 429, 500, 502, 503, 504)
+        val RETRIABLE_HTTP_CODES = setOf(408, 425, 500, 502, 503, 504)
     }
 }
 
