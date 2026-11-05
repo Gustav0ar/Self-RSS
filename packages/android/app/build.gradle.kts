@@ -371,6 +371,7 @@ dependencies {
     implementation("androidx.compose.material3.adaptive:adaptive-navigation3:1.3.0-rc01")
     implementation("androidx.paging:paging-compose:3.5.0")
     implementation("androidx.paging:paging-runtime-ktx:3.5.0")
+    implementation("androidx.webkit:webkit:1.17.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

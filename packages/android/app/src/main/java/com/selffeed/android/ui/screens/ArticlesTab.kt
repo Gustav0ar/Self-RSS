@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -86,6 +87,8 @@ import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.shouldOfferUnreadUndo
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,11 +111,19 @@ fun ArticlesTab(
 
     LaunchedEffect(listState, pagedArticles) {
         snapshotFlow {
-            val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
-            listState.layoutInfo.visibleItemsInfo
-                .mapNotNull { item -> loadedArticlesById[item.key as? String] }
+            // Warming and state reconciliation belong to the settled viewport.
+            // Rows passing during a fling should not start network requests.
+            if (listState.isScrollInProgress) null else listState.layoutInfo.visibleItemsInfo
+                .mapNotNull { it.key as? String }
                 .take(100)
         }
+            .filterNotNull()
+            // Layout changes on every scroll frame. Resolve the loaded articles
+            // only when visible keys change, not for each pixel of movement.
+            .map { visibleKeys ->
+                val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
+                visibleKeys.mapNotNull(loadedArticlesById::get)
+            }
             .distinctUntilChanged { previous, current ->
                 previous.map { it.id } == current.map { it.id }
             }
@@ -567,7 +578,10 @@ internal fun ArticleCard(
 ) {
     val isRead = isReadOverride ?: article.isRead
     val verticalPadding = if (density == DensityPreference.COMPACT) 8.dp else 12.dp
-    val heroSize = if (density == DensityPreference.COMPACT) 44.dp else 56.dp
+    val heroSize = dimensionResource(
+        if (density == DensityPreference.COMPACT) R.dimen.article_thumbnail_size_compact
+        else R.dimen.article_thumbnail_size,
+    )
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.background,

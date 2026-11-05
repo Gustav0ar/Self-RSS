@@ -23,6 +23,7 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ActivityScenario
 import com.selffeed.android.MainActivity
 import com.selffeed.android.data.FakeSelfFeedRepository
@@ -187,6 +188,40 @@ class MainActivityHiltUiTest {
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithText("Injected Article").fetchSemanticsNodes().isEmpty()
         }
+        composeRule.onAllNodesWithText("Injected Article").assertCountEquals(0)
+    }
+
+    @Test
+    fun manualUnreadSurvivesReaderNavigationAndReturnToList() {
+        repository.reset(authenticated = true, hideRead = true)
+        launchActivity()
+        waitForText("Injected Article")
+        composeRule.onNodeWithText("Injected Article").performClick()
+        waitForContentDescription("Mark as unread")
+        composeRule.onNodeWithContentDescription("Mark as unread").performClick()
+        waitForContentDescription("Mark as read")
+
+        scenario!!.moveToState(Lifecycle.State.CREATED)
+        scenario!!.moveToState(Lifecycle.State.RESUMED)
+        scenario!!.recreate()
+        waitForContentDescription("Mark as read")
+
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+        waitForText("Injected Article 2")
+        composeRule.onRoot().performTouchInput { swipeRight() }
+        waitForText("Injected Article")
+        composeRule.onNodeWithContentDescription("Mark as read").assertIsDisplayed()
+
+        composeRule.onNodeWithContentDescription("Back to list").performClick()
+        waitForContentDescription("Open feeds")
+        composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Injected Article").performClick()
+        waitForContentDescription("Back to list")
+        composeRule.onNodeWithContentDescription("Mark as read").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Mark as read").performClick()
+        waitForContentDescription("Mark as unread")
+        composeRule.onNodeWithContentDescription("Back to list").performClick()
+        waitForContentDescription("Open feeds")
         composeRule.onAllNodesWithText("Injected Article").assertCountEquals(0)
     }
 

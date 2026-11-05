@@ -1226,11 +1226,17 @@ class RssRepositoryTest {
     }
 
     @Test
-    fun `prefetchHeroImages dispatches to the image loader when online`() {
+    fun `prefetchHeroImages decodes at the list thumbnail size`() = runTest {
         onlineState.value = true
         val urls = listOf("https://example.com/a.jpg")
         repository.prefetchHeroImages(urls)
-        io.mockk.verify(atLeast = 1) { imageLoader.enqueue(any()) }
+        val requests = mutableListOf<coil3.request.ImageRequest>()
+        io.mockk.verify(exactly = 1) { imageLoader.enqueue(capture(requests)) }
+        val thumbnailPixels = (56 * context.resources.displayMetrics.density).toInt()
+        assertEquals(
+            coil3.size.Size(thumbnailPixels, thumbnailPixels),
+            requests.single().sizeResolver.size(),
+        )
     }
 
     @Test

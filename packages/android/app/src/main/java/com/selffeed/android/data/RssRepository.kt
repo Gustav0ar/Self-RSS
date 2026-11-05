@@ -43,6 +43,8 @@ import com.squareup.moshi.Moshi
 import coil3.ImageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import coil3.size.Scale
+import com.selffeed.android.R
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CancellationException
@@ -834,6 +836,7 @@ class RssRepository @Inject constructor(
 
     override fun prefetchHeroImages(imageUrls: Iterable<String?>) {
         if (!networkMonitor.unmetered.value) return
+        val thumbnailPixels = imageRequestContext.resources.getDimensionPixelSize(R.dimen.article_thumbnail_size)
         imageUrls
             .asSequence()
             .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
@@ -842,6 +845,8 @@ class RssRepository @Inject constructor(
             .forEach { imageUrl ->
                 val request = ImageRequest.Builder(imageRequestContext)
                     .data(imageUrl)
+                    .size(thumbnailPixels)
+                    .scale(Scale.FILL)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .build()

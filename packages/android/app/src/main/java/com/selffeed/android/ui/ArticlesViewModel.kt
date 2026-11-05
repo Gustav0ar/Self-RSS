@@ -203,6 +203,10 @@ class ArticlesViewModel @Inject constructor(
         if (sessionKey != null && readingSessionKey == sessionKey && readingSessionRestored) return
         val canRestore = sessionKey != null && savedStateHandle.get<String>("reading.session") == sessionKey
         val articleId = if (canRestore) savedStateHandle.get<String>("reading.article") else null
+        // Room restores the flag; the session must also restore why auto-read should leave it alone.
+        val manuallyUnread = if (canRestore) {
+            savedStateHandle.get<ArrayList<String>>("reading.manuallyUnread").orEmpty()
+        } else emptyList()
         val restored = if (canRestore) ArticlesUiState(
             selectedFeedId = savedStateHandle["reading.feed"],
             selectedCategoryId = savedStateHandle["reading.category"],
@@ -212,6 +216,7 @@ class ArticlesViewModel @Inject constructor(
         ) else ArticlesUiState()
         clearReadingSession()
         readingSessionKey = sessionKey
+        readStateManager.restoreManuallyUnread(manuallyUnread)
         preserveRestoredFiltersOnBootstrap = canRestore
         _state.value = restored
         refreshArticlePager()
@@ -257,6 +262,7 @@ class ArticlesViewModel @Inject constructor(
         savedStateHandle["reading.saved"] = current.savedOnly
         savedStateHandle["reading.sort"] = current.sort
         savedStateHandle["reading.hideRead"] = current.hideRead
+        savedStateHandle["reading.manuallyUnread"] = ArrayList(readStateManager.manuallyUnreadArticleIds())
     }
 
     fun setScope(feedId: String?, categoryId: String?) {
@@ -553,15 +559,18 @@ class ArticlesViewModel @Inject constructor(
             read = read,
             source = source,
             onError = {
+                saveReadingSession()
                 stateProjection.restartObservation()
                 _state.update {
                     it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed))
                 }
             },
             onConfirm = { confirmed, previous ->
+                saveReadingSession()
                 if (_state.value.hideRead && previous != confirmed) refreshArticlePager()
             },
         )
+        saveReadingSession()
     }
 
     fun markAllRead() {

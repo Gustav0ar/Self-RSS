@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.lifecycle.viewmodel.HiltViewModelFactory
@@ -27,12 +28,12 @@ internal const val ACCOUNT_OWNER_ID_ARGUMENT = "account.ownerId"
 
 /** Retains one account through recreation and clears its models when that entry leaves. */
 @Composable
-internal fun AccountScreenScope(ownerId: String?, content: @Composable (String) -> Unit) {
+internal fun AccountScreenScope(ownerId: String?, restoring: Boolean = false, content: @Composable (String) -> Unit) {
     val latestContent by rememberUpdatedState(content)
     val history = viewModel<AccountEntryHistory>(factory = viewModelFactory {
         initializer { AccountEntryHistory(ownerId) }
     })
-    var renderedOwner by remember(history) { mutableStateOf(history.ownerId) }
+    var renderedOwner by rememberSaveable { mutableStateOf(history.ownerId) }
     val stackOwner = renderedOwner
     val entries = rememberDecoratedNavEntries(
         backStack = listOfNotNull(stackOwner),
@@ -43,13 +44,15 @@ internal fun AccountScreenScope(ownerId: String?, content: @Composable (String) 
     ) { owner ->
         NavEntry(owner, contentKey = "account:$owner") { latestContent(owner) }
     }
-    if (stackOwner == ownerId) entries.singleOrNull()?.Content()
+    if (!restoring && stackOwner == ownerId) entries.singleOrNull()?.Content()
     SideEffect {
         // A stopped host can miss logout before recreation. First let Navigation3 observe
         // its retained entry, then pop it. Persist only membership it has actually processed,
         // so recreation between these compositions cannot orphan the previous store.
         history.ownerId = stackOwner
-        renderedOwner = ownerId
+        // Authentication starts empty after process death. Keep the saved entry until
+        // it resolves, otherwise Navigation3 discards its reader and manual unread state.
+        if (!restoring) renderedOwner = ownerId
     }
 }
 

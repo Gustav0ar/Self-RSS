@@ -126,17 +126,9 @@ class ArticleWarmingManager @Inject constructor(
         if (details.isEmpty()) return
         onArticlesWarmed(details)
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
-        repository.prefetchHeroImages(
-            details.flatMap { detail ->
-                buildList {
-                    add(detail.heroImageUrl)
-                    detail.media
-                        .asSequence()
-                        .filter { it.type == "image" }
-                        .mapTo(this) { it.url }
-                }
-            },
-        )
+        // Coil serves list thumbnails. Inline images are loaded by WebView,
+        // which has a separate cache; decoding them here only duplicates work.
+        repository.prefetchHeroImages(details.map { it.heroImageUrl })
     }
 
     private companion object {

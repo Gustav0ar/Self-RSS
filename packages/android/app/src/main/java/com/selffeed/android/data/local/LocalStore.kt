@@ -375,10 +375,10 @@ class LocalStore internal constructor(
     }
 
     fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem> =
-        dao.articlePagingSource(queryKey, ownerId)
+        AnchoredArticlePagingSource(dao.articlePagingSource(queryKey, ownerId))
 
     fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem> =
-        dao.savedArticlePagingSource(ownerId)
+        AnchoredArticlePagingSource(dao.savedArticlePagingSource(ownerId))
 
     /** Build an offline view from known metadata without claiming a fresh server snapshot. */
     suspend fun writeOfflineArticleQuery(query: ArticlePageQuery, feedIds: List<String>) = database.withTransaction {

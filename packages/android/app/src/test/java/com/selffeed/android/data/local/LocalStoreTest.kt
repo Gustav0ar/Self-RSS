@@ -1,6 +1,8 @@
 package com.selffeed.android.data.local
 
 import androidx.paging.PagingSource
+import androidx.paging.PagingConfig
+import androidx.paging.PagingState
 import androidx.room.Room
 import android.content.Context
 import java.util.UUID
@@ -470,6 +472,33 @@ class LocalStoreTest {
         )
         val page = result as PagingSource.LoadResult.Page
         assertEquals(listOf("a-1", "a-2"), page.data.map { it.id })
+    }
+
+    @Test
+    fun `repeated paging invalidations retain a deep article anchor without placeholders`() = runBlocking {
+        val articles = (0 until 200).map { sampleArticle("article-$it").copy(isSaved = true) }
+        store.writeArticleRemotePage("long-list", ApiListResponse(articles, null, false), true)
+        for (sourceFactory in listOf(
+            { store.articlePagingSource("long-list", ownerId = null) },
+            { store.savedArticlePagingSource(ownerId = null) },
+        )) {
+            var source = sourceFactory()
+            var page = source.load(PagingSource.LoadParams.Refresh(120, 30, false)) as PagingSource.LoadResult.Page
+            val anchorId = page.data[15].id
+            repeat(3) {
+                val state = PagingState(
+                    pages = listOf(page), anchorPosition = 15,
+                    config = PagingConfig(pageSize = 30, initialLoadSize = 30, enablePlaceholders = false),
+                    leadingPlaceholderCount = 0,
+                )
+                val key = source.getRefreshKey(state)
+                source.invalidate()
+                source = sourceFactory()
+                page = source.load(PagingSource.LoadParams.Refresh(key, 30, false)) as PagingSource.LoadResult.Page
+                assertEquals("Refresh must keep the same article in the viewport", anchorId, page.data[15].id)
+                assertEquals(120, page.itemsBefore)
+            }
+        }
     }
 
     @Test

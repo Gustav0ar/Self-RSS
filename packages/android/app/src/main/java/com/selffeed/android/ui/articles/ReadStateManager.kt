@@ -44,6 +44,13 @@ class ReadStateManager @Inject constructor(private val repository: ArticleReposi
     fun updateItems(items: List<ArticleListItem>) { this.items = items }
     fun updateSelectedArticle(article: ArticleDetail?) { selectedArticle = article }
 
+    fun manuallyUnreadArticleIds(): List<String> = manuallyUnread.toList()
+
+    fun restoreManuallyUnread(articleIds: List<String>) {
+        manuallyUnread.clear()
+        manuallyUnread.addAll(articleIds)
+    }
+
     internal fun retainArticleIds(articleIds: Set<String>) {
         stateProjection.retain(articleIds)
     }

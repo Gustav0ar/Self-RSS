@@ -104,7 +104,7 @@ class ArticleWarmingManagerTest {
     }
 
     @Test
-    fun `publishes warmed details and prefetches embedded article images`() = runTest {
+    fun `publishes warmed details but only prefetches list thumbnails`() = runTest {
         val repository = mockk<SelfFeedRepository>()
         val imageRequests = mutableListOf<Iterable<String?>>()
         every { repository.cachedArticleDetail(any()) } returns null
@@ -130,9 +130,7 @@ class ArticleWarmingManagerTest {
 
         assertEquals(listOf("a1"), warmed.map { it.id })
         val requestedUrls = imageRequests.flatMap { it.toList() }.filterNotNull()
-        assertTrue("https://example.com/hero.jpg" in requestedUrls)
-        assertTrue("https://example.com/body.jpg" in requestedUrls)
-        assertTrue("https://example.com/video.mp4" !in requestedUrls)
+        assertEquals(listOf("https://example.com/hero.jpg"), requestedUrls)
     }
 
     @Test

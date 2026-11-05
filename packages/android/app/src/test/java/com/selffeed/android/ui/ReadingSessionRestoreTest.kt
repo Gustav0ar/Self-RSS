@@ -67,6 +67,51 @@ class ReadingSessionRestoreTest {
     }
 
     @Test
+    fun `manual unread survives process recreation with automatic marking enabled`() = runTest {
+        var stored = detail
+        coEvery { repository.article(detail.id, any()) } coAnswers { AppResult.Success(stored) }
+        coEvery { repository.readCachedArticleDetail(detail.id) } coAnswers { stored }
+        coEvery { repository.localArticleState(detail.id) } coAnswers {
+            AppResult.Success(com.selffeed.android.data.repository.LocalArticleState(stored.isRead, false))
+        }
+        coEvery { repository.markRead(detail.id, any(), any()) } coAnswers {
+            stored = stored.copy(isRead = secondArg())
+            AppResult.Success(com.selffeed.android.data.repository.ArticleMutationReceipt("manual-unread"))
+        }
+        val first = Owner()
+        val current = articles(first)
+        current.restoreReadingSession(session)
+        current.setAutoMarkReadMode("on_open")
+        current.openArticle(detail.id)
+        runCurrent()
+        current.markRead(detail.id, false)
+        runCurrent()
+        assertFalse(stored.isRead)
+
+        val recreated = Owner(first.saveAndDestroy())
+        try {
+            val next = articles(recreated)
+            next.restoreReadingSession(session)
+            next.setAutoMarkReadMode("on_open")
+            next.onArticleDisplayed(detail.id)
+            runCurrent()
+            assertFalse("Restoring the reader must respect the manual unread choice", stored.isRead)
+            next.closeArticle()
+            next.setAutoMarkReadMode("on_navigate")
+            next.updateArticleQueueSnapshot(listOf(com.selffeed.android.network.ArticleListItem(
+                id = detail.id, feedId = detail.feedId, feedTitle = detail.feedTitle,
+                title = detail.title, isRead = false,
+            )))
+            next.openArticle(detail.id)
+            runCurrent()
+            assertFalse("Reopening the article must also preserve the restored choice", stored.isRead)
+            coVerify(exactly = 0) { repository.markRead(detail.id, true, "auto_open") }
+        } finally {
+            recreated.destroy()
+        }
+    }
+
+    @Test
     fun `fresh ViewModels restore Bundle identifiers from Room only after matching authentication`() = runTest {
         val local = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideMoshi())
         val unreadDetail = detail.copy(isRead = false)

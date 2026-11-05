@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +21,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.screens.ArticleTabActions
@@ -360,11 +363,16 @@ class ArticlesTabUiTest {
     @Test
     fun articlesTab_reportsTheActualVisibleArticlesWhenOfflineBannerIsPresent() {
         val visibleArticleIds = AtomicReference<List<String>>(emptyList())
-        val articles = (1..8).map { index -> sampleArticle("article-$index", "Article $index") }
+        val articles = (1..24).map { index -> sampleArticle("article-$index", "Article $index") }
+        val pages = MutableStateFlow(PagingData.from(articles))
+        val listState = LazyListState()
+        var callbacksDuringScroll = 0
 
         composeRule.setContent {
             SelfFeedTheme {
-                ArticlesTabWithStaticPaging(
+                ArticlesTab(
+                    listState = listState,
+                    pagedArticles = pages.collectAsLazyPagingItems(),
                     state = ArticleTabState(
                         articles = articles,
                         selectedArticleId = null,
@@ -373,6 +381,7 @@ class ArticlesTabUiTest {
                     ),
                     actions = noOpArticleActions().copy(
                         onVisibleArticles = { visible ->
+                            if (listState.isScrollInProgress) callbacksDuringScroll += 1
                             visibleArticleIds.set(visible.map { it.id })
                         },
                     ),
@@ -386,6 +395,20 @@ class ArticlesTabUiTest {
             composeRule.onNodeWithText(article.title).isDisplayed()
         }.map { it.id }
         assertEquals(displayedIds, visibleArticleIds.get())
+
+        composeRule.onNodeWithTag("articles-list").performTouchInput { swipeUp() }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            visibleArticleIds.get().isNotEmpty() && visibleArticleIds.get().first() != "article-1"
+        }
+        val scrolledIds = articles.filter { article ->
+            composeRule.onNodeWithContentDescription(
+                "Unread article: ${article.title}, from ${article.feedTitle}",
+            ).isDisplayed()
+        }.map { it.id }
+        assertEquals(scrolledIds, visibleArticleIds.get())
+        composeRule.runOnIdle {
+            assertEquals("Do not start warming and state requests for rows passing during a fling", 0, callbacksDuringScroll)
+        }
     }
 
     @Test
