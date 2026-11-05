@@ -35,17 +35,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxDefaults
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,7 +85,6 @@ import com.selffeed.android.ui.articles.withArticleFlags
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.shouldOfferUnreadUndo
 import com.selffeed.android.ui.utils.formatPublishedAt
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -398,29 +399,39 @@ private fun ArticleListRow(
     density: DensityPreference,
     observeOfflineText: (String) -> Flow<Boolean>,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState()
-    var pendingToggle by remember { mutableStateOf(false) }
-    // Snapshot the read state at the moment the user started the swipe so
-    // a fast double-swipe (or a recomposition that flips `isRead`) cannot
-    // toggle the article twice in a row.
-    val readAtSwipeStart = remember { mutableStateOf(isRead) }
+    val swipeDensity = LocalDensity.current
+    val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
+    // A saved dismissed position replays the toggle when this row returns to the viewport.
+    val dismissState = remember(swipeDensity) {
+        SwipeToDismissBoxState(
+            initialValue = SwipeToDismissBoxValue.Settled,
+            density = swipeDensity,
+            positionalThreshold = positionalThreshold,
+        )
+    }
+    var pendingRead by remember { mutableStateOf<Boolean?>(null) }
+    val currentIsRead by rememberUpdatedState(isRead)
+    val currentOnToggleRead by rememberUpdatedState(onToggleRead)
 
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart && !pendingToggle) {
-            readAtSwipeStart.value = isRead
-            pendingToggle = true
-            delay(250)
-            onToggleRead(!readAtSwipeStart.value)
-            dismissState.reset()
-            pendingToggle = false
+    LaunchedEffect(dismissState) {
+        snapshotFlow { dismissState.currentValue }.collect { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                val read = !currentIsRead
+                pendingRead = read
+                // Apply the action before resetting, since it can remove this row from the list.
+                currentOnToggleRead(read)
+                dismissState.reset()
+                pendingRead = null
+            }
         }
     }
 
-    val effectiveIsRead = if (pendingToggle) !isRead else isRead
+    val effectiveIsRead = pendingRead ?: isRead
 
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,
+        gesturesEnabled = pendingRead == null,
         backgroundContent = {
             val color =
                 if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary

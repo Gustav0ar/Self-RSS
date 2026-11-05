@@ -237,6 +237,7 @@ fun SelfFeedApp(
                     snackbarHostState.showSnackbar(
                         message = markedUnreadMessage,
                         actionLabel = undoLabel,
+                        duration = SnackbarDuration.Short,
                     ) == androidx.compose.material3.SnackbarResult.ActionPerformed
                 ) {
                     actions.onToggleRead(articleId, true)
