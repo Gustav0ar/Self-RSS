@@ -10,6 +10,24 @@ const fixtures = resolve(import.meta.dirname, '../fixtures/feeds');
 const load = (name: string) => readFileSync(resolve(fixtures, name), 'utf8');
 
 describe('parseNormalizedFeed', () => {
+	it('selects linked original images from thumbnail-only feed descriptions', async () => {
+		const parsed = await parseNormalizedFeed(load('linked-image-thumbnails.xml'), {
+			finalUrl: 'https://www.techpowerup.com/rss/news',
+		});
+		const item = parsed.items[0];
+		expect(item?.contentHtml).toContain(
+			'src="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg"',
+		);
+		expect(item?.contentHtml).toContain(
+			'src="https://www.techpowerup.com/img/fez4MvdaRXVg00BC.jpg"',
+		);
+		expect(item?.contentHtml).not.toContain('_thm.jpg');
+		expect(item?.media.map((media) => media.url)).toEqual([
+			'https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg',
+			'https://www.techpowerup.com/img/fez4MvdaRXVg00BC.jpg',
+		]);
+	});
+
 	it('normalizes RSS 2.x, preserves date fallbacks, sanitizes content, and deduplicates items', async () => {
 		const parsed = await parseNormalizedFeed(load('rss.xml'), {
 			finalUrl: 'https://example.com/feed.xml',

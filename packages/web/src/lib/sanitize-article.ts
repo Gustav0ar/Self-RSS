@@ -1,3 +1,4 @@
+import { promoteLinkedArticleImage } from '@self-feed/shared';
 import DOMPurify from 'dompurify';
 
 /**
@@ -263,6 +264,7 @@ function hardenRenderedHtml(html: string): string {
 	const doc = new DOMParser().parseFromString(html, 'text/html');
 
 	for (const img of doc.querySelectorAll('img')) {
+		promoteLinkedArticleImage(img);
 		img.setAttribute('loading', 'lazy');
 		img.setAttribute('decoding', 'async');
 		img.setAttribute('referrerpolicy', 'no-referrer');

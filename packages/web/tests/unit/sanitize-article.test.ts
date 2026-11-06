@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { sanitizeArticleHtml } from '../../src/lib/sanitize-article';
 
 describe('sanitizeArticleHtml', () => {
+	it('uses linked originals when rendering previously cached feed thumbnails', () => {
+		const result = sanitizeArticleHtml(
+			'<a href="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg" target="_blank"><img src="https://tpucdn.com/img/7eH3cdYrzhdh93b2_thm.jpg" width="232" height="130" alt="" /></a>',
+		);
+
+		expect(result).toContain('src="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg"');
+	});
+
 	it('returns empty string for falsy input', () => {
 		expect(sanitizeArticleHtml(null)).toBe('');
 		expect(sanitizeArticleHtml(undefined)).toBe('');
