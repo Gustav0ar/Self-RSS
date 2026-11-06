@@ -10,6 +10,51 @@ import {
 } from '../../src/utils/sanitizer.js';
 
 describe('sanitizeHtml', () => {
+	it('uses the linked original instead of a TechPowerUp feed thumbnail', () => {
+		const result = sanitizeHtml(
+			'<a href="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg" target="_blank" data-width="1713" data-height="960"><img src="https://tpucdn.com/img/7eH3cdYrzhdh93b2_thm.jpg" width="232" height="130" alt="" /></a>',
+		);
+
+		expect(result).toContain('src="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg"');
+		expect(extractHeroImage(result)).toBe('https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg');
+		expect(extractMediaFromHtml(result)[0]?.url).toBe(
+			'https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg',
+		);
+	});
+
+	it('removes thumbnail candidates and dimensions when selecting an original', () => {
+		const result = sanitizeHtml(
+			'<a href="/images/original.JPG?download=1"><img src="/thumb.jpg" srcset="/thumb.jpg 1x, /thumb-2x.jpg 2x" sizes="232px" width="232" height="130" alt="Laptops" onerror="alert(1)"></a>',
+		);
+
+		expect(result).toContain('src="/images/original.JPG?download=1"');
+		expect(result).toContain('alt="Laptops"');
+		for (const attribute of ['srcset=', 'sizes=', 'width=', 'height=', 'onerror=']) {
+			expect(result).not.toContain(attribute);
+		}
+		expect(sanitizeHtml(result)).toBe(result);
+	});
+
+	it.each([
+		'https://example.com/article',
+		'https://example.com/article?image=original.jpg',
+		'javascript:alert(1)//original.jpg',
+		'data:image/png;base64,original.jpg',
+		'ftp://example.com/original.jpg',
+	])('keeps image sources when their link is not a safe direct image: %s', (href) => {
+		const result = sanitizeHtml(`<a href="${href}"><img src="/thumb.jpg"></a>`);
+		expect(result).toContain('src="/thumb.jpg"');
+	});
+
+	it('preserves picture sources instead of overriding responsive image selection', () => {
+		const result = sanitizeHtml(
+			'<a href="/original.jpg"><picture><source srcset="/wide.webp 1600w" type="image/webp"><img src="/fallback.jpg" srcset="/fallback.jpg 800w, /large.jpg 1600w"></picture></a>',
+		);
+		expect(result).toContain('srcset="/wide.webp 1600w"');
+		expect(result).toContain('src="/fallback.jpg"');
+		expect(result).toContain('srcset="/fallback.jpg 800w, /large.jpg 1600w"');
+	});
+
 	it('removes script tags', () => {
 		const result = sanitizeHtml('<p>Hello</p><script>alert("xss")</script>');
 		expect(result).not.toContain('script');

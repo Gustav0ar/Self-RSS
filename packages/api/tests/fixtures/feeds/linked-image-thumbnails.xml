@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>TechPowerUp image fixture</title>
+    <link>https://www.techpowerup.com/</link>
+    <description>Linked originals from the reported Discord article.</description>
+    <item>
+      <guid>767f7184c485d5de04466c880913fe08</guid>
+      <title>Discord image fixture</title>
+      <link>https://www.techpowerup.com/354550/discord-is-rebuilding-its-app-in-rust-early-build-uses-just-290-mb-of-ram</link>
+      <description><![CDATA[
+        <div class="imgcontainer">
+          <a href="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg" target="_blank" data-width="1713" data-height="960"><img src="https://tpucdn.com/img/7eH3cdYrzhdh93b2_thm.jpg" width="232" height="130" alt="" /></a>
+          <a href="https://www.techpowerup.com/img/fez4MvdaRXVg00BC.jpg" target="_blank" data-width="894" data-height="400"><img src="https://tpucdn.com/img/fez4MvdaRXVg00BC_thm.jpg" width="291" height="130" alt="" /></a>
+        </div>
+      ]]></description>
+    </item>
+  </channel>
+</rss>

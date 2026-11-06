@@ -1,3 +1,4 @@
+import { promoteLinkedArticleImage } from '@self-feed/shared';
 import DOMPurify from 'dompurify';
 import { JSDOM, VirtualConsole } from 'jsdom';
 
@@ -126,6 +127,12 @@ purify.addHook('uponSanitizeElement', (node, data) => {
 				element.remove();
 			}
 		}
+	}
+});
+
+purify.addHook('afterSanitizeAttributes', (node) => {
+	if (node.tagName === 'IMG') {
+		promoteLinkedArticleImage(node);
 	}
 });
 
