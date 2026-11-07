@@ -94,6 +94,22 @@ describe('ReaderPane', () => {
 		vi.restoreAllMocks();
 	});
 
+	it('renders the title once when cached KDE content includes the publisher heading', () => {
+		const title = 'This Week in Plasma: Widgets Widgets Widgets';
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			title,
+			contentHtml: `<div class="jumbotron"><div class="content-width"><h1 class="page-header">${title}</h1><p class="meta">Saturday, 7 November 2026 | Nate Graham and John Veness</p></div></div><div class="content-width"><p>Welcome to a new issue of <em>This Week in Plasma!</em></p><h2>Notable new features</h2><img src="https://blogs.kde.org/example.webp" alt="Plasma desktop" /></div>`,
+		};
+
+		const { getAllByRole, getByRole, getByText } = render(<ReaderPane articleId="article-1" />);
+
+		expect(getAllByRole('heading', { name: title })).toHaveLength(1);
+		expect(getByRole('heading', { name: 'Notable new features' })).toBeTruthy();
+		expect(getByText(/Welcome to a new issue/)).toBeTruthy();
+		expect(getByRole('img', { name: 'Plasma desktop' })).toBeTruthy();
+	});
+
 	it('keeps inline images in article content and renders only embedded media in the lower panel', () => {
 		render(<ReaderPane articleId="article-1" />);
 

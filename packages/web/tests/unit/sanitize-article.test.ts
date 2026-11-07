@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from 'vitest';
 import { sanitizeArticleHtml } from '../../src/lib/sanitize-article';
 
 describe('sanitizeArticleHtml', () => {
+	it('removes a matching leading title with links, entities and different whitespace', () => {
+		const result = sanitizeArticleHtml(
+			'<div><h2><a href="https://example.com">Widgets &amp;\n  More</a></h2></div><p>Body</p><h2>Features</h2>',
+			'Widgets & More',
+		);
+
+		expect(result).not.toContain('Widgets');
+		expect(result).toContain('<p>Body</p>');
+		expect(result).toContain('<h2>Features</h2>');
+	});
+
+	it.each([
+		'<h2>Different section</h2><p>Body</p>',
+		'<p>Intro</p><h2>Widgets</h2>',
+		'<img src="https://example.com/hero.jpg" /><h2>Widgets</h2>',
+		'<blockquote><h2>Widgets</h2></blockquote>',
+	])('preserves substantive headings in %s', (html) => {
+		const result = sanitizeArticleHtml(html, 'Widgets');
+
+		expect(result).toContain('<h2>');
+	});
+
+	it('keeps publisher titles when no reader title was provided', () => {
+		expect(sanitizeArticleHtml('<h1>Widgets</h1><p>Body</p>')).toContain('<h1>Widgets</h1>');
+	});
+
 	it('uses linked originals when rendering previously cached feed thumbnails', () => {
 		const result = sanitizeArticleHtml(
 			'<a href="https://www.techpowerup.com/img/7eH3cdYrzhdh93b2.jpg" target="_blank"><img src="https://tpucdn.com/img/7eH3cdYrzhdh93b2_thm.jpg" width="232" height="130" alt="" /></a>',
