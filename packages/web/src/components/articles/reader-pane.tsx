@@ -36,13 +36,6 @@ export interface ReaderArticleSummary {
 	isSaved: boolean;
 }
 
-function prepareReaderHtml(html: string) {
-	// The API sanitizes content before persisting; this client-side
-	// pass re-validates against the same allowlist (defense in depth)
-	// and adds presentation attributes for the web surface.
-	return sanitizeArticleHtml(html);
-}
-
 export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
 	const { data: article, isLoading, isError, isFetching, refetch } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
@@ -61,8 +54,8 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const isRead = article?.isRead;
 	const readerHtml = useMemo(() => {
 		const html = article?.contentHtml ?? '';
-		return prepareReaderHtml(html);
-	}, [article?.contentHtml]);
+		return sanitizeArticleHtml(html, article?.title);
+	}, [article?.contentHtml, article?.title]);
 	const mediaToRender = useMemo(() => getReaderPanelMedia(article?.media ?? []), [article?.media]);
 	// The following `useMemo` calls must run unconditionally (before
 	// the loading / not-found early returns) to satisfy the rules of

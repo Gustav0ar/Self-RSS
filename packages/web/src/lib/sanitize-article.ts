@@ -255,13 +255,35 @@ function getPurify(): ReturnType<typeof DOMPurify> {
 /**
  * Apply presentation attributes the reader expects: lazy images, safe
  * cross-origin defaults on iframes, and `noopener noreferrer` on
- * outbound links. Run AFTER DOMPurify so the sanitizer's output
+ * outbound links, and omit a leading title already shown by the reader.
+ * Run AFTER DOMPurify so the sanitizer's output
  * survives the round-trip.
  */
-function hardenRenderedHtml(html: string): string {
+function hardenRenderedHtml(html: string, articleTitle: string): string {
 	if (typeof DOMParser === 'undefined') return html;
 
 	const doc = new DOMParser().parseFromString(html, 'text/html');
+	const normalizeTitle = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+	const heading = doc.querySelector('h1, h2, h3, h4, h5, h6');
+	if (
+		articleTitle.trim() &&
+		heading &&
+		normalizeTitle(heading.textContent ?? '') === normalizeTitle(articleTitle) &&
+		!heading.closest('blockquote, pre, table, ul, ol, details')
+	) {
+		// The reader owns the title, including for HTML already cached offline.
+		// Only remove a matching heading before any prose or media.
+		const prefix = doc.createRange();
+		prefix.selectNodeContents(doc.body);
+		prefix.setEndBefore(heading);
+		const leadingContent = prefix.cloneContents();
+		if (
+			!leadingContent.textContent?.trim() &&
+			!leadingContent.querySelector('img, picture, video, audio, iframe, hr')
+		) {
+			heading.remove();
+		}
+	}
 
 	for (const img of doc.querySelectorAll('img')) {
 		promoteLinkedArticleImage(img);
@@ -327,9 +349,10 @@ function hardenRenderedHtml(html: string): string {
  * Sanitize and harden article HTML for safe rendering. The input is
  * expected to already be sanitized by the API; this is a defense-in-
  * depth pass that re-validates the markup against the same allowlist
- * and adds client-side presentation attributes.
+ * and adds client-side presentation attributes. When given the reader title,
+ * omit a matching leading heading from the body.
  */
-export function sanitizeArticleHtml(dirty: string | null | undefined): string {
+export function sanitizeArticleHtml(dirty: string | null | undefined, articleTitle = ''): string {
 	if (!dirty) return '';
 	let cleaned: string;
 	try {
@@ -342,5 +365,5 @@ export function sanitizeArticleHtml(dirty: string | null | undefined): string {
 		// "safe by guarantee" — the safest response is to show nothing.
 		return '';
 	}
-	return hardenRenderedHtml(cleaned);
+	return hardenRenderedHtml(cleaned, articleTitle);
 }
