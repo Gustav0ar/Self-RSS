@@ -21,6 +21,12 @@ interface MutationOptions {
 	baseRevision?: number;
 }
 
+function commitArticleState(db: Database, mutate: (tx: Transaction) => ArticleStateMutationResult) {
+	// Reserve the writer before reading the revision. A newer WAL snapshot
+	// cannot be acquired by upgrading an existing read transaction.
+	return db.transaction(mutate, { behavior: 'immediate' });
+}
+
 export function setArticleReadState(
 	db: Database,
 	userId: string,
@@ -29,7 +35,7 @@ export function setArticleReadState(
 	source: string,
 	options: MutationOptions = {},
 ): ArticleStateMutationResult {
-	return db.transaction((tx) => {
+	return commitArticleState(db, (tx) => {
 		const currentState = Boolean(
 			tx
 				.select({ articleId: articleReads.articleId })
@@ -104,7 +110,7 @@ export function setArticleSavedState(
 	saved: boolean,
 	options: MutationOptions = {},
 ): ArticleStateMutationResult {
-	return db.transaction((tx) => {
+	return commitArticleState(db, (tx) => {
 		const currentState = Boolean(
 			tx
 				.select({ articleId: articleSaves.articleId })

@@ -576,7 +576,16 @@ test('reader can toggle a read article back to unread', async ({ page, request }
 	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
 
 	// The article is auto-marked read. Click "Mark unread" to flip it back.
+	const unreadWrite = page.waitForResponse(
+		(response) =>
+			response.request().method() === 'PATCH' &&
+			new URL(response.url()).pathname.endsWith('/read') &&
+			response.request().postDataJSON()?.read === false,
+	);
 	await page.getByRole('button', { name: 'Mark unread' }).click();
+	const acknowledgment = await unreadWrite;
+	expect(acknowledgment.ok()).toBe(true);
+	expect((await acknowledgment.json()).data).toMatchObject({ read: false, applied: true });
 	await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible();
 });
 
