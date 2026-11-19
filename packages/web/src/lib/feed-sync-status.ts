@@ -80,14 +80,22 @@ export function rememberFeedRefreshRequestId(
 	publishFeedRefreshRequest(accountKey, requestId);
 }
 
-export function forgetFeedRefreshRequestId(accountKey?: string | null) {
-	if (!accountKey) return;
+export function forgetFeedRefreshRequestId(accountKey: string | null, completedRequestId: string) {
+	if (!accountKey) return null;
+	let nextRequestId: string | null = null;
 	try {
-		globalThis.localStorage?.removeItem(`${LAST_REFRESH_REQUEST_KEY}:${accountKey}`);
+		const key = `${LAST_REFRESH_REQUEST_KEY}:${accountKey}`;
+		const saved = globalThis.localStorage?.getItem(key);
+		if (saved === completedRequestId) {
+			globalThis.localStorage.removeItem(key);
+		} else {
+			nextRequestId = saved ?? null;
+		}
 	} catch {
 		// Storage is an enhancement; the latest server status remains the fallback.
 	}
-	publishFeedRefreshRequest(accountKey, null);
+	publishFeedRefreshRequest(accountKey, nextRequestId);
+	return nextRequestId;
 }
 
 function publishFeedRefreshRequest(accountKey: string, requestId: string | null) {
@@ -123,9 +131,12 @@ export function mergeFeedSyncStatus(
 	current: FeedSyncAllStatus | undefined,
 	incoming: FeedSyncAllStatus,
 ) {
-	if (!current?.jobId || !incoming.jobId || current.jobId !== incoming.jobId) {
-		return incoming;
-	}
+	if (!current) return incoming;
+	const sameRequest =
+		current.requestId || incoming.requestId
+			? current.requestId === incoming.requestId
+			: !!current.jobId && current.jobId === incoming.jobId;
+	if (!sameRequest) return incoming;
 
 	return feedSyncPhaseRank(resolveStatusPhase(current)) >
 		feedSyncPhaseRank(resolveStatusPhase(incoming))
@@ -219,7 +230,7 @@ export function buildAllFeedsRefreshActivity({
 	}
 
 	const activeSinceMs =
-		getFeedSyncStatusActiveSince(status) ??
+		(serverActive ? getFeedSyncStatusActiveSince(status) : null) ??
 		(localQueuedAt > 0 ? localQueuedAt : null) ??
 		(statusUpdatedAt > 0 ? statusUpdatedAt : now);
 	const elapsedMs = Math.max(0, now - activeSinceMs);
@@ -234,7 +245,8 @@ export function buildAllFeedsRefreshActivity({
 			elapsedMs: null,
 		};
 	}
-	const isTakingLonger = status?.stale === true || elapsedMs >= foregroundTimeoutMs;
+	const isTakingLonger =
+		(serverActive && status.stale === true) || elapsedMs >= foregroundTimeoutMs;
 	// A refresh can be started by another tab/client or restored after a page
 	// reload. Server activity is still foreground UX state even when this hook
 	// did not create the local mutation that discovered it.
@@ -252,13 +264,19 @@ export function buildAllFeedsRefreshActivity({
 	};
 }
 
-export function getFeedSyncStatusPollInterval(status: FeedSyncAllStatus | undefined) {
-	if (!status?.active) {
-		return false;
-	}
-
-	// Retained for non-SSE clients. The web query no longer calls this function.
-	return REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS;
+export function getFeedSyncStatusPollInterval(
+	status: FeedSyncAllStatus | undefined,
+	realtimeConnected = false,
+	firstObservedAt = 0,
+) {
+	if (!status?.active) return false;
+	const started = getFeedSyncStatusActiveSince(status) ?? firstObservedAt;
+	const elapsed = started ? Date.now() - started : 0;
+	if (elapsed >= REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS) return false;
+	if (realtimeConnected) return REFRESH_INTERVALS.SYNC_STATUS_CONNECTED_FALLBACK_MS;
+	return elapsed >= REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS
+		? REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS
+		: REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS;
 }
 
 export function getFeedSyncStatusActiveSince(status: FeedSyncAllStatus | undefined) {

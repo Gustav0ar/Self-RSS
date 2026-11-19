@@ -1,7 +1,7 @@
 import type { FeedHealthUpdatedEvent, RealtimeEvent } from '@self-feed/shared';
 import type { QueryClient } from '@tanstack/react-query';
 import { type FeedSyncAllStatus, mergeFeedSyncStatus } from '@/lib/feed-sync-status';
-import { invalidateReaderQueries } from './cache-query-helpers';
+import { feedListQueries, invalidateReaderQueries } from './cache-query-helpers';
 
 interface PendingReaderRefresh {
 	timer: ReturnType<typeof setTimeout>;
@@ -9,10 +9,6 @@ interface PendingReaderRefresh {
 }
 
 const readerRefreshTimers = new WeakMap<QueryClient, PendingReaderRefresh>();
-const feedListQueries = {
-	predicate: (query: { queryKey: readonly unknown[] }) =>
-		query.queryKey[0] === 'feeds' && query.queryKey[1] !== 'sync',
-};
 
 export function applyFeedRealtimeEvent(qc: QueryClient, event: RealtimeEvent) {
 	if (event.type === 'feed.sync.progress') {

@@ -52,6 +52,22 @@ describe('FeedRefreshStatusBanner terminal status', () => {
 		expect(screen.queryByText('Refresh complete')).toBeNull();
 	});
 
+	it('keeps a completed category refresh in the category that requested it', () => {
+		const status = { ...terminalStatus(new Date().toISOString()), scope: { categoryId: 'news' } };
+		const banner = (categoryId: string) => (
+			<FeedRefreshStatusBanner
+				categoryId={categoryId}
+				allFeedsRefreshActivity={idleActivity}
+				allFeedsSyncStatus={status}
+				isRefreshingCurrentSelection={false}
+			/>
+		);
+		const { rerender } = render(banner('news'));
+		expect(screen.getByText('Refresh complete')).toBeTruthy();
+		rerender(banner('sports'));
+		expect(screen.queryByText('Refresh complete')).toBeNull();
+	});
+
 	it('expires a fresh terminal result without requiring another server response', () => {
 		const now = Date.parse('2026-07-18T12:00:00.000Z');
 		vi.useFakeTimers();

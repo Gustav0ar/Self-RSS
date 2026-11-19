@@ -9,6 +9,7 @@ import { apiDownload, apiFetch } from '@/lib/api';
 import {
 	type FeedSyncAllStatus,
 	getFeedRefreshAccountKey,
+	getFeedSyncStatusPollInterval,
 	mergeFeedSyncStatus,
 	rememberFeedRefreshRequestId,
 } from '@/lib/feed-sync-status';
@@ -171,12 +172,20 @@ export function useSyncAllFeeds() {
 				mergeFeedSyncStatus(current, response.data.status),
 			);
 			const requestId = response.data.requestId ?? response.data.status.requestId;
-			if (requestId) qc.setQueryData(['feeds', 'sync', 'status', requestId], response.data.status);
+			if (requestId) {
+				qc.setQueryData<FeedSyncAllStatus>(['feeds', 'sync', 'status', requestId], (current) =>
+					mergeFeedSyncStatus(current, response.data.status),
+				);
+			}
 		},
 	});
 }
 
-export function useSyncAllFeedsStatus(requestId?: string | null) {
+export function useSyncAllFeedsStatus(
+	requestId?: string | null,
+	realtimeConnected = false,
+	firstObservedAt = 0,
+) {
 	return useQuery({
 		queryKey: requestId ? ['feeds', 'sync', 'status', requestId] : ['feeds', 'sync', 'status'],
 		queryFn: ({ signal }) =>
@@ -184,8 +193,9 @@ export function useSyncAllFeedsStatus(requestId?: string | null) {
 				`/feeds/sync/status${requestId ? `?requestId=${encodeURIComponent(requestId)}` : ''}`,
 				{ signal },
 			).then((response) => response.data),
-		// SSE is the primary progress transport. This query is only the initial
-		// snapshot and reconnect/focus fallback, never a polling loop.
+		// Realtime events usually arrive first. Check active requests until the worker settles.
+		refetchInterval: (query) =>
+			getFeedSyncStatusPollInterval(query.state.data, realtimeConnected, firstObservedAt),
 		staleTime: 10_000,
 	});
 }

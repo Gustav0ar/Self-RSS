@@ -24,10 +24,17 @@ export function infiniteArticleQueryKey(params: ArticleQueryParams) {
 	] as const;
 }
 
+// Refreshing reader data must not trigger another fetch of the worker status
+// that just caused the refresh.
+export const feedListQueries = {
+	predicate: (query: { queryKey: QueryKey }) =>
+		query.queryKey[0] === 'feeds' && query.queryKey[1] !== 'sync',
+};
+
 export function invalidateReaderQueries(qc: QueryClient) {
 	qc.invalidateQueries({ queryKey: ['articles'] });
 	qc.invalidateQueries({ queryKey: ['article'] });
-	qc.invalidateQueries({ queryKey: ['feeds'] });
+	qc.invalidateQueries(feedListQueries);
 	qc.invalidateQueries({ queryKey: ['categories'] });
 	qc.invalidateQueries({ queryKey: ['stats'] });
 	qc.invalidateQueries({ queryKey: ['search'] });

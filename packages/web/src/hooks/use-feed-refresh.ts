@@ -12,6 +12,7 @@ import {
 	ALL_FEEDS_SYNC_ID,
 	buildAllFeedsRefreshActivity,
 	FEED_REFRESH_REQUEST_EVENT,
+	type FeedSyncAllStatus,
 	forgetFeedRefreshRequestId,
 	getFeedRefreshAccountKey,
 	getFeedSyncStatusActiveSince,
@@ -43,7 +44,7 @@ export function shouldAutoSyncSelectedFeed(
 	);
 }
 
-export function useFeedRefresh() {
+export function useFeedRefresh(categoryId?: string) {
 	const qc = useQueryClient();
 	const accountKey = getFeedRefreshAccountKey();
 	const { data: feeds } = useFeeds();
@@ -51,11 +52,6 @@ export function useFeedRefresh() {
 	const [trackedRequestId, setTrackedRequestId] = useState<string | null>(() =>
 		readLastFeedRefreshRequestId(accountKey),
 	);
-	const {
-		data: allFeedsSyncStatus,
-		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
-		refetch: refetchAllFeedsSyncStatus,
-	} = useSyncAllFeedsStatus(trackedRequestId);
 	const { data: isRealtimeConnected = false } = useQuery<boolean>({
 		queryKey: ['realtime', 'connected'],
 		queryFn: () => false,
@@ -66,8 +62,13 @@ export function useFeedRefresh() {
 	const { feedSyncError, setFeedSyncError, setSyncingFeedId, syncingFeedId } = useAppState();
 	const [localRefreshQueuedAt, setLocalRefreshQueuedAt] = useState(0);
 	const [untimedStatusActiveSince, setUntimedStatusActiveSince] = useState(0);
+	const {
+		data: allFeedsSyncStatus,
+		dataUpdatedAt: allFeedsSyncStatusUpdatedAt,
+		refetch: refetchAllFeedsSyncStatus,
+	} = useSyncAllFeedsStatus(trackedRequestId, isRealtimeConnected, untimedStatusActiveSince);
 	const [, setRefreshClock] = useState(0);
-	const wasRefreshingAllFeeds = useRef(false);
+	const wasRefreshing = useRef(false);
 
 	useEffect(() => {
 		setTrackedRequestId(readLastFeedRefreshRequestId(accountKey));
@@ -87,14 +88,21 @@ export function useFeedRefresh() {
 		if (!trackedRequestId || !allFeedsSyncStatus) return;
 		const isTrackedRequest = allFeedsSyncStatus.requestId === trackedRequestId;
 		if (isTrackedRequest && allFeedsSyncStatus.active) return;
-		// Effects run after the terminal snapshot has committed, so the result can
-		// render once before returning to the latest cross-client status stream.
-		forgetFeedRefreshRequestId(accountKey);
-		setTrackedRequestId(null);
-	}, [accountKey, allFeedsSyncStatus, trackedRequestId]);
-	const allFeedsStatus = allFeedsSyncStatus?.scope?.feedId
-		? { ...allFeedsSyncStatus, active: false, queued: false, running: false }
-		: allFeedsSyncStatus;
+		// The queue response also seeded the latest key. Retire that copy unless
+		// another request has already replaced it.
+		const latestKey = ['feeds', 'sync', 'status'];
+		if (
+			isTrackedRequest &&
+			qc.getQueryData<FeedSyncAllStatus>(latestKey)?.requestId === trackedRequestId
+		) {
+			qc.setQueryData(latestKey, allFeedsSyncStatus);
+		}
+		setTrackedRequestId(forgetFeedRefreshRequestId(accountKey, trackedRequestId));
+	}, [accountKey, allFeedsSyncStatus, qc, trackedRequestId]);
+	const singleFeedId =
+		syncingFeedId === ALL_FEEDS_SYNC_ID
+			? undefined
+			: (syncingFeedId ?? allFeedsSyncStatus?.scope?.feedId);
 	const hasSettledInactiveAllFeedsStatus = hasFreshInactiveFeedSyncStatus({
 		status: allFeedsSyncStatus,
 		statusUpdatedAt: allFeedsSyncStatusUpdatedAt,
@@ -106,14 +114,21 @@ export function useFeedRefresh() {
 			? untimedStatusActiveSince
 			: allFeedsSyncStatusUpdatedAt;
 	const allFeedsRefreshActivity = buildAllFeedsRefreshActivity({
-		status: allFeedsStatus,
+		status: allFeedsSyncStatus,
 		statusUpdatedAt: allFeedsRefreshStatusUpdatedAt,
 		localQueuedAt: localRefreshQueuedAt,
-		isMutationPending: syncAllFeeds.isPending && syncingFeedId === ALL_FEEDS_SYNC_ID,
-		isLocalRefreshSelected: syncingFeedId === ALL_FEEDS_SYNC_ID,
+		isMutationPending: syncAllFeeds.isPending,
+		isLocalRefreshSelected: !!syncingFeedId,
 		now: Date.now(),
 	});
-	const isRefreshingAllFeeds = allFeedsRefreshActivity.isBlocking;
+	const activeScope =
+		syncAllFeeds.isPending || !allFeedsSyncStatus?.active
+			? syncAllFeeds.variables
+			: allFeedsSyncStatus.scope;
+	const showsBulkRefresh =
+		!singleFeedId &&
+		(!categoryId || !activeScope?.categoryId || activeScope.categoryId === categoryId);
+	const isRefreshingAllFeeds = showsBulkRefresh && allFeedsRefreshActivity.isBlocking;
 
 	useEffect(() => {
 		const isUntimedActive =
@@ -126,24 +141,6 @@ export function useFeedRefresh() {
 			return current === 0 ? current : 0;
 		});
 	}, [allFeedsSyncStatus]);
-
-	useEffect(() => {
-		if (!allFeedsSyncStatus?.active) return;
-		const activeSince = getFeedSyncStatusActiveSince(allFeedsSyncStatus);
-		const elapsed = activeSince == null ? 0 : Date.now() - activeSince;
-		if (elapsed >= REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS) return;
-		const timer = globalThis.setTimeout(
-			() => {
-				void refetchAllFeedsSyncStatus();
-			},
-			isRealtimeConnected
-				? REFRESH_INTERVALS.SYNC_STATUS_CONNECTED_FALLBACK_MS
-				: elapsed >= REFRESH_INTERVALS.SYNC_STATUS_FOREGROUND_TIMEOUT_MS
-					? REFRESH_INTERVALS.SYNC_STATUS_BACKGROUND_POLL_MS
-					: REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS,
-		);
-		return () => globalThis.clearTimeout(timer);
-	}, [allFeedsSyncStatus, isRealtimeConnected, refetchAllFeedsSyncStatus]);
 
 	useEffect(() => {
 		if (!allFeedsRefreshActivity.isActive) {
@@ -166,13 +163,18 @@ export function useFeedRefresh() {
 	]);
 
 	useEffect(() => {
-		if (!syncingFeedId || !hasSettledInactiveAllFeedsStatus) {
+		if (!syncingFeedId || (!hasSettledInactiveAllFeedsStatus && allFeedsRefreshActivity.isActive)) {
 			return;
 		}
 
 		setLocalRefreshQueuedAt(0);
 		setSyncingFeedId(null);
-	}, [hasSettledInactiveAllFeedsStatus, setSyncingFeedId, syncingFeedId]);
+	}, [
+		allFeedsRefreshActivity.isActive,
+		hasSettledInactiveAllFeedsStatus,
+		setSyncingFeedId,
+		syncingFeedId,
+	]);
 
 	useEffect(() => {
 		if (syncingFeedId !== ALL_FEEDS_SYNC_ID || !allFeedsRefreshActivity.isTakingLonger) {
@@ -186,15 +188,15 @@ export function useFeedRefresh() {
 
 	useEffect(() => {
 		if (allFeedsRefreshActivity.isActive) {
-			wasRefreshingAllFeeds.current = true;
+			wasRefreshing.current = true;
 			return;
 		}
 
-		if (!wasRefreshingAllFeeds.current) {
+		if (!wasRefreshing.current) {
 			return;
 		}
 
-		wasRefreshingAllFeeds.current = false;
+		wasRefreshing.current = false;
 		const wasSettledByRealtimeEvent =
 			allFeedsSyncStatus?.phase === 'completed' || allFeedsSyncStatus?.phase === 'failed';
 		if (!wasSettledByRealtimeEvent) {
@@ -204,90 +206,65 @@ export function useFeedRefresh() {
 
 	const refreshFeed = useCallback(
 		async (feedId?: string, options: RefreshOptions = {}) => {
-			if (!feedId) {
-				if (
-					allFeedsRefreshActivity.isBlocking &&
-					refreshScopesOverlap({ categoryId: options.categoryId }, allFeedsSyncStatus?.scope, feeds)
-				)
-					return false;
-				if (syncingFeedId === ALL_FEEDS_SYNC_ID && !hasSettledInactiveAllFeedsStatus) {
-					return false;
-				}
-
-				const queuedAt = Date.now();
-				setFeedSyncError(null);
-				setLocalRefreshQueuedAt(queuedAt);
-				setSyncingFeedId(ALL_FEEDS_SYNC_ID);
-				setRefreshClock((tick) => tick + 1);
-
-				try {
-					const response = await syncAllFeeds.mutateAsync({ categoryId: options.categoryId });
-					const requestId = response.data.requestId ?? response.data.status?.requestId ?? null;
-					if (requestId) {
-						rememberFeedRefreshRequestId(accountKey, requestId);
-						setTrackedRequestId(requestId);
-					}
-					return true;
-				} catch (error) {
-					const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
-					if (reconciledStatus?.data?.active) {
-						return true;
-					}
-					setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feeds');
-					setLocalRefreshQueuedAt(0);
-					setSyncingFeedId((current) => (current === ALL_FEEDS_SYNC_ID ? null : current));
-					return false;
-				}
-			}
-
-			if (syncingFeedId === feedId) {
+			const scope = feedId ? { feedId } : { categoryId: options.categoryId };
+			const selectionId = feedId ?? ALL_FEEDS_SYNC_ID;
+			if (allFeedsRefreshActivity.isBlocking && refreshScopesOverlap(scope, activeScope, feeds))
 				return false;
-			}
-			const selectedFeed = feeds?.find((feed) => feed.id === feedId);
 			if (
-				allFeedsRefreshActivity.isBlocking &&
-				refreshScopesOverlap({ feedId }, allFeedsSyncStatus?.scope, feeds)
+				syncingFeedId === selectionId &&
+				(feedId || (!allFeedsSyncStatus?.active && !hasSettledInactiveAllFeedsStatus))
 			)
 				return false;
-			if (isFeedRefreshBlocked(selectedFeed)) {
-				setFeedSyncError(null);
-				setSyncingFeedId(null);
-				return false;
+			if (feedId) {
+				const selectedFeed = feeds?.find((feed) => feed.id === feedId);
+				if (isFeedRefreshBlocked(selectedFeed)) return false;
+				if (
+					!options.force &&
+					((allFeedsSyncStatus?.active && allFeedsSyncStatus.scope?.feedId === feedId) ||
+						!shouldAutoSyncSelectedFeed(selectedFeed))
+				)
+					return false;
 			}
-			const shouldAutoSync = options.force || shouldAutoSyncSelectedFeed(selectedFeed);
-			if (!shouldAutoSync) {
-				setFeedSyncError(null);
-				setSyncingFeedId(null);
-				return false;
-			}
-
 			setFeedSyncError(null);
 			setLocalRefreshQueuedAt(Date.now());
-			setSyncingFeedId(feedId);
+			setSyncingFeedId(selectionId);
 
 			try {
-				const response = await syncAllFeeds.mutateAsync({ feedId });
-				const requestId = response.data.requestId ?? response.data.status?.requestId ?? null;
+				const response = await syncAllFeeds.mutateAsync(scope);
+				const requestId = response.data.requestId ?? response.data.status?.requestId;
 				if (requestId) {
 					rememberFeedRefreshRequestId(accountKey, requestId);
 					setTrackedRequestId(requestId);
 				}
 				return true;
 			} catch (error) {
-				const reconciledStatus = await refetchAllFeedsSyncStatus().catch(() => null);
-				if (reconciledStatus?.data?.active) {
+				const snapshot = await refetchAllFeedsSyncStatus().catch(() => null);
+				const status = snapshot?.data;
+				if (
+					!snapshot?.isError &&
+					status?.active &&
+					status.scope?.feedId === scope.feedId &&
+					status.scope?.categoryId === scope.categoryId
+				)
 					return true;
-				}
-				setFeedSyncError(error instanceof Error ? error.message : 'Unable to sync feed');
+				setFeedSyncError(
+					error instanceof Error
+						? error.message
+						: feedId
+							? 'Unable to sync feed'
+							: 'Unable to sync feeds',
+				);
 				setLocalRefreshQueuedAt(0);
-				setSyncingFeedId((current) => (current === feedId ? null : current));
+				setSyncingFeedId((current) => (current === selectionId ? null : current));
 				return false;
 			}
 		},
 		[
 			feeds,
+			activeScope,
 			allFeedsRefreshActivity.isBlocking,
 			allFeedsSyncStatus?.scope,
+			allFeedsSyncStatus?.active,
 			hasSettledInactiveAllFeedsStatus,
 			refetchAllFeedsSyncStatus,
 			setFeedSyncError,
@@ -301,15 +278,16 @@ export function useFeedRefresh() {
 	return {
 		feedSyncError,
 		allFeedsSyncStatus,
-		allFeedsRefreshActivity,
+		allFeedsRefreshActivity: {
+			...allFeedsRefreshActivity,
+			shouldShowStatus: showsBulkRefresh && allFeedsRefreshActivity.shouldShowStatus,
+		},
 		isRefreshingAllFeeds,
 		isRefreshingFeed: (feedId?: string) =>
-			!!feedId &&
-			(syncingFeedId === feedId ||
-				(allFeedsSyncStatus?.active === true && allFeedsSyncStatus.scope?.feedId === feedId)),
+			!!feedId && singleFeedId === feedId && allFeedsRefreshActivity.isActive,
 		isRefreshBlockedByActiveRequest: (feedId?: string, categoryId?: string) =>
 			allFeedsRefreshActivity.isBlocking &&
-			refreshScopesOverlap({ feedId, categoryId }, allFeedsSyncStatus?.scope, feeds),
+			refreshScopesOverlap({ feedId, categoryId }, activeScope, feeds),
 		refreshFeed,
 	};
 }

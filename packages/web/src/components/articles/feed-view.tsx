@@ -83,7 +83,7 @@ export function FeedView({
 		isRefreshingFeed,
 		isRefreshBlockedByActiveRequest,
 		refreshFeed,
-	} = useFeedRefresh();
+	} = useFeedRefresh(categoryId);
 	const isSyncingSelectedFeed = isRefreshingFeed(feedId);
 	const isRefreshingCurrentSelection = feedId ? isSyncingSelectedFeed : isRefreshingAllFeeds;
 	const prefetchArticle = usePrefetchArticle();
@@ -354,6 +354,7 @@ export function FeedView({
 
 					<FeedRefreshStatusBanner
 						feedId={feedId}
+						categoryId={categoryId}
 						allFeedsRefreshActivity={allFeedsRefreshActivity}
 						allFeedsSyncStatus={allFeedsSyncStatus}
 						isRefreshingCurrentSelection={isRefreshingCurrentSelection}

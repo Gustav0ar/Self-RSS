@@ -7,6 +7,7 @@ import {
 	forgetFeedRefreshRequestId,
 	getFeedSyncStatusPollInterval,
 	hasFreshInactiveFeedSyncStatus,
+	mergeFeedSyncStatus,
 	readLastFeedRefreshRequestId,
 	rememberFeedRefreshRequestId,
 } from '../../src/lib/feed-sync-status';
@@ -26,6 +27,15 @@ describe('feed sync status reconciliation', () => {
 		vi.unstubAllGlobals();
 	});
 
+	it('tracks progress by refresh request even when requests share or change publisher jobs', () => {
+		const completed = { ...inactiveStatus, requestId: 'first', jobId: 'shared-job' };
+		const queued = { ...completed, requestId: 'second', queued: true, active: true };
+		expect(mergeFeedSyncStatus(completed, queued)).toBe(queued);
+		expect(mergeFeedSyncStatus(completed, { ...queued, requestId: 'first', jobId: null })).toBe(
+			completed,
+		);
+	});
+
 	it('scopes persisted refresh requests by account', () => {
 		const storage = new Map<string, string>();
 		vi.stubGlobal('localStorage', {
@@ -37,6 +47,21 @@ describe('feed sync status reconciliation', () => {
 
 		expect(readLastFeedRefreshRequestId('account-a')).toBe('request-a');
 		expect(readLastFeedRefreshRequestId('account-b')).toBe('request-b');
+	});
+
+	it('retains the newer request saved by another tab when an earlier request completes', () => {
+		const storage = new Map<string, string>();
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => storage.get(key) ?? null,
+			setItem: (key: string, value: string) => storage.set(key, value),
+			removeItem: (key: string) => storage.delete(key),
+		});
+		rememberFeedRefreshRequestId('reader', 'old');
+		rememberFeedRefreshRequestId('reader', 'new');
+		expect(forgetFeedRefreshRequestId('reader', 'old')).toBe('new');
+		expect(readLastFeedRefreshRequestId('reader')).toBe('new');
+		forgetFeedRefreshRequestId('reader', 'new');
+		expect(readLastFeedRefreshRequestId('reader')).toBeNull();
 	});
 
 	it('delivers request events even when browser storage rejects changes', () => {
@@ -52,7 +77,7 @@ describe('feed sync status reconciliation', () => {
 		vi.stubGlobal('dispatchEvent', dispatchEvent);
 
 		rememberFeedRefreshRequestId('account-a', 'request-a');
-		forgetFeedRefreshRequestId('account-a');
+		forgetFeedRefreshRequestId('account-a', 'request-a');
 
 		expect(dispatchEvent).toHaveBeenCalledTimes(2);
 		expect(
@@ -109,7 +134,11 @@ describe('feed sync status reconciliation', () => {
 
 		expect(
 			hasFreshInactiveFeedSyncStatus({
-				status: inactiveStatus,
+				status: {
+					...inactiveStatus,
+					stale: true,
+					heartbeatAt: new Date(localQueuedAt - 360_000).toISOString(),
+				},
 				statusUpdatedAt,
 				localQueuedAt,
 				isMutationPending: false,
