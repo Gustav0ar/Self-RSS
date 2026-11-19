@@ -19,6 +19,13 @@ const saveOfflineUserMock = vi.fn();
 const restoreQueryClientMock = vi.fn();
 const setSignedOutLocallyMock = vi.fn();
 
+vi.mock('../../src/lib/product-analytics', () => ({
+	flushProductAnalyticsEvents: vi.fn(),
+	queueProductAnalyticsEvent: vi.fn(),
+	setProductAnalyticsUser: vi.fn(),
+	trackProductAnalyticsAppOpen: vi.fn(),
+}));
+
 vi.mock('../../src/lib/api', () => ({
 	ApiClientError: class extends Error {
 		constructor(readonly status: number) {
@@ -404,6 +411,23 @@ describe('AuthProvider', () => {
 		await screen.findByText('The signed-in account changed. Please sign in again.');
 		expect(screen.getByText('logged-out')).toBeTruthy();
 		expect(clearOfflineStateMock).toHaveBeenCalledWith('old', { keepPendingChanges: true });
+	});
+
+	it('keeps the reader offline when a reconnect cannot verify the session', async () => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock
+			.mockResolvedValueOnce({ data: user('current@example.com') })
+			.mockRejectedValueOnce(new TypeError('Connection interrupted'));
+		renderWithQuery(
+			<AuthProvider>
+				<AuthProbe />
+			</AuthProvider>,
+		);
+		await screen.findByText('online');
+		fireEvent(window, new Event('online'));
+		await screen.findByText('offline');
+		expect(screen.getByText('current@example.com')).toBeTruthy();
+		expect(clearOfflineStateMock).not.toHaveBeenCalled();
 	});
 
 	it('clears the session when another tab signs out the same account', async () => {

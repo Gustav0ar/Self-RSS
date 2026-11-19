@@ -255,25 +255,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			reconnecting = true;
 			try {
 				if (!getAccessToken() && !(await refreshAccessToken())) {
+					if (activeUserId.current !== user.id) return;
 					if (getLastRefreshOutcome() === 'rejected') {
 						await clearLocalSession(user.id, { keepPendingChanges: true });
 						setAuthLostMessage('Authentication was lost. Please sign in again.');
+					} else {
+						setIsOffline(true);
 					}
 					return;
 				}
 				const response = await apiFetch<ApiResponse<User>>('/auth/me');
+				if (activeUserId.current !== user.id) return;
 				if (response.data.id !== user.id) {
 					await clearLocalSession(user.id, { keepPendingChanges: true });
 					setAuthLostMessage('The signed-in account changed. Please sign in again.');
 					return;
 				}
 				await saveOfflineUser(response.data);
+				if (activeUserId.current !== user.id) return;
 				setUser(response.data);
 				setUsername(response.data.email);
 				setIsOffline(false);
 				await flushOfflineArticleMutations();
 				await queryClient.invalidateQueries();
 				void flushProductAnalyticsEvents();
+			} catch (error) {
+				if (activeUserId.current !== user.id) return;
+				if (isUnavailable(error)) {
+					setIsOffline(true);
+				} else {
+					await clearLocalSession(user.id, { keepPendingChanges: true });
+					setAuthLostMessage('Authentication was lost. Please sign in again.');
+				}
 			} finally {
 				reconnecting = false;
 			}
