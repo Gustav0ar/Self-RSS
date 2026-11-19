@@ -536,10 +536,9 @@ export class ArticleRepository {
 					.where(
 						and(
 							eq(articles.id, update.id),
-							// Enrichment may have finished since the snapshot's preparation read.
-							params.snapshotDelivery
-								? and(ne(articles.contentStatus, 'full_ready'), ne(articles.hash, update.hash))
-								: undefined,
+							// Enrichment can finish after either sync path reads the article.
+							ne(articles.contentStatus, 'full_ready'),
+							params.snapshotDelivery ? ne(articles.hash, update.hash) : undefined,
 						),
 					)
 					.returning({

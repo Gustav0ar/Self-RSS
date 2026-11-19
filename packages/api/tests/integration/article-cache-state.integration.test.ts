@@ -209,6 +209,59 @@ describe('article enrichment queue', () => {
 		);
 	}
 
+	it('keeps the full article and its media when enrichment finishes during legacy sync', async () => {
+		const summary = 'A longer feed summary. '.repeat(6).trim();
+		const fullText = 'The full story from the publisher. '.repeat(20).trim();
+		const publisher = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === '/feed') {
+					return new Response(
+						`<rss version="2.0"><channel><item><guid>guid</guid><title>Snapshot</title><description>${summary}</description></item></channel></rss>`,
+					);
+				}
+				return new Response(
+					`<article><div class="entry-content"><p>${fullText}</p><img src="/full.png"></div></article>`,
+					{ headers: { 'content-type': 'text/html' } },
+				);
+			},
+		});
+		try {
+			await fixture.db
+				.update(schema.feeds)
+				.set({ feedUrl: new URL('/feed', publisher.url).href })
+				.where(eq(schema.feeds.id, feedId));
+			await fixture.repo.updateContent(articleId, {
+				canonicalUrl: new URL('/article', publisher.url).href,
+				contentStatus: 'enrichment_pending',
+			});
+			const persist = fixture.repo.persistSyncResults.bind(fixture.repo);
+			const syncWrite = vi
+				.spyOn(fixture.repo, 'persistSyncResults')
+				.mockImplementationOnce(async (params) => {
+					expect(params.articlesToUpdate).toMatchObject([{ id: articleId, contentText: summary }]);
+					expect(await createWorker().processPendingArticleEnrichments()).toMatchObject({
+						succeeded: 1,
+					});
+					return persist(params);
+				});
+
+			expect(await createWorker().syncFeed(feedId, userId)).toEqual({ newArticles: 0, total: 1 });
+			expect(syncWrite).toHaveBeenCalledTimes(1);
+			expect(await fixture.repo.findById(articleId)).toMatchObject({
+				contentStatus: 'full_ready',
+				contentVersion: 2,
+				contentText: fullText,
+			});
+			expect(
+				fixture.db.select({ url: schema.articleMedia.url }).from(schema.articleMedia).all(),
+			).toEqual([{ url: new URL('/full.png', publisher.url).href }]);
+		} finally {
+			publisher.stop(true);
+		}
+	});
+
 	it('keeps the retry deadline across repeated opens and background polling', async () => {
 		let requests = 0;
 		const publisher = Bun.serve({
