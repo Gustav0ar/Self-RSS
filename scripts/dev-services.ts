@@ -52,9 +52,12 @@ async function main() {
 	process.on('SIGINT', () => stopAll('SIGINT'));
 	process.on('SIGTERM', () => stopAll('SIGTERM'));
 
+	const apiOrigin = `http://127.0.0.1:${process.env.API_PORT ?? '3000'}`;
+	process.env.VITE_PROXY_TARGET ??= apiOrigin;
+
 	const api = run('api', ['run', 'dev:api']);
 	console.log('[dev] waiting for API health before starting worker');
-	await waitForHttp('http://127.0.0.1:3000/health', api);
+	await waitForHttp(`${apiOrigin}/health`, api);
 
 	const worker = run('worker', ['run', 'dev:worker']);
 	const web = run('web', ['run', 'dev:web']);

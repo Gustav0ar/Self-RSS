@@ -76,7 +76,7 @@ bun run db:seed
 ### 5. Running the Application
 To run the full stack locally (with automatic reload/watch mode):
 ```bash
-# Stops any conflicting containers, frees up port 3000, and boots Redis, the API, Worker, and Web UI
+# Stops the project’s containerized app services, then starts Redis, the API, worker, and web UI
 bun run dev
 ```
 
