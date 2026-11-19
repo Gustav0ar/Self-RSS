@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useLayoutEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from '../../src/providers/auth';
 
@@ -397,18 +397,22 @@ describe('AuthProvider', () => {
 	});
 
 	it('retains the original account’s edits when reconnect verifies a different account', async () => {
+		function ReconnectedReader() {
+			const { username } = useAuth();
+			useLayoutEffect(() => {
+				if (username === 'old@example.com') window.dispatchEvent(new Event('online'));
+			}, [username]);
+			return <AuthActionsProbe />;
+		}
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock
 			.mockResolvedValueOnce({ data: user('old@example.com', 'old') })
 			.mockResolvedValueOnce({ data: user('current@example.com') });
 		renderWithQuery(
 			<AuthProvider>
-				<AuthActionsProbe />
+				<ReconnectedReader />
 			</AuthProvider>,
 		);
-		await screen.findByText('old@example.com');
-
-		fireEvent(window, new Event('online'));
 		await screen.findByText('The signed-in account changed. Please sign in again.');
 		expect(screen.getByText('logged-out')).toBeTruthy();
 		expect(clearOfflineStateMock).toHaveBeenCalledWith('old', { keepPendingChanges: true });

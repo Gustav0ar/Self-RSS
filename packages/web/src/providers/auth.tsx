@@ -1,6 +1,14 @@
 import type { ApiResponse, LoginResponse, RegisterResponse, User } from '@self-feed/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useEffectEvent,
+	useRef,
+	useState,
+} from 'react';
 import {
 	ApiClientError,
 	apiFetch,
@@ -262,21 +270,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 		};
 	}, [queryClient, user]);
 
+	const getActiveSession = useEffectEvent(() => {
+		const current = session.current;
+		return current?.userId === user?.id ? current : null;
+	});
 	useEffect(() => {
-		let reconnecting = false;
+		let reconnecting: AbortSignal | null = null;
 		async function updateConnectionState() {
 			if (!navigator.onLine) {
 				setIsOffline(true);
 				return;
 			}
-			const current = session.current;
-			if (!user || current?.userId !== user.id || reconnecting) return;
-			reconnecting = true;
+			const current = getActiveSession();
+			if (!current || current.signal.aborted || reconnecting === current.signal) return;
+			reconnecting = current.signal;
 			try {
 				if (!getAccessToken() && !(await refreshAccessToken())) {
 					if (current.signal.aborted) return;
 					if (getLastRefreshOutcome() === 'rejected') {
-						await clearLocalSession(user.id, { keepPendingChanges: true });
+						await clearLocalSession(current.userId, { keepPendingChanges: true });
 						setAuthLostMessage('Authentication was lost. Please sign in again.');
 					} else {
 						setIsOffline(true);
@@ -285,8 +297,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				}
 				const response = await apiFetch<ApiResponse<User>>('/auth/me');
 				if (current.signal.aborted) return;
-				if (response.data.id !== user.id) {
-					await clearLocalSession(user.id, { keepPendingChanges: true });
+				if (response.data.id !== current.userId) {
+					await clearLocalSession(current.userId, { keepPendingChanges: true });
 					setAuthLostMessage('The signed-in account changed. Please sign in again.');
 					return;
 				}
@@ -303,11 +315,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 				if (isUnavailable(error)) {
 					setIsOffline(true);
 				} else {
-					await clearLocalSession(user.id, { keepPendingChanges: true });
+					await clearLocalSession(current.userId, { keepPendingChanges: true });
 					setAuthLostMessage('Authentication was lost. Please sign in again.');
 				}
 			} finally {
-				reconnecting = false;
+				if (reconnecting === current.signal) reconnecting = null;
 			}
 		}
 		function recordVisibleAppOpen() {
@@ -321,7 +333,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			window.removeEventListener('online', updateConnectionState);
 			document.removeEventListener('visibilitychange', recordVisibleAppOpen);
 		};
-	}, [clearLocalSession, queryClient, user]);
+	}, [clearLocalSession, queryClient]);
 
 	const login = useCallback(
 		async (email: string, password: string) => {
