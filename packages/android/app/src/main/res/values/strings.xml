@@ -167,6 +167,7 @@
     <string name="stats_feeds">Feeds</string>
     <string name="stats_categories">Categories</string>
     <string name="settings_sign_out_cd">Sign out</string>
+    <string name="auth_logout_failed">Could not finish signing out. Please try again.</string>
     <string name="settings_logout">Logout</string>
     <string name="settings_saved">Preferences saved</string>
     <string name="settings_sessions_title">Authenticated devices</string>

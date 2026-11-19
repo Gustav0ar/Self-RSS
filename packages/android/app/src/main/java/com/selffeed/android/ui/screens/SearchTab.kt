@@ -121,7 +121,7 @@ fun SearchTab(
                     article = article,
                     selected = state.selectedArticleId == article.id,
                     onClick = {},
-                    onToggleSaved = { actions.onToggleSaved(article.id, !article.isSaved) },
+                    onToggleSaved = { actions.onToggleSaved(article, !article.isSaved) },
                 )
             }
         }

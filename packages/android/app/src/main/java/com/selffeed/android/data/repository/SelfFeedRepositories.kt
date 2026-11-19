@@ -160,7 +160,7 @@ interface ArticleRepository {
         source: String = "manual"
     ): AppResult<ArticleMutationReceipt>
 
-    suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt>
+    suspend fun setSaved(articleId: String, saved: Boolean, listItem: ArticleListItem? = null): AppResult<ArticleMutationReceipt>
     fun savedStateRejections(): Flow<SavedStateRejection> = emptyFlow()
     fun readStateRejections(): Flow<ReadStateRejection> = emptyFlow()
     suspend fun markAllRead(

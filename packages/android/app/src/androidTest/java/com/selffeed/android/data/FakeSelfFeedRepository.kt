@@ -60,6 +60,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         articleSavedStates[id] ?: fakeArticles.firstOrNull { it.id == id }?.isSaved,
         lastReadMutationId = readReceipts[id], lastSavedMutationId = savedReceipts[id],
     )
+    var logoutResult: kotlinx.coroutines.CompletableDeferred<AppResult<Boolean>>? = null
     var detailGate: ReviewRequestGate<String, AppResult<ArticleDetail>>? = null
     var readGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
     var savedGate: ReviewRequestGate<Pair<String, Boolean>, AppResult<Boolean>>? = null
@@ -161,6 +162,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         fakeArticles = initialArticles
         restoreRequests = 0
         online.value = true
+        logoutResult = null
         detailGate = null
         readGate = null
         savedGate = null
@@ -235,6 +237,8 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
     }
 
     override suspend fun logout(): AppResult<Boolean> {
+        val result = logoutResult?.await()
+        if (result is AppResult.Error) return result
         replaceSession()
         authenticated = false
         return AppResult.Success(true)
@@ -414,7 +418,7 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         }
     }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt> {
+    override suspend fun setSaved(articleId: String, saved: Boolean, listItem: ArticleListItem?): AppResult<ArticleMutationReceipt> {
         val result = savedGate?.await(articleId to saved) ?: AppResult.Success(saved)
         return when (result) {
             is AppResult.Error -> result

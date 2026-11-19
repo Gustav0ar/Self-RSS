@@ -17,6 +17,9 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextClearance
@@ -26,6 +29,7 @@ import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ActivityScenario
 import com.selffeed.android.MainActivity
+import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.FakeSelfFeedRepository
 import com.selffeed.android.network.ArticleMedia
 import dagger.hilt.android.testing.HiltAndroidRule
@@ -37,6 +41,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import javax.inject.Inject
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.job
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -85,6 +90,33 @@ class MainActivityHiltUiTest {
         waitForContentDescription("Back to list")
         composeRule.onNodeWithText("Injected Article 2").assertIsDisplayed()
         assertEquals("Recreation must retain the authenticated model", 1, repository.restoreRequests)
+    }
+
+    @Test
+    fun signOutShowsProgressAndReturnsToSettingsForRetryOnStorageFailure() {
+        repository.reset(authenticated = true)
+        val result = CompletableDeferred<AppResult<Boolean>>()
+        repository.logoutResult = result
+        launchActivity()
+        waitForText("Injected Article")
+        composeRule.onNodeWithContentDescription("Settings tab", useUnmergedTree = true).performClick()
+        waitForText("Preferences")
+
+        fun clickLogout() {
+            composeRule.onNodeWithTag("settings-list").performScrollToNode(hasText("Logout"))
+            composeRule.onNodeWithText("Logout").performClick()
+        }
+        clickLogout()
+        waitForText("Loading your reading workspace")
+        result.complete(AppResult.Error("disk full"))
+        val error = "Could not finish signing out. Please try again."
+        waitForText(error)
+        composeRule.waitUntil(10_000) { composeRule.onAllNodesWithText(error).fetchSemanticsNodes().isEmpty() }
+        repository.logoutResult = null
+
+        clickLogout()
+        waitForText("Email")
+        composeRule.onNodeWithText("Email").assertIsDisplayed()
     }
 
     @Test

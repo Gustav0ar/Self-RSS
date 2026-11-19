@@ -84,7 +84,7 @@ data class ArticleTabActions(
         )
     },
     val onToggleRead: (String, Boolean) -> Unit,
-    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
+    val onToggleSaved: (ArticleListItem, Boolean) -> Unit = { _, _ -> },
     val onMarkedUnread: (String) -> Unit = {},
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
     val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
@@ -110,7 +110,7 @@ data class SearchTabActions(
     val onOpenArticle: (String) -> Unit,
     val onLoadMore: () -> Unit,
     val onCurrentCategoryOnlyChanged: (Boolean) -> Unit,
-    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
+    val onToggleSaved: (ArticleListItem, Boolean) -> Unit = { _, _ -> },
 )
 
 data class SettingsTabState(

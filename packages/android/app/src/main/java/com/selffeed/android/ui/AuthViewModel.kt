@@ -166,9 +166,7 @@ class AuthViewModel @Inject constructor(
 
     fun logout() {
         launchAuthAction {
-            _state.value = signedOutWhileLoading()
-            awaitActive { repository.logout() }
-            showSignedOut(repository.getApiBaseUrl())
+            if (clearLocalSession()) showSignedOut(repository.getApiBaseUrl())
         }
     }
 
@@ -200,15 +198,33 @@ class AuthViewModel @Inject constructor(
 
     fun switchServerForExternalAction(serverOrigin: String) {
         launchAuthAction {
-            _state.value = signedOutWhileLoading()
-            // The local logout completes before a new server can receive credentials.
-            awaitActive { repository.logout() }
+            if (!clearLocalSession()) return@launchAuthAction
             when (val result = awaitActive { repository.setApiBaseUrl(serverOrigin) }) {
                 is AppResult.Success -> showSignedOut(result.data)
                 is AppResult.Error -> _state.value = _state.value.copy(
                     loading = false,
                     errorMessage = result.message.toApiBaseUrlPresentationText(),
                 )
+            }
+        }
+    }
+
+    private suspend fun clearLocalSession(): Boolean {
+        val previous = _state.value.copy(passwordChangePending = false, errorMessage = null, statusMessage = null)
+        _state.value = previous.copy(loading = true)
+        when (awaitActive { repository.logout() }) {
+            is AppResult.Success -> {
+                _state.value = signedOutWhileLoading()
+                return true
+            }
+            is AppResult.Error -> {
+                val error = PresentationText.resource(R.string.auth_logout_failed)
+                if (previous.session != null && repository.isCurrentSession(previous.session)) {
+                    _state.value = previous.copy(loading = false, errorMessage = error)
+                } else {
+                    showSignedOut(repository.getApiBaseUrl(), error)
+                }
+                return false
             }
         }
     }

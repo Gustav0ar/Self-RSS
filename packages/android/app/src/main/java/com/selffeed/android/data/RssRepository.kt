@@ -557,7 +557,9 @@ class RssRepository @Inject constructor(
                             forceInitialRefresh = query.generation > 0L,
                             readRemoteKey = { account.commit(session) { localStore.readArticleRemoteKey(queryKey) } },
                             onCompletedRefresh = {
-                                if (query.savedOnly && networkMonitor.online.value) reconcileSavedArticles(queryKey, session) else AppResult.Success(Unit)
+                                if (query.savedOnly && networkMonitor.online.value) {
+                                    reconcileSavedArticles(queryKey, session, query.unreadOnly)
+                                } else AppResult.Success(Unit)
                             },
                             loadAndStorePage = { limit, cursor, clearExisting ->
                                 safeReadCall(session) {
@@ -591,8 +593,9 @@ class RssRepository @Inject constructor(
                             },
                         ),
                         pagingSourceFactory = {
-                            if (query.savedOnly) localStore.savedArticlePagingSource(session.ownerId)
-                            else localStore.articlePagingSource(queryKey, session.ownerId)
+                            if (query.savedOnly) {
+                                localStore.savedArticlePagingSource(session.ownerId, query.unreadOnly, oldest = query.sort == "oldest")
+                            } else localStore.articlePagingSource(queryKey, session.ownerId)
                         },
                     ).flow,
                 )
@@ -604,8 +607,9 @@ class RssRepository @Inject constructor(
     internal suspend fun reconcileSavedArticles(
         queryKey: String,
         expected: ApiSession? = sessionStore.loadedSession(),
+        unreadOnly: Boolean = false,
     ): AppResult<Unit> = safeReadCall(expected) { session ->
-        val missing = account.commit(session) { localStore.savedArticlesMissingFromQuery(queryKey) }
+        val missing = account.commit(session) { localStore.savedArticlesMissingFromQuery(queryKey, unreadOnly) }
         for (batch in missing.chunked(4)) {
             fetchArticleSnapshot(
                 session,
@@ -634,6 +638,7 @@ class RssRepository @Inject constructor(
                         }
                     } else {
                         localStore.updateArticleSavedState(snapshot.articleId, detail.isSaved, detail.savedRevision)
+                        if (unreadOnly) localStore.updateArticleReadState(snapshot.articleId, detail.isRead, detail.readRevision)
                     }
                     projectCachedArticleState(snapshot.articleId)
                 }
@@ -942,11 +947,11 @@ class RssRepository @Inject constructor(
         event.value.takeIf { sessionStore.isCurrentSession(event.session) }
     }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean) = safeCall { session ->
+    override suspend fun setSaved(articleId: String, saved: Boolean, listItem: ArticleListItem?) = safeCall { session ->
         val (receipt, previous) = withContext(NonCancellable) {
             val committed = articleStateProjectionMutex.withLock {
                 account.commit(session) {
-                    val pending = localStore.queueSavedStateMutation(articleId, saved)
+                    val pending = localStore.queueSavedStateMutation(articleId, saved, listItem)
                     val key = "article:$articleId"
                     val cached = runtime.getCached<ArticleDetail>(key)?.also {
                         runtime.putCached(key, ARTICLE_DETAIL_TTL_MS, it.copy(isSaved = saved))

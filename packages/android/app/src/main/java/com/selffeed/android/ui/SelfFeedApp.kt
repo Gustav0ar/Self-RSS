@@ -98,6 +98,7 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.ui.components.ArticleReaderPane
@@ -171,7 +172,7 @@ data class SelfFeedAppActions(
     val onArticleCompleted: (String) -> Unit = {},
     val onCloseArticle: () -> Unit,
     val onToggleRead: (String, Boolean) -> Unit,
-    val onToggleSaved: (String, Boolean) -> Unit = { _, _ -> },
+    val onToggleSaved: (ArticleListItem, Boolean) -> Unit = { _, _ -> },
     val onMarkAllRead: () -> Unit,
     val onArticleSnapshot: (List<ArticleListItem>) -> Unit,
     val onVisibleArticles: (List<ArticleListItem>) -> Unit = {},
@@ -284,22 +285,6 @@ fun SelfFeedApp(
     val resolvedErrorMessage = errorMessage?.resolve()
     val resolvedStatusMessage = statusMessage?.resolve()
 
-    LaunchedEffect(resolvedErrorMessage) {
-        resolvedErrorMessage?.let {
-            actions.onClearMessages()
-            snackbarHostState.showSnackbar(it)
-        }
-    }
-    LaunchedEffect(resolvedStatusMessage) {
-        resolvedStatusMessage?.let {
-            actions.onClearMessages()
-            snackbarHostState.showSnackbar(
-                message = it,
-                duration = SnackbarDuration.Short,
-            )
-        }
-    }
-
     if (state.auth.loading) {
         LoadingScreen()
         return
@@ -316,6 +301,16 @@ fun SelfFeedApp(
             onRegister = actions.onRegister,
         )
         return
+    }
+
+    LaunchedEffect(resolvedErrorMessage, resolvedStatusMessage) {
+        if (resolvedErrorMessage == null && resolvedStatusMessage == null) return@LaunchedEffect
+        // Consuming the message changes this effect's keys. The screen owns the displayed snackbar.
+        scope.launch {
+            resolvedErrorMessage?.let { snackbarHostState.showSnackbar(it) }
+            resolvedStatusMessage?.let { snackbarHostState.showSnackbar(it) }
+        }
+        actions.onClearMessages()
     }
 
     val articlePagingItems = articlePagingData.collectAsLazyPagingItems()
@@ -637,7 +632,7 @@ fun SelfFeedApp(
                     },
                     onToggleSaved = {
                         selectedArticle?.let { article ->
-                            actions.onToggleSaved(article.id, !article.isSaved)
+                            actions.onToggleSaved(article.toArticleListItem(), !article.isSaved)
                         }
                     },
                     onShare = {
