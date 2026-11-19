@@ -88,7 +88,9 @@ export function SidebarBody({
 						</p>
 						<h2 className="mt-1.5 text-base font-semibold tracking-tight">Your feeds</h2>
 						<p className="mt-0.5 text-xs text-muted-foreground">
-							{totalUnread > 0 ? `${totalUnread} unread stories` : 'Everything is caught up'}
+							{totalUnread > 0
+								? `${totalUnread} unread ${totalUnread === 1 ? 'story' : 'stories'}`
+								: 'Everything is caught up'}
 						</p>
 					</div>
 					<div className="surface-muted rounded-xl px-2.5 py-1.5 text-right">

@@ -6,6 +6,7 @@ import { clearTokens, setTokens } from '../../src/lib/api';
 import {
 	flushOfflineArticleMutations,
 	hasPendingArticleStateMutation,
+	isSignedOutLocally,
 	loadOfflineUser,
 	persistQueryClient,
 	queueArticleStateMutation,
@@ -78,6 +79,25 @@ describe('offline article mutation outbox', () => {
 		).toBe(true);
 	});
 
+	it('keeps the durable head when opening IndexedDB for its acknowledgement fails', async () => {
+		setOfflineSessionUser('user-1');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		const open = indexedDB.open.bind(indexedDB);
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(async () => {
+				// Opening an existing store with a lower version fails asynchronously.
+				vi.spyOn(indexedDB, 'open').mockImplementationOnce((name) => open(name, 1));
+				return mutationResponse({ saved: true });
+			})
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'queued', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
+	});
+
 	it('retains the same durable mutation after a transient delivery failure', async () => {
 		setOfflineSessionUser('user-1');
 		const mutation = await queueArticleStateMutation('read', 'article-1', true, 'manual');
@@ -97,6 +117,38 @@ describe('offline article mutation outbox', () => {
 		expect(firstBody.mutationId).toBe(mutation.mutationId);
 		expect(secondBody.mutationId).toBe(mutation.mutationId);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		false,
+		true,
+	])('stops delivery if the outbox write aborts (conflict=%s)', async (conflict) => {
+		setOfflineSessionUser('user-1');
+		const queued = await queueArticleStateMutation('saved', 'article-1', true);
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(mutationResponse({ applied: !conflict, conflict, saved: true }))
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+		const put = IDBObjectStore.prototype.put;
+		const abortOutboxWrite = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
+			this: IDBObjectStore,
+			value,
+			key,
+		) {
+			const request = put.call(this, value, key);
+			if (String(key).includes(':outbox:')) this.transaction.abort();
+			return request;
+		});
+
+		expect(await flushOfflineArticleMutations()).toMatchObject([
+			{ status: 'queued', mutation: queued },
+		]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		abortOutboxWrite.mockRestore();
+		expect(await flushOfflineArticleMutations()).toMatchObject([
+			{ status: 'applied', mutation: queued },
+		]);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
 	});
 
 	it('retains a mutation when token refresh is temporarily unavailable', async () => {
@@ -236,6 +288,21 @@ describe('offline identity and query cache', () => {
 		await setSignedOutLocally(true);
 
 		expect(await loadOfflineUser()).toBeNull();
+	});
+
+	it('reports that local sign-out failed when the durable marker transaction aborts', async () => {
+		const put = IDBObjectStore.prototype.put;
+		vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementationOnce(function (
+			this: IDBObjectStore,
+			...args
+		) {
+			const request = put.apply(this, args);
+			this.transaction.abort();
+			return request;
+		});
+
+		expect(await setSignedOutLocally(true)).toBe(false);
+		expect(await isSignedOutLocally()).toBe(false);
 	});
 
 	it('rejects an offline identity lease created implausibly far in the future', async () => {

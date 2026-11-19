@@ -34,11 +34,12 @@ vi.mock('../../src/lib/api', () => ({
 	setAuthLostHandler: (handler: ((message: string) => void) | null) =>
 		setAuthLostHandlerMock(handler),
 	setTokens: (token: string) => setTokensMock(token),
+	setSessionOwner: vi.fn(),
 }));
 
 vi.mock('../../src/lib/offline-store', () => ({
 	clearOfflineQueryCache: () => clearOfflineQueryCacheMock(),
-	clearOfflineState: () => clearOfflineStateMock(),
+	clearOfflineState: (...args: unknown[]) => clearOfflineStateMock(...args),
 	flushOfflineArticleMutations: vi.fn(async () => []),
 	isSignedOutLocally: vi.fn(async () => false),
 	loadOfflineUser: () => loadOfflineUserMock(),
@@ -116,6 +117,7 @@ function renderWithQuery(node: ReactNode, queryClient = new QueryClient()) {
 describe('AuthProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		apiFetchMock.mockReset();
 		Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
 		getLastRefreshOutcomeMock.mockReturnValue('rejected');
 		loadOfflineUserMock.mockResolvedValue(null);
@@ -123,7 +125,7 @@ describe('AuthProvider', () => {
 		clearOfflineStateMock.mockResolvedValue(undefined);
 		saveOfflineUserMock.mockResolvedValue(undefined);
 		restoreQueryClientMock.mockResolvedValue(false);
-		setSignedOutLocallyMock.mockResolvedValue(undefined);
+		setSignedOutLocallyMock.mockResolvedValue(true);
 	});
 
 	afterEach(() => {
@@ -343,6 +345,67 @@ describe('AuthProvider', () => {
 		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
 	});
 
+	it('keeps the reader signed in until remote revocation succeeds if the local marker fails', async () => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock
+			.mockResolvedValueOnce({ data: user('current@example.com') })
+			.mockRejectedValueOnce(new TypeError('offline'))
+			.mockResolvedValueOnce({ data: { success: true } });
+		setSignedOutLocallyMock.mockResolvedValue(false);
+		const { queryClient } = renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+		);
+		await screen.findByText('current@example.com');
+		queryClient.setQueryData(['stats'], { totalUnread: 10 });
+
+		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+		await screen.findByText('Could not finish signing out. Please try again.');
+		expect(screen.getByText('current@example.com')).toBeTruthy();
+		expect(screen.getByText('logout-idle')).toBeTruthy();
+		expect(clearOfflineStateMock).not.toHaveBeenCalled();
+		expect(clearTokensMock).not.toHaveBeenCalled();
+		expect(queryClient.getQueryData(['stats'])).toEqual({ totalUnread: 10 });
+
+		fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+		await screen.findByText('logged-out');
+		expect(screen.getByText('no-logout-error')).toBeTruthy();
+		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
+	});
+
+	it('retains pending edits for the previous account when bootstrap verifies a different account', async () => {
+		loadOfflineUserMock.mockResolvedValue(user('old@example.com', 'old'));
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock.mockResolvedValue({ data: user('current@example.com') });
+
+		renderWithQuery(
+			<AuthProvider>
+				<AuthProbe />
+			</AuthProvider>,
+		);
+		await screen.findByText('current@example.com');
+		expect(clearOfflineStateMock).toHaveBeenCalledWith('old', { keepPendingChanges: true });
+	});
+
+	it('retains the original account’s edits when reconnect verifies a different account', async () => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		apiFetchMock
+			.mockResolvedValueOnce({ data: user('old@example.com', 'old') })
+			.mockResolvedValueOnce({ data: user('current@example.com') });
+		renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+		);
+		await screen.findByText('old@example.com');
+
+		fireEvent(window, new Event('online'));
+		await screen.findByText('The signed-in account changed. Please sign in again.');
+		expect(screen.getByText('logged-out')).toBeTruthy();
+		expect(clearOfflineStateMock).toHaveBeenCalledWith('old', { keepPendingChanges: true });
+	});
+
 	it('clears the session when another tab signs out the same account', async () => {
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock.mockResolvedValue({ data: user('current@example.com') });
@@ -401,6 +464,7 @@ describe('AuthProvider', () => {
 			expect(screen.getByText('logged-out')).toBeTruthy();
 		});
 		expect(clearTokensMock).toHaveBeenCalled();
+		expect(clearOfflineStateMock).toHaveBeenCalledWith('user-1', { keepPendingChanges: true });
 		expect(queryClient.getQueryData(['stats'])).toBeUndefined();
 	});
 });

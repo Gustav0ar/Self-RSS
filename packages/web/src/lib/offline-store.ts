@@ -52,10 +52,7 @@ interface ArticleRevisionState {
 }
 
 interface ArticleStateMutationResponse {
-	success: true;
-	applied: boolean;
 	conflict: boolean;
-	duplicate: boolean;
 	read?: boolean;
 	saved?: boolean;
 	revision: number;
@@ -99,7 +96,7 @@ function revisionsKey(userId: string) {
 
 function openDatabase(): Promise<IDBDatabase | null> {
 	if (!('indexedDB' in globalThis)) return Promise.resolve(null);
-	return new Promise((resolve) => {
+	return new Promise<IDBDatabase | null>((resolve) => {
 		const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
 		request.onupgradeneeded = (event) => {
 			if (!request.result.objectStoreNames.contains(STORE_NAME)) {
@@ -111,7 +108,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
 		};
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => resolve(null);
-	});
+	}).catch(() => null);
 }
 
 /** Recover v1 records, including those stranded by the old v2 upgrade. */
@@ -184,6 +181,7 @@ async function writeValue(
 ): Promise<boolean> {
 	const database = await openDatabase();
 	if (!database) {
+		if ('indexedDB' in globalThis) return false;
 		memoryFallbackStore.set(key, value);
 		return true;
 	}
@@ -198,10 +196,7 @@ async function writeValue(
 			database.close();
 			resolve(false);
 		};
-		transaction.onabort = () => {
-			database.close();
-			resolve(false);
-		};
+		transaction.onabort = transaction.onerror;
 	});
 }
 
@@ -213,28 +208,26 @@ async function updateValue<T>(
 	key: string,
 	update: (current: T | null) => T | null,
 	durability: WriteDurability = 'relaxed',
-): Promise<{ persisted: boolean; value: T | null }> {
+): Promise<boolean> {
 	const database = await openDatabase();
 	if (!database) {
+		if ('indexedDB' in globalThis) return false;
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
 		notifyOfflineChange(key.includes(':query-cache:'));
-		return { persisted: true, value };
+		return true;
 	}
 	return new Promise((resolve, reject) => {
 		const transaction = writeTransaction(database, durability);
 		const store = transaction.objectStore(STORE_NAME);
 		const request = store.get(key);
-		let value: T | null = null;
-		let updaterFailed = false;
 		request.onsuccess = () => {
 			try {
-				value = update((request.result as T | undefined) ?? null);
+				const value = update((request.result as T | undefined) ?? null);
 				if (value === null) store.delete(key);
 				else store.put(value, key);
 			} catch (error) {
-				updaterFailed = true;
 				transaction.abort();
 				database.close();
 				reject(error);
@@ -243,16 +236,13 @@ async function updateValue<T>(
 		transaction.oncomplete = () => {
 			database.close();
 			notifyOfflineChange(key.includes(':query-cache:'));
-			resolve({ persisted: true, value });
+			resolve(true);
 		};
 		transaction.onerror = () => {
 			database.close();
-			resolve({ persisted: false, value: null });
+			resolve(false);
 		};
-		transaction.onabort = () => {
-			database.close();
-			if (!updaterFailed) resolve({ persisted: false, value: null });
-		};
+		transaction.onabort = transaction.onerror;
 	});
 }
 
@@ -275,7 +265,8 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 			database.close();
 			resolve();
 		};
-	});
+		transaction.onabort = transaction.onerror;
+	}).catch(() => database.close());
 }
 
 async function withStoreLock<T>(name: string, operation: () => Promise<T>): Promise<T> {
@@ -434,9 +425,11 @@ export async function loadOfflineUser(): Promise<User | null> {
 	return candidate.user;
 }
 
-export async function setSignedOutLocally(value: boolean): Promise<void> {
-	if (value) await writeValue(signedOutKey(), { at: Date.now() }, 'strict');
-	else await deleteValue(signedOutKey(), 'strict');
+export async function setSignedOutLocally(value: boolean): Promise<boolean> {
+	if (!('indexedDB' in globalThis)) return false;
+	return updateValue(signedOutKey(), () => (value ? { at: Date.now() } : null), 'strict').catch(
+		() => false,
+	);
 }
 
 export async function isSignedOutLocally(): Promise<boolean> {
@@ -447,13 +440,18 @@ export async function clearOfflineQueryCache(userId = activeUserId): Promise<voi
 	if (userId) await deleteValue(cacheKey(userId));
 }
 
-export async function clearOfflineState(userId = activeUserId): Promise<void> {
+export async function clearOfflineState(
+	userId = activeUserId,
+	{ keepPendingChanges = false } = {},
+): Promise<void> {
 	const keys = [deleteValue(userKey(), 'strict')];
 	if (userId) {
 		dismissOfflineRejections(userId);
 		keys.push(deleteValue(cacheKey(userId)));
-		keys.push(deleteValue(outboxKey(userId), 'strict'));
-		keys.push(deleteValue(revisionsKey(userId), 'strict'));
+		if (!keepPendingChanges) {
+			keys.push(deleteValue(outboxKey(userId), 'strict'));
+			keys.push(deleteValue(revisionsKey(userId), 'strict'));
+		}
 	}
 	await Promise.all(keys);
 }
@@ -470,7 +468,7 @@ export async function queueArticleStateMutation(
 		const revisions =
 			(await readValue<Record<string, ArticleRevisionState>>(revisionsKey(userId))) ?? {};
 		let mutation: OfflineArticleMutation | null = null;
-		const result = await updateValue<OfflineArticleMutation[]>(
+		const persisted = await updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => {
 				const current = entries ?? [];
@@ -499,7 +497,7 @@ export async function queueArticleStateMutation(
 			},
 			'strict',
 		);
-		if (!result.persisted && 'indexedDB' in globalThis) {
+		if (!persisted) {
 			throw new Error('Offline storage is unavailable or full');
 		}
 		if (!mutation) throw new Error('Offline mutation could not be queued');
@@ -550,7 +548,7 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 				(left, right) => left.createdAt - right.createdAt,
 			);
 			const mutation = entries[0];
-			if (!mutation) break;
+			if (!mutation || activeUserId !== userId) break;
 			try {
 				const path = `/articles/${encodeURIComponent(mutation.articleId)}/${mutation.kind === 'read' ? 'read' : 'saved'}`;
 				const body =
@@ -572,7 +570,7 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 				});
 				const authoritativeState =
 					mutation.kind === 'read' ? response.data.read : response.data.saved;
-				await updateValue<Record<string, ArticleRevisionState>>(
+				const recorded = await updateValue<Record<string, ArticleRevisionState>>(
 					revisionsKey(userId),
 					(revisions) => ({
 						...(revisions ?? {}),
@@ -583,10 +581,14 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					}),
 					'strict',
 				);
-				if (response.data.conflict) {
-					await rebaseMutation(userId, mutation, response.data.revision);
-				} else {
-					await removeMutationIfCurrent(userId, mutation);
+				const acknowledged =
+					recorded &&
+					(response.data.conflict
+						? await rebaseMutation(userId, mutation, response.data.revision)
+						: await removeMutationIfCurrent(userId, mutation));
+				if (!acknowledged) {
+					results.push({ mutation, status: 'queued' });
+					break;
 				}
 				results.push({
 					mutation,
@@ -595,11 +597,10 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					revision: response.data.revision,
 				});
 			} catch (error) {
-				if (isTransientMutationError(error)) {
+				if (isTransientMutationError(error) || !(await removeMutationIfCurrent(userId, mutation))) {
 					results.push({ mutation, status: 'queued' });
 					break;
 				}
-				await removeMutationIfCurrent(userId, mutation);
 				reportOfflineRejection(userId);
 				results.push({ mutation, status: 'discarded' });
 			}
@@ -615,18 +616,18 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 }
 
 async function removeMutationIfCurrent(userId: string, mutation: OfflineArticleMutation) {
-	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(
+	return withStoreLock(`outbox:${userId}`, () =>
+		updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => (entries ?? []).filter((entry) => entry.mutationId !== mutation.mutationId),
 			'strict',
-		);
-	});
+		),
+	);
 }
 
 async function rebaseMutation(userId: string, mutation: OfflineArticleMutation, revision: number) {
-	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(
+	return withStoreLock(`outbox:${userId}`, () =>
+		updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => {
 				const current = (entries ?? []).find(
@@ -643,6 +644,6 @@ async function rebaseMutation(userId: string, mutation: OfflineArticleMutation, 
 				);
 			},
 			'strict',
-		);
-	});
+		),
+	);
 }

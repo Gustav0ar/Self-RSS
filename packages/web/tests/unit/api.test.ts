@@ -8,6 +8,7 @@ import {
 	loadTokens,
 	refreshAccessToken,
 	setAuthLostHandler,
+	setSessionOwner,
 	setTokens,
 } from '../../src/lib/api';
 
@@ -73,6 +74,38 @@ describe('api module', () => {
 			const requestInit = calls[0]?.[1] as RequestInit | undefined;
 			const headers = (requestInit?.headers ?? {}) as Record<string, string>;
 			expect(headers['X-Self-Feed-Client-Id']).toBeTruthy();
+		});
+
+		it('serializes cookie rotation when two tabs bootstrap at once', async () => {
+			vi.resetModules();
+			const otherTab = await import('../../src/lib/api');
+			let previous = Promise.resolve();
+			const requestLock = vi.fn((_name: string, run: () => Promise<boolean>) => {
+				const next = previous.then(run);
+				previous = next.then(() => {});
+				return next;
+			});
+			vi.stubGlobal('navigator', { locks: { request: requestLock } });
+			let cookie = 0;
+			vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+				const submitted = cookie;
+				await Promise.resolve();
+				if (submitted !== cookie) return new Response(null, { status: 401 });
+				cookie++;
+				return Response.json({ data: { tokens: { accessToken: String(cookie) } } });
+			});
+			try {
+				expect(await Promise.all([refreshAccessToken(), otherTab.refreshAccessToken()])).toEqual([
+					true,
+					true,
+				]);
+				expect(new Set(requestLock.mock.calls.map(([name]) => name))).toEqual(
+					new Set(['self-feed:auth-refresh']),
+				);
+				expect(otherTab.getAccessToken()).not.toBe(getAccessToken());
+			} finally {
+				vi.unstubAllGlobals();
+			}
 		});
 
 		it('includes device metadata headers on refresh requests', async () => {
@@ -153,6 +186,43 @@ describe('api module', () => {
 			expect(fetchMock).toHaveBeenCalledTimes(2); // 1st attempt + failed refresh
 		});
 
+		it('never replays a mutation when the shared cookie has switched accounts', async () => {
+			const token = (sub: string) => `header.${btoa(JSON.stringify({ sub }))}.signature`;
+			setTokens(token('original-reader'));
+			setSessionOwner('original-reader');
+			const onAuthLost = vi.fn();
+			setAuthLostHandler(onAuthLost);
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValueOnce(new Response(null, { status: 401 }))
+				.mockResolvedValueOnce(
+					Response.json({ data: { tokens: { accessToken: token('other-reader') } } }),
+				);
+
+			await expect(apiFetch('/articles/item/read', { method: 'PATCH' })).rejects.toMatchObject({
+				status: 401,
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(getAccessToken()).toBeNull();
+			expect(getLastRefreshOutcome()).toBe('rejected');
+			expect(onAuthLost).toHaveBeenCalledOnce();
+		});
+
+		it('discards an old request’s late 401 after the reader changes accounts', async () => {
+			const response = Promise.withResolvers<Response>();
+			const onAuthLost = vi.fn();
+			setAuthLostHandler(onAuthLost);
+			setSessionOwner('original-reader');
+			const fetchMock = vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(response.promise);
+			const pending = apiFetch('/articles/item/read', { method: 'PATCH' });
+			setSessionOwner('other-reader');
+			response.resolve(new Response(null, { status: 401 }));
+
+			await expect(pending).rejects.toMatchObject({ status: 401 });
+			expect(fetchMock).toHaveBeenCalledOnce();
+			expect(onAuthLost).not.toHaveBeenCalled();
+		});
+
 		it('keeps the local session when refresh is temporarily unavailable', async () => {
 			setTokens('expired-token');
 			const onAuthLost = vi.fn();
@@ -163,7 +233,10 @@ describe('api module', () => {
 				.mockResolvedValueOnce(new Response('', { status: 503 }));
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
-			await expect(apiFetch('/test')).rejects.toThrow();
+			await expect(apiFetch('/test')).rejects.toMatchObject({
+				status: 503,
+				code: 'AUTH_UNAVAILABLE',
+			});
 
 			expect(getLastRefreshOutcome()).toBe('unavailable');
 			expect(getAccessToken()).toBe('expired-token');
