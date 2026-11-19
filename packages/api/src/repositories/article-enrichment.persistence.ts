@@ -1,6 +1,13 @@
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { articleMedia, articles, feeds } from '../db/schema.js';
+
+export interface EnrichmentAttempt {
+	articleId: string;
+	attempts: number;
+	contentVersion: number;
+	hash: string;
+}
 
 export interface EnrichedContentReplacement {
 	contentHtml: string | null;
@@ -51,6 +58,7 @@ export async function queueArticleEnrichments(
 function dueArticleEnrichment(at: Date) {
 	return and(
 		eq(articles.contentStatus, 'enrichment_pending'),
+		ne(articles.canonicalUrl, ''),
 		or(isNull(articles.nextEnrichmentAt), lte(articles.nextEnrichmentAt, at)),
 	);
 }
@@ -60,17 +68,10 @@ export function findPendingArticleEnrichments(db: Database, limit: number, now =
 		.select({
 			articleId: articles.id,
 			userId: feeds.userId,
-			feedId: articles.feedId,
-			canonicalUrl: articles.canonicalUrl,
-			contentHtml: articles.contentHtml,
-			heroImageUrl: articles.heroImageUrl,
-			fetchedAt: articles.fetchedAt,
-			enrichmentQueuedAt: articles.enrichmentQueuedAt,
-			contentVersion: articles.contentVersion,
 		})
 		.from(articles)
 		.innerJoin(feeds, eq(articles.feedId, feeds.id))
-		.where(and(dueArticleEnrichment(now), sql`${articles.canonicalUrl} IS NOT NULL`))
+		.where(dueArticleEnrichment(now))
 		.orderBy(asc(articles.nextEnrichmentAt), desc(articles.fetchedAt))
 		.limit(limit);
 }
@@ -88,22 +89,35 @@ export async function markArticleEnrichmentAttempt(
 			nextEnrichmentAt: null,
 		})
 		.where(and(eq(articles.id, articleId), dueArticleEnrichment(attemptedAt)))
-		.returning({ attempts: articles.enrichmentAttempts });
-	return attempt?.attempts ?? null;
+		.returning({
+			articleId: articles.id,
+			attempts: articles.enrichmentAttempts,
+			contentVersion: articles.contentVersion,
+			hash: articles.hash,
+			canonicalUrl: articles.canonicalUrl,
+			title: articles.title,
+			author: articles.author,
+			contentHtml: articles.contentHtml,
+			heroImageUrl: articles.heroImageUrl,
+		});
+	return attempt?.canonicalUrl ? { ...attempt, canonicalUrl: attempt.canonicalUrl } : null;
 }
 
-function currentAttempt(articleId: string, attempts: number) {
+function currentAttempt(attempt: EnrichmentAttempt) {
 	return and(
-		eq(articles.id, articleId),
+		eq(articles.id, attempt.articleId),
 		eq(articles.contentStatus, 'enrichment_pending'),
-		eq(articles.enrichmentAttempts, attempts),
+		eq(articles.enrichmentAttempts, attempt.attempts),
+		eq(articles.contentVersion, attempt.contentVersion),
+		// Legacy refreshes change the hash without advancing the public content version.
+		eq(articles.hash, attempt.hash),
 	);
 }
 
 export async function markArticleEnrichmentRetry(
 	db: Database,
-	articleId: string,
-	data: { attempts: number; failed: boolean; error: string; nextEnrichmentAt: Date | null },
+	attempt: EnrichmentAttempt,
+	data: { failed: boolean; error: string; nextEnrichmentAt: Date | null },
 ) {
 	const [updated] = await db
 		.update(articles)
@@ -113,15 +127,14 @@ export async function markArticleEnrichmentRetry(
 			enrichmentError: data.error,
 			nextEnrichmentAt: data.nextEnrichmentAt,
 		})
-		.where(currentAttempt(articleId, data.attempts))
+		.where(currentAttempt(attempt))
 		.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId });
 	return updated ?? null;
 }
 
 export async function markArticleEnrichmentComplete(
 	db: Database,
-	articleId: string,
-	attempts: number,
+	attempt: EnrichmentAttempt,
 	enrichedAt = new Date(),
 ) {
 	const [updated] = await db
@@ -133,16 +146,15 @@ export async function markArticleEnrichmentComplete(
 			enrichmentError: null,
 			nextEnrichmentAt: null,
 		})
-		.where(currentAttempt(articleId, attempts))
+		.where(currentAttempt(attempt))
 		.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId });
 	return updated ?? null;
 }
 
 export function replaceArticleEnrichedContent(
 	db: Database,
-	articleId: string,
+	attempt: EnrichmentAttempt,
 	data: EnrichedContentReplacement,
-	attempts: number,
 ) {
 	return db.transaction((tx) => {
 		const [updated] = tx
@@ -159,11 +171,11 @@ export function replaceArticleEnrichedContent(
 				enrichmentError: null,
 				nextEnrichmentAt: null,
 			})
-			.where(currentAttempt(articleId, attempts))
+			.where(currentAttempt(attempt))
 			.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId })
 			.all();
 		if (!updated) return null;
-		tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId)).run();
+		tx.delete(articleMedia).where(eq(articleMedia.articleId, attempt.articleId)).run();
 		if (data.media.length > 0) tx.insert(articleMedia).values(data.media).run();
 		return updated;
 	});

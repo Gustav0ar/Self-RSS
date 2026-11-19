@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import Redis from 'ioredis';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheKeys, normalizeRedisUrl } from '../../src/db/redis.js';
 import * as schema from '../../src/db/schema.js';
 import { ArticleRepository } from '../../src/repositories/article.repository.js';
@@ -253,6 +253,98 @@ describe('article enrichment queue', () => {
 		}
 	});
 
+	it.each([
+		'durable',
+		'legacy',
+	] as const)('preserves a %s publisher correction during an enrichment fetch', async (pipeline) => {
+		const requested = Promise.withResolvers<string>();
+		const respond = Promise.withResolvers<Response>();
+		const publisher = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch(request) {
+				requested.resolve(new URL(request.url).pathname);
+				return respond.promise;
+			},
+		});
+		try {
+			await fixture.repo.updateContent(articleId, {
+				canonicalUrl: new URL('/old', publisher.url).href,
+				contentStatus: 'enrichment_pending',
+			});
+			const selectPending = fixture.repo.findPendingEnrichments.bind(fixture.repo);
+			vi.spyOn(fixture.repo, 'findPendingEnrichments').mockImplementationOnce(async (limit) => {
+				const selected = await selectPending(limit);
+				await fixture.repo.updateContent(articleId, {
+					canonicalUrl: new URL('/at-claim', publisher.url).href,
+					hash: 'at-claim',
+				});
+				return selected;
+			});
+
+			const replaceContent = vi.spyOn(fixture.repo, 'replaceEnrichedContent');
+			const work = createWorker().processPendingArticleEnrichments();
+			expect(await requested.promise).toBe('/at-claim');
+			const correctedMedia = {
+				articleId,
+				type: 'image' as const,
+				provider: 'example.com',
+				url: 'https://example.com/correction.png',
+				position: 0,
+			};
+			await fixture.repo.persistSyncResults({
+				articlesToInsert: [],
+				articlesToUpdate: [
+					{
+						id: articleId,
+						contentHtml: '<p>Publisher correction</p>',
+						contentText: 'Publisher correction',
+						excerpt: 'Publisher correction',
+						heroImageUrl: correctedMedia.url,
+						hash: 'publisher-correction',
+						incrementContentVersion: pipeline === 'durable',
+					},
+				],
+				mediaByGuid: new Map(),
+				updatedMediaByArticleId: new Map([[articleId, [correctedMedia]]]),
+			});
+			const stale = { articleId, attempts: 1, contentVersion: 1, hash: 'at-claim' };
+			expect(
+				await fixture.repo.markEnrichmentRetry(stale, {
+					failed: true,
+					error: 'old error',
+					nextEnrichmentAt: null,
+				}),
+			).toBeNull();
+			expect(await fixture.repo.markEnrichmentComplete(stale)).toBeNull();
+
+			respond.resolve(
+				new Response(
+					`<article><div class="entry-content"><p>${'Superseded content from the earlier request. '.repeat(20)}</p><img src="/stale.png"></div></article>`,
+					{ headers: { 'content-type': 'text/html' } },
+				),
+			);
+			expect(await work).toEqual({ processed: 0, succeeded: 0, failed: 0 });
+			expect(replaceContent).toHaveBeenCalledWith(
+				expect.objectContaining(stale),
+				expect.objectContaining({ contentText: expect.stringContaining('Superseded content') }),
+			);
+			expect(await fixture.repo.findById(articleId)).toMatchObject({
+				contentText: 'Publisher correction',
+				contentStatus: 'enrichment_pending',
+				contentVersion: pipeline === 'durable' ? 2 : 1,
+				hash: 'publisher-correction',
+			});
+			expect(
+				fixture.db.select({ url: schema.articleMedia.url }).from(schema.articleMedia).all(),
+			).toEqual([{ url: correctedMedia.url }]);
+			expect(await fixture.repo.findPendingEnrichments(1)).toEqual([{ articleId, userId }]);
+		} finally {
+			respond.resolve(new Response(null, { status: 503 }));
+			publisher.stop(true);
+		}
+	});
+
 	it('leaves the last attempt to the worker fetching it and requeues failures only on request', async () => {
 		const requested = Promise.withResolvers<void>();
 		const respond = Promise.withResolvers<Response>();
@@ -295,16 +387,20 @@ describe('article enrichment queue', () => {
 				enrichmentAttempts: 0,
 				enrichmentError: null,
 			});
-			expect(await fixture.repo.markEnrichmentAttempt(articleId)).toBe(1);
+			const attempt = await fixture.repo.markEnrichmentAttempt(articleId);
+			if (!attempt) throw new Error('Expected a new enrichment attempt');
+			expect(attempt.attempts).toBe(1);
 			expect(
-				await fixture.repo.markEnrichmentRetry(articleId, {
-					failed: true,
-					attempts: 5,
-					error: 'old worker',
-					nextEnrichmentAt: null,
-				}),
+				await fixture.repo.markEnrichmentRetry(
+					{ ...attempt, attempts: 5 },
+					{
+						failed: true,
+						error: 'old worker',
+						nextEnrichmentAt: null,
+					},
+				),
 			).toBeNull();
-			expect(await fixture.repo.markEnrichmentComplete(articleId, 1)).not.toBeNull();
+			expect(await fixture.repo.markEnrichmentComplete(attempt)).not.toBeNull();
 			const completed = await fixture.repo.findById(articleId);
 			await createWorker().queueArticleEnrichment(articleId);
 			await fixture.repo.queueEnrichments([articleId]);

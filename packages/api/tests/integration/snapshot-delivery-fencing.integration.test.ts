@@ -143,6 +143,7 @@ describe('snapshot delivery transaction fencing', () => {
 			id: 'one',
 			feedId: 'feed',
 			guid: 'old-guid',
+			canonicalUrl: 'https://example.com/article',
 			title: 'Before correction',
 			hash: 'prior',
 			contentStatus: 'enrichment_pending',
@@ -150,28 +151,25 @@ describe('snapshot delivery transaction fencing', () => {
 		const afterCommit = vi.fn();
 		const worker = new FeedSnapshotDeliveryService(repository, articles, {
 			beforePersist: async () => {
-				expect(await articles.markEnrichmentAttempt('one')).toBe(1);
-				await articles.replaceEnrichedContent(
-					'one',
-					{
-						contentHtml: '<p>Full article</p>',
-						contentText: 'Full article',
-						excerpt: 'Full article',
-						heroImageUrl: null,
-						hash: 'enriched',
-						enrichedAt: now,
-						media: [
-							{
-								articleId: 'one',
-								url: 'https://example.com/photo.png',
-								provider: 'example.com',
-								type: 'image',
-								position: 0,
-							},
-						],
-					},
-					1,
-				);
+				const attempt = await articles.markEnrichmentAttempt('one');
+				if (!attempt) throw new Error('Expected pending article to be claimed');
+				await articles.replaceEnrichedContent(attempt, {
+					contentHtml: '<p>Full article</p>',
+					contentText: 'Full article',
+					excerpt: 'Full article',
+					heroImageUrl: null,
+					hash: 'enriched',
+					enrichedAt: now,
+					media: [
+						{
+							articleId: 'one',
+							url: 'https://example.com/photo.png',
+							provider: 'example.com',
+							type: 'image',
+							position: 0,
+						},
+					],
+				});
 			},
 			afterCommit,
 		});

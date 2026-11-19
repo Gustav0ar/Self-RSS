@@ -12,6 +12,7 @@ import {
 import { decodeArticleCursor } from '../utils/article-cursor.js';
 import {
 	type EnrichedContentReplacement,
+	type EnrichmentAttempt,
 	findPendingArticleEnrichments,
 	markArticleEnrichmentAttempt,
 	markArticleEnrichmentComplete,
@@ -419,22 +420,18 @@ export class ArticleRepository {
 	}
 
 	async markEnrichmentRetry(
-		articleId: string,
-		data: { attempts: number; failed: boolean; error: string; nextEnrichmentAt: Date | null },
+		attempt: EnrichmentAttempt,
+		data: { failed: boolean; error: string; nextEnrichmentAt: Date | null },
 	) {
-		return markArticleEnrichmentRetry(this.db, articleId, data);
+		return markArticleEnrichmentRetry(this.db, attempt, data);
 	}
 
-	async markEnrichmentComplete(articleId: string, attempts: number) {
-		return markArticleEnrichmentComplete(this.db, articleId, attempts);
+	async markEnrichmentComplete(attempt: EnrichmentAttempt) {
+		return markArticleEnrichmentComplete(this.db, attempt);
 	}
 
-	async replaceEnrichedContent(
-		articleId: string,
-		data: EnrichedContentReplacement,
-		attempts: number,
-	) {
-		return replaceArticleEnrichedContent(this.db, articleId, data, attempts);
+	async replaceEnrichedContent(attempt: EnrichmentAttempt, data: EnrichedContentReplacement) {
+		return replaceArticleEnrichedContent(this.db, attempt, data);
 	}
 
 	async replaceMedia(articleId: string, data: (typeof articleMedia.$inferInsert)[]) {

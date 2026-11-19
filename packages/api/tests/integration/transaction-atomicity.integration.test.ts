@@ -453,7 +453,7 @@ describe('Bun SQLite repository transaction atomicity', () => {
 		expect(() =>
 			replaceArticleEnrichedContent(
 				db,
-				'article-1',
+				{ articleId: 'article-1', attempts: 1, contentVersion: 1, hash: 'old-hash' },
 				{
 					contentHtml: '<p>Enriched</p>',
 					contentText: 'Enriched',
@@ -471,7 +471,6 @@ describe('Bun SQLite repository transaction atomicity', () => {
 						},
 					],
 				},
-				1,
 			),
 		).toThrow('enriched media rejected');
 

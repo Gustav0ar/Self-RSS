@@ -418,14 +418,6 @@ describe('FeedSyncService', () => {
 			del: vi.fn(async () => 1),
 		};
 		const articleRepo = {
-			findById: vi.fn(async () => ({
-				id: 'article-1',
-				canonicalUrl: 'https://example.com/post-1',
-				title: 'Post 1',
-				author: null,
-				contentHtml: '<p>Short</p>',
-				heroImageUrl: null,
-			})),
 			replaceEnrichedContent: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 2 })),
 		};
 		const service = new FeedSyncService(
@@ -450,34 +442,23 @@ describe('FeedSyncService', () => {
 			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="../about">About</a><img src="images/hero.jpg"><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
 		);
 
+		const attempt = {
+			articleId: 'article-1',
+			attempts: 1,
+			contentVersion: 1,
+			hash: 'prior',
+			canonicalUrl: 'https://example.com/post-1',
+			title: 'Post 1',
+			author: null,
+			contentHtml: '<p>Short</p>',
+			heroImageUrl: null,
+		};
 		await (
-			service as unknown as {
-				enrichSingleArticle: (
-					enrichment: {
-						articleId: string;
-						userId: string;
-						canonicalUrl: string;
-						contentHtml: string | null;
-						heroImageUrl: string | null;
-						fetchedAt: Date;
-					},
-					attempts: number,
-				) => Promise<void>;
-			}
-		).enrichSingleArticle(
-			{
-				articleId: 'article-1',
-				userId: 'user-1',
-				canonicalUrl: 'https://example.com/post-1',
-				contentHtml: '<p>Short</p>',
-				heroImageUrl: null,
-				fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
-			},
-			1,
-		);
+			service as unknown as { enrichSingleArticle: (claim: typeof attempt) => Promise<unknown> }
+		).enrichSingleArticle(attempt);
 
 		expect(articleRepo.replaceEnrichedContent).toHaveBeenCalledWith(
-			'article-1',
+			attempt,
 			expect.objectContaining({
 				contentHtml:
 					'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="https://example.com/about">About</a><img src="https://example.com/images/hero.jpg"></article>',
@@ -487,7 +468,6 @@ describe('FeedSyncService', () => {
 					'Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test. About',
 				heroImageUrl: 'https://example.com/images/hero.jpg',
 			}),
-			1,
 		);
 	});
 

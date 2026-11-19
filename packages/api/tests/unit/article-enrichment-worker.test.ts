@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 
-function pendingJob() {
+function pendingJob(attempts = 1) {
 	return {
+		attempts,
+		hash: 'feed-hash',
+		title: 'Article',
+		author: null,
 		articleId: 'article-1',
 		userId: 'user-1',
 		feedId: 'feed-1',
@@ -35,7 +39,7 @@ describe('durable article enrichment worker', () => {
 		}));
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => jobs),
-			markEnrichmentAttempt: vi.fn(async () => 1),
+			markEnrichmentAttempt: vi.fn(async () => pendingJob(1)),
 			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
@@ -63,7 +67,7 @@ describe('durable article enrichment worker', () => {
 	it('claims due database work before enriching it', async () => {
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
-			markEnrichmentAttempt: vi.fn(async () => 1),
+			markEnrichmentAttempt: vi.fn(async () => pendingJob(1)),
 			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
@@ -84,7 +88,7 @@ describe('durable article enrichment worker', () => {
 	it('persists retry state with backoff when canonical extraction fails', async () => {
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
-			markEnrichmentAttempt: vi.fn(async () => 2),
+			markEnrichmentAttempt: vi.fn(async () => pendingJob(2)),
 			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
@@ -98,7 +102,7 @@ describe('durable article enrichment worker', () => {
 		const result = await service.processPendingArticleEnrichments();
 
 		expect(articleRepo.markEnrichmentRetry).toHaveBeenCalledWith(
-			'article-1',
+			pendingJob(2),
 			expect.objectContaining({
 				failed: false,
 				error: 'publisher unavailable',
@@ -111,7 +115,7 @@ describe('durable article enrichment worker', () => {
 	it('invalidates and publishes the terminal failed content version', async () => {
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
-			markEnrichmentAttempt: vi.fn(async () => 5),
+			markEnrichmentAttempt: vi.fn(async () => pendingJob(5)),
 			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 2 })),
 		};
 		const redis = { del: vi.fn(async () => 1) };

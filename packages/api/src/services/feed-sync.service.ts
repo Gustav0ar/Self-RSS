@@ -716,22 +716,19 @@ export class FeedSyncService {
 
 			try {
 				// Another worker may have completed or deferred the selected row before we acquired the lock.
-				const attempts = await this.articleRepo.markEnrichmentAttempt(item.articleId);
-				if (attempts === null) continue;
+				const attempt = await this.articleRepo.markEnrichmentAttempt(item.articleId);
+				if (!attempt) continue;
 				const startedAt = Date.now();
 				let updated: Awaited<ReturnType<ArticleRepository['markEnrichmentRetry']>>;
 				let outcome: 'success' | 'failed' | 'retry';
 				try {
-					updated = await this.enrichSingleArticle(
-						{ ...item, canonicalUrl: item.canonicalUrl! },
-						attempts,
-					);
+					updated = await this.enrichSingleArticle(attempt);
 					outcome = 'success';
 				} catch (error) {
-					const exhausted = attempts >= ARTICLE_ENRICHMENT_MAX_ATTEMPTS;
-					const retryDelay = ARTICLE_ENRICHMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5);
-					updated = await this.articleRepo.markEnrichmentRetry(item.articleId, {
-						attempts,
+					const exhausted = attempt.attempts >= ARTICLE_ENRICHMENT_MAX_ATTEMPTS;
+					const retryDelay =
+						ARTICLE_ENRICHMENT_RETRY_BASE_MS * 2 ** Math.min(attempt.attempts - 1, 5);
+					updated = await this.articleRepo.markEnrichmentRetry(attempt, {
 						failed: exhausted,
 						error: error instanceof Error ? error.message : String(error),
 						nextEnrichmentAt: exhausted ? null : new Date(Date.now() + retryDelay),
@@ -761,7 +758,9 @@ export class FeedSyncService {
 		return { processed: succeeded + failed, succeeded, failed };
 	}
 
-	private async enrichSingleArticle(enrichment: PendingArticleEnrichment, attempts: number) {
+	private async enrichSingleArticle(
+		enrichment: NonNullable<Awaited<ReturnType<ArticleRepository['markEnrichmentAttempt']>>>,
+	) {
 		const enrichedHtml = await this.resolveEnrichedArticleHtml(enrichment.canonicalUrl);
 		if (!enrichedHtml) {
 			throw new Error('Canonical article content was unavailable');
@@ -784,18 +783,15 @@ export class FeedSyncService {
 			heroImage,
 		);
 
-		const article = await this.articleRepo.findById(enrichment.articleId);
-		if (!article) return null;
-
 		const replacement = {
 			contentHtml: sanitizedHtml || null,
 			contentText: textContent || null,
 			excerpt,
 			heroImageUrl: heroImage,
 			hash: createArticleContentHash({
-				canonicalUrl: article.canonicalUrl,
-				title: article.title,
-				author: article.author,
+				canonicalUrl: enrichment.canonicalUrl,
+				title: enrichment.title,
+				author: enrichment.author,
 				excerpt,
 				contentHtml: sanitizedHtml || null,
 				contentText: textContent || null,
@@ -814,8 +810,8 @@ export class FeedSyncService {
 			enrichedAt: new Date(),
 		};
 		return shouldReplace
-			? this.articleRepo.replaceEnrichedContent(enrichment.articleId, replacement, attempts)
-			: this.articleRepo.markEnrichmentComplete(enrichment.articleId, attempts);
+			? this.articleRepo.replaceEnrichedContent(enrichment, replacement)
+			: this.articleRepo.markEnrichmentComplete(enrichment);
 	}
 
 	private shouldAttemptArticleEnrichment(canonicalUrl: string | null) {
