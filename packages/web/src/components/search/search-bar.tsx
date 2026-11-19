@@ -3,7 +3,9 @@ import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { QueryFailure } from '@/components/query-failure';
-import { usePrefetchArticle, useSearch } from '@/hooks/queries';
+import { usePreferences, usePrefetchArticle, useSearch } from '@/hooks/queries';
+import { useDebouncedSearchTerm } from '@/hooks/search-queries';
+import { canUseAppShortcut } from '@/lib/keyboard-shortcuts';
 import type { SearchScope } from '@/routes/article-route-search';
 
 interface SearchBarProps {
@@ -26,7 +28,6 @@ export function SearchBar({
 	onScopeChange,
 }: SearchBarProps) {
 	const [uncontrolledQuery, setUncontrolledQuery] = useState('');
-	const [debouncedQuery, setDebouncedQuery] = useState('');
 	const [isOpen, setIsOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(-1);
 	const [uncontrolledScope, setUncontrolledScope] = useState<SearchScope>('all');
@@ -34,7 +35,9 @@ export function SearchBar({
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const prefetchArticle = usePrefetchArticle();
+	const shortcutsEnabled = usePreferences().data?.keyboardShortcutsEnabled ?? true;
 	const query = controlledQuery ?? uncontrolledQuery;
+	const debouncedQuery = useDebouncedSearchTerm(query);
 	const scope = controlledScope ?? uncontrolledScope;
 	const activeCategoryId = scope === 'category' ? categoryId : undefined;
 	const {
@@ -71,13 +74,6 @@ export function SearchBar({
 		}
 	}, [categoryId, scope, updateScope]);
 
-	useEffect(() => {
-		const timeout = window.setTimeout(() => {
-			setDebouncedQuery(query);
-		}, 300);
-		return () => window.clearTimeout(timeout);
-	}, [query]);
-
 	// Close the dropdown when clicking outside the search bar.
 	useEffect(() => {
 		if (!isOpen) return;
@@ -93,29 +89,25 @@ export function SearchBar({
 		return () => document.removeEventListener('pointerdown', handlePointer);
 	}, [isOpen]);
 
-	// Press `/` from anywhere (when not already typing) to focus the search.
 	useEffect(() => {
+		if (!shortcutsEnabled) return;
 		function handleKey(event: KeyboardEvent) {
-			if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
-			const target = event.target as HTMLElement | null;
-			if (target) {
-				const tag = target.tagName;
-				if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
-					return;
-				}
-			}
+			if (event.key !== '/' || !canUseAppShortcut(event)) return;
 			event.preventDefault();
 			inputRef.current?.focus();
 			inputRef.current?.select();
 		}
 		window.addEventListener('keydown', handleKey);
 		return () => window.removeEventListener('keydown', handleKey);
-	}, []);
+	}, [shortcutsEnabled]);
 
-	const resultIds = useMemo(() => results?.pages.flatMap((page) => page.data) ?? [], [results]);
+	const resultIds = useMemo(
+		() => (debouncedQuery ? (results?.pages.flatMap((page) => page.data) ?? []) : []),
+		[debouncedQuery, results],
+	);
 	const renderedResults = useMemo(() => resultIds.slice(0, MAX_RENDERED_RESULTS), [resultIds]);
 	const reachedRenderLimit = resultIds.length >= MAX_RENDERED_RESULTS;
-	const showDropdown = isOpen && debouncedQuery.trim().length >= 2;
+	const showDropdown = isOpen && query.trim().length >= 2;
 	const activeArticle =
 		activeIndex >= 0 && activeIndex < renderedResults.length
 			? renderedResults[activeIndex]
@@ -185,7 +177,7 @@ export function SearchBar({
 					role="combobox"
 					aria-expanded={showDropdown}
 					aria-controls={showDropdown ? listboxId : undefined}
-					aria-activedescendant={activeOptionId}
+					aria-activedescendant={showDropdown ? activeOptionId : undefined}
 					className="input-surface h-9 w-full rounded-full py-2 pl-10 pr-10 text-sm outline-none"
 				/>
 				{query ? (
@@ -193,7 +185,7 @@ export function SearchBar({
 						type="button"
 						onClick={() => {
 							updateQuery('');
-							setDebouncedQuery('');
+							inputRef.current?.focus();
 							setIsOpen(false);
 							setActiveIndex(-1);
 						}}
@@ -253,7 +245,7 @@ export function SearchBar({
 							? { role: 'listbox', 'aria-label': 'Search results' }
 							: {})}
 					>
-						{isLoading && renderedResults.length === 0 ? (
+						{(!debouncedQuery || isLoading) && renderedResults.length === 0 ? (
 							<div className="px-4 py-4 text-sm text-muted-foreground" role="status">
 								Searching...
 							</div>

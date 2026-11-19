@@ -2,6 +2,8 @@ import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog } from '@/components/ui/dialog';
+import { usePreferences } from '@/hooks/queries';
+import { canUseAppShortcut } from '@/lib/keyboard-shortcuts';
 
 interface ShortcutRow {
 	keys: string[];
@@ -23,18 +25,12 @@ const SHORTCUTS: ShortcutRow[] = [
 
 export function KeyboardHelp() {
 	const [open, setOpen] = useState(false);
+	const shortcutsEnabled = usePreferences().data?.keyboardShortcutsEnabled ?? true;
 
 	useEffect(() => {
+		if (!shortcutsEnabled) return;
 		function handleKey(event: KeyboardEvent) {
-			const target = event.target as HTMLElement | null;
-			if (target) {
-				const tag = target.tagName;
-				if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
-					return;
-				}
-			}
-
-			if (event.key === '?' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+			if (event.key === '?' && canUseAppShortcut(event)) {
 				event.preventDefault();
 				setOpen(true);
 			}
@@ -42,7 +38,7 @@ export function KeyboardHelp() {
 
 		window.addEventListener('keydown', handleKey);
 		return () => window.removeEventListener('keydown', handleKey);
-	}, []);
+	}, [shortcutsEnabled]);
 
 	if (!open) return null;
 

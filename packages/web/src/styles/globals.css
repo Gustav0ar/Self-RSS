@@ -310,32 +310,9 @@ a:focus-visible {
 	}
 }
 
-/* Skeleton shimmer for article list placeholders. */
-@keyframes skeleton-shimmer {
-	0% {
-		background-position: -240px 0;
-	}
-	100% {
-		background-position: 240px 0;
-	}
-}
-
 .skeleton-row {
-	background: linear-gradient(
-		90deg,
-		color-mix(in srgb, var(--color-muted) 70%, transparent) 0%,
-		color-mix(in srgb, var(--color-muted) 30%, transparent) 50%,
-		color-mix(in srgb, var(--color-muted) 70%, transparent) 100%
-	);
-	background-size: 480px 100%;
-	animation: skeleton-shimmer 1.4s ease-in-out infinite;
+	background: color-mix(in srgb, var(--color-muted) 70%, transparent);
 	border-radius: 0.75rem;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.skeleton-row {
-		animation: none;
-	}
 }
 
 .surface-muted {

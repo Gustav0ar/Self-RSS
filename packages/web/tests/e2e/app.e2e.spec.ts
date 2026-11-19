@@ -187,7 +187,11 @@ test('seeded user can browse articles, search, use keyboard navigation, and pers
 	await page.waitForURL(/\/articles\//);
 	await expect(page.getByRole('heading', { name: 'Gamma World' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Preferences' }).click();
+	await page.getByRole('button', { name: 'Preferences' }).press('Enter');
+	const dialog = page.getByRole('dialog', { name: 'Preferences' });
+	await expect(dialog).toBeVisible();
+	await dialog.getByRole('button').first().press('/');
+	await expect(page.getByRole('combobox', { name: 'Search articles' })).not.toBeFocused();
 	await page.getByRole('combobox', { name: 'Theme' }).selectOption('dark');
 	await page.getByRole('combobox', { name: 'Font Family' }).selectOption('Georgia');
 	await page.getByRole('checkbox', { name: 'Hide read articles' }).check();

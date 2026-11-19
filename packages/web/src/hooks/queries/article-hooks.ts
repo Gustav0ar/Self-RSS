@@ -94,7 +94,6 @@ function articleItemsFromCachedValue(value: unknown): ArticleListItem[] {
 export function buildSavedArticlesFallback(
 	qc: QueryClient,
 	params: ArticleQueryParams,
-	limit: number,
 ): InfiniteData<ApiListResponse<ArticleListItem>, string | null> | undefined {
 	if (!params.savedOnly || params.categoryId) return undefined;
 	const byId = new Map<string, ArticleListItem>();
@@ -123,15 +122,18 @@ export function buildSavedArticlesFallback(
 	}
 	const direction = params.sort === 'oldest' ? 1 : -1;
 	const data = [...byId.values()]
-		.filter((article) => !params.feedId || article.feedId === params.feedId)
+		.filter(
+			(article) =>
+				(!params.feedId || article.feedId === params.feedId) &&
+				(!params.unreadOnly || !article.isRead),
+		)
 		.sort(
 			(left, right) =>
 				direction *
 				(left.displayedAt ?? left.publishedAt ?? '').localeCompare(
 					right.displayedAt ?? right.publishedAt ?? '',
 				),
-		)
-		.slice(0, limit);
+		);
 	if (data.length === 0) return undefined;
 	return {
 		pages: [{ data, cursor: null, hasMore: false }],
@@ -173,7 +175,6 @@ export function useInfiniteArticles(
 			}),
 		[params.feedId, params.categoryId, params.unreadOnly, params.savedOnly, params.sort, limit],
 	);
-	const savedFallback = buildSavedArticlesFallback(qc, params, limit);
 	const query = useInfiniteQuery({
 		queryKey,
 		initialPageParam: null as string | null,
@@ -191,8 +192,9 @@ export function useInfiniteArticles(
 			});
 		},
 		getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.cursor : undefined),
-		initialData: savedFallback,
-		initialDataUpdatedAt: savedFallback ? 0 : undefined,
+		// Offline rows have no usable server cursor. Keep all retained matches in one page.
+		initialData: () => buildSavedArticlesFallback(qc, params),
+		initialDataUpdatedAt: 0,
 	});
 	useEffect(() => {
 		const error = query.error;

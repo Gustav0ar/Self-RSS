@@ -1,6 +1,17 @@
 import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
+
+export function useDebouncedSearchTerm(query: string) {
+	const normalized = query.trim();
+	const [term, setTerm] = useState(normalized);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setTerm(normalized), 300);
+		return () => window.clearTimeout(timer);
+	}, [normalized]);
+	return normalized.length >= 2 && term === normalized ? term : '';
+}
 
 export function useSearch(q: string, categoryId?: string) {
 	const normalizedQuery = q.trim();

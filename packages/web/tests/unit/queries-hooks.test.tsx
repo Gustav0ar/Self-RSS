@@ -328,12 +328,14 @@ describe('saved article offline fallback', () => {
 			contentVersion: 2,
 		});
 
-		const fallback = buildSavedArticlesFallback(queryClient, { savedOnly: true }, 30);
+		const fallback = buildSavedArticlesFallback(queryClient, { savedOnly: true, limit: 1 });
 
 		expect(fallback?.pages[0]?.data.map((article) => article.id)).toEqual([
 			'detail-saved',
 			'list-saved',
 		]);
+		const unread = buildSavedArticlesFallback(queryClient, { savedOnly: true, unreadOnly: true });
+		expect(unread?.pages[0]?.data.map((article) => article.id)).toEqual(['list-saved']);
 	});
 });
 

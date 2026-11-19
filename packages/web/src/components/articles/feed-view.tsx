@@ -29,6 +29,7 @@ import {
 	useWarmNextArticles,
 	useWarmVisibleArticles,
 } from '@/hooks/queries';
+import { useDebouncedSearchTerm } from '@/hooks/search-queries';
 import { useFeedLifecycleActions } from '@/hooks/use-feed-lifecycle-actions';
 import { useFeedRefresh } from '@/hooks/use-feed-refresh';
 import { useKeyboardNav } from '@/hooks/use-keyboard-nav';
@@ -104,8 +105,9 @@ export function FeedView({
 	);
 	const { data, isFetching, isFetchingNextPage, isLoading, fetchNextPage, hasNextPage } =
 		articlesQuery;
+	const searchTerm = useDebouncedSearchTerm(searchQuery);
 	const { data: searchData } = useSearch(
-		searchQuery,
+		searchTerm,
 		searchScope === 'category' ? categoryId : undefined,
 	);
 
@@ -123,12 +125,13 @@ export function FeedView({
 		[categoryId, categoryTree, feedId, unreadOnly],
 	);
 	const displayedTitle = savedOnly ? 'Saved' : viewTitle;
-	const displayedEmptyState = savedOnly
-		? {
-				title: 'No saved articles yet',
-				description: 'Save articles from the list or reader to keep them here.',
-			}
-		: emptyState;
+	const displayedEmptyState =
+		savedOnly && !unreadOnly
+			? {
+					title: 'No saved articles yet',
+					description: 'Save articles from the list or reader to keep them here.',
+				}
+			: emptyState;
 	const {
 		error: lifecycleActionError,
 		lifecycle: selectedLifecycle,
@@ -150,8 +153,7 @@ export function FeedView({
 		() => searchData?.pages.flatMap((page) => page.data) ?? [],
 		[searchData?.pages],
 	);
-	const readingQueue =
-		searchQuery.trim().length >= 2 && searchArticles.length > 0 ? searchArticles : articles;
+	const readingQueue = searchTerm && searchArticles.length > 0 ? searchArticles : articles;
 	const articleIds = useMemo(() => readingQueue.map((a) => a.id), [readingQueue]);
 	const listArticleIds = useMemo(() => articles.map((a) => a.id), [articles]);
 	// Keep deep-linked article ids while their surrounding list resolves.
@@ -382,11 +384,11 @@ export function FeedView({
 						emptyTitle={displayedEmptyState.title}
 						emptyDescription={displayedEmptyState.description}
 						emptyAction={
-							savedOnly ? null : unreadOnly ? (
+							unreadOnly ? (
 								<ToolbarButton onClick={handleUnreadOnlyToggle} label="Show all articles">
 									<Filter className="h-3.5 w-3.5" />
 								</ToolbarButton>
-							) : (
+							) : savedOnly ? null : (
 								<ToolbarButton
 									onClick={handleRefresh}
 									label="Refresh articles"

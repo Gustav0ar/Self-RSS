@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { canUseAppShortcut } from '@/lib/keyboard-shortcuts';
 
 export interface KeyboardNavOptions {
 	articleIds: string[];
@@ -68,12 +69,8 @@ export function useKeyboardNav({
 			enabled: latestEnabled,
 		} = stateRef.current;
 
-		if (!latestEnabled || latestArticleIds.length === 0) return;
-
-		const target = e.target as HTMLElement;
-		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+		if (!latestEnabled || latestArticleIds.length === 0 || e.shiftKey || !canUseAppShortcut(e))
 			return;
-		}
 
 		switch (e.key) {
 			case 'j':
