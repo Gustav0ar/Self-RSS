@@ -9,6 +9,12 @@ import {
 	reportOfflineRejection,
 } from './offline-changes';
 import {
+	isUser,
+	leasedUser,
+	OFFLINE_ACCESS_LEASE_MS,
+	type PersistedOfflineUser,
+} from './offline-identity';
+import {
 	boundedState,
 	cachedArticleIds,
 	isPersistedQueryCache,
@@ -24,16 +30,7 @@ const STORE_NAME = 'state';
 const DATABASE_VERSION = 3;
 // Version 3 migrates legacy records into the existing v2 record format.
 const SCHEMA_VERSION = 2;
-const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
-const OFFLINE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_OUTBOX_ENTRIES = 1_000;
-interface PersistedOfflineUser {
-	schemaVersion: number;
-	namespace: string;
-	cachedAt: number;
-	offlineAccessUntil: number;
-	user: User;
-}
 
 export type OfflineArticleMutationKind = 'read' | 'saved';
 
@@ -257,17 +254,6 @@ async function withStoreLock<T>(name: string, operation: () => Promise<T>): Prom
 	return operation();
 }
 
-function isUser(value: unknown): value is User {
-	if (!value || typeof value !== 'object') return false;
-	const candidate = value as Partial<User>;
-	return (
-		typeof candidate.id === 'string' &&
-		typeof candidate.email === 'string' &&
-		typeof candidate.role === 'string' &&
-		typeof candidate.isActive === 'boolean'
-	);
-}
-
 export function setOfflineSessionUser(userId: string | null) {
 	if (userId !== activeUserId) {
 		activeSession.abort();
@@ -348,7 +334,19 @@ export async function restoreQueryClient(
 	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION))
 		return false;
 	const state = boundedState(cached.state);
-	if (state.queries.length === 0) return false;
+	if (state.queries.length === 0) {
+		await updateValue(
+			cacheKey(userId),
+			(current) =>
+				isPersistedQueryCache(current, userId, namespace(), SCHEMA_VERSION) &&
+				boundedState(current.state).queries.length === 0
+					? null
+					: current,
+			'relaxed',
+			signal,
+		);
+		return false;
+	}
 	hydrate(queryClient, state);
 	return true;
 }
@@ -386,24 +384,15 @@ export async function saveOfflineUser(user: User): Promise<void> {
 export async function loadOfflineUser(): Promise<User | null> {
 	if (await isSignedOutLocally()) return null;
 	const cached = await readValue<unknown>(userKey());
-	if (!cached || typeof cached !== 'object') return null;
-	const candidate = cached as Partial<PersistedOfflineUser>;
-	const now = Date.now();
-	if (
-		candidate.schemaVersion !== SCHEMA_VERSION ||
-		candidate.namespace !== namespace() ||
-		typeof candidate.cachedAt !== 'number' ||
-		typeof candidate.offlineAccessUntil !== 'number' ||
-		candidate.cachedAt > now + OFFLINE_CLOCK_SKEW_MS ||
-		now - candidate.cachedAt > OFFLINE_ACCESS_LEASE_MS ||
-		candidate.offlineAccessUntil < now ||
-		candidate.offlineAccessUntil - candidate.cachedAt >
-			OFFLINE_ACCESS_LEASE_MS + OFFLINE_CLOCK_SKEW_MS ||
-		!isUser(candidate.user)
-	) {
-		return null;
+	const reader = leasedUser(cached, namespace(), SCHEMA_VERSION);
+	if (cached && !reader) {
+		await updateValue(
+			userKey(),
+			(current) => (leasedUser(current, namespace(), SCHEMA_VERSION) ? current : null),
+			'strict',
+		);
 	}
-	return candidate.user;
+	return reader;
 }
 
 export async function setSignedOutLocally(value: boolean): Promise<boolean> {

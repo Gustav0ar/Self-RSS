@@ -450,6 +450,8 @@ describe('offline identity and query cache', () => {
 		vi.mocked(Date.now).mockReturnValue(now);
 
 		expect(await loadOfflineUser()).toBeNull();
+		vi.mocked(Date.now).mockReturnValue(now + 10 * 60 * 1000);
+		expect(await loadOfflineUser()).toBeNull();
 	});
 
 	it('discards cache reads and writes that outlive the session', async () => {
