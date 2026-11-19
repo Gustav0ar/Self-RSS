@@ -4,6 +4,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearTokens, setTokens } from '../../src/lib/api';
 import {
+	clearOfflineState,
 	flushOfflineArticleMutations,
 	hasPendingArticleStateMutation,
 	isSignedOutLocally,
@@ -288,6 +289,26 @@ describe('offline identity and query cache', () => {
 		await setSignedOutLocally(true);
 
 		expect(await loadOfflineUser()).toBeNull();
+	});
+
+	it('retains pending edits and the newly verified offline reader when the old tab loses auth', async () => {
+		setOfflineSessionUser('old-reader');
+		await queueArticleStateMutation('saved', 'article-1', true);
+		const currentUser: User = {
+			id: 'current-reader',
+			email: 'current@example.com',
+			role: 'user',
+			isActive: true,
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+		};
+		await saveOfflineUser(currentUser);
+		await clearOfflineState('old-reader', { keepPendingChanges: true });
+
+		expect(await loadOfflineUser()).toEqual(currentUser);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(true);
+		setOfflineSessionUser(currentUser.id);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
 	});
 
 	it('reports that local sign-out failed when the durable marker transaction aborts', async () => {

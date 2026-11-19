@@ -174,32 +174,6 @@ function writeTransaction(database: IDBDatabase, durability: WriteDurability) {
 	}
 }
 
-async function writeValue(
-	key: string,
-	value: unknown,
-	durability: WriteDurability = 'relaxed',
-): Promise<boolean> {
-	const database = await openDatabase();
-	if (!database) {
-		if ('indexedDB' in globalThis) return false;
-		memoryFallbackStore.set(key, value);
-		return true;
-	}
-	return new Promise((resolve) => {
-		const transaction = writeTransaction(database, durability);
-		transaction.objectStore(STORE_NAME).put(value, key);
-		transaction.oncomplete = () => {
-			database.close();
-			resolve(true);
-		};
-		transaction.onerror = () => {
-			database.close();
-			resolve(false);
-		};
-		transaction.onabort = transaction.onerror;
-	});
-}
-
 /**
  * Atomically reads and updates one record. IndexedDB read/write transactions are
  * serialized across tabs, covering browsers that do not implement Web Locks.
@@ -388,15 +362,16 @@ export async function restoreOfflineArticle(queryClient: QueryClient, articleId:
 
 export async function saveOfflineUser(user: User): Promise<void> {
 	const cachedAt = Date.now();
-	await writeValue(
+	await updateValue(
 		userKey(),
-		{
-			schemaVersion: SCHEMA_VERSION,
-			namespace: namespace(),
-			cachedAt,
-			offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
-			user,
-		} satisfies PersistedOfflineUser,
+		() =>
+			({
+				schemaVersion: SCHEMA_VERSION,
+				namespace: namespace(),
+				cachedAt,
+				offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
+				user,
+			}) satisfies PersistedOfflineUser,
 		'strict',
 	);
 }
@@ -444,7 +419,13 @@ export async function clearOfflineState(
 	userId = activeUserId,
 	{ keepPendingChanges = false } = {},
 ): Promise<void> {
-	const keys = [deleteValue(userKey(), 'strict')];
+	// A different tab may already have verified and cached the next account.
+	const clearIdentity = updateValue<PersistedOfflineUser>(
+		userKey(),
+		(current) => (keepPendingChanges && current?.user?.id !== userId ? current : null),
+		'strict',
+	).catch(() => false);
+	const keys: Promise<unknown>[] = [clearIdentity];
 	if (userId) {
 		dismissOfflineRejections(userId);
 		keys.push(deleteValue(cacheKey(userId)));
