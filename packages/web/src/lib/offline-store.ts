@@ -66,6 +66,7 @@ export interface OfflineMutationFlushResult {
 }
 
 let activeUserId: string | null = null;
+let activeSession = new AbortController();
 const flushPromises = new Map<string, Promise<OfflineMutationFlushResult[]>>();
 const memoryFallbackStore = new Map<string, unknown>();
 type WriteDurability = 'relaxed' | 'strict';
@@ -182,10 +183,11 @@ async function updateValue<T>(
 	key: string,
 	update: (current: T | null) => T | null,
 	durability: WriteDurability = 'relaxed',
+	signal?: AbortSignal,
 ): Promise<boolean> {
 	const database = await openDatabase();
 	if (!database) {
-		if ('indexedDB' in globalThis) return false;
+		if (signal?.aborted || 'indexedDB' in globalThis) return false;
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
@@ -197,6 +199,10 @@ async function updateValue<T>(
 		const store = transaction.objectStore(STORE_NAME);
 		const request = store.get(key);
 		request.onsuccess = () => {
+			if (signal?.aborted) {
+				transaction.abort();
+				return;
+			}
 			try {
 				const value = update((request.result as T | undefined) ?? null);
 				if (value === null) store.delete(key);
@@ -262,7 +268,12 @@ function isUser(value: unknown): value is User {
 }
 
 export function setOfflineSessionUser(userId: string | null) {
-	activeUserId = userId;
+	if (userId !== activeUserId) {
+		activeSession.abort();
+		if (activeUserId) flushPromises.delete(activeUserId);
+		activeSession = new AbortController();
+		activeUserId = userId;
+	}
 	notifyOfflineChange();
 }
 
@@ -518,18 +529,19 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 	const userId = activeUserId;
 	if (!userId) return [];
 	if (typeof navigator !== 'undefined' && !navigator.onLine) return [];
+	const { signal } = activeSession;
 	const existingFlush = flushPromises.get(userId);
 	if (existingFlush) return existingFlush;
 	const flush = withStoreLock(`flush:${userId}`, async () => {
 		const results: OfflineMutationFlushResult[] = [];
 		let attempts = 0;
-		while (activeUserId === userId && attempts < MAX_OUTBOX_ENTRIES) {
+		while (!signal.aborted && attempts < MAX_OUTBOX_ENTRIES) {
 			attempts += 1;
 			const entries = ((await readValue<OfflineArticleMutation[]>(outboxKey(userId))) ?? []).sort(
 				(left, right) => left.createdAt - right.createdAt,
 			);
 			const mutation = entries[0];
-			if (!mutation || activeUserId !== userId) break;
+			if (!mutation || signal.aborted) break;
 			try {
 				const path = `/articles/${encodeURIComponent(mutation.articleId)}/${mutation.kind === 'read' ? 'read' : 'saved'}`;
 				const body =
@@ -547,8 +559,10 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 							};
 				const response = await apiFetch<ApiResponse<ArticleStateMutationResponse>>(path, {
 					method: 'PATCH',
+					signal,
 					body: JSON.stringify(body),
 				});
+				if (signal.aborted) break;
 				const authoritativeState =
 					mutation.kind === 'read' ? response.data.read : response.data.saved;
 				const recorded = await updateValue<Record<string, ArticleRevisionState>>(
@@ -561,12 +575,16 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 						},
 					}),
 					'strict',
+					signal,
 				);
 				const acknowledged =
 					recorded &&
-					(response.data.conflict
-						? await rebaseMutation(userId, mutation, response.data.revision)
-						: await removeMutationIfCurrent(userId, mutation));
+					(await acknowledgeMutation(
+						userId,
+						mutation,
+						signal,
+						response.data.conflict ? response.data.revision : undefined,
+					));
 				if (!acknowledged) {
 					results.push({ mutation, status: 'queued' });
 					break;
@@ -578,15 +596,20 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					revision: response.data.revision,
 				});
 			} catch (error) {
-				if (isTransientMutationError(error) || !(await removeMutationIfCurrent(userId, mutation))) {
+				if (signal.aborted) break;
+				if (
+					isTransientMutationError(error) ||
+					!(await acknowledgeMutation(userId, mutation, signal))
+				) {
 					results.push({ mutation, status: 'queued' });
 					break;
 				}
+				if (signal.aborted) break;
 				reportOfflineRejection(userId);
 				results.push({ mutation, status: 'discarded' });
 			}
 		}
-		return results;
+		return signal.aborted ? [] : results;
 	}).finally(() => {
 		if (flushPromises.get(userId) === flush) flushPromises.delete(userId);
 		notifyOfflineChange(false);
@@ -596,35 +619,28 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 	return flush;
 }
 
-async function removeMutationIfCurrent(userId: string, mutation: OfflineArticleMutation) {
-	return withStoreLock(`outbox:${userId}`, () =>
-		updateValue<OfflineArticleMutation[]>(
-			outboxKey(userId),
-			(entries) => (entries ?? []).filter((entry) => entry.mutationId !== mutation.mutationId),
-			'strict',
-		),
-	);
-}
-
-async function rebaseMutation(userId: string, mutation: OfflineArticleMutation, revision: number) {
+async function acknowledgeMutation(
+	userId: string,
+	mutation: OfflineArticleMutation,
+	signal: AbortSignal,
+	conflictRevision?: number,
+) {
 	return withStoreLock(`outbox:${userId}`, () =>
 		updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => {
-				const current = (entries ?? []).find(
-					(entry) => entry.articleId === mutation.articleId && entry.kind === mutation.kind,
-				);
-				if (!current) return entries ?? [];
-				const rebased: OfflineArticleMutation = {
-					...current,
-					mutationId: crypto.randomUUID(),
-					baseRevision: revision,
-				};
-				return (entries ?? []).map((entry) =>
-					entry.mutationId === current.mutationId ? rebased : entry,
+				const pending = entries ?? [];
+				if (conflictRevision === undefined) {
+					return pending.filter((entry) => entry.mutationId !== mutation.mutationId);
+				}
+				return pending.map((entry) =>
+					entry.articleId === mutation.articleId && entry.kind === mutation.kind
+						? { ...entry, mutationId: crypto.randomUUID(), baseRevision: conflictRevision }
+						: entry,
 				);
 			},
 			'strict',
+			signal,
 		),
 	);
 }

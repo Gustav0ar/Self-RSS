@@ -6,6 +6,7 @@ import { clearTokens, setTokens } from '../../src/lib/api';
 import {
 	clearOfflineState,
 	flushOfflineArticleMutations,
+	getPendingArticleStateMutation,
 	hasPendingArticleStateMutation,
 	isSignedOutLocally,
 	loadOfflineUser,
@@ -243,6 +244,90 @@ describe('offline article mutation outbox', () => {
 			expect.stringContaining('/articles/article-user-2/read'),
 			expect.stringContaining('/articles/article-user-1/read'),
 		]);
+	});
+
+	it.each([
+		'success',
+		'conflict',
+		'rejection',
+	])('ignores a late %s after switching away and back', async (outcome) => {
+		setOfflineSessionUser('reader');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		const response = Promise.withResolvers<Response>();
+		const started = Promise.withResolvers<void>();
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(() => {
+				started.resolve();
+				return response.promise;
+			})
+			.mockImplementation(async () => mutationResponse({ saved: true, duplicate: true }));
+
+		const oldFlush = flushOfflineArticleMutations();
+		await started.promise;
+		setOfflineSessionUser('second-reader');
+		setOfflineSessionUser('reader');
+		response.resolve(
+			outcome === 'rejection'
+				? new Response(null, { status: 404 })
+				: mutationResponse({ conflict: outcome === 'conflict', saved: true, revision: 7 }),
+		);
+
+		expect(await oldFlush).toEqual([]);
+		expect(await getPendingArticleStateMutation('article-1', 'saved')).toEqual(mutation);
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('lets the returning reader replay while the earlier acknowledgement is waiting on IndexedDB', async () => {
+		setOfflineSessionUser('reader');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		let retry: ReturnType<typeof flushOfflineArticleMutations> | undefined;
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(async () => {
+				const get = IDBObjectStore.prototype.get;
+				const reads = vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (
+					this: IDBObjectStore,
+					key,
+				) {
+					const request = get.call(this, key);
+					if (String(key).includes(':outbox:')) {
+						reads.mockRestore();
+						setOfflineSessionUser(null);
+						setOfflineSessionUser('reader');
+						retry = flushOfflineArticleMutations();
+					}
+					return request;
+				});
+				return mutationResponse({ saved: true });
+			})
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+
+		expect(await flushOfflineArticleMutations()).toEqual([]);
+		expect(await retry).toMatchObject([{ status: 'applied', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not restore a cleared revision when a PATCH completes after logout', async () => {
+		setOfflineSessionUser('reader');
+		await queueArticleStateMutation('read', 'article-1', true);
+		const response = Promise.withResolvers<Response>();
+		const started = Promise.withResolvers<void>();
+		vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => {
+			started.resolve();
+			return response.promise;
+		});
+		const oldFlush = flushOfflineArticleMutations();
+		await started.promise;
+		setOfflineSessionUser(null);
+		await clearOfflineState('reader');
+		response.resolve(mutationResponse({ read: true, revision: 9 }));
+		await oldFlush;
+
+		setOfflineSessionUser('reader');
+		const next = await queueArticleStateMutation('read', 'article-1', false);
+		expect(next.baseRevision).toBeUndefined();
 	});
 
 	it('flushes a newly selected account independently of an older in-flight account', async () => {
