@@ -482,7 +482,7 @@ export class ArticleCacheService {
 	/**
 	 * Get current cache generation for a user
 	 */
-	private async getGeneration(userId: string): Promise<number> {
+	async getGeneration(userId: string): Promise<number> {
 		const genKey = CacheKeys.articleCacheGeneration(userId);
 		const gen = await this.redis.get(genKey);
 		return gen ? parseInt(gen, 10) : 0;

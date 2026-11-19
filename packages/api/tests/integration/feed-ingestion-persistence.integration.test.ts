@@ -693,9 +693,13 @@ describe('durable feed ingestion persistence', () => {
 		expect(
 			(await service.cleanupExpired(new Date(now.getTime() + 23 * 60 * 60_000))).deleted,
 		).toEqual([]);
-		expect(
-			(await service.cleanupExpired(new Date(now.getTime() + 25 * 60 * 60_000))).deleted,
-		).toEqual([{ id: 'snapshot-retry' }]);
+		const afterRetention = new Date(now.getTime() + 25 * 60 * 60_000);
+		expect((await service.cleanupExpired(afterRetention)).deleted).toEqual([]);
+		const deliveries = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db));
+		expect(await deliveries.drainOnce('snapshot-retention', { now: afterRetention })).toBe(2);
+		expect((await service.cleanupExpired(afterRetention)).deleted).toEqual([
+			{ id: 'snapshot-retry' },
+		]);
 
 		const failingService = new FeedSnapshotParserService(repository);
 		const expiringSnapshot = await failingService.persistRawResponse({
@@ -2442,7 +2446,7 @@ describe('durable feed ingestion persistence', () => {
 		expect(secondDelivery).not.toBeNull();
 		expect(
 			await delivery.drainOnce('snapshot-reuse-second', {
-				now: secondDelivery!.availableAt,
+				now: new Date(secondDelivery!.availableAt.getTime() + 4 * 60 * 60_000),
 				limit: 10,
 			}),
 		).toBe(1);
@@ -2456,6 +2460,18 @@ describe('durable feed ingestion persistence', () => {
 				where: (request, { eq }) => eq(request.id, second.requestId),
 			}),
 		).toMatchObject({ status: 'completed', completedItems: 1, pendingItems: 0 });
+		// This subscription finished four hours after the fetch it reused.
+		const cleanupAt = new Date(now.getTime() + 26 * 60 * 60_000);
+		await repository.cleanupExpiredSnapshots(cleanupAt);
+		await repository.cleanupOperationalHistory({
+			now: cleanupAt,
+			retentionDays: 1,
+			batchSize: 100,
+		});
+		expect(await facade.getRefreshStatus('user-1', second.requestId)).toMatchObject({
+			requestId: second.requestId,
+			newArticles: 1,
+		});
 		expect(publisherRequests).toBe(1);
 	});
 

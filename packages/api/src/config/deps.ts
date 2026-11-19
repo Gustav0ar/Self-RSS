@@ -121,6 +121,7 @@ export function createDeps(
 		repos.feed,
 		repos.category,
 		repos.feedIngestion,
+		articleCache,
 	);
 	const feedSync = new FeedSyncService(
 		repos.feed,

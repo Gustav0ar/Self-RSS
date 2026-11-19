@@ -14,6 +14,7 @@ import type { CategoryRepository } from '../repositories/category.repository.js'
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
 import { FeedSourceUrlError, normalizeFeedSourceUrl } from '../utils/feed-source-url.js';
+import type { ArticleCacheService } from './article-cache.service.js';
 import {
 	cleanupDurableDiscoveryCandidates,
 	listDurableDiscoveryCandidates,
@@ -34,6 +35,7 @@ export class DurableFeedFacadeService {
 		private feedRepository: FeedRepository,
 		private categoryRepository: CategoryRepository,
 		private ingestionRepository: FeedIngestionRepository,
+		private articleCache?: Pick<ArticleCacheService, 'getGeneration'>,
 	) {}
 
 	async ensureSource(inputUrl: string) {
@@ -379,7 +381,12 @@ export class DurableFeedFacadeService {
 	}
 
 	async getRefreshStatus(userId: string, requestId?: string | null) {
-		return getDurableRefreshStatus(this.db, userId, requestId);
+		const [status, generation] = await Promise.all([
+			getDurableRefreshStatus(this.db, userId, requestId),
+			// Request progress is durable even when the cache is unavailable.
+			this.articleCache?.getGeneration(userId).catch(() => 0),
+		]);
+		return { ...status, articleRevision: generation ?? 0 };
 	}
 
 	async listDiscoveryCandidates(userId: string, requestId: string) {

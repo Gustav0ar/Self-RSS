@@ -10,7 +10,11 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
-import { FeedIngestionOperationsRepository } from './feed-ingestion-operations.repository.js';
+import {
+	FeedIngestionOperationsRepository,
+	noProtectedSnapshotDelivery,
+	noRetainedRefreshItem,
+} from './feed-ingestion-operations.repository.js';
 import {
 	aggregateRefreshRequest as aggregateRefreshRequestRecord,
 	aggregateRefreshRequests,
@@ -434,6 +438,8 @@ export class FeedIngestionRepository extends FeedIngestionOperationsRepository {
 					and(
 						inArray(feedFetchSnapshots.parseState, ['parsed', 'expired']),
 						lte(feedFetchSnapshots.cleanupAfter, now),
+						noRetainedRefreshItem(feedFetchSnapshots.jobId),
+						noProtectedSnapshotDelivery(),
 					),
 				)
 				.returning({ id: feedFetchSnapshots.id })

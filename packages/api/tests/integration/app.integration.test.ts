@@ -19,7 +19,6 @@ import { createDurableDeliveryWorker } from '../../src/jobs/durable-ingestion-ru
 import { DurableFeedScheduler } from '../../src/services/durable-feed-scheduler.js';
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
-import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
 import { RATE_LIMITS } from '../../src/utils/rate-limiter.js';
 import { createTokenUtils } from '../../src/utils/tokens.js';
 
@@ -2148,12 +2147,17 @@ describe('API integration', () => {
 			});
 			expect(await worker.drainOnce()).toBe(1);
 			expect(publisher.requestCount).toBe(1);
-			const delivery = new FeedSnapshotDeliveryService(
-				v2Deps.repos.feedIngestion,
-				v2Deps.repos.article,
-			);
+			const statusUrl = '/api/v1/feeds/sync/status';
+			const beforeDelivery = (await v2AuthedRequest(statusUrl, firstToken)).body.data;
+			expect(beforeDelivery.newArticles).toBe(0);
+			const delivery = createDurableDeliveryWorker(v2Deps);
 			expect(await delivery.drainOnce('v2-api-delivery', { limit: 10 })).toBe(2);
 			expect(await db.select().from(articles)).toHaveLength(2);
+			for (const token of [firstToken, secondToken]) {
+				const status = (await v2AuthedRequest(statusUrl, token)).body.data;
+				expect(status).toMatchObject({ status: 'completed', newArticles: 1 });
+				expect(status.articleRevision).toBeGreaterThan(beforeDelivery.articleRevision);
+			}
 
 			const deleted = await v2AuthedRequest(
 				`/api/v1/feeds/${firstCreate.body.data.id}`,
@@ -2199,6 +2203,7 @@ describe('API integration', () => {
 				active: false,
 				syncedFeeds: 0,
 				skippedFeeds: 1,
+				newArticles: 0,
 			});
 			await redis.flushall();
 			const persistedStatus = await v2AuthedRequest(

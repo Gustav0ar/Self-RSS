@@ -515,7 +515,8 @@ export class ArticleRepository {
 				'id' | 'contentVersion' | 'contentStatus'
 			>[] = [];
 			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];
-			for (const update of params.articlesToUpdate) {
+			const updates = delivery?.newerSnapshotApplied ? [] : params.articlesToUpdate;
+			for (const update of updates) {
 				const updated = tx
 					.update(articles)
 					.set({

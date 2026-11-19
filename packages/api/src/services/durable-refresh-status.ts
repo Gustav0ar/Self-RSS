@@ -5,8 +5,10 @@ import {
 	feedOrigins,
 	feedRefreshRequestItems,
 	feedRefreshRequests,
+	feedSnapshotDeliveries,
 	feedSources,
 	feeds,
+	syncRuns,
 } from '../db/schema.js';
 
 const STALLED_RUNNING_JOB_MS = 2 * 60_000;
@@ -41,12 +43,21 @@ export async function getDurableRefreshStatus(
 			source: feedSources,
 			job: feedFetchJobs,
 			origin: feedOrigins,
+			insertedArticles: syncRuns.itemCount,
 		})
 		.from(feedRefreshRequestItems)
 		.leftJoin(feeds, eq(feeds.id, feedRefreshRequestItems.feedId))
 		.leftJoin(feedSources, eq(feedSources.id, feedRefreshRequestItems.sourceId))
 		.leftJoin(feedOrigins, eq(feedOrigins.id, feedSources.originId))
 		.leftJoin(feedFetchJobs, eq(feedFetchJobs.id, feedRefreshRequestItems.jobId))
+		.leftJoin(
+			feedSnapshotDeliveries,
+			and(
+				eq(feedSnapshotDeliveries.snapshotId, feedFetchJobs.snapshotId),
+				eq(feedSnapshotDeliveries.feedId, feedRefreshRequestItems.feedId),
+			),
+		)
+		.leftJoin(syncRuns, eq(syncRuns.id, feedSnapshotDeliveries.id))
 		.where(eq(feedRefreshRequestItems.requestId, request.id));
 	const itemDetails = rows.map((row) => {
 		const { origin } = row;
@@ -128,8 +139,7 @@ export async function getDurableRefreshStatus(
 		pendingFeeds: request.pendingItems,
 		runningFeeds: request.runningItems,
 		deadFeeds: request.deadItems,
-		newArticles: 0,
-		articleRevision: 0,
+		newArticles: rows.reduce((total, row) => total + (row.insertedArticles ?? 0), 0),
 		jobId: items.find((item) => item.jobId)?.jobId ?? null,
 		scope: {
 			feedId: request.scopeFeedId ?? undefined,
@@ -159,7 +169,6 @@ function emptyDurableRefreshStatus() {
 		runningFeeds: 0,
 		deadFeeds: 0,
 		newArticles: 0,
-		articleRevision: 0,
 		jobId: null,
 		scope: {},
 		items: [],
