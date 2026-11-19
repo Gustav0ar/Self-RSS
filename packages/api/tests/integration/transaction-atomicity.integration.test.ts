@@ -441,6 +441,7 @@ describe('Bun SQLite repository transaction atomicity', () => {
 		const { sqlite, db } = await setupDatabase();
 		seedArticleGraph(sqlite);
 		sqlite.exec(`
+			UPDATE articles SET content_status = 'enrichment_pending', enrichment_attempts = 1 WHERE id = 'article-1';
 			CREATE TRIGGER reject_enriched_media
 			BEFORE INSERT ON article_media
 			WHEN NEW.url = 'https://example.com/enriched-fail.jpg'
@@ -450,23 +451,28 @@ describe('Bun SQLite repository transaction atomicity', () => {
 		`);
 
 		expect(() =>
-			replaceArticleEnrichedContent(db, 'article-1', {
-				contentHtml: '<p>Enriched</p>',
-				contentText: 'Enriched',
-				excerpt: 'Enriched',
-				heroImageUrl: 'https://example.com/enriched-fail.jpg',
-				hash: 'enriched-hash',
-				enrichedAt: new Date(),
-				media: [
-					{
-						articleId: 'article-1',
-						type: 'image',
-						provider: 'unknown',
-						url: 'https://example.com/enriched-fail.jpg',
-						position: 0,
-					},
-				],
-			}),
+			replaceArticleEnrichedContent(
+				db,
+				'article-1',
+				{
+					contentHtml: '<p>Enriched</p>',
+					contentText: 'Enriched',
+					excerpt: 'Enriched',
+					heroImageUrl: 'https://example.com/enriched-fail.jpg',
+					hash: 'enriched-hash',
+					enrichedAt: new Date(),
+					media: [
+						{
+							articleId: 'article-1',
+							type: 'image',
+							provider: 'unknown',
+							url: 'https://example.com/enriched-fail.jpg',
+							position: 0,
+						},
+					],
+				},
+				1,
+			),
 		).toThrow('enriched media rejected');
 
 		const article = sqlite

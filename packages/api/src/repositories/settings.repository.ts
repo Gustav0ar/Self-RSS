@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, between, desc, eq, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { appSettings, auditLogs, feeds, syncRuns, userMetricsDaily } from '../db/schema.js';
 
@@ -100,20 +100,28 @@ export class MetricsRepository {
 			.onConflictDoUpdate({
 				target: [userMetricsDaily.userId, userMetricsDaily.date],
 				set: {
+					isActive: true,
 					articlesReadCount: sql`${userMetricsDaily.articlesReadCount} + ${amount}`,
 				},
 			});
 	}
 
-	async incrementSyncCount(userId: string) {
+	async incrementSyncCount(userId: string, status: 'success' | 'failed') {
 		const today = new Date().toISOString().split('T')[0]!;
 		await this.db
 			.insert(userMetricsDaily)
-			.values({ userId, date: today, feedsSyncedCount: 1 })
+			.values({
+				userId,
+				date: today,
+				isActive: false,
+				feedsSyncedCount: Number(status === 'success'),
+				feedFailuresCount: Number(status === 'failed'),
+			})
 			.onConflictDoUpdate({
 				target: [userMetricsDaily.userId, userMetricsDaily.date],
 				set: {
-					feedsSyncedCount: sql`${userMetricsDaily.feedsSyncedCount} + 1`,
+					feedsSyncedCount: sql`${userMetricsDaily.feedsSyncedCount} + excluded.feeds_synced_count`,
+					feedFailuresCount: sql`${userMetricsDaily.feedFailuresCount} + excluded.feed_failures_count`,
 				},
 			});
 	}
@@ -126,6 +134,7 @@ export class MetricsRepository {
 			.onConflictDoUpdate({
 				target: [userMetricsDaily.userId, userMetricsDaily.date],
 				set: {
+					isActive: true,
 					searchCount: sql`${userMetricsDaily.searchCount} + 1`,
 				},
 			});
@@ -137,14 +146,12 @@ export class MetricsRepository {
 			articlesSaved?: number;
 			offlineRestores?: number;
 			articlesCompleted?: number;
-			feedFailures?: number;
 		},
 		date = new Date().toISOString().split('T')[0]!,
 	) {
 		const articlesSaved = counts.articlesSaved ?? 0;
 		const offlineRestores = counts.offlineRestores ?? 0;
 		const articlesCompleted = counts.articlesCompleted ?? 0;
-		const feedFailures = counts.feedFailures ?? 0;
 		await this.db
 			.insert(userMetricsDaily)
 			.values({
@@ -153,21 +160,21 @@ export class MetricsRepository {
 				articlesSavedCount: articlesSaved,
 				offlineRestoresCount: offlineRestores,
 				articlesCompletedCount: articlesCompleted,
-				feedFailuresCount: feedFailures,
 			})
 			.onConflictDoUpdate({
 				target: [userMetricsDaily.userId, userMetricsDaily.date],
 				set: {
+					isActive: true,
 					articlesSavedCount: sql`${userMetricsDaily.articlesSavedCount} + ${articlesSaved}`,
 					offlineRestoresCount: sql`${userMetricsDaily.offlineRestoresCount} + ${offlineRestores}`,
 					articlesCompletedCount: sql`${userMetricsDaily.articlesCompletedCount} + ${articlesCompleted}`,
-					feedFailuresCount: sql`${userMetricsDaily.feedFailuresCount} + ${feedFailures}`,
 				},
 			});
 	}
 
 	async getDailyMetrics(userId: string, days: number) {
 		return this.db.query.userMetricsDaily.findMany({
+			columns: { isActive: false },
 			where: and(
 				eq(userMetricsDaily.userId, userId),
 				sql`${userMetricsDaily.date} >= date('now', '-' || ${days} || ' day')`,
@@ -176,10 +183,11 @@ export class MetricsRepository {
 		});
 	}
 
-	async getProductMetricsSince(date: string) {
+	async getProductMetricsBetween(start: string, end: string) {
 		return this.db
 			.select({
 				userId: userMetricsDaily.userId,
+				isActive: userMetricsDaily.isActive,
 				date: userMetricsDaily.date,
 				articlesSavedCount: userMetricsDaily.articlesSavedCount,
 				offlineRestoresCount: userMetricsDaily.offlineRestoresCount,
@@ -187,7 +195,7 @@ export class MetricsRepository {
 				feedFailuresCount: userMetricsDaily.feedFailuresCount,
 			})
 			.from(userMetricsDaily)
-			.where(gte(userMetricsDaily.date, date))
+			.where(between(userMetricsDaily.date, start, end))
 			.orderBy(userMetricsDaily.date);
 	}
 }

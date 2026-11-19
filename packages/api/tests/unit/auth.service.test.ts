@@ -327,8 +327,8 @@ describe('AuthService - refresh', () => {
 		expect(tokenUtils.signAccessToken).toHaveBeenCalledWith(user.id, user.role, sessionId);
 	});
 
-	it('rejects refresh when the token hash is stale before issuing a new access token', async () => {
-		const { service, userRepo, sessionRepo, tokenUtils } = createServiceWithMocks();
+	it('rejects refresh when the token hash is stale without returning tokens', async () => {
+		const { service, userRepo, sessionRepo } = createServiceWithMocks();
 		userRepo.findById.mockResolvedValue(user);
 		sessionRepo.findActiveById.mockResolvedValue(activeSession);
 		sessionRepo.rotate.mockResolvedValue(undefined);
@@ -343,7 +343,15 @@ describe('AuthService - refresh', () => {
 			expect.any(String),
 			expect.objectContaining({ deviceName: 'Unknown device' }),
 		);
-		expect(tokenUtils.signAccessToken).not.toHaveBeenCalled();
+	});
+	it('keeps the current refresh token usable if signing fails', async () => {
+		const { service, userRepo, sessionRepo, tokenUtils } = createServiceWithMocks();
+		userRepo.findById.mockResolvedValue(user);
+		sessionRepo.findActiveById.mockResolvedValue(activeSession);
+		tokenUtils.signAccessToken.mockRejectedValueOnce(new Error('signing unavailable'));
+
+		await expect(service.refresh(refreshToken)).rejects.toThrow('signing unavailable');
+		expect(sessionRepo.rotate).not.toHaveBeenCalled();
 	});
 });
 

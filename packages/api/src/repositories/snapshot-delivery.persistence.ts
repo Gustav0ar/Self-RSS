@@ -20,7 +20,14 @@ export function assertCurrentSnapshotDelivery(
 	claim: SnapshotDeliveryClaim,
 ) {
 	const delivery = tx
-		.select({ sourceId: feeds.sourceId, snapshotSourceId: feedFetchSnapshots.sourceId })
+		.select({
+			id: feedSnapshotDeliveries.id,
+			feedId: feeds.id,
+			startedAt: feedSnapshotDeliveries.startedAt,
+			httpStatus: feedFetchSnapshots.httpStatus,
+			sourceId: feeds.sourceId,
+			snapshotSourceId: feedFetchSnapshots.sourceId,
+		})
 		.from(feedSnapshotDeliveries)
 		.innerJoin(feedFetchSnapshots, eq(feedFetchSnapshots.id, feedSnapshotDeliveries.snapshotId))
 		.innerJoin(feeds, eq(feeds.id, feedSnapshotDeliveries.feedId))
@@ -37,4 +44,5 @@ export function assertCurrentSnapshotDelivery(
 	if (delivery.sourceId !== delivery.snapshotSourceId) {
 		throw new SnapshotDeliveryRejectedError('source_replaced');
 	}
+	return delivery;
 }

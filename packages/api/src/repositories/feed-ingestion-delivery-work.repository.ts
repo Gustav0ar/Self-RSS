@@ -6,6 +6,7 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
+import { recordDurableSyncRun } from './durable-sync-history.js';
 import { FeedIngestionSourceWorkRepository } from './feed-ingestion-source-work.repository.js';
 import { aggregateRefreshRequests } from './refresh-request-aggregation.js';
 
@@ -167,10 +168,21 @@ export class FeedIngestionDeliveryWorkRepository extends FeedIngestionSourceWork
 				.returning()
 				.get();
 			const snapshot = tx
-				.select({ jobId: feedFetchSnapshots.jobId })
+				.select({ jobId: feedFetchSnapshots.jobId, httpStatus: feedFetchSnapshots.httpStatus })
 				.from(feedFetchSnapshots)
 				.where(eq(feedFetchSnapshots.id, delivery.snapshotId))
 				.get();
+			if (data.status === 'dead') {
+				recordDurableSyncRun(tx, {
+					id: delivery.id,
+					feedId: delivery.feedId,
+					startedAt: delivery.startedAt ?? now,
+					finishedAt: now,
+					status: 'failed',
+					httpStatus: snapshot?.httpStatus,
+					errorMessage: (data.error?.details ?? data.error?.code)?.slice(0, 500),
+				});
+			}
 			let requestIds: string[] = [];
 			if (snapshot?.jobId && data.status !== 'pending') {
 				requestIds = tx

@@ -85,9 +85,10 @@ describe('ProductAnalyticsService', () => {
 
 	it('returns 30 daily buckets and rolling 7/30-day returning-user rates', async () => {
 		const metricsRepo = {
-			getProductMetricsSince: vi.fn(async () => [
+			getProductMetricsBetween: vi.fn(async () => [
 				{
 					userId: 'returning-user',
+					isActive: true,
 					date: '2026-07-10',
 					articlesSavedCount: 1,
 					offlineRestoresCount: 0,
@@ -96,6 +97,7 @@ describe('ProductAnalyticsService', () => {
 				},
 				{
 					userId: 'returning-user',
+					isActive: true,
 					date: '2026-08-08',
 					articlesSavedCount: 2,
 					offlineRestoresCount: 1,
@@ -104,6 +106,7 @@ describe('ProductAnalyticsService', () => {
 				},
 				{
 					userId: 'churned-user',
+					isActive: true,
 					date: '2026-08-01',
 					articlesSavedCount: 1,
 					offlineRestoresCount: 0,
@@ -112,7 +115,35 @@ describe('ProductAnalyticsService', () => {
 				},
 				{
 					userId: 'returning-user',
+					isActive: true,
 					date: '2026-08-03',
+					articlesSavedCount: 0,
+					offlineRestoresCount: 0,
+					articlesCompletedCount: 0,
+					feedFailuresCount: 0,
+				},
+				{
+					userId: 'unattended',
+					date: '2026-08-01',
+					isActive: false,
+					articlesSavedCount: 0,
+					offlineRestoresCount: 0,
+					articlesCompletedCount: 0,
+					feedFailuresCount: 1,
+				},
+				{
+					userId: 'unattended',
+					date: '2026-08-11',
+					isActive: false,
+					articlesSavedCount: 0,
+					offlineRestoresCount: 0,
+					articlesCompletedCount: 0,
+					feedFailuresCount: 2,
+				},
+				{
+					userId: 'churned-user',
+					date: '2026-08-11',
+					isActive: false,
 					articlesSavedCount: 0,
 					offlineRestoresCount: 0,
 					articlesCompletedCount: 0,
@@ -128,15 +159,20 @@ describe('ProductAnalyticsService', () => {
 
 		const report = await service.getReport();
 
+		expect(metricsRepo.getProductMetricsBetween).toHaveBeenCalledWith('2026-06-13', '2026-08-11');
 		expect(report.daily).toHaveLength(30);
 		expect(report.throughDate).toBe('2026-08-11');
-		expect(report.daily.at(-1)?.date).toBe('2026-08-11');
+		expect(report.daily.at(-1)).toMatchObject({
+			date: '2026-08-11',
+			activeUsers: 0,
+			feedFailures: 2,
+		});
 		expect(report.totals).toEqual({
 			activeUsers: 2,
 			articlesSaved: 3,
 			offlineRestores: 1,
 			articlesCompleted: 4,
-			feedFailures: 1,
+			feedFailures: 4,
 		});
 		expect(report.retention.sevenDay).toEqual({
 			windowDays: 7,

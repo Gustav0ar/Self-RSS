@@ -24,7 +24,9 @@ import {
 	feedRefreshRequestItems,
 	feedSnapshotDeliveries,
 	feedSources,
+	feeds,
 } from '../db/schema.js';
+import { recordDurableSyncRun } from './durable-sync-history.js';
 import { aggregateRefreshRequests } from './refresh-request-aggregation.js';
 
 type SourceUpdate = Partial<typeof feedSources.$inferInsert>;
@@ -259,7 +261,20 @@ export class FeedIngestionSourceWorkRepository {
 			}
 			const source = tx.select().from(feedSources).where(eq(feedSources.id, job.sourceId)).get()!;
 			const origin = tx.select().from(feedOrigins).where(eq(feedOrigins.id, job.originId)).get()!;
-			return { claim: { job, source, origin }, expiredRequestIds };
+			const needsInitialBody = Boolean(
+				tx
+					.select({ id: feeds.id })
+					.from(feeds)
+					.where(
+						or(
+							eq(feeds.pendingSourceId, source.id),
+							and(eq(feeds.sourceId, source.id), eq(feeds.syncStatus, 'pending')),
+						),
+					)
+					.limit(1)
+					.get(),
+			);
+			return { claim: { job, source, origin, needsInitialBody }, expiredRequestIds };
 		});
 		await aggregateRefreshRequests(this.db, result.expiredRequestIds, now);
 		return result.claim;
@@ -425,6 +440,30 @@ export class FeedIngestionSourceWorkRepository {
 					.where(eq(feedOrigins.id, job.originId))
 					.run();
 			}
+			// Parsed snapshots record history per delivery. Unchanged and failed
+			// publisher attempts have no delivery, so capture their subscribers here.
+			if (data.completesWithoutDelivery || data.error) {
+				const subscribers = tx
+					.select({ id: feeds.id })
+					.from(feeds)
+					.where(or(eq(feeds.sourceId, job.sourceId), eq(feeds.pendingSourceId, job.sourceId)))
+					.all();
+				const error =
+					data.error?.details ??
+					data.error?.code ??
+					data.source?.lastErrorDetails ??
+					data.source?.lastErrorCode;
+				for (const feed of subscribers) {
+					recordDurableSyncRun(tx, {
+						feedId: feed.id,
+						startedAt: job.startedAt ?? now,
+						finishedAt: now,
+						status: error ? 'failed' : 'success',
+						httpStatus: data.source?.lastHttpStatus,
+						errorMessage: error?.slice(0, 500),
+					});
+				}
+			}
 			const terminal = data.status !== 'queued';
 			const updated = tx
 				.update(feedFetchJobs)
@@ -443,6 +482,37 @@ export class FeedIngestionSourceWorkRepository {
 				.returning()
 				.get();
 			if (terminal) {
+				// A subscription may have joined this source after the request started or after
+				// its snapshot was parsed. Its request still needs a delivery from the next poll.
+				if (data.status === 'completed' && data.source?.state === 'active' && !data.error) {
+					const waitingFeeds = tx
+						.select({ id: feeds.id })
+						.from(feeds)
+						.where(eq(feeds.pendingSourceId, job.sourceId));
+					if (waitingFeeds.get()) {
+						const next = tx
+							.insert(feedFetchJobs)
+							.values({
+								kind: 'scheduled',
+								sourceId: job.sourceId,
+								originId: job.originId,
+								priority: job.priority,
+								availableAt: data.source.nextFetchAt ?? now,
+							})
+							.returning({ id: feedFetchJobs.id })
+							.get();
+						tx.update(feedRefreshRequestItems)
+							.set({ jobId: next.id, updatedAt: now })
+							.where(
+								and(
+									eq(feedRefreshRequestItems.jobId, jobId),
+									inArray(feedRefreshRequestItems.status, ['pending', 'running']),
+									inArray(feedRefreshRequestItems.feedId, waitingFeeds),
+								),
+							)
+							.run();
+					}
+				}
 				if (data.status === 'dead') {
 					tx.update(feedRefreshRequestItems)
 						.set({ status: 'dead', completedAt: now, updatedAt: now })
@@ -477,6 +547,7 @@ export class FeedIngestionSourceWorkRepository {
 							.where(
 								and(
 									eq(feedRefreshRequestItems.jobId, jobId),
+									inArray(feedRefreshRequestItems.status, ['pending', 'running']),
 									inArray(feedRefreshRequestItems.feedId, deliveryFeedIds),
 								),
 							)

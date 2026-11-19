@@ -49,6 +49,7 @@ import {
 } from './feed-sync-status.js';
 import type { MetricsService } from './metrics.service.js';
 import type { RealtimeService } from './realtime.service.js';
+import { acquireOwnedRedisLock } from './redis-owned-lock.js';
 
 const logger = createLogger();
 interface SyncConfig extends FeedFetchRelayConfig {
@@ -423,7 +424,7 @@ export class FeedSyncService {
 				);
 			}
 
-			const insertedArticles = await this.articleRepo.persistSyncResults({
+			const { inserted: insertedArticles, updated } = await this.articleRepo.persistSyncResults({
 				articlesToInsert,
 				articlesToUpdate,
 				mediaByGuid,
@@ -431,7 +432,7 @@ export class FeedSyncService {
 			});
 			await this.invalidateArticleDetailCaches(
 				userId,
-				articlesToUpdate.map((article) => article.id),
+				updated.map((article) => article.id),
 			);
 
 			for (const article of insertedArticles) {
@@ -473,12 +474,12 @@ export class FeedSyncService {
 			});
 
 			await this.invalidateUnreadCache(userId, feedId);
-			if (this.articleCache && (insertedArticles.length > 0 || articlesToUpdate.length > 0)) {
+			if (this.articleCache && (insertedArticles.length > 0 || updated.length > 0)) {
 				await this.articleCache.invalidateCache(userId, {
 					cleanupScoped: options.deferScopedCacheCleanup !== true,
 				});
 			}
-			await this.metricsRepo.incrementSyncCount(userId);
+			await this.metricsRepo.incrementSyncCount(userId, 'success');
 			await publishRealtimeEvent(this.realtimeService, userId, {
 				type: 'feed.health.updated',
 				eventId: crypto.randomUUID(),
@@ -526,9 +527,7 @@ export class FeedSyncService {
 				itemCount: 0,
 				errorMessage: errorDetails.error,
 			});
-			await this.metricsRepo
-				.incrementProductCounts?.(userId, { feedFailures: 1 })
-				.catch(() => undefined);
+			await this.metricsRepo.incrementSyncCount?.(userId, 'failed').catch(() => undefined);
 			await publishRealtimeEvent(this.realtimeService, userId, {
 				type: 'feed.health.updated',
 				eventId: crypto.randomUUID(),
@@ -688,15 +687,12 @@ export class FeedSyncService {
 	}
 
 	async enrichArticleNow(enrichment: PendingArticleEnrichment) {
-		await this.articleRepo.queueEnrichments([enrichment.articleId]);
+		await this.queueArticleEnrichment(enrichment.articleId);
 		return this.processPendingArticleEnrichments(1);
 	}
 
 	async queueArticleEnrichment(articleId: string) {
-		// User-visible prefetch/open requests outrank the background queue.
-		// Pending enrichments are ordered by nextEnrichmentAt, so epoch zero
-		// moves this article to the front without requiring a schema change.
-		await this.articleRepo.queueEnrichments([articleId], new Date(0));
+		await this.articleRepo.queueEnrichments([articleId], 'reader');
 	}
 
 	private async enrichArticlesInBackground(pendingEnrichments: PendingArticleEnrichment[]) {
@@ -710,150 +706,116 @@ export class FeedSyncService {
 
 		let succeeded = 0;
 		let failed = 0;
-		for (let i = 0; i < pending.length; i += ARTICLE_ENRICHMENT_CONCURRENCY) {
-			const batch = pending.slice(i, i + ARTICLE_ENRICHMENT_CONCURRENCY);
-			const results = await Promise.allSettled(
-				batch.map(async (item) => {
-					const startedAt = Date.now();
-					await this.articleRepo.markEnrichmentAttempt(item.articleId);
-					try {
-						const processed = await this.enrichSingleArticle({
-							articleId: item.articleId,
-							userId: item.userId,
-							canonicalUrl: item.canonicalUrl!,
-							contentHtml: item.contentHtml,
-							heroImageUrl: item.heroImageUrl,
-							fetchedAt: item.fetchedAt,
-						});
-						if (!processed) throw new Error('Article enrichment is already in progress');
-						this.performanceMetrics?.recordArticleEnrichment(
-							'success',
-							(Date.now() - startedAt) / 1000,
-						);
-						return true;
-					} catch (error) {
-						const attempts = item.enrichmentAttempts + 1;
-						const exhausted = attempts >= ARTICLE_ENRICHMENT_MAX_ATTEMPTS;
-						const retryDelay = ARTICLE_ENRICHMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5);
-						const updated = await this.articleRepo.markEnrichmentRetry(item.articleId, {
-							failed: exhausted,
-							error: error instanceof Error ? error.message : String(error),
-							nextEnrichmentAt: exhausted ? null : new Date(Date.now() + retryDelay),
-						});
-						if (exhausted) {
-							await this.invalidateArticleDetailCaches(item.userId, [item.articleId]);
-							if (updated && this.realtimeService) {
-								await this.realtimeService.publishEvent(item.userId, {
-									type: 'article.updated',
-									eventId: crypto.randomUUID(),
-									articleId: item.articleId,
-									feedId: updated.feedId,
-									contentStatus: 'failed',
-									contentVersion: updated.contentVersion,
-									updatedAt: new Date().toISOString(),
-								});
-							}
-						}
-						this.performanceMetrics?.recordArticleEnrichment(
-							exhausted ? 'failed' : 'retry',
-							(Date.now() - startedAt) / 1000,
-						);
-						throw error;
-					}
-				}),
-			);
-			for (const result of results) {
-				if (result.status === 'fulfilled') succeeded++;
+		for (const item of pending) {
+			const release = await acquireOwnedRedisLock({
+				redis: this.redis,
+				key: CacheKeys.articleEnrichmentLock(item.articleId),
+				ttlSeconds: 60,
+			});
+			if (!release) continue;
+
+			try {
+				// Another worker may have completed or deferred the selected row before we acquired the lock.
+				const attempts = await this.articleRepo.markEnrichmentAttempt(item.articleId);
+				if (attempts === null) continue;
+				const startedAt = Date.now();
+				let updated: Awaited<ReturnType<ArticleRepository['markEnrichmentRetry']>>;
+				let outcome: 'success' | 'failed' | 'retry';
+				try {
+					updated = await this.enrichSingleArticle(
+						{ ...item, canonicalUrl: item.canonicalUrl! },
+						attempts,
+					);
+					outcome = 'success';
+				} catch (error) {
+					const exhausted = attempts >= ARTICLE_ENRICHMENT_MAX_ATTEMPTS;
+					const retryDelay = ARTICLE_ENRICHMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 5);
+					updated = await this.articleRepo.markEnrichmentRetry(item.articleId, {
+						attempts,
+						failed: exhausted,
+						error: error instanceof Error ? error.message : String(error),
+						nextEnrichmentAt: exhausted ? null : new Date(Date.now() + retryDelay),
+					});
+					outcome = exhausted ? 'failed' : 'retry';
+				}
+				if (!updated) continue;
+				if (outcome === 'success') succeeded++;
 				else failed++;
+				this.performanceMetrics?.recordArticleEnrichment(outcome, (Date.now() - startedAt) / 1000);
+				if (outcome !== 'retry') {
+					await this.invalidateArticleDetailCaches(item.userId, [item.articleId]);
+					await this.realtimeService?.publishEvent(item.userId, {
+						type: 'article.updated',
+						eventId: crypto.randomUUID(),
+						articleId: item.articleId,
+						feedId: updated.feedId,
+						contentStatus: outcome === 'success' ? 'full_ready' : 'failed',
+						contentVersion: updated.contentVersion,
+						updatedAt: new Date().toISOString(),
+					});
+				}
+			} finally {
+				await release();
 			}
 		}
-		return { processed: pending.length, succeeded, failed };
+		return { processed: succeeded + failed, succeeded, failed };
 	}
 
-	private async enrichSingleArticle(enrichment: PendingArticleEnrichment) {
-		const lockKey = CacheKeys.articleEnrichmentLock(enrichment.articleId);
-		const lockAcquired = await this.redis.set(lockKey, '1', 'EX', 60, 'NX');
-		if (lockAcquired !== 'OK') return false;
+	private async enrichSingleArticle(enrichment: PendingArticleEnrichment, attempts: number) {
+		const enrichedHtml = await this.resolveEnrichedArticleHtml(enrichment.canonicalUrl);
+		if (!enrichedHtml) {
+			throw new Error('Canonical article content was unavailable');
+		}
 
-		try {
-			const enrichedHtml = await this.resolveEnrichedArticleHtml(enrichment.canonicalUrl);
-			if (!enrichedHtml) {
-				throw new Error('Canonical article content was unavailable');
-			}
+		const sanitizedHtml = resolvePublisherHtmlUrls(
+			sanitizeHtml(enrichedHtml),
+			enrichment.canonicalUrl,
+		);
+		const textContent = stripHtml(sanitizedHtml);
+		const excerpt = textContent ? extractExcerpt(textContent) : null;
+		const heroImage =
+			extractHeroImage(sanitizedHtml) ??
+			resolvePublisherUrl(enrichment.heroImageUrl, enrichment.canonicalUrl);
 
-			const sanitizedHtml = resolvePublisherHtmlUrls(
-				sanitizeHtml(enrichedHtml),
-				enrichment.canonicalUrl,
-			);
-			const textContent = stripHtml(sanitizedHtml);
-			const excerpt = textContent ? extractExcerpt(textContent) : null;
-			const heroImage =
-				extractHeroImage(sanitizedHtml) ??
-				resolvePublisherUrl(enrichment.heroImageUrl, enrichment.canonicalUrl);
+		const shouldReplace = this.shouldRefreshArticle(
+			enrichment.contentHtml,
+			enrichment.heroImageUrl,
+			sanitizedHtml,
+			heroImage,
+		);
 
-			const shouldReplace = this.shouldRefreshArticle(
-				enrichment.contentHtml,
-				enrichment.heroImageUrl,
-				sanitizedHtml,
-				heroImage,
-			);
+		const article = await this.articleRepo.findById(enrichment.articleId);
+		if (!article) return null;
 
-			const article = await this.articleRepo.findById(enrichment.articleId);
-			if (!article) {
-				return;
-			}
-
-			const replacement = {
+		const replacement = {
+			contentHtml: sanitizedHtml || null,
+			contentText: textContent || null,
+			excerpt,
+			heroImageUrl: heroImage,
+			hash: createArticleContentHash({
+				canonicalUrl: article.canonicalUrl,
+				title: article.title,
+				author: article.author,
+				excerpt,
 				contentHtml: sanitizedHtml || null,
 				contentText: textContent || null,
-				excerpt,
 				heroImageUrl: heroImage,
-				hash: createArticleContentHash({
-					canonicalUrl: article.canonicalUrl,
-					title: article.title,
-					author: article.author,
-					excerpt,
-					contentHtml: sanitizedHtml || null,
-					contentText: textContent || null,
-					heroImageUrl: heroImage,
-				}),
-				media: extractMediaFromHtml(sanitizedHtml || null).map((item, index) => ({
-					articleId: enrichment.articleId,
-					type: item.type,
-					provider: item.provider,
-					url: item.url,
-					embedUrl: item.embedUrl,
-					width: item.width,
-					height: item.height,
-					position: index,
-				})),
-				enrichedAt: new Date(),
-			};
-			let updated: { feedId: string; contentVersion: number } | null = null;
-			if (shouldReplace && this.articleRepo.replaceEnrichedContent) {
-				updated = await this.articleRepo.replaceEnrichedContent(enrichment.articleId, replacement);
-			} else if (shouldReplace) {
-				await this.articleRepo.updateContent(enrichment.articleId, replacement);
-				await this.articleRepo.replaceMedia(enrichment.articleId, replacement.media);
-			} else if (this.articleRepo.markEnrichmentComplete) {
-				updated = await this.articleRepo.markEnrichmentComplete(enrichment.articleId);
-			}
-			await this.invalidateArticleDetailCaches(enrichment.userId, [enrichment.articleId]);
-			if (updated && this.realtimeService) {
-				await this.realtimeService.publishEvent(enrichment.userId, {
-					type: 'article.updated',
-					eventId: crypto.randomUUID(),
-					articleId: enrichment.articleId,
-					feedId: updated.feedId,
-					contentStatus: 'full_ready',
-					contentVersion: updated.contentVersion,
-					updatedAt: new Date().toISOString(),
-				});
-			}
-			return true;
-		} finally {
-			await this.redis.del(lockKey);
-		}
+			}),
+			media: extractMediaFromHtml(sanitizedHtml || null).map((item, index) => ({
+				articleId: enrichment.articleId,
+				type: item.type,
+				provider: item.provider,
+				url: item.url,
+				embedUrl: item.embedUrl,
+				width: item.width,
+				height: item.height,
+				position: index,
+			})),
+			enrichedAt: new Date(),
+		};
+		return shouldReplace
+			? this.articleRepo.replaceEnrichedContent(enrichment.articleId, replacement, attempts)
+			: this.articleRepo.markEnrichmentComplete(enrichment.articleId, attempts);
 	}
 
 	private shouldAttemptArticleEnrichment(canonicalUrl: string | null) {

@@ -20,7 +20,7 @@ function daysBefore(date: Date, days: number): Date {
 }
 
 function retention(
-	rows: Awaited<ReturnType<MetricsRepository['getProductMetricsSince']>>,
+	rows: Awaited<ReturnType<MetricsRepository['getProductMetricsBetween']>>,
 	today: Date,
 	windowDays: 7 | 30,
 ): ProductRetentionMetric {
@@ -31,6 +31,7 @@ function retention(
 	const current = new Set<string>();
 
 	for (const row of rows) {
+		if (!row.isActive) continue;
 		if (row.date >= previousStart && row.date <= previousEnd) eligible.add(row.userId);
 		if (row.date >= currentStart) current.add(row.userId);
 	}
@@ -102,8 +103,8 @@ export class ProductAnalyticsService {
 		const reportEnd = daysBefore(this.now(), 1);
 		const earliestDate = utcDate(daysBefore(reportEnd, REPORT_PERIOD_DAYS * 2 - 1));
 		const reportStart = utcDate(daysBefore(reportEnd, REPORT_PERIOD_DAYS - 1));
-		const rows = await this.metricsRepo.getProductMetricsSince(earliestDate);
-		const dailyByDate = new Map<string, ProductAnalyticsDaily & { activeUserIds: Set<string> }>();
+		const rows = await this.metricsRepo.getProductMetricsBetween(earliestDate, utcDate(reportEnd));
+		const dailyByDate = new Map<string, ProductAnalyticsDaily>();
 
 		for (let offset = REPORT_PERIOD_DAYS - 1; offset >= 0; offset -= 1) {
 			const date = utcDate(daysBefore(reportEnd, offset));
@@ -114,30 +115,25 @@ export class ProductAnalyticsService {
 				offlineRestores: 0,
 				articlesCompleted: 0,
 				feedFailures: 0,
-				activeUserIds: new Set(),
 			});
 		}
 
+		const activeUserIds = new Set<string>();
 		for (const row of rows) {
 			if (row.date < reportStart) continue;
 			const daily = dailyByDate.get(row.date);
 			if (!daily) continue;
-			daily.activeUserIds.add(row.userId);
+			if (row.isActive) {
+				daily.activeUsers += 1;
+				activeUserIds.add(row.userId);
+			}
 			daily.articlesSaved += row.articlesSavedCount;
 			daily.offlineRestores += row.offlineRestoresCount;
 			daily.articlesCompleted += row.articlesCompletedCount;
 			daily.feedFailures += row.feedFailuresCount;
 		}
 
-		const activeUserIds = new Set<string>();
-		for (const row of rows) {
-			if (row.date >= reportStart) activeUserIds.add(row.userId);
-		}
-
-		const daily = [...dailyByDate.values()].map(({ activeUserIds: ids, ...entry }) => ({
-			...entry,
-			activeUsers: ids.size,
-		}));
+		const daily = [...dailyByDate.values()];
 		const totals = daily.reduce<Omit<ProductAnalyticsDaily, 'date'>>(
 			(sum, entry) => ({
 				activeUsers: activeUserIds.size,

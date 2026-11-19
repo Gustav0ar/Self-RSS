@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 
-function pendingJob(attempts = 0) {
+function pendingJob() {
 	return {
 		articleId: 'article-1',
 		userId: 'user-1',
@@ -11,7 +11,6 @@ function pendingJob(attempts = 0) {
 		heroImageUrl: null,
 		fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
 		enrichmentQueuedAt: new Date('2026-01-01T00:00:00.000Z'),
-		enrichmentAttempts: attempts,
 		contentVersion: 1,
 	};
 }
@@ -22,7 +21,7 @@ function serviceFor(articleRepo: Record<string, unknown>) {
 		articleRepo as never,
 		{} as never,
 		{} as never,
-		{} as never,
+		{ del: vi.fn() } as never,
 		{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: false },
 	);
 }
@@ -36,21 +35,23 @@ describe('durable article enrichment worker', () => {
 		}));
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => jobs),
-			markEnrichmentAttempt: vi.fn(async () => undefined),
-			markEnrichmentRetry: vi.fn(async () => undefined),
+			markEnrichmentAttempt: vi.fn(async () => 1),
+			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
 		let active = 0;
 		let maximumActive = 0;
 		vi.spyOn(
-			service as unknown as { enrichSingleArticle: () => Promise<boolean> },
+			service as unknown as {
+				enrichSingleArticle: () => Promise<{ feedId: string; contentVersion: number }>;
+			},
 			'enrichSingleArticle',
 		).mockImplementation(async () => {
 			active++;
 			maximumActive = Math.max(maximumActive, active);
 			await new Promise((resolve) => setTimeout(resolve, 1));
 			active--;
-			return true;
+			return { feedId: 'feed-1', contentVersion: 2 };
 		});
 
 		const result = await service.processPendingArticleEnrichments(4);
@@ -62,14 +63,16 @@ describe('durable article enrichment worker', () => {
 	it('claims due database work before enriching it', async () => {
 		const articleRepo = {
 			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
-			markEnrichmentAttempt: vi.fn(async () => undefined),
-			markEnrichmentRetry: vi.fn(async () => undefined),
+			markEnrichmentAttempt: vi.fn(async () => 1),
+			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
 		vi.spyOn(
-			service as unknown as { enrichSingleArticle: () => Promise<boolean> },
+			service as unknown as {
+				enrichSingleArticle: () => Promise<{ feedId: string; contentVersion: number }>;
+			},
 			'enrichSingleArticle',
-		).mockResolvedValue(true);
+		).mockResolvedValue({ feedId: 'feed-1', contentVersion: 2 });
 
 		const result = await service.processPendingArticleEnrichments();
 
@@ -80,13 +83,15 @@ describe('durable article enrichment worker', () => {
 
 	it('persists retry state with backoff when canonical extraction fails', async () => {
 		const articleRepo = {
-			findPendingEnrichments: vi.fn(async () => [pendingJob(1)]),
-			markEnrichmentAttempt: vi.fn(async () => undefined),
-			markEnrichmentRetry: vi.fn(async () => undefined),
+			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
+			markEnrichmentAttempt: vi.fn(async () => 2),
+			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 1 })),
 		};
 		const service = serviceFor(articleRepo);
 		vi.spyOn(
-			service as unknown as { enrichSingleArticle: () => Promise<boolean> },
+			service as unknown as {
+				enrichSingleArticle: () => Promise<{ feedId: string; contentVersion: number }>;
+			},
 			'enrichSingleArticle',
 		).mockRejectedValue(new Error('publisher unavailable'));
 
@@ -105,8 +110,8 @@ describe('durable article enrichment worker', () => {
 
 	it('invalidates and publishes the terminal failed content version', async () => {
 		const articleRepo = {
-			findPendingEnrichments: vi.fn(async () => [pendingJob(4)]),
-			markEnrichmentAttempt: vi.fn(async () => undefined),
+			findPendingEnrichments: vi.fn(async () => [pendingJob()]),
+			markEnrichmentAttempt: vi.fn(async () => 5),
 			markEnrichmentRetry: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 2 })),
 		};
 		const redis = { del: vi.fn(async () => 1) };
@@ -122,7 +127,9 @@ describe('durable article enrichment worker', () => {
 			realtime as never,
 		);
 		vi.spyOn(
-			service as unknown as { enrichSingleArticle: () => Promise<boolean> },
+			service as unknown as {
+				enrichSingleArticle: () => Promise<{ feedId: string; contentVersion: number }>;
+			},
 			'enrichSingleArticle',
 		).mockRejectedValue(new Error('publisher unavailable'));
 

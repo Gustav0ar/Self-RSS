@@ -8,9 +8,13 @@ import { CacheKeys, normalizeRedisUrl } from '../../src/db/redis.js';
 import * as schema from '../../src/db/schema.js';
 import { ArticleRepository } from '../../src/repositories/article.repository.js';
 import { FeedRepository } from '../../src/repositories/feed.repository.js';
-import { MetricsRepository } from '../../src/repositories/settings.repository.js';
+import {
+	MetricsRepository,
+	SyncRunRepository,
+} from '../../src/repositories/settings.repository.js';
 import { ArticleService } from '../../src/services/article.service.js';
 import { ArticleCacheService } from '../../src/services/article-cache.service.js';
+import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 import { scanKeys } from '../../src/services/redis-scan.js';
 
 const redisUrl = process.env.REDIS_URL;
@@ -190,5 +194,125 @@ describe('cached article state authority', () => {
 		expect(
 			(await fixture.service.getArticles(userId, { limit: 20 })).data.map((row) => row.id),
 		).toEqual(['replacement']);
+	});
+});
+
+describe('article enrichment queue', () => {
+	function createWorker() {
+		return new FeedSyncService(
+			new FeedRepository(fixture.db),
+			fixture.repo,
+			new SyncRunRepository(fixture.db),
+			new MetricsRepository(fixture.db),
+			redis,
+			{ timeoutMs: 5_000, maxContentLength: 1_000_000, concurrency: 1, allowPrivateHosts: true },
+		);
+	}
+
+	it('keeps the retry deadline across repeated opens and background polling', async () => {
+		let requests = 0;
+		const publisher = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch() {
+				requests++;
+				return new Response(null, { status: 503 });
+			},
+		});
+		try {
+			const worker = createWorker();
+			await fixture.repo.updateContent(articleId, { canonicalUrl: String(publisher.url) });
+			await fixture.repo.queueEnrichments([articleId]);
+			await worker.queueArticleEnrichment(articleId);
+			await fixture.repo.queueEnrichments([articleId]);
+			expect((await fixture.repo.findById(articleId))?.nextEnrichmentAt).toEqual(new Date(0));
+			const started = Date.now();
+			expect(await worker.processPendingArticleEnrichments()).toEqual({
+				processed: 1,
+				succeeded: 0,
+				failed: 1,
+			});
+			const article = await fixture.repo.findById(articleId);
+			expect(article).toMatchObject({ enrichmentAttempts: 1, contentStatus: 'enrichment_pending' });
+			// Timestamps in SQLite have one-second precision.
+			expect(article!.nextEnrichmentAt!.getTime()).toBeGreaterThanOrEqual(started + 29_000);
+			await Promise.all([
+				worker.queueArticleEnrichment(articleId),
+				fixture.repo.queueEnrichments([articleId]),
+			]);
+			expect(await fixture.repo.findById(articleId)).toEqual(article);
+			expect(await worker.processPendingArticleEnrichments()).toEqual({
+				processed: 0,
+				succeeded: 0,
+				failed: 0,
+			});
+			expect(await fixture.repo.markEnrichmentAttempt(articleId)).toBeNull();
+			expect(requests).toBe(1);
+		} finally {
+			publisher.stop(true);
+		}
+	});
+
+	it('leaves the last attempt to the worker fetching it and requeues failures only on request', async () => {
+		const requested = Promise.withResolvers<void>();
+		const respond = Promise.withResolvers<Response>();
+		const publisher = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch() {
+				requested.resolve();
+				return respond.promise;
+			},
+		});
+		try {
+			await fixture.repo.updateContent(articleId, {
+				canonicalUrl: String(publisher.url),
+				contentStatus: 'enrichment_pending',
+				enrichmentAttempts: 4,
+			});
+			const owner = createWorker().processPendingArticleEnrichments();
+			await requested.promise;
+			expect(await createWorker().processPendingArticleEnrichments()).toEqual({
+				processed: 0,
+				succeeded: 0,
+				failed: 0,
+			});
+			expect(await fixture.repo.findById(articleId)).toMatchObject({
+				contentStatus: 'enrichment_pending',
+				enrichmentAttempts: 5,
+				contentVersion: 1,
+			});
+			respond.resolve(new Response(null, { status: 503 }));
+			expect(await owner).toEqual({ processed: 1, succeeded: 0, failed: 1 });
+			await fixture.repo.queueEnrichments([articleId]);
+			expect(await fixture.repo.findById(articleId)).toMatchObject({
+				contentStatus: 'failed',
+				enrichmentAttempts: 5,
+			});
+			await createWorker().queueArticleEnrichment(articleId);
+			expect(await fixture.repo.findById(articleId)).toMatchObject({
+				contentStatus: 'enrichment_pending',
+				enrichmentAttempts: 0,
+				enrichmentError: null,
+			});
+			expect(await fixture.repo.markEnrichmentAttempt(articleId)).toBe(1);
+			expect(
+				await fixture.repo.markEnrichmentRetry(articleId, {
+					failed: true,
+					attempts: 5,
+					error: 'old worker',
+					nextEnrichmentAt: null,
+				}),
+			).toBeNull();
+			expect(await fixture.repo.markEnrichmentComplete(articleId, 1)).not.toBeNull();
+			const completed = await fixture.repo.findById(articleId);
+			await createWorker().queueArticleEnrichment(articleId);
+			await fixture.repo.queueEnrichments([articleId]);
+			expect(await fixture.repo.findById(articleId)).toEqual(completed);
+			expect(await fixture.repo.markEnrichmentAttempt(articleId)).toBeNull();
+		} finally {
+			respond.resolve(new Response(null, { status: 503 }));
+			publisher.stop(true);
+		}
 	});
 });

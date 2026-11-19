@@ -186,7 +186,8 @@ export class DurableFeedWorker {
 			const forceUnconditional =
 				requiresUnconditionalFeedFetch(publisherRequestUrl) ||
 				(hasValidators &&
-					(!claim.source.lastUnconditionalFetchAt ||
+					(claim.needsInitialBody ||
+						!claim.source.lastUnconditionalFetchAt ||
 						now.getTime() - claim.source.lastUnconditionalFetchAt.getTime() >= WEEK_MS));
 			if (forceUnconditional) {
 				unconditionalAttempt = true;

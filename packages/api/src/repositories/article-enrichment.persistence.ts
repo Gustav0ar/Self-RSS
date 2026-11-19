@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { articleMedia, articles, feeds } from '../db/schema.js';
 
@@ -15,6 +15,7 @@ export interface EnrichedContentReplacement {
 export async function queueArticleEnrichments(
 	db: Database,
 	articleIds: string[],
+	source: 'background' | 'reader' = 'background',
 	queuedAt = new Date(),
 ) {
 	if (articleIds.length === 0) return;
@@ -23,10 +24,35 @@ export async function queueArticleEnrichments(
 		.set({
 			contentStatus: 'enrichment_pending',
 			enrichmentQueuedAt: queuedAt,
-			nextEnrichmentAt: queuedAt,
+			nextEnrichmentAt: source === 'reader' ? new Date(0) : queuedAt,
+			enrichmentAttempts: 0,
+			enrichmentAttemptedAt: null,
 			enrichmentError: null,
 		})
-		.where(inArray(articles.id, articleIds));
+		.where(
+			and(
+				inArray(articles.id, articleIds),
+				or(
+					eq(articles.contentStatus, 'feed_ready'),
+					source === 'reader'
+						? or(
+								eq(articles.contentStatus, 'failed'),
+								and(
+									eq(articles.contentStatus, 'enrichment_pending'),
+									eq(articles.enrichmentAttempts, 0),
+								),
+							)
+						: undefined,
+				),
+			),
+		);
+}
+
+function dueArticleEnrichment(at: Date) {
+	return and(
+		eq(articles.contentStatus, 'enrichment_pending'),
+		or(isNull(articles.nextEnrichmentAt), lte(articles.nextEnrichmentAt, at)),
+	);
 }
 
 export function findPendingArticleEnrichments(db: Database, limit: number, now = new Date()) {
@@ -40,18 +66,11 @@ export function findPendingArticleEnrichments(db: Database, limit: number, now =
 			heroImageUrl: articles.heroImageUrl,
 			fetchedAt: articles.fetchedAt,
 			enrichmentQueuedAt: articles.enrichmentQueuedAt,
-			enrichmentAttempts: articles.enrichmentAttempts,
 			contentVersion: articles.contentVersion,
 		})
 		.from(articles)
 		.innerJoin(feeds, eq(articles.feedId, feeds.id))
-		.where(
-			and(
-				eq(articles.contentStatus, 'enrichment_pending'),
-				sql`${articles.canonicalUrl} IS NOT NULL`,
-				or(sql`${articles.nextEnrichmentAt} IS NULL`, lte(articles.nextEnrichmentAt, now)),
-			),
-		)
+		.where(and(dueArticleEnrichment(now), sql`${articles.canonicalUrl} IS NOT NULL`))
 		.orderBy(asc(articles.nextEnrichmentAt), desc(articles.fetchedAt))
 		.limit(limit);
 }
@@ -61,20 +80,30 @@ export async function markArticleEnrichmentAttempt(
 	articleId: string,
 	attemptedAt = new Date(),
 ) {
-	await db
+	const [attempt] = await db
 		.update(articles)
 		.set({
 			enrichmentAttemptedAt: attemptedAt,
 			enrichmentAttempts: sql`${articles.enrichmentAttempts} + 1`,
 			nextEnrichmentAt: null,
 		})
-		.where(eq(articles.id, articleId));
+		.where(and(eq(articles.id, articleId), dueArticleEnrichment(attemptedAt)))
+		.returning({ attempts: articles.enrichmentAttempts });
+	return attempt?.attempts ?? null;
+}
+
+function currentAttempt(articleId: string, attempts: number) {
+	return and(
+		eq(articles.id, articleId),
+		eq(articles.contentStatus, 'enrichment_pending'),
+		eq(articles.enrichmentAttempts, attempts),
+	);
 }
 
 export async function markArticleEnrichmentRetry(
 	db: Database,
 	articleId: string,
-	data: { failed: boolean; error: string; nextEnrichmentAt: Date | null },
+	data: { attempts: number; failed: boolean; error: string; nextEnrichmentAt: Date | null },
 ) {
 	const [updated] = await db
 		.update(articles)
@@ -84,14 +113,15 @@ export async function markArticleEnrichmentRetry(
 			enrichmentError: data.error,
 			nextEnrichmentAt: data.nextEnrichmentAt,
 		})
-		.where(eq(articles.id, articleId))
+		.where(currentAttempt(articleId, data.attempts))
 		.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId });
-	return data.failed ? (updated ?? null) : null;
+	return updated ?? null;
 }
 
 export async function markArticleEnrichmentComplete(
 	db: Database,
 	articleId: string,
+	attempts: number,
 	enrichedAt = new Date(),
 ) {
 	const [updated] = await db
@@ -103,7 +133,7 @@ export async function markArticleEnrichmentComplete(
 			enrichmentError: null,
 			nextEnrichmentAt: null,
 		})
-		.where(eq(articles.id, articleId))
+		.where(currentAttempt(articleId, attempts))
 		.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId });
 	return updated ?? null;
 }
@@ -112,6 +142,7 @@ export function replaceArticleEnrichedContent(
 	db: Database,
 	articleId: string,
 	data: EnrichedContentReplacement,
+	attempts: number,
 ) {
 	return db.transaction((tx) => {
 		const [updated] = tx
@@ -128,11 +159,12 @@ export function replaceArticleEnrichedContent(
 				enrichmentError: null,
 				nextEnrichmentAt: null,
 			})
-			.where(eq(articles.id, articleId))
+			.where(currentAttempt(articleId, attempts))
 			.returning({ contentVersion: articles.contentVersion, feedId: articles.feedId })
 			.all();
+		if (!updated) return null;
 		tx.delete(articleMedia).where(eq(articleMedia.articleId, articleId)).run();
 		if (data.media.length > 0) tx.insert(articleMedia).values(data.media).run();
-		return updated ?? null;
+		return updated;
 	});
 }

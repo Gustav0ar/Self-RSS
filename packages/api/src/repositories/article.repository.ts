@@ -1,5 +1,5 @@
 import type { Database as BunDatabase } from 'bun:sqlite';
-import { and, eq, inArray, lt, type SQL, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
 	articleMedia,
@@ -29,6 +29,7 @@ import {
 	setArticleReadState,
 	setArticleSavedState,
 } from './article-state.persistence.js';
+import { recordDurableSyncRun } from './durable-sync-history.js';
 import {
 	assertCurrentSnapshotDelivery,
 	type SnapshotDeliveryClaim,
@@ -405,8 +406,8 @@ export class ArticleRepository {
 		await this.db.update(articles).set(data).where(eq(articles.id, id));
 	}
 
-	async queueEnrichments(articleIds: string[], queuedAt = new Date()) {
-		await queueArticleEnrichments(this.db, articleIds, queuedAt);
+	async queueEnrichments(articleIds: string[], source: 'background' | 'reader' = 'background') {
+		await queueArticleEnrichments(this.db, articleIds, source);
 	}
 
 	async findPendingEnrichments(limit: number, now = new Date()) {
@@ -414,22 +415,26 @@ export class ArticleRepository {
 	}
 
 	async markEnrichmentAttempt(articleId: string, attemptedAt = new Date()) {
-		await markArticleEnrichmentAttempt(this.db, articleId, attemptedAt);
+		return markArticleEnrichmentAttempt(this.db, articleId, attemptedAt);
 	}
 
 	async markEnrichmentRetry(
 		articleId: string,
-		data: { failed: boolean; error: string; nextEnrichmentAt: Date | null },
+		data: { attempts: number; failed: boolean; error: string; nextEnrichmentAt: Date | null },
 	) {
 		return markArticleEnrichmentRetry(this.db, articleId, data);
 	}
 
-	async markEnrichmentComplete(articleId: string, enrichedAt = new Date()) {
-		return markArticleEnrichmentComplete(this.db, articleId, enrichedAt);
+	async markEnrichmentComplete(articleId: string, attempts: number) {
+		return markArticleEnrichmentComplete(this.db, articleId, attempts);
 	}
 
-	async replaceEnrichedContent(articleId: string, data: EnrichedContentReplacement) {
-		return replaceArticleEnrichedContent(this.db, articleId, data);
+	async replaceEnrichedContent(
+		articleId: string,
+		data: EnrichedContentReplacement,
+		attempts: number,
+	) {
+		return replaceArticleEnrichedContent(this.db, articleId, data, attempts);
 	}
 
 	async replaceMedia(articleId: string, data: (typeof articleMedia.$inferInsert)[]) {
@@ -482,7 +487,8 @@ export class ArticleRepository {
 		snapshotDelivery?: SnapshotDeliveryClaim;
 	}) {
 		return this.db.transaction((tx) => {
-			if (params.snapshotDelivery) assertCurrentSnapshotDelivery(tx, params.snapshotDelivery);
+			const delivery =
+				params.snapshotDelivery && assertCurrentSnapshotDelivery(tx, params.snapshotDelivery);
 			const inserted =
 				params.articlesToInsert.length > 0
 					? tx
@@ -507,8 +513,14 @@ export class ArticleRepository {
 
 			// Bun SQLite transactions are synchronous. Execute every update before
 			// the callback returns so an exception rolls the entire batch back.
+			const updatedArticles: Pick<
+				typeof articles.$inferSelect,
+				'id' | 'contentVersion' | 'contentStatus'
+			>[] = [];
+			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];
 			for (const update of params.articlesToUpdate) {
-				tx.update(articles)
+				const updated = tx
+					.update(articles)
 					.set({
 						canonicalUrl: update.canonicalUrl,
 						title: update.title,
@@ -524,23 +536,36 @@ export class ArticleRepository {
 							? sql`${articles.contentVersion} + 1`
 							: undefined,
 					})
-					.where(eq(articles.id, update.id))
+					.where(
+						and(
+							eq(articles.id, update.id),
+							// Enrichment may have finished since the snapshot's preparation read.
+							params.snapshotDelivery
+								? and(ne(articles.contentStatus, 'full_ready'), ne(articles.hash, update.hash))
+								: undefined,
+						),
+					)
+					.returning({
+						id: articles.id,
+						contentVersion: articles.contentVersion,
+						contentStatus: articles.contentStatus,
+					})
+					.get();
+				if (!updated) continue;
+				updatedArticles.push(updated);
+				const media = params.updatedMediaByArticleId.get(updated.id);
+				if (media) allReplacementMedia.push(...media);
+			}
+
+			if (updatedArticles.length > 0) {
+				tx.delete(articleMedia)
+					.where(
+						inArray(
+							articleMedia.articleId,
+							updatedArticles.map((article) => article.id),
+						),
+					)
 					.run();
-			}
-
-			// Collect all replacement media and delete old media in batch
-			const allReplacementMedia: (typeof articleMedia.$inferInsert)[] = [];
-			for (const update of params.articlesToUpdate) {
-				const replacement = params.updatedMediaByArticleId.get(update.id);
-				if (replacement && replacement.length > 0) {
-					allReplacementMedia.push(...replacement);
-				}
-			}
-
-			// Delete old media for all updated articles (1 query instead of N)
-			const articleIdsToUpdate = params.articlesToUpdate.map((u) => u.id);
-			if (articleIdsToUpdate.length > 0) {
-				tx.delete(articleMedia).where(inArray(articleMedia.articleId, articleIdsToUpdate)).run();
 			}
 
 			// Batch insert all replacement media (1 query instead of N)
@@ -548,7 +573,19 @@ export class ArticleRepository {
 				tx.insert(articleMedia).values(allReplacementMedia).run();
 			}
 
-			return inserted;
+			if (delivery && params.snapshotDelivery) {
+				// A recovered delivery can replay after its articles already committed.
+				recordDurableSyncRun(tx, {
+					id: delivery.id,
+					feedId: delivery.feedId,
+					status: 'success',
+					startedAt: delivery.startedAt ?? params.snapshotDelivery.now,
+					finishedAt: params.snapshotDelivery.now,
+					httpStatus: delivery.httpStatus,
+					itemCount: inserted.length,
+				});
+			}
+			return { inserted, updated: updatedArticles };
 		});
 	}
 

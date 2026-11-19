@@ -106,6 +106,9 @@ describe('snapshot delivery transaction fencing', () => {
 				.get(),
 		).toMatchObject({ status: 'completed', lastErrorCode: 'source_replaced' });
 		expect(afterCommit).toHaveBeenCalledTimes(1);
+		expect(context.db.select().from(schema.syncRuns).all()).toMatchObject([
+			{ feedId: 'feed', status: 'success', httpStatus: 200, itemCount: 1 },
+		]);
 		expect(context.db.select({ sourceId: schema.feeds.sourceId }).from(schema.feeds).get()).toEqual(
 			{ sourceId: 'new' },
 		);
@@ -132,6 +135,56 @@ describe('snapshot delivery transaction fencing', () => {
 				.where(eq(schema.feedSnapshotDeliveries.id, context.oldDelivery.id))
 				.get(),
 		).toMatchObject({ status: 'completed', lastErrorCode: 'source_replaced' });
+	});
+
+	it('retains content and media enriched after a snapshot prepared its update', async () => {
+		const { db, repository, articles, now } = await setup();
+		await db.insert(schema.articles).values({
+			id: 'one',
+			feedId: 'feed',
+			guid: 'old-guid',
+			title: 'Before correction',
+			hash: 'prior',
+			contentStatus: 'enrichment_pending',
+		});
+		const afterCommit = vi.fn();
+		const worker = new FeedSnapshotDeliveryService(repository, articles, {
+			beforePersist: async () => {
+				expect(await articles.markEnrichmentAttempt('one')).toBe(1);
+				await articles.replaceEnrichedContent(
+					'one',
+					{
+						contentHtml: '<p>Full article</p>',
+						contentText: 'Full article',
+						excerpt: 'Full article',
+						heroImageUrl: null,
+						hash: 'enriched',
+						enrichedAt: now,
+						media: [
+							{
+								articleId: 'one',
+								url: 'https://example.com/photo.png',
+								provider: 'example.com',
+								type: 'image',
+								position: 0,
+							},
+						],
+					},
+					1,
+				);
+			},
+			afterCommit,
+		});
+		expect(await worker.drainOnce('worker', { now })).toBe(1);
+		expect(db.select().from(schema.articles).get()).toMatchObject({
+			contentText: 'Full article',
+			contentStatus: 'full_ready',
+			contentVersion: 2,
+		});
+		expect(db.select().from(schema.articleMedia).all()).toMatchObject([
+			{ url: 'https://example.com/photo.png' },
+		]);
+		expect(afterCommit).toHaveBeenCalledWith(expect.objectContaining({ updatedArticles: [] }));
 	});
 
 	it.each(['expired', 'reclaimed'])('does not write articles under an %s lease', async (kind) => {

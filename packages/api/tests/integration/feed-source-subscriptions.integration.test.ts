@@ -5,8 +5,13 @@ import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../src/db/migrations.js';
 import * as schema from '../../src/db/schema.js';
+import { recordDurableSyncRun } from '../../src/repositories/durable-sync-history.js';
 import { FeedRepository } from '../../src/repositories/feed.repository.js';
 import { FeedIngestionRepository } from '../../src/repositories/feed-ingestion.repository.js';
+import {
+	MetricsRepository,
+	SyncRunRepository,
+} from '../../src/repositories/settings.repository.js';
 
 const databases: Database[] = [];
 afterEach(() => {
@@ -61,6 +66,58 @@ async function setup() {
 }
 
 describe('durable source subscription eligibility', () => {
+	it('counts each background outcome once and retains user activity across later polls', async () => {
+		const { db, now, feed } = await setup();
+		const metrics = new MetricsRepository(db);
+		for (const status of ['success', 'failed', 'success', 'failed'] as const) {
+			db.transaction((tx) =>
+				recordDurableSyncRun(tx, {
+					id: `same-${status}`,
+					feedId: feed.id,
+					status,
+					finishedAt: now,
+				}),
+			);
+		}
+		const row = () => db.select().from(schema.userMetricsDaily).get();
+		expect(row()).toMatchObject({ isActive: false, feedsSyncedCount: 1, feedFailuresCount: 1 });
+		await metrics.incrementSyncCount('one', 'failed');
+		expect(row()).toMatchObject({ isActive: false, feedsSyncedCount: 1, feedFailuresCount: 2 });
+		// app_opened has no product counter, but does establish activity.
+		await metrics.incrementProductCounts('one', {});
+		await metrics.incrementSyncCount('one', 'success');
+		expect(row()).toMatchObject({ isActive: true, feedsSyncedCount: 2, feedFailuresCount: 2 });
+		expect((await metrics.getDailyMetrics('one', 30))[0]).not.toHaveProperty('isActive');
+	});
+
+	it('records unchanged publisher polls in each subscriber’s own history alongside legacy runs', async () => {
+		const { db, now, repository, subscribe } = await setup();
+		subscribe('two');
+		const history = new SyncRunRepository(db);
+		const legacy = await history.create('feed-one');
+		await repository.enqueueDueSources(1, now);
+		const claim = await repository.claimEligibleFetchJob('worker', 60, now);
+		if (!claim) throw new Error('Expected due job');
+		await repository.finishFetchJob(
+			claim.job.id,
+			'worker',
+			{
+				status: 'completed',
+				completesWithoutDelivery: true,
+				source: { lastHttpStatus: 304 },
+			},
+			now,
+		);
+		const first = await history.findByFeedForUser('one', 'feed-one', 10, 0);
+		expect(first).toHaveLength(2);
+		expect(first).toContainEqual(expect.objectContaining({ id: legacy.id }));
+		expect(first).toContainEqual(expect.objectContaining({ status: 'success', httpStatus: 304 }));
+		expect(await history.findRecentByUser('two', 10)).toMatchObject([
+			{ feedId: 'feed-two', httpStatus: 304 },
+		]);
+		expect(await history.findByFeedForUser('two', 'feed-one', 10, 0)).toEqual([]);
+	});
+
 	it('stops scheduling a source when its final subscription is removed', async () => {
 		const context = await setup();
 		await context.feeds.delete(context.feed.id, context.feed.userId);

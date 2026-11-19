@@ -74,6 +74,8 @@ try {
 	// synchronously, so startup cannot launch a scheduled batch on top of a
 	// pending manual refresh.
 	const pipelineWorkers = selectFeedPipelineWorkers(env.FEED_PIPELINE_MODE);
+	if (pipelineWorkers.durablePublisherWorkers)
+		await deps.services.durableFeed.registerUnlinkedFeeds();
 	const durableRuntime = pipelineWorkers.durablePublisherWorkers
 		? startDurableIngestionRuntime(deps, {
 				timeoutMs: env.FEED_SYNC_TIMEOUT_MS,

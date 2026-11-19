@@ -134,6 +134,8 @@ export function createDeps(
 		metrics,
 	);
 	const opmlImport = new OpmlImportService(repos.category, repos.feed, {
+		registerSource:
+			resolvedSyncConfig.pipelineMode === 'v2' ? (url) => durableFeed.ensureSource(url) : undefined,
 		allowPrivateHosts: resolvedSyncConfig.allowPrivateHosts,
 	});
 

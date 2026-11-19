@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createDeps } from '../../src/config/deps.js';
 import { clearEnvCache } from '../../src/config/env.js';
@@ -15,6 +15,8 @@ import {
 	syncRuns,
 	users,
 } from '../../src/db/schema.js';
+import { createDurableDeliveryWorker } from '../../src/jobs/durable-ingestion-runtime.js';
+import { DurableFeedScheduler } from '../../src/services/durable-feed-scheduler.js';
 import { DurableFeedWorker } from '../../src/services/durable-feed-worker.js';
 import { FeedService } from '../../src/services/feed.service.js';
 import { FeedSnapshotDeliveryService } from '../../src/services/feed-snapshot-delivery.service.js';
@@ -418,6 +420,7 @@ describe('API integration', () => {
 			},
 		});
 		expect(reusedRefresh.response.status).toBe(401);
+		expect(reusedRefresh.response.headers.get('set-cookie')).toBeNull();
 
 		const adminToken = refreshed.body.data.tokens.accessToken;
 
@@ -2033,6 +2036,60 @@ describe('API integration', () => {
 		const blockedRegister = await registerUser('second@example.com');
 		expect(blockedRegister.response.status).toBe(403);
 		expect(blockedRegister.body.error.message).toContain('Registration is currently closed');
+	});
+
+	it('delivers a V2 OPML subscription and refreshes already-cached corrected articles', async () => {
+		const account = await registerUser('durable-import@example.com');
+		const userId = account.body.data.user.id;
+		const url = 'https://192.0.2.1/news';
+		const imported = await v2Deps.services.opmlImport.import(
+			userId,
+			'feed.opml',
+			`<opml><body><outline text="My news" xmlUrl="${url}" /></body></opml>`,
+		);
+		expect(imported.createdFeeds).toBe(1);
+		let now = new Date(Date.now() + 2_000);
+		let title = 'First version';
+		const scheduler = new DurableFeedScheduler(v2Deps.repos.feedIngestion);
+		const worker = new DurableFeedWorker(v2Deps.repos.feedIngestion, {
+			now: () => now,
+			fetch: async () =>
+				new Response(
+					`<rss version="2.0"><channel><title>News</title><item><guid>one</guid><title>${title}</title></item></channel></rss>`,
+				),
+		});
+		const delivery = createDurableDeliveryWorker(v2Deps);
+		await scheduler.tick(now);
+		expect(await worker.drainOnce()).toBe(1);
+		expect(await delivery.drainOnce('import-test', { now })).toBe(1);
+		const article = await db.select().from(articles).get();
+		expect(article?.title).toBe(title);
+		const detail = await v2Deps.services.article.getArticle(userId, article!.id);
+		const key = CacheKeys.articleDetail(userId, detail.id);
+		expect(await redis.exists(key)).toBe(1);
+		title = 'Publisher correction';
+		now = new Date(now.getTime() + 16 * 60_000);
+		await scheduler.tick(now);
+		expect(await worker.drainOnce()).toBe(1);
+		const publish = vi.spyOn(v2Deps.services.realtime, 'publishEvent');
+		try {
+			expect(await delivery.drainOnce('import-test', { now })).toBe(1);
+			expect(await redis.exists(key)).toBe(0);
+			const fresh = await v2Deps.services.article.getArticle(userId, detail.id);
+			expect(fresh.title).toBe(title);
+			expect(fresh.contentVersion).toBe(detail.contentVersion + 1);
+			expect(publish).toHaveBeenCalledWith(
+				userId,
+				expect.objectContaining({
+					type: 'article.updated',
+					articleId: detail.id,
+					feedId: detail.feedId,
+					contentVersion: fresh.contentVersion,
+				}),
+			);
+		} finally {
+			publish.mockRestore();
+		}
 	});
 
 	it('queues v2 creates and refreshes without inline or duplicate publisher fetches', async () => {

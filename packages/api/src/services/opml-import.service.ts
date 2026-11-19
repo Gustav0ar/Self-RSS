@@ -4,7 +4,9 @@ import { AppError } from '../middleware/errors.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import { uniqueCategorySlug } from '../utils/category-slug.js';
+import { normalizeFeedSourceUrl } from '../utils/feed-source-url.js';
 import { assertSafeRemoteUrl } from '../utils/safe-fetch.js';
+import type { DurableFeedFacadeService } from './durable-feed-facade.service.js';
 
 interface ParsedOpmlFeed {
 	feedUrl: string;
@@ -22,6 +24,7 @@ function titleFromUrl(feedUrl: string): string {
 }
 
 interface OpmlImportConfig {
+	registerSource?: DurableFeedFacadeService['ensureSource'];
 	allowPrivateHosts: boolean;
 }
 
@@ -65,6 +68,9 @@ export class OpmlImportService {
 					normalizedFeedUrl = await assertSafeRemoteUrl(entry.feedUrl.trim(), {
 						allowPrivateHosts: this.config.allowPrivateHosts,
 					});
+					if (this.config.registerSource) {
+						normalizedFeedUrl = normalizeFeedSourceUrl(normalizedFeedUrl).normalizedUrl;
+					}
 					normalizedUrlCache.set(entry.feedUrl, normalizedFeedUrl);
 				}
 			} catch (error) {
@@ -175,7 +181,13 @@ export class OpmlImportService {
 				parentCategoryId = `__pending__:${categoriesToCreate.length - 1}`;
 			}
 
+			const registration = await this.config.registerSource?.(entry.feedUrl);
 			feedsToCreate.push({
+				...(registration && {
+					pendingSourceId: registration.source.id,
+					customTitle: entry.title?.trim() || null,
+					syncStatus: 'pending',
+				}),
 				userId,
 				// Patched after the category insert below.
 				categoryId: parentCategoryId as string,

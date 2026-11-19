@@ -76,7 +76,7 @@ export interface FeedSnapshotDeliveryCallbacks {
 		feedId: string;
 		userId: string;
 		insertedArticleIds: string[];
-		updatedArticleIds: string[];
+		updatedArticles: Awaited<ReturnType<ArticleRepository['persistSyncResults']>>['updated'];
 	}) => void | Promise<void>;
 }
 
@@ -174,7 +174,7 @@ export class FeedSnapshotDeliveryService {
 				);
 			}
 			const completedAt = now ?? new Date();
-			const inserted = await this.articleRepository.persistSyncResults({
+			const { inserted, updated } = await this.articleRepository.persistSyncResults({
 				articlesToInsert,
 				articlesToUpdate,
 				mediaByGuid,
@@ -201,7 +201,7 @@ export class FeedSnapshotDeliveryService {
 					feedId: context.feed.id,
 					userId: context.feed.userId,
 					insertedArticleIds: inserted.map((article) => article.id),
-					updatedArticleIds: articlesToUpdate.map((article) => article.id),
+					updatedArticles: updated,
 				});
 			} catch (error) {
 				throw new PostCommitCallbackError(error);

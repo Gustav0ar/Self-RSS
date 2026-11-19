@@ -169,40 +169,22 @@ export function setArticleSavedState(
 export function markArticlesRead(db: Database, userId: string, feedIds: string[]): number {
 	if (feedIds.length === 0) return 0;
 	return db.transaction((tx) => {
-		const inserted = tx.all<{ article_id: string }>(sql`
-			INSERT INTO article_reads (user_id, article_id, source, read_at)
-			SELECT ${userId}, articles.id, 'mark_all', unixepoch()
-			FROM articles
-			LEFT JOIN article_reads
-				ON article_reads.article_id = articles.id
-				AND article_reads.user_id = ${userId}
-			WHERE articles.feed_id IN (${sql.join(
-				feedIds.map((id) => sql`${id}`),
-				sql`, `,
-			)})
-				AND article_reads.user_id IS NULL
-			RETURNING article_id
+		// Both statements select the same unread rows under the transaction's write lock.
+		const unreadArticles = sql`SELECT a.id FROM articles a
+			WHERE a.feed_id IN (SELECT value FROM json_each(${JSON.stringify(feedIds)}))
+			  AND NOT EXISTS (SELECT 1 FROM article_reads r
+			                  WHERE r.user_id = ${userId} AND r.article_id = a.id)`;
+		tx.run(sql`
+			INSERT INTO article_user_states (user_id, article_id, read_revision, updated_at)
+			SELECT ${userId}, id, 1, unixepoch() FROM (${unreadArticles}) WHERE true
+			ON CONFLICT(user_id, article_id) DO UPDATE SET
+				read_revision = read_revision + 1, updated_at = excluded.updated_at
 		`);
-		if (inserted.length > 0) {
-			tx.insert(articleUserStates)
-				.values(
-					inserted.map((row) => ({
-						userId,
-						articleId: row.article_id,
-						readRevision: 1,
-						updatedAt: new Date(),
-					})),
-				)
-				.onConflictDoUpdate({
-					target: [articleUserStates.userId, articleUserStates.articleId],
-					set: {
-						readRevision: sql`${articleUserStates.readRevision} + 1`,
-						updatedAt: new Date(),
-					},
-				})
-				.run();
-		}
-		return inserted.length;
+		tx.run(sql`
+			INSERT INTO article_reads (user_id, article_id, source, read_at)
+			SELECT ${userId}, id, 'mark_all', unixepoch() FROM (${unreadArticles})
+		`);
+		return tx.values<[number]>(sql`SELECT changes()`)[0]![0];
 	});
 }
 
