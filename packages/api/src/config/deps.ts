@@ -121,6 +121,7 @@ export function createDeps(
 		repos.feed,
 		repos.category,
 		repos.feedIngestion,
+		articleCache,
 	);
 	const feedSync = new FeedSyncService(
 		repos.feed,
@@ -134,6 +135,8 @@ export function createDeps(
 		metrics,
 	);
 	const opmlImport = new OpmlImportService(repos.category, repos.feed, {
+		registerSource:
+			resolvedSyncConfig.pipelineMode === 'v2' ? (url) => durableFeed.ensureSource(url) : undefined,
 		allowPrivateHosts: resolvedSyncConfig.allowPrivateHosts,
 	});
 

@@ -199,71 +199,73 @@ function copyMigrationFolder(baseDir: string) {
 	return folder;
 }
 
-function copyMigrationsBeforeDurableIngestion(baseDir: string) {
-	const folder = join(baseDir, 'pre-durable-drizzle');
+function copyMigrationsBefore(baseDir: string, firstExcludedTag: string) {
+	const folder = join(baseDir, 'previous-drizzle');
 	cpSync(migrationsFolder, folder, { recursive: true });
 	const journalPath = join(folder, 'meta/_journal.json');
-	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
-		version: string;
-		dialect: string;
-		entries: { tag: string }[];
-	};
-	journal.entries = journal.entries.filter(
-		(entry) =>
-			entry.tag !== '0017_smiling_naoko' &&
-			entry.tag !== '0018_nifty_dragon_man' &&
-			entry.tag !== '0019_tidy_wong' &&
-			entry.tag !== '0020_fixed_feed_refresh_interval' &&
-			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics' &&
-			entry.tag !== '0022_offline_article_state',
-	);
-	writeFileSync(journalPath, JSON.stringify(journal));
-	return folder;
-}
-
-function copyMigrationsBeforeAuthSessionExpiry(baseDir: string) {
-	const folder = join(baseDir, 'pre-auth-session-expiry-drizzle');
-	cpSync(migrationsFolder, folder, { recursive: true });
-	const journalPath = join(folder, 'meta/_journal.json');
-	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
-		version: string;
-		dialect: string;
-		entries: { tag: string }[];
-	};
-	journal.entries = journal.entries.filter(
-		(entry) =>
-			entry.tag !== '0019_tidy_wong' &&
-			entry.tag !== '0020_fixed_feed_refresh_interval' &&
-			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics' &&
-			entry.tag !== '0022_offline_article_state',
-	);
-	writeFileSync(journalPath, JSON.stringify(journal));
-	return folder;
-}
-
-function copyMigrationsBeforeFixedFeedRefresh(baseDir: string) {
-	const folder = join(baseDir, 'pre-fixed-feed-refresh-drizzle');
-	cpSync(migrationsFolder, folder, { recursive: true });
-	const journalPath = join(folder, 'meta/_journal.json');
-	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
-		version: string;
-		dialect: string;
-		entries: { tag: string }[];
-	};
-	journal.entries = journal.entries.filter(
-		(entry) =>
-			entry.tag !== '0020_fixed_feed_refresh_interval' &&
-			entry.tag !== '0021_saved_articles' &&
-			entry.tag !== '0022_product_analytics' &&
-			entry.tag !== '0022_offline_article_state',
-	);
+	const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { tag: string }[] };
+	const index = journal.entries.findIndex((entry) => entry.tag === firstExcludedTag);
+	if (index < 0) throw new Error(`Unknown migration ${firstExcludedTag}`);
+	journal.entries = journal.entries.slice(0, index);
 	writeFileSync(journalPath, JSON.stringify(journal));
 	return folder;
 }
 
 describe('SQLite migrations', () => {
+	it.each([
+		'fresh',
+		'upgrade',
+	] as const)('installs the daily activity marker on a %s database', async (path) => {
+		const sqlite = new BunDatabase(':memory:');
+		try {
+			const db = drizzle(sqlite, { schema });
+			if (path === 'upgrade') {
+				const dir = await mkdtemp(join(tmpdir(), 'daily-activity-migration-'));
+				tempDirs.push(dir);
+				applyMigrations(db, {
+					migrationsFolder: copyMigrationsBefore(dir, '0023_daily_reader_activity'),
+				});
+				await db
+					.insert(schema.users)
+					.values({ id: 'reader', email: 'reader@example.com', passwordHash: 'test' });
+				sqlite.exec(
+					"INSERT INTO user_metrics_daily (user_id,date,articles_read_count,feeds_synced_count,feed_failures_count) VALUES ('reader','2026-08-01',3,40,2),('reader','2026-08-02',0,0,0)",
+				);
+			}
+			applyMigrations(db, { migrationsFolder });
+			expect(
+				sqlite
+					.query(
+						`SELECT name, "notnull" AS required, dflt_value FROM pragma_table_info('user_metrics_daily') WHERE name='is_active'`,
+					)
+					.get(),
+			).toMatchObject({ name: 'is_active', required: 1, dflt_value: 'true' });
+			if (path === 'upgrade')
+				expect(
+					await db.select().from(schema.userMetricsDaily).orderBy(schema.userMetricsDaily.date),
+				).toMatchObject([
+					{
+						userId: 'reader',
+						date: '2026-08-01',
+						isActive: true,
+						articlesReadCount: 3,
+						feedsSyncedCount: 40,
+						feedFailuresCount: 2,
+					},
+					{
+						userId: 'reader',
+						date: '2026-08-02',
+						isActive: true,
+						articlesReadCount: 0,
+						feedsSyncedCount: 0,
+						feedFailuresCount: 0,
+					},
+				]);
+		} finally {
+			sqlite.close();
+		}
+	});
+
 	it('backfills auth session expiry on an existing database', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-auth-session-migration-'));
 		tempDirs.push(tempDir);
@@ -273,7 +275,7 @@ describe('SQLite migrations', () => {
 		try {
 			const db = drizzle(sqlite, { schema });
 			applyMigrations(db, {
-				migrationsFolder: copyMigrationsBeforeAuthSessionExpiry(tempDir),
+				migrationsFolder: copyMigrationsBefore(tempDir, '0019_tidy_wong'),
 			});
 			const createdAt = 1_700_000_000;
 			sqlite
@@ -321,7 +323,7 @@ describe('SQLite migrations', () => {
 		try {
 			const db = drizzle(sqlite, { schema });
 			applyMigrations(db, {
-				migrationsFolder: copyMigrationsBeforeDurableIngestion(tempDir),
+				migrationsFolder: copyMigrationsBefore(tempDir, '0017_smiling_naoko'),
 			});
 			const now = 1_700_000_000;
 			for (const [id, email] of [
@@ -470,7 +472,7 @@ describe('SQLite migrations', () => {
 		try {
 			const db = drizzle(sqlite, { schema });
 			applyMigrations(db, {
-				migrationsFolder: copyMigrationsBeforeFixedFeedRefresh(tempDir),
+				migrationsFolder: copyMigrationsBefore(tempDir, '0020_fixed_feed_refresh_interval'),
 			});
 			const now = Math.floor(Date.now() / 1_000);
 			sqlite
@@ -569,6 +571,29 @@ describe('SQLite migrations', () => {
 			expect(countRows(sqlite, 'articles')).toBe(1);
 			expect(sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
 			expect(readdirSync(join(tempDir, 'backups')).some((file) => file.endsWith('.db'))).toBe(true);
+		} finally {
+			sqlite.close();
+		}
+	});
+
+	it('retries an interrupted first baseline without leaving a partial guard', () => {
+		const sqlite = new BunDatabase(':memory:');
+		try {
+			const db = drizzle(sqlite, { schema });
+			applyMigrations(db, { migrationsFolder });
+			sqlite.exec(`
+				DELETE FROM __self_feed_migration_guard;
+				CREATE TEMP TRIGGER interrupt_baseline BEFORE INSERT ON __self_feed_migration_guard
+				WHEN (SELECT count(*) FROM __self_feed_migration_guard) = 1
+				BEGIN SELECT RAISE(ABORT, 'interrupted baseline'); END;
+			`);
+			expect(() => applyMigrations(db, { migrationsFolder })).toThrow();
+			expect(countRows(sqlite, '__self_feed_migration_guard')).toBe(0);
+			sqlite.exec('DROP TRIGGER interrupt_baseline');
+			applyMigrations(db, { migrationsFolder });
+			expect(countRows(sqlite, '__self_feed_migration_guard')).toBe(
+				countRows(sqlite, '__drizzle_migrations'),
+			);
 		} finally {
 			sqlite.close();
 		}

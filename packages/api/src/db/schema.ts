@@ -864,6 +864,7 @@ export const userMetricsDaily = sqliteTable(
 			.notNull()
 			.references(() => users.id, { onDelete: 'cascade' }),
 		date: text('date').notNull(),
+		isActive: boolean('is_active').notNull().default(true),
 		articlesReadCount: integer('articles_read_count').notNull().default(0),
 		feedsSyncedCount: integer('feeds_synced_count').notNull().default(0),
 		searchCount: integer('search_count').notNull().default(0),

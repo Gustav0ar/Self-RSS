@@ -325,6 +325,29 @@ class AuthViewModelTest {
     }
 
     @Test
+    fun `failed local logout keeps the session available for retry and stops a server switch`() = runTest {
+        every { repository.isLoggedIn() } returns true
+        val viewModel = AuthViewModel(repository)
+        viewModel.bootstrap()
+        val session = requireNotNull(viewModel.state.value.session)
+        every { repository.isCurrentSession(session) } returns true
+        coEvery { repository.logout() } returns AppResult.Error("disk full")
+
+        viewModel.logout()
+        assertEquals(session, viewModel.state.value.session)
+        assertTrue(viewModel.state.value.isAuthenticated)
+        assertEquals(PresentationText.resource(R.string.auth_logout_failed), viewModel.state.value.errorMessage)
+
+        viewModel.switchServerForExternalAction("https://other.example")
+        coVerify(exactly = 0) { repository.setApiBaseUrl(any()) }
+        assertEquals(session, viewModel.state.value.session)
+
+        coEvery { repository.logout() } returns AppResult.Success(true)
+        viewModel.logout()
+        assertFalse(viewModel.state.value.isAuthenticated)
+    }
+
+    @Test
     fun `changePassword keeps the rotated session and reports success`() = runTest {
         val viewModel = AuthViewModel(repository)
         viewModel.login("reader@example.com", "password123", DEFAULT_API_BASE_URL)

@@ -1,27 +1,22 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { spawnService, stopService } from './service-process.js';
 
 const children = new Set<ChildProcess>();
-let shuttingDown = false;
+let shutdown: Promise<void> | undefined;
 
 function run(name: string, args: string[]) {
 	console.log(`[dev] starting ${name}: bun ${args.join(' ')}`);
-	const child = spawn('bun', args, {
+	const child = spawnService('bun', args, {
 		env: process.env,
 		stdio: 'inherit',
 	});
 	children.add(child);
-	child.once('exit', () => children.delete(child));
 	return child;
 }
 
 function stopAll(signal: NodeJS.Signals = 'SIGTERM') {
-	if (shuttingDown) return;
-	shuttingDown = true;
-	for (const child of children) {
-		if (child.exitCode === null && child.signalCode === null) {
-			child.kill(signal);
-		}
-	}
+	shutdown ??= Promise.all([...children].map((child) => stopService(child, signal))).then(() => {});
+	return shutdown;
 }
 
 function sleep(ms: number) {
@@ -52,9 +47,13 @@ async function main() {
 	process.on('SIGINT', () => stopAll('SIGINT'));
 	process.on('SIGTERM', () => stopAll('SIGTERM'));
 
+	const apiOrigin = `http://127.0.0.1:${process.env.API_PORT ?? '3000'}`;
+	process.env.VITE_PROXY_TARGET ??= apiOrigin;
+
 	const api = run('api', ['run', 'dev:api']);
 	console.log('[dev] waiting for API health before starting worker');
-	await waitForHttp('http://127.0.0.1:3000/health', api);
+	await waitForHttp(`${apiOrigin}/health`, api);
+	if (shutdown) return shutdown;
 
 	const worker = run('worker', ['run', 'dev:worker']);
 	const web = run('web', ['run', 'dev:web']);
@@ -63,7 +62,7 @@ async function main() {
 	await new Promise<void>((resolve) => {
 		for (const child of services) {
 			child.once('exit', (code, signal) => {
-				if (!shuttingDown) {
+				if (!shutdown) {
 					console.log(
 						`[dev] service exited; stopping remaining services (${signal ?? `code ${code ?? 0}`})`,
 					);
@@ -74,12 +73,13 @@ async function main() {
 		}
 	});
 
+	await shutdown;
 	const failed = services.find((child) => child.exitCode && child.exitCode !== 0);
 	process.exit(failed?.exitCode ?? 0);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
 	console.error(error instanceof Error ? error.message : String(error));
-	stopAll();
+	await stopAll();
 	process.exit(1);
 });

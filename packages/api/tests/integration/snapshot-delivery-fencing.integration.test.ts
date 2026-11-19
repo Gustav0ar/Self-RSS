@@ -15,7 +15,7 @@ afterEach(() => {
 	for (const sqlite of databases.splice(0)) sqlite.close();
 });
 
-async function setup() {
+async function setup(extraOldItem = '') {
 	const sqlite = new Database(':memory:');
 	databases.push(sqlite);
 	const db = drizzle(sqlite, { schema });
@@ -62,7 +62,7 @@ async function setup() {
 			finalUrl: `https://example.com/${sourceId}`,
 			status: 200,
 			fetchedAt: now,
-			body: `<rss version="2.0"><channel><title>${sourceId} feed</title><item><guid>${sourceId}-guid</guid><title>${sourceId} article</title><description>${sourceId} content</description></item></channel></rss>`,
+			body: `<rss version="2.0"><channel><title>${sourceId} feed</title><item><guid>${sourceId}-guid</guid><title>${sourceId} article</title><description>${sourceId} content</description></item>${sourceId === 'old' ? extraOldItem : ''}</channel></rss>`,
 		});
 		await parser.parsePersistedSnapshot(snapshot.id, now);
 	}
@@ -87,6 +87,49 @@ async function setup() {
 }
 
 describe('snapshot delivery transaction fencing', () => {
+	it('keeps a newer correction when an older snapshot retries with a previously unseen article', async () => {
+		const { db, repository, articles, now, oldDelivery } = await setup(
+			'<item><guid>archive</guid><title>Previously unseen</title></item>',
+		);
+		await repository.claimNextDelivery('first-worker', 60, now);
+		const parser = new FeedSnapshotParserService(repository);
+		const newer = await parser.persistRawResponse({
+			id: 'a-newer-snapshot',
+			sourceId: 'old',
+			finalUrl: 'https://example.com/old',
+			status: 200,
+			fetchedAt: now, // Both publisher responses landed in the same SQLite timestamp second.
+			body: '<rss version="2.0"><channel><item><guid>old-guid</guid><title>Correction</title></item></channel></rss>',
+		});
+		await parser.parsePersistedSnapshot(newer.id, now);
+		const worker = new FeedSnapshotDeliveryService(repository, articles);
+		expect(await worker.drainOnce('second-worker', { now })).toBe(0);
+		const retryAt = new Date(now.getTime() + 60_000);
+		await repository.finishDelivery(
+			oldDelivery.id,
+			'first-worker',
+			{ status: 'pending', availableAt: retryAt },
+			now,
+		);
+		expect(await worker.drainOnce('second-worker', { now })).toBe(1);
+		const corrected = db.select().from(schema.articles).get();
+		expect(corrected).toMatchObject({ title: 'Correction', contentVersion: 1 });
+
+		// History cleanup can run after an outage before the pending worker recovers.
+		const restartedAt = new Date(now.getTime() + 3 * 24 * 60 * 60_000);
+		await repository.cleanupExpiredSnapshots(restartedAt);
+		await repository.cleanupOperationalHistory({
+			now: restartedAt,
+			retentionDays: 1,
+			batchSize: 100,
+		});
+		expect(await worker.drainOnce('restarted-worker', { now: restartedAt })).toBe(1);
+		expect(db.select().from(schema.articles).orderBy(schema.articles.guid).all()).toEqual([
+			expect.objectContaining({ guid: 'archive', title: 'Previously unseen' }),
+			corrected,
+		]);
+	});
+
 	it('settles a queued old-source snapshot without restoring replaced articles', async () => {
 		const context = await setup();
 		await context.activateReplacement();
@@ -106,6 +149,9 @@ describe('snapshot delivery transaction fencing', () => {
 				.get(),
 		).toMatchObject({ status: 'completed', lastErrorCode: 'source_replaced' });
 		expect(afterCommit).toHaveBeenCalledTimes(1);
+		expect(context.db.select().from(schema.syncRuns).all()).toMatchObject([
+			{ feedId: 'feed', status: 'success', httpStatus: 200, itemCount: 1 },
+		]);
 		expect(context.db.select({ sourceId: schema.feeds.sourceId }).from(schema.feeds).get()).toEqual(
 			{ sourceId: 'new' },
 		);
@@ -132,6 +178,54 @@ describe('snapshot delivery transaction fencing', () => {
 				.where(eq(schema.feedSnapshotDeliveries.id, context.oldDelivery.id))
 				.get(),
 		).toMatchObject({ status: 'completed', lastErrorCode: 'source_replaced' });
+	});
+
+	it('retains content and media enriched after a snapshot prepared its update', async () => {
+		const { db, repository, articles, now } = await setup();
+		await db.insert(schema.articles).values({
+			id: 'one',
+			feedId: 'feed',
+			guid: 'old-guid',
+			canonicalUrl: 'https://example.com/article',
+			title: 'Before correction',
+			hash: 'prior',
+			contentStatus: 'enrichment_pending',
+		});
+		const afterCommit = vi.fn();
+		const worker = new FeedSnapshotDeliveryService(repository, articles, {
+			beforePersist: async () => {
+				const attempt = await articles.markEnrichmentAttempt('one');
+				if (!attempt) throw new Error('Expected pending article to be claimed');
+				await articles.replaceEnrichedContent(attempt, {
+					contentHtml: '<p>Full article</p>',
+					contentText: 'Full article',
+					excerpt: 'Full article',
+					heroImageUrl: null,
+					hash: 'enriched',
+					enrichedAt: now,
+					media: [
+						{
+							articleId: 'one',
+							url: 'https://example.com/photo.png',
+							provider: 'example.com',
+							type: 'image',
+							position: 0,
+						},
+					],
+				});
+			},
+			afterCommit,
+		});
+		expect(await worker.drainOnce('worker', { now })).toBe(1);
+		expect(db.select().from(schema.articles).get()).toMatchObject({
+			contentText: 'Full article',
+			contentStatus: 'full_ready',
+			contentVersion: 2,
+		});
+		expect(db.select().from(schema.articleMedia).all()).toMatchObject([
+			{ url: 'https://example.com/photo.png' },
+		]);
+		expect(afterCommit).toHaveBeenCalledWith(expect.objectContaining({ updatedArticles: [] }));
 	});
 
 	it.each(['expired', 'reclaimed'])('does not write articles under an %s lease', async (kind) => {

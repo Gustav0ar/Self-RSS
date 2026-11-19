@@ -123,14 +123,11 @@ export function createAuthRoutes(
 			throw AppError.unauthorized('No refresh token provided');
 		}
 
-		try {
-			const result = await authService.refresh(refreshToken, getSessionMetadata(c));
-			setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
-			return c.json({ data: { tokens: { accessToken: result.tokens.accessToken } } });
-		} catch (err) {
-			deleteCookie(c, COOKIE_NAME, { path: '/api/v1/auth' });
-			throw err;
-		}
+		// A failed request may have used a cookie another tab already rotated.
+		// Only a successful refresh should replace the browser's current cookie.
+		const result = await authService.refresh(refreshToken, getSessionMetadata(c));
+		setCookie(c, COOKIE_NAME, result.tokens.refreshToken, getCookieOptions());
+		return c.json({ data: { tokens: { accessToken: result.tokens.accessToken } } });
 	});
 
 	auth.get('/me', authMiddleware, async (c) => {

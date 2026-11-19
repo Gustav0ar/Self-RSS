@@ -190,8 +190,8 @@ class ArticleRepositoryImpl @Inject constructor(
     ): AppResult<ArticleMutationReceipt> =
         access.withAccount { delegate.markRead(articleId, read, source) }
 
-    override suspend fun setSaved(articleId: String, saved: Boolean): AppResult<ArticleMutationReceipt> =
-        access.withAccount { delegate.setSaved(articleId, saved) }
+    override suspend fun setSaved(articleId: String, saved: Boolean, listItem: ArticleListItem?): AppResult<ArticleMutationReceipt> =
+        access.withAccount { delegate.setSaved(articleId, saved, listItem) }
 
     override fun savedStateRejections(): Flow<SavedStateRejection> = access.observe { delegate.savedStateRejections() }
     override fun readStateRejections(): Flow<ReadStateRejection> = access.observe { delegate.readStateRejections() }

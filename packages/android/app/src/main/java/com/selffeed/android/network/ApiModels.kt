@@ -243,6 +243,26 @@ data class ArticleDetail(
     val enrichmentError: String? = null,
 )
 
+internal fun ArticleDetail.toArticleListItem(): ArticleListItem =
+    ArticleListItem(
+        id = id,
+        feedId = feedId,
+        feedTitle = feedTitle,
+        feedFaviconUrl = feedFaviconUrl,
+        title = title,
+        author = author,
+        excerpt = excerpt,
+        heroImageUrl = heroImageUrl,
+        publishedAt = publishedAt,
+        displayedAt = publishedAt ?: fetchedAt,
+        isRead = isRead,
+        isSaved = isSaved,
+        readRevision = readRevision,
+        savedRevision = savedRevision,
+        contentStatus = contentStatus,
+        contentVersion = contentVersion,
+    )
+
 sealed interface ReadStateSyncEvent {
     val eventId: String
     val clientId: String?

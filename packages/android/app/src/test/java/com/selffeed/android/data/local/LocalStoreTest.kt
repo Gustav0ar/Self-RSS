@@ -613,6 +613,43 @@ class LocalStoreTest {
     }
 
     @Test
+    fun `saved paging applies hide read and stable sort to local bookmarks`() = runBlocking {
+        val rows = listOf(
+            sampleArticle("a").copy(isSaved = true, displayedAt = "2026-01-01"),
+            sampleArticle("b").copy(isSaved = true, displayedAt = "2026-01-01"),
+            sampleArticle("c").copy(isSaved = true, displayedAt = "2026-01-02"),
+            sampleArticle("read").copy(isSaved = true, isRead = true, displayedAt = "2026-01-03"),
+        )
+        store.writeArticleRemotePage("latest-saved", ApiListResponse(rows, null, false), true)
+
+        suspend fun savedIds(unreadOnly: Boolean, oldest: Boolean): List<String> {
+            val page = store.savedArticlePagingSource(null, unreadOnly, oldest).load(
+                PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+            ) as PagingSource.LoadResult.Page
+            return page.data.map { it.id }
+        }
+        assertEquals(listOf("a", "b", "c"), savedIds(unreadOnly = true, oldest = true))
+        assertEquals(listOf("read", "c", "b", "a"), savedIds(unreadOnly = false, oldest = false))
+        assertEquals(listOf("a", "b", "c"), store.savedArticlesMissingFromQuery("unread-saved", unreadOnly = true).map { it.articleId })
+    }
+
+    @Test
+    fun `bookmarking an unopened search result retains its row and pending download across restart`() = runBlocking {
+        val item = sampleArticle("search-only").copy(title = "Unopened result", savedRevision = 1)
+        store.reconcileArticleSnapshots(listOf(item))
+        store.queueSavedStateMutation(item.id, saved = true, listItem = item)
+        reopenStore()
+
+        val page = store.savedArticlePagingSource(null).load(
+            PagingSource.LoadParams.Refresh<Int>(null, 30, false),
+        ) as PagingSource.LoadResult.Page
+        assertEquals(item.title, page.data.single().title)
+        assertTrue(page.data.single().isSaved)
+        assertEquals(1, store.readPendingSavedStateMutations().single().baseRevision)
+        assertEquals(listOf(item.id), store.savedArticleIdsWithoutText())
+    }
+
+    @Test
     fun `saving a detail-only article adds it to the offline saved collection`() = runBlocking {
         store.writeArticleDetail(sampleDetail("a-detail-save"))
 

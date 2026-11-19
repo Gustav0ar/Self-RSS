@@ -4,6 +4,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { REFRESH_INTERVALS } from '../../src/lib/constants';
+
 const apiFetchMock = vi.fn();
 
 vi.mock('../../src/lib/api', () => ({
@@ -210,23 +212,25 @@ describe('applyReadStateSyncEvent', () => {
 });
 
 describe('invalidateReaderQueries', () => {
-	it('invalidates the reader query family', () => {
-		const invalidateQueries = vi.fn();
-		const qc = { invalidateQueries };
-
-		invalidateReaderQueries(qc as unknown as QueryClient);
-
-		const calledKeys = invalidateQueries.mock.calls.map((c) => c[0].queryKey);
-		expect(calledKeys).toEqual(
-			expect.arrayContaining([
-				['articles'],
-				['article'],
-				['feeds'],
-				['categories'],
-				['stats'],
-				['search'],
-			]),
-		);
+	it('invalidates reader data and preserves the refresh status that triggered the update', () => {
+		const qc = new RealQueryClient();
+		const readerKeys = [
+			['articles'],
+			['article', 'a'],
+			['feeds', 'news'],
+			['categories'],
+			['stats'],
+			['search'],
+		];
+		const statusKeys = [
+			['feeds', 'sync', 'status'],
+			['feeds', 'sync', 'status', 'request'],
+		];
+		for (const key of [...readerKeys, ...statusKeys]) qc.setQueryData(key, {});
+		invalidateReaderQueries(qc);
+		for (const key of readerKeys) expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
+		for (const key of statusKeys) expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
+		qc.clear();
 	});
 });
 
@@ -328,12 +332,14 @@ describe('saved article offline fallback', () => {
 			contentVersion: 2,
 		});
 
-		const fallback = buildSavedArticlesFallback(queryClient, { savedOnly: true }, 30);
+		const fallback = buildSavedArticlesFallback(queryClient, { savedOnly: true, limit: 1 });
 
 		expect(fallback?.pages[0]?.data.map((article) => article.id)).toEqual([
 			'detail-saved',
 			'list-saved',
 		]);
+		const unread = buildSavedArticlesFallback(queryClient, { savedOnly: true, unreadOnly: true });
+		expect(unread?.pages[0]?.data.map((article) => article.id)).toEqual(['list-saved']);
 	});
 });
 
@@ -411,6 +417,44 @@ describe('read query cancellation', () => {
 		});
 		for (const [, options] of apiFetchMock.mock.calls) {
 			expect((options as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+		}
+	});
+});
+
+describe('feed refresh status fallback', () => {
+	it('continues through unchanged progress and a temporary error, then stops on completion', async () => {
+		vi.useFakeTimers();
+		const requestId = 'slow-feed';
+		const active = {
+			requestId,
+			active: true,
+			running: true,
+			queued: false,
+			startedAt: new Date().toISOString(),
+		};
+		const complete = { ...active, active: false, running: false, newArticles: 2 };
+		apiFetchMock
+			.mockReset()
+			.mockResolvedValueOnce({ data: active })
+			.mockRejectedValueOnce(new TypeError('offline'))
+			.mockResolvedValue({ data: complete });
+		const client = new RealQueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(['feeds', 'sync', 'status', requestId], active);
+		const { unmount } = renderHook(() => useSyncAllFeedsStatus(requestId), {
+			wrapper: ({ children }) => (
+				<QueryClientProvider client={client}>{children}</QueryClientProvider>
+			),
+		});
+		try {
+			await act(async () =>
+				vi.advanceTimersByTimeAsync(3 * REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS),
+			);
+			expect(client.getQueryData(['feeds', 'sync', 'status', requestId])).toEqual(complete);
+			await act(async () => vi.advanceTimersByTimeAsync(REFRESH_INTERVALS.SYNC_STATUS_FALLBACK_MS));
+			expect(apiFetchMock).toHaveBeenCalledTimes(3);
+		} finally {
+			unmount();
+			client.clear();
 		}
 	});
 });

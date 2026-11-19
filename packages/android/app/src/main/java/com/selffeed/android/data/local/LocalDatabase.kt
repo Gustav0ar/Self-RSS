@@ -350,14 +350,14 @@ interface LocalStoreDao {
         """
         SELECT articles.* FROM articles
         LEFT JOIN feeds ON feeds.id = articles.feedId
-        WHERE (:categoryId IS NULL OR feeds.categoryId = :categoryId)
-          AND (articles.title LIKE '%' || :query || '%' COLLATE NOCASE
-               OR COALESCE(articles.excerpt, '') LIKE '%' || :query || '%' COLLATE NOCASE)
-        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC
+        WHERE (:allCategories OR feeds.categoryId IN (:categoryIds))
+          AND (instr(lower(articles.title), lower(:query)) > 0
+               OR instr(lower(articles.excerpt), lower(:query)) > 0)
+        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC, articles.id DESC
         LIMIT :limit
         """,
     )
-    suspend fun searchArticles(query: String, categoryId: String?, limit: Int): List<ArticleEntity>
+    suspend fun searchArticles(query: String, categoryIds: List<String>, allCategories: Boolean, limit: Int): List<ArticleEntity>
 
     @Query(
         """
@@ -373,25 +373,27 @@ interface LocalStoreDao {
     @Query(
         """
         SELECT articles.*, NULL AS readRevision, NULL AS savedRevision FROM articles
-        WHERE isSaved = 1
+        WHERE isSaved = 1 AND (NOT :unreadOnly OR isRead = 0)
           AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
-        ORDER BY COALESCE(displayedAt, publishedAt) DESC, id DESC
+        ORDER BY CASE WHEN :oldest THEN COALESCE(displayedAt, publishedAt) END ASC,
+                 CASE WHEN :oldest THEN id END ASC,
+                 COALESCE(displayedAt, publishedAt) DESC, id DESC
         """,
     )
-    fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem>
+    fun savedArticlePagingSource(ownerId: String?, unreadOnly: Boolean, oldest: Boolean): PagingSource<Int, ArticleListItem>
 
     @Query(
         """
         SELECT articles.id AS articleId, article_state_revisions.savedRevision
         FROM articles
         LEFT JOIN article_state_revisions ON article_state_revisions.articleId = articles.id
-        WHERE articles.isSaved = 1
+        WHERE articles.isSaved = 1 AND (NOT :unreadOnly OR articles.isRead = 0)
           AND articles.id NOT IN (SELECT articleId FROM article_query_entries WHERE queryKey = :queryKey)
           AND articles.id NOT IN (SELECT articleId FROM pending_saved_state_mutations)
         ORDER BY articles.id
         """,
     )
-    suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot>
+    suspend fun savedArticlesMissingFromQuery(queryKey: String, unreadOnly: Boolean): List<SavedArticleSnapshot>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertArticleQueryEntries(entries: List<ArticleQueryEntryEntity>)

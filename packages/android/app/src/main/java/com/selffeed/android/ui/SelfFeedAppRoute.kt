@@ -62,7 +62,7 @@ fun SelfFeedAppRoute(
             performanceMetricsState = performanceMetricsState,
         )
     }
-    if (session == null) {
+    if (authState.loading || session == null) {
         SelfFeedTheme {
             ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
             if (authState.loading || authState.isAuthenticated) {
@@ -326,11 +326,7 @@ private fun AuthenticatedAppRoute(
                 onAuthModeChange = authViewModel::setAuthMode,
                 onLogin = authViewModel::login,
                 onRegister = authViewModel::register,
-                onLogout = {
-                    articlesViewModel.clearReadingSession()
-                    appViewModel.clearReadingSession()
-                    authViewModel.logout()
-                },
+                onLogout = authViewModel::logout,
                 onTabSelected = { tab ->
                     when (tab) {
                         HomeTab.SAVED -> articlesViewModel.setSavedOnly(true)
@@ -416,7 +412,7 @@ private fun AuthenticatedAppRoute(
                     appViewModel.closeReader()
                 },
                 onToggleRead = articlesViewModel::markRead,
-                onToggleSaved = { articleId, saved -> articlesViewModel.setSaved(articleId, saved) },
+                onToggleSaved = { article, saved -> articlesViewModel.setSaved(article.id, saved, listItem = article) },
                 onMarkAllRead = articlesViewModel::markAllRead,
                 onArticleSnapshot = articlesViewModel::updateArticleQueueSnapshot,
                 onVisibleArticles = articlesViewModel::warmVisibleArticles,

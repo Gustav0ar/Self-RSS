@@ -516,11 +516,11 @@ class ArticlesViewModel @Inject constructor(
         markReadInternal(articleId, read, ReadStateChangeSource.Manual)
     }
 
-    fun setSaved(articleId: String, saved: Boolean, onFailure: () -> Unit = {}) {
+    fun setSaved(articleId: String, saved: Boolean, listItem: ArticleListItem? = null, onFailure: () -> Unit = {}) {
         val projection = stateProjection.begin(articleId, ArticleStateProjection.Field.Saved, saved, _state.value.savedState(articleId))
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                val result = repository.setSaved(articleId, saved)
+                val result = repository.setSaved(articleId, saved, listItem)
                 if (!currentCoroutineContext().isActive || savedActions[articleId]?.job !== currentCoroutineContext()[Job]) return@launch
                 when (result) {
                     is AppResult.Success -> {

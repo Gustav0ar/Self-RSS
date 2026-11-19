@@ -5,8 +5,10 @@ import {
 	feedOrigins,
 	feedRefreshRequestItems,
 	feedRefreshRequests,
+	feedSnapshotDeliveries,
 	feedSources,
 	feeds,
+	syncRuns,
 } from '../db/schema.js';
 
 const STALLED_RUNNING_JOB_MS = 2 * 60_000;
@@ -40,63 +42,70 @@ export async function getDurableRefreshStatus(
 			feed: feeds,
 			source: feedSources,
 			job: feedFetchJobs,
+			origin: feedOrigins,
+			insertedArticles: syncRuns.itemCount,
 		})
 		.from(feedRefreshRequestItems)
 		.leftJoin(feeds, eq(feeds.id, feedRefreshRequestItems.feedId))
 		.leftJoin(feedSources, eq(feedSources.id, feedRefreshRequestItems.sourceId))
+		.leftJoin(feedOrigins, eq(feedOrigins.id, feedSources.originId))
 		.leftJoin(feedFetchJobs, eq(feedFetchJobs.id, feedRefreshRequestItems.jobId))
+		.leftJoin(
+			feedSnapshotDeliveries,
+			and(
+				eq(feedSnapshotDeliveries.snapshotId, feedFetchJobs.snapshotId),
+				eq(feedSnapshotDeliveries.feedId, feedRefreshRequestItems.feedId),
+			),
+		)
+		.leftJoin(syncRuns, eq(syncRuns.id, feedSnapshotDeliveries.id))
 		.where(eq(feedRefreshRequestItems.requestId, request.id));
-	const itemDetails = await Promise.all(
-		rows.map(async (row) => {
-			const origin = row.source
-				? await db.query.feedOrigins.findFirst({ where: eq(feedOrigins.id, row.source.originId) })
-				: null;
-			const isManual = request.scopeType === 'manual' || row.job?.kind === 'manual';
-			const sourceEligibleAt = isManual
-				? row.source?.lastFetchAt
-					? new Date(row.source.lastFetchAt.getTime() + row.source.minIntervalSeconds * 1_000)
-					: null
-				: row.source?.nextFetchAt;
-			const nextEligibleAt = latestDate(
-				row.job?.availableAt,
-				sourceEligibleAt,
-				row.source?.backoffUntil,
-				origin?.nextAllowedRequestAt,
-				origin?.retryAfterUntil,
-				origin?.blockedUntil,
-			);
-			const runningTooLong =
-				row.job?.status === 'running' &&
-				row.job.startedAt != null &&
-				now.getTime() - row.job.startedAt.getTime() >= STALLED_RUNNING_JOB_MS;
-			const actionableQueued =
-				row.job?.status === 'queued' &&
-				row.job.availableAt <= now &&
-				row.source != null &&
-				(sourceEligibleAt == null || sourceEligibleAt <= now) &&
-				(row.source.backoffUntil == null || row.source.backoffUntil <= now) &&
-				(origin?.nextAllowedRequestAt == null || origin.nextAllowedRequestAt <= now) &&
-				(origin?.retryAfterUntil == null || origin.retryAfterUntil <= now) &&
-				(origin?.blockedUntil == null || origin.blockedUntil <= now);
-			return {
-				item: {
-					feedId: row.item.feedId,
-					sourceId: row.item.sourceId,
-					jobId: row.item.jobId,
-					status: row.item.status,
-					feedTitle: row.feed?.title ?? null,
-					errorCode: row.item.lastErrorCode ?? row.job?.lastErrorCode ?? row.source?.lastErrorCode,
-					errorDetails:
-						row.item.lastErrorDetails ?? row.job?.lastErrorDetails ?? row.source?.lastErrorDetails,
-					nextEligibleAt: nextEligibleAt?.toISOString() ?? null,
-					publisherRequestStarted: Boolean(row.job?.startedAt),
-					lastFetchAt: row.source?.lastFetchAt?.toISOString() ?? null,
-				},
-				runningTooLong,
-				actionableQueued,
-			};
-		}),
-	);
+	const itemDetails = rows.map((row) => {
+		const { origin } = row;
+		const isManual = request.scopeType === 'manual' || row.job?.kind === 'manual';
+		const sourceEligibleAt = isManual
+			? row.source?.lastFetchAt
+				? new Date(row.source.lastFetchAt.getTime() + row.source.minIntervalSeconds * 1_000)
+				: null
+			: row.source?.nextFetchAt;
+		const nextEligibleAt = latestDate(
+			row.job?.availableAt,
+			sourceEligibleAt,
+			row.source?.backoffUntil,
+			origin?.nextAllowedRequestAt,
+			origin?.retryAfterUntil,
+			origin?.blockedUntil,
+		);
+		const runningTooLong =
+			row.job?.status === 'running' &&
+			row.job.startedAt != null &&
+			now.getTime() - row.job.startedAt.getTime() >= STALLED_RUNNING_JOB_MS;
+		const actionableQueued =
+			row.job?.status === 'queued' &&
+			row.job.availableAt <= now &&
+			row.source != null &&
+			(sourceEligibleAt == null || sourceEligibleAt <= now) &&
+			(row.source.backoffUntil == null || row.source.backoffUntil <= now) &&
+			(origin?.nextAllowedRequestAt == null || origin.nextAllowedRequestAt <= now) &&
+			(origin?.retryAfterUntil == null || origin.retryAfterUntil <= now) &&
+			(origin?.blockedUntil == null || origin.blockedUntil <= now);
+		return {
+			item: {
+				feedId: row.item.feedId,
+				sourceId: row.item.sourceId,
+				jobId: row.item.jobId,
+				status: row.item.status,
+				feedTitle: row.feed?.title ?? null,
+				errorCode: row.item.lastErrorCode ?? row.job?.lastErrorCode ?? row.source?.lastErrorCode,
+				errorDetails:
+					row.item.lastErrorDetails ?? row.job?.lastErrorDetails ?? row.source?.lastErrorDetails,
+				nextEligibleAt: nextEligibleAt?.toISOString() ?? null,
+				publisherRequestStarted: Boolean(row.job?.startedAt),
+				lastFetchAt: row.source?.lastFetchAt?.toISOString() ?? null,
+			},
+			runningTooLong,
+			actionableQueued,
+		};
+	});
 	const items = itemDetails.map((detail) => detail.item);
 	const skippedFeeds = items.filter(
 		(item) =>
@@ -130,8 +139,7 @@ export async function getDurableRefreshStatus(
 		pendingFeeds: request.pendingItems,
 		runningFeeds: request.runningItems,
 		deadFeeds: request.deadItems,
-		newArticles: 0,
-		articleRevision: 0,
+		newArticles: rows.reduce((total, row) => total + (row.insertedArticles ?? 0), 0),
 		jobId: items.find((item) => item.jobId)?.jobId ?? null,
 		scope: {
 			feedId: request.scopeFeedId ?? undefined,
@@ -161,7 +169,6 @@ function emptyDurableRefreshStatus() {
 		runningFeeds: 0,
 		deadFeeds: 0,
 		newArticles: 0,
-		articleRevision: 0,
 		jobId: null,
 		scope: {},
 		items: [],

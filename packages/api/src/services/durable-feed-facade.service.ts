@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import {
 	feedDiscoveryCandidates,
@@ -13,7 +13,8 @@ import { AppError } from '../middleware/errors.js';
 import type { CategoryRepository } from '../repositories/category.repository.js';
 import type { FeedRepository } from '../repositories/feed.repository.js';
 import type { FeedIngestionRepository } from '../repositories/feed-ingestion.repository.js';
-import { normalizeFeedSourceUrl } from '../utils/feed-source-url.js';
+import { FeedSourceUrlError, normalizeFeedSourceUrl } from '../utils/feed-source-url.js';
+import type { ArticleCacheService } from './article-cache.service.js';
 import {
 	cleanupDurableDiscoveryCandidates,
 	listDurableDiscoveryCandidates,
@@ -34,6 +35,7 @@ export class DurableFeedFacadeService {
 		private feedRepository: FeedRepository,
 		private categoryRepository: CategoryRepository,
 		private ingestionRepository: FeedIngestionRepository,
+		private articleCache?: Pick<ArticleCacheService, 'getGeneration'>,
 	) {}
 
 	async ensureSource(inputUrl: string) {
@@ -52,6 +54,43 @@ export class DurableFeedFacadeService {
 			nextFetchAt: new Date(),
 		});
 		return { source, origin };
+	}
+
+	/** Link subscriptions created by older importers or while the legacy worker was active. */
+	async registerUnlinkedFeeds() {
+		const unlinked = and(isNull(feeds.sourceId), isNull(feeds.pendingSourceId));
+		const rows = await this.db
+			.select({ id: feeds.id, url: feeds.feedUrl })
+			.from(feeds)
+			.where(unlinked);
+		for (const row of rows) {
+			const stillUnlinked = and(eq(feeds.id, row.id), eq(feeds.feedUrl, row.url), unlinked);
+			try {
+				const { source } = await this.ensureSource(row.url);
+				// Retain the feed and its articles. A pending first delivery forces a full
+				// publisher response even after a failed attempt or a worker restart.
+				await this.db
+					.update(feeds)
+					.set({
+						sourceId: source.id,
+						syncStatus: 'pending',
+						updatedAt: new Date(),
+						customTitle: sql`coalesce(${feeds.customTitle}, ${feeds.title})`,
+					})
+					.where(stillUnlinked);
+			} catch (error) {
+				if (!(error instanceof FeedSourceUrlError)) throw error;
+				await this.db
+					.update(feeds)
+					.set({
+						syncStatus: 'error',
+						lastSyncErrorCode: error.code,
+						lastSyncError: error.message,
+						lastSyncErrorAt: new Date(),
+					})
+					.where(stillUnlinked);
+			}
+		}
 	}
 
 	async lifecycleForFeed(feed: typeof feeds.$inferSelect) {
@@ -342,7 +381,12 @@ export class DurableFeedFacadeService {
 	}
 
 	async getRefreshStatus(userId: string, requestId?: string | null) {
-		return getDurableRefreshStatus(this.db, userId, requestId);
+		const [status, generation] = await Promise.all([
+			getDurableRefreshStatus(this.db, userId, requestId),
+			// Request progress is durable even when the cache is unavailable.
+			this.articleCache?.getGeneration(userId).catch(() => 0),
+		]);
+		return { ...status, articleRevision: generation ?? 0 };
 	}
 
 	async listDiscoveryCandidates(userId: string, requestId: string) {

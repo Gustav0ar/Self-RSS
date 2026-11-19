@@ -299,10 +299,7 @@ fun ArticlesTab(
                         },
                         onToggleSaved = {
                             actions.onArticleSnapshot(pagedArticles.itemSnapshotList.items)
-                            actions.onToggleSaved(
-                                displayedArticle.id,
-                                !displayedArticle.isSaved,
-                            )
+                            actions.onToggleSaved(displayedArticle, !displayedArticle.isSaved)
                         },
                         density = state.density,
                     )

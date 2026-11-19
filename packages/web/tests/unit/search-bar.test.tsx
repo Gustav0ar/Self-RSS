@@ -3,14 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearchBar } from '../../src/components/search/search-bar';
 
 const useSearchMock = vi.fn();
+let shortcutsEnabled = true;
 
 vi.mock('../../src/hooks/queries', () => ({
+	usePreferences: () => ({ data: { keyboardShortcutsEnabled: shortcutsEnabled } }),
 	useSearch: (...args: unknown[]) => useSearchMock(...args),
 	usePrefetchArticle: () => vi.fn(),
 }));
 
 describe('SearchBar', () => {
 	beforeEach(() => {
+		shortcutsEnabled = true;
 		vi.useFakeTimers();
 		useSearchMock.mockReturnValue({
 			data: { pages: [{ data: [], cursor: null, hasMore: false }] },
@@ -23,6 +26,13 @@ describe('SearchBar', () => {
 			isLoading: false,
 			refetch: vi.fn(),
 		});
+	});
+
+	it('honors the disabled shortcuts preference when pressing slash', () => {
+		shortcutsEnabled = false;
+		render(<SearchBar onSelectArticle={() => {}} />);
+		fireEvent.keyDown(document.body, { key: '/' });
+		expect(document.activeElement).not.toBe(screen.getByRole('combobox'));
 	});
 
 	afterEach(() => {
@@ -177,6 +187,32 @@ describe('SearchBar', () => {
 		expect(onSelect).toHaveBeenCalledWith('a-1');
 	});
 
+	it('cannot select a previous search result while a new query is settling', () => {
+		useSearchMock.mockReturnValue({
+			data: { pages: [{ data: [{ id: 'previous', title: 'Alpha', feedTitle: 'Feed' }] }] },
+		});
+		const onSelect = vi.fn();
+		render(<SearchBar onSelectArticle={onSelect} />);
+		const input = screen.getByRole('combobox');
+		fireEvent.change(input, { target: { value: 'Alpha' } });
+		act(() => vi.advanceTimersByTime(300));
+		fireEvent.keyDown(input, { key: 'ArrowDown' });
+		fireEvent.change(input, { target: { value: 'Beta' } });
+		fireEvent.keyDown(input, { key: 'Enter' });
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(screen.queryByRole('option')).toBeNull();
+		expect(input.hasAttribute('aria-activedescendant')).toBe(false);
+	});
+
+	it('returns focus to the input when search is cleared', () => {
+		render(<SearchBar onSelectArticle={() => {}} />);
+		const input = screen.getByRole('combobox');
+		fireEvent.change(input, { target: { value: 'Alpha' } });
+		const clear = screen.getByRole('button', { name: 'Clear search' });
+		clear.focus();
+		fireEvent.click(clear);
+		expect(document.activeElement).toBe(input);
+	});
 	it('passes the active category id when current scope is selected', () => {
 		render(<SearchBar onSelectArticle={() => {}} categoryId="category-1" />);
 		const input = screen.getByPlaceholderText('Search articles...');
@@ -277,6 +313,11 @@ describe('SearchBar', () => {
 								heroImageUrl: null,
 							},
 						],
+						cursor: 'page-2',
+						hasMore: true,
+					},
+					{
+						data: [{ id: 'a-1', title: 'Alpha', feedTitle: 'Feed A' }],
 						cursor: null,
 						hasMore: false,
 					},

@@ -370,6 +370,25 @@ class RssRepositoryTest {
     }
 
     @Test
+    fun `offline category search includes child feeds and reports empty matches without a network error`() = runTest {
+        repository.prepareSession()
+        localStore.writeCategories(listOf(sampleCategory("parent", children = listOf(sampleCategory("child", "parent")))))
+        localStore.writeFeeds(listOf(sampleFeed("in", "child"), sampleFeed("out", "other")))
+        localStore.writeArticleRemotePage("all", ApiListResponse(listOf(
+            sampleArticle("one").copy(feedId = "in", title = "50% off"),
+            sampleArticle("two").copy(feedId = "out", title = "50% off"),
+            sampleArticle("three").copy(feedId = "in", title = "500 offers"),
+        ), null, false), true)
+        onlineState.value = false
+
+        val scoped = repository.search("50%", "parent", null) as AppResult.Success
+        assertEquals(listOf("one"), scoped.data.data.map { it.id })
+        assertTrue((repository.search("absent") as AppResult.Success).data.data.isEmpty())
+        assertTrue(repository.search("50%", "parent", "next") is AppResult.Error)
+        coVerify(exactly = 0) { api.search(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `search pagination returns its admitted page without fetching it twice under cache pressure`() = runTest {
         repository.prepareSession()
         evictOrphanStateHistory()
@@ -1830,6 +1849,17 @@ class RssRepositoryTest {
         assertTrue(result is AppResult.Error)
         assertEquals("Session could not be refreshed. Please try again.", (result as AppResult.Error).message)
         coVerify(exactly = 0) { sessionStore.clear() }
+    }
+
+    @Test
+    fun `force refreshing a cached article propagates a confirmed session rejection`() = runTest {
+        repository.prepareSession()
+        localStore.writeArticleDetail(sampleArticleDetail("cached", false))
+        coEvery { api.article("cached", session = any()) } throws httpError(401, "Session expired")
+        every { sessionRefreshCoordinator.hasRecentRefreshRejection() } returns true
+
+        assertTrue(repository.article("cached", forceRefresh = true) is AppResult.Error)
+        coVerify(exactly = 1) { sessionStore.clear() }
     }
 
     @Test

@@ -8,6 +8,7 @@ import {
 	loadTokens,
 	refreshAccessToken,
 	setAuthLostHandler,
+	setSessionOwner,
 	setTokens,
 } from '../../src/lib/api';
 
@@ -75,6 +76,61 @@ describe('api module', () => {
 			expect(headers['X-Self-Feed-Client-Id']).toBeTruthy();
 		});
 
+		it('serializes cookie rotation when two tabs bootstrap at once', async () => {
+			vi.resetModules();
+			const otherTab = await import('../../src/lib/api');
+			let previous = Promise.resolve();
+			const requestLock = vi.fn((_name: string, run: () => Promise<boolean>) => {
+				const next = previous.then(run);
+				previous = next.then(() => {});
+				return next;
+			});
+			vi.stubGlobal('navigator', { locks: { request: requestLock } });
+			let cookie = 0;
+			vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+				const submitted = cookie;
+				await Promise.resolve();
+				if (submitted !== cookie) return new Response(null, { status: 401 });
+				cookie++;
+				return Response.json({ data: { tokens: { accessToken: String(cookie) } } });
+			});
+			try {
+				expect(await Promise.all([refreshAccessToken(), otherTab.refreshAccessToken()])).toEqual([
+					true,
+					true,
+				]);
+				expect(new Set(requestLock.mock.calls.map(([name]) => name))).toEqual(
+					new Set(['self-feed:auth-refresh']),
+				);
+				expect(otherTab.getAccessToken()).not.toBe(getAccessToken());
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it('waits for a pending sign-out to finish changing the cookie before signing in again', async () => {
+			const signOut = Promise.withResolvers<Response>();
+			const started = Promise.withResolvers<void>();
+			let cookie = 'old';
+			const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+				if (String(url).endsWith('/logout')) {
+					started.resolve();
+					const result = await signOut.promise;
+					cookie = '';
+					return result;
+				}
+				cookie = 'new';
+				return Response.json({});
+			});
+			const loggingOut = apiFetch('/auth/logout', { method: 'POST' });
+			await started.promise;
+			const loggingIn = apiFetch('/auth/login', { method: 'POST' });
+			signOut.resolve(Response.json({}));
+			await Promise.all([loggingOut, loggingIn]);
+			expect(fetch).toHaveBeenCalledTimes(2);
+			expect(cookie).toBe('new');
+		});
+
 		it('includes device metadata headers on refresh requests', async () => {
 			const fetchMock = vi.fn(
 				async () =>
@@ -119,6 +175,23 @@ describe('api module', () => {
 			expect(getLastRefreshOutcome()).toBe('rejected');
 		});
 
+		it('shows the login error directly when credentials are rejected', async () => {
+			const fetch = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValueOnce(
+					Response.json(
+						{ error: { code: 'UNAUTHORIZED', message: 'Invalid email or password' } },
+						{ status: 401 },
+					),
+				)
+				.mockResolvedValue(new Response(null, { status: 503 }));
+			await expect(apiFetch('/auth/login', { method: 'POST' })).rejects.toMatchObject({
+				status: 401,
+				message: 'Invalid email or password',
+			});
+			expect(fetch).toHaveBeenCalledOnce();
+		});
+
 		it('apiFetch retries after token refresh on 401', async () => {
 			setTokens('expired-token');
 			let callCount = 0;
@@ -153,6 +226,43 @@ describe('api module', () => {
 			expect(fetchMock).toHaveBeenCalledTimes(2); // 1st attempt + failed refresh
 		});
 
+		it('never replays a mutation when the shared cookie has switched accounts', async () => {
+			const token = (sub: string) => `header.${btoa(JSON.stringify({ sub }))}.signature`;
+			setTokens(token('original-reader'));
+			setSessionOwner('original-reader');
+			const onAuthLost = vi.fn();
+			setAuthLostHandler(onAuthLost);
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValueOnce(new Response(null, { status: 401 }))
+				.mockResolvedValueOnce(
+					Response.json({ data: { tokens: { accessToken: token('other-reader') } } }),
+				);
+
+			await expect(apiFetch('/articles/item/read', { method: 'PATCH' })).rejects.toMatchObject({
+				status: 401,
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(getAccessToken()).toBeNull();
+			expect(getLastRefreshOutcome()).toBe('rejected');
+			expect(onAuthLost).toHaveBeenCalledOnce();
+		});
+
+		it('discards an old request’s late 401 after the reader changes accounts', async () => {
+			const response = Promise.withResolvers<Response>();
+			const onAuthLost = vi.fn();
+			setAuthLostHandler(onAuthLost);
+			setSessionOwner('original-reader');
+			const fetchMock = vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(response.promise);
+			const pending = apiFetch('/articles/item/read', { method: 'PATCH' });
+			setSessionOwner('other-reader');
+			response.resolve(new Response(null, { status: 401 }));
+
+			await expect(pending).rejects.toMatchObject({ status: 401 });
+			expect(fetchMock).toHaveBeenCalledOnce();
+			expect(onAuthLost).not.toHaveBeenCalled();
+		});
+
 		it('keeps the local session when refresh is temporarily unavailable', async () => {
 			setTokens('expired-token');
 			const onAuthLost = vi.fn();
@@ -163,7 +273,10 @@ describe('api module', () => {
 				.mockResolvedValueOnce(new Response('', { status: 503 }));
 			vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
 
-			await expect(apiFetch('/test')).rejects.toThrow();
+			await expect(apiFetch('/test')).rejects.toMatchObject({
+				status: 503,
+				code: 'AUTH_UNAVAILABLE',
+			});
 
 			expect(getLastRefreshOutcome()).toBe('unavailable');
 			expect(getAccessToken()).toBe('expired-token');

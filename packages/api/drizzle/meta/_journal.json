@@ -162,6 +162,13 @@
       "when": 1786859862861,
       "tag": "0022_offline_article_state",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1795055381162,
+      "tag": "0023_daily_reader_activity",
+      "breakpoints": true
     }
   ]
 }

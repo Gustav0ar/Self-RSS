@@ -2,10 +2,23 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyboardHelp } from '../../src/components/help/keyboard-help';
 
+let shortcutsEnabled = true;
+vi.mock('../../src/hooks/queries', () => ({
+	usePreferences: () => ({ data: { keyboardShortcutsEnabled: shortcutsEnabled } }),
+}));
+
 describe('KeyboardHelp', () => {
 	beforeEach(() => {
+		shortcutsEnabled = true;
 		vi.useFakeTimers();
 		document.body.style.overflow = '';
+	});
+
+	it('respects the keyboard shortcuts preference', () => {
+		shortcutsEnabled = false;
+		render(<KeyboardHelp />);
+		fireEvent.keyDown(document.body, { key: '?' });
+		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 
 	afterEach(() => {

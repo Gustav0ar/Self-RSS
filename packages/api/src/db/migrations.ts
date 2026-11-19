@@ -277,7 +277,9 @@ function latestAppliedMigration(db: Database, migrationsTable: string): DbMigrat
 	return rows[0];
 }
 
-function appliedMigrations(db: Database, migrationsTable: string): DbMigrationRow[] {
+type MigrationLedger = Pick<Database, 'run' | 'all'>;
+
+function appliedMigrations(db: MigrationLedger, migrationsTable: string): DbMigrationRow[] {
 	return db.all<DbMigrationRow>(
 		sql`SELECT id, hash, created_at FROM ${sql.identifier(
 			migrationsTable,
@@ -285,7 +287,7 @@ function appliedMigrations(db: Database, migrationsTable: string): DbMigrationRo
 	);
 }
 
-function migrationGuardRows(db: Database): MigrationGuardRow[] {
+function migrationGuardRows(db: MigrationLedger): MigrationGuardRow[] {
 	return db.all<MigrationGuardRow>(
 		sql`SELECT created_at, local_hash, ledger_hash FROM ${sql.identifier(
 			MIGRATION_GUARD_TABLE,
@@ -294,7 +296,7 @@ function migrationGuardRows(db: Database): MigrationGuardRow[] {
 }
 
 function insertMigrationGuardRecord(
-	db: Database,
+	db: MigrationLedger,
 	createdAt: number,
 	localHash: string,
 	ledgerHash: string,
@@ -321,7 +323,7 @@ function migrationCreatedAt(row: { id?: number; created_at: number | string }) {
 }
 
 function assertOrBaselineAppliedMigrationHashes(
-	db: Database,
+	db: MigrationLedger,
 	migrations: MigrationMeta[],
 	applied: DbMigrationRow[],
 ) {
@@ -417,8 +419,16 @@ export function applyMigrations(db: Database, options: ApplyMigrationsOptions) {
 
 	createMigrationTable(db, migrationsTable);
 	createMigrationGuardTable(db);
-	const applied = appliedMigrations(db, migrationsTable);
-	assertOrBaselineAppliedMigrationHashes(db, migrations, applied);
+	db.transaction(
+		(tx) => {
+			assertOrBaselineAppliedMigrationHashes(
+				tx,
+				migrations,
+				appliedMigrations(tx, migrationsTable),
+			);
+		},
+		{ behavior: 'immediate' },
+	);
 	const latest = latestAppliedMigration(db, migrationsTable);
 	const pending = pendingMigrations(migrations, latest);
 	if (pending.length === 0) {

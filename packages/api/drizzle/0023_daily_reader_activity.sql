@@ -1,0 +1,1 @@
+ALTER TABLE `user_metrics_daily` ADD `is_active` integer DEFAULT true NOT NULL;

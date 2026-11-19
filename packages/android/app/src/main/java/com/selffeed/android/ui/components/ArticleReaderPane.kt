@@ -78,6 +78,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.delay
@@ -493,22 +494,6 @@ private fun List<ArticleListItem>.withSelectedArticle(selectedArticle: ArticleDe
     if (isEmpty() || any { it.id == selectedArticle.id }) return this
     return listOf(selectedArticle.toArticleListItem()) + this
 }
-
-private fun ArticleDetail.toArticleListItem(): ArticleListItem =
-    ArticleListItem(
-        id = id,
-        feedId = feedId,
-        feedTitle = feedTitle,
-        feedFaviconUrl = feedFaviconUrl,
-        title = title,
-        author = author,
-        excerpt = excerpt,
-        heroImageUrl = heroImageUrl,
-        publishedAt = publishedAt,
-        isRead = isRead,
-        contentStatus = contentStatus,
-        contentVersion = contentVersion,
-    )
 
 @Composable
 private fun ArticlePlaceholderView(article: ArticleListItem) {

@@ -5,6 +5,19 @@ import { FeedSyncService } from '../../src/services/feed-sync.service.js';
 import { acquireOwnedRedisLock } from '../../src/services/redis-owned-lock.js';
 import { FEED_FETCH_USER_AGENT } from '../../src/utils/feed-fetch-headers.js';
 
+function fakePersistSyncResults({
+	articlesToInsert,
+	articlesToUpdate,
+}: {
+	articlesToInsert: Record<string, unknown>[];
+	articlesToUpdate: { id: string }[];
+}) {
+	return {
+		inserted: articlesToInsert.map((item, index) => ({ id: `article-${index + 1}`, ...item })),
+		updated: articlesToUpdate,
+	};
+}
+
 describe('FeedSyncService', () => {
 	const noonTimestamp = new Date('2026-06-21T12:00:00.000Z').getTime();
 	const queuedMarker = JSON.stringify({ queuedAt: noonTimestamp });
@@ -39,59 +52,7 @@ describe('FeedSyncService', () => {
 
 		await service.queueArticleEnrichment('article-visible');
 
-		expect(articleRepo.queueEnrichments).toHaveBeenCalledWith(['article-visible'], new Date(0));
-	});
-
-	it('skips article enrichment when another worker holds the article lock', async () => {
-		const redis = {
-			set: vi.fn(async () => null),
-			del: vi.fn(async () => 0),
-		};
-		const service = new FeedSyncService(
-			{} as never,
-			{} as never,
-			{} as never,
-			{} as never,
-			redis as never,
-			{
-				timeoutMs: 5_000,
-				maxContentLength: 1_000_000,
-				concurrency: 1,
-				allowPrivateHosts: false,
-			},
-		);
-		const resolveSpy = vi
-			.spyOn(
-				service as unknown as {
-					resolveEnrichedArticleHtml: () => Promise<string | null>;
-				},
-				'resolveEnrichedArticleHtml',
-			)
-			.mockResolvedValue('<p>Enriched</p>');
-
-		await (
-			service as unknown as {
-				enrichSingleArticle: (enrichment: {
-					articleId: string;
-					userId: string;
-					canonicalUrl: string;
-					contentHtml: string | null;
-					heroImageUrl: string | null;
-					fetchedAt: Date;
-				}) => Promise<void>;
-			}
-		).enrichSingleArticle({
-			articleId: 'article-1',
-			userId: 'user-1',
-			canonicalUrl: 'https://example.com/post-1',
-			contentHtml: null,
-			heroImageUrl: null,
-			fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
-		});
-
-		expect(redis.set).toHaveBeenCalledWith('articles:enriching:article-1', '1', 'EX', 60, 'NX');
-		expect(resolveSpy).not.toHaveBeenCalled();
-		expect(redis.del).not.toHaveBeenCalled();
+		expect(articleRepo.queueEnrichments).toHaveBeenCalledWith(['article-visible'], 'reader');
 	});
 
 	it('stores feed content immediately and triggers lazy enrichment for new articles', async () => {
@@ -108,13 +69,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -217,13 +172,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 		const syncRunRepo = {
 			create: vi.fn(async () => ({ id: 'run-1' })),
@@ -302,13 +251,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			countByFeeds: vi.fn(async () => 10),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 		const syncRunRepo = {
 			create: vi.fn(async () => ({ id: 'run-1' })),
@@ -418,7 +361,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: null,
 				},
 			]),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 		const syncRunRepo = {
 			create: vi.fn(async () => ({ id: 'run-1' })),
@@ -475,16 +418,7 @@ describe('FeedSyncService', () => {
 			del: vi.fn(async () => 1),
 		};
 		const articleRepo = {
-			findById: vi.fn(async () => ({
-				id: 'article-1',
-				canonicalUrl: 'https://example.com/post-1',
-				title: 'Post 1',
-				author: null,
-				contentHtml: '<p>Short</p>',
-				heroImageUrl: null,
-			})),
-			updateContent: vi.fn(async () => undefined),
-			replaceMedia: vi.fn(async () => undefined),
+			replaceEnrichedContent: vi.fn(async () => ({ feedId: 'feed-1', contentVersion: 2 })),
 		};
 		const service = new FeedSyncService(
 			{} as never,
@@ -508,28 +442,23 @@ describe('FeedSyncService', () => {
 			'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="../about">About</a><img src="images/hero.jpg"><iframe src="javascript:alert(1)">hiddenToken</iframe></article>',
 		);
 
-		await (
-			service as unknown as {
-				enrichSingleArticle: (enrichment: {
-					articleId: string;
-					userId: string;
-					canonicalUrl: string;
-					contentHtml: string | null;
-					heroImageUrl: string | null;
-					fetchedAt: Date;
-				}) => Promise<void>;
-			}
-		).enrichSingleArticle({
+		const attempt = {
 			articleId: 'article-1',
-			userId: 'user-1',
+			attempts: 1,
+			contentVersion: 1,
+			hash: 'prior',
 			canonicalUrl: 'https://example.com/post-1',
+			title: 'Post 1',
+			author: null,
 			contentHtml: '<p>Short</p>',
 			heroImageUrl: null,
-			fetchedAt: new Date('2026-01-01T00:00:00.000Z'),
-		});
+		};
+		await (
+			service as unknown as { enrichSingleArticle: (claim: typeof attempt) => Promise<unknown> }
+		).enrichSingleArticle(attempt);
 
-		expect(articleRepo.updateContent).toHaveBeenCalledWith(
-			'article-1',
+		expect(articleRepo.replaceEnrichedContent).toHaveBeenCalledWith(
+			attempt,
 			expect.objectContaining({
 				contentHtml:
 					'<article><p>Visible article body with enough useful text to refresh the stored article content and clearly exceed the refresh threshold for this enrichment regression test.</p><a href="https://example.com/about">About</a><img src="https://example.com/images/hero.jpg"></article>',
@@ -737,7 +666,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: null,
 				},
 			]),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -826,7 +755,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: null,
 				},
 			]),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2336,7 +2265,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			countByFeeds: vi.fn(async () => 10),
 			findExistingGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const service = new FeedSyncService(
@@ -2388,7 +2317,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => ['guid-1', 'guid-2']),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2469,7 +2398,7 @@ describe('FeedSyncService', () => {
 					heroImageUrl: 'https://example.com/image.jpg',
 				},
 			]),
-			persistSyncResults: vi.fn(async () => []),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2543,13 +2472,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2624,13 +2547,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2710,13 +2627,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {
@@ -2800,13 +2711,7 @@ describe('FeedSyncService', () => {
 		const articleRepo = {
 			findExistingGuids: vi.fn(async () => []),
 			findByFeedAndGuids: vi.fn(async () => []),
-			persistSyncResults: vi.fn(
-				async ({ articlesToInsert }: { articlesToInsert: Array<Record<string, unknown>> }) =>
-					articlesToInsert.map((item, index) => ({
-						id: `article-${index + 1}`,
-						...item,
-					})),
-			),
+			persistSyncResults: vi.fn(fakePersistSyncResults),
 		};
 
 		const syncRunRepo = {

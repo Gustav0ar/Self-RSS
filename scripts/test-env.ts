@@ -1,8 +1,11 @@
-import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { spawnService } from './service-process.js';
+
+export { stopService as stopProcess } from './service-process.js';
 
 interface RunOptions {
 	cwd?: string;
@@ -96,21 +99,11 @@ export async function waitForHttp(url: string, timeoutMs = 60_000) {
 }
 
 export function spawnBackground(command: string, args: string[], options: RunOptions = {}) {
-	return spawn(command, args, {
+	return spawnService(command, args, {
 		cwd: options.cwd ?? rootDir,
 		env: options.env ?? process.env,
 		stdio: options.stdio ?? 'inherit',
 	});
-}
-
-export async function stopProcess(processHandle: ChildProcess | undefined) {
-	if (!processHandle || processHandle.exitCode !== null) return;
-	processHandle.kill('SIGTERM');
-	for (let attempt = 0; attempt < 20; attempt += 1) {
-		if (processHandle.exitCode !== null) return;
-		await sleep(250);
-	}
-	processHandle.kill('SIGKILL');
 }
 
 export async function startTestServices(prefix: string): Promise<TestServices> {

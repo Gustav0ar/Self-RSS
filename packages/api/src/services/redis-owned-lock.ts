@@ -19,8 +19,14 @@ return redis.call("DEL", KEYS[1])
 `;
 
 interface RedisLockClient {
-	set?: (...args: unknown[]) => Promise<unknown>;
-	eval?: (...args: unknown[]) => Promise<unknown>;
+	set?(key: string, value: string, mode: 'EX', seconds: number, condition: 'NX'): Promise<unknown>;
+	eval?(
+		script: string,
+		keyCount: number,
+		key: string,
+		token: string,
+		seconds: string,
+	): Promise<unknown>;
 }
 
 interface OwnedRedisLockOptions {

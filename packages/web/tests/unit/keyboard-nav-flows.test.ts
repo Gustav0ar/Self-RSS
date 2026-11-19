@@ -175,6 +175,39 @@ describe('useKeyboardNav', () => {
 		expect(ctx.onToggleRead).toHaveBeenCalledWith('a-2');
 	});
 
+	it('leaves browser shortcuts and focused controls to their own keyboard handlers', () => {
+		const ctx = makeContext();
+		renderHook(() => useKeyboardNav({ articleIds: ['a-1'], selectedId: 'a-1', ...ctx }));
+		const button = document.createElement('button');
+		const select = document.createElement('select');
+		const dialog = document.createElement('div');
+		dialog.setAttribute('role', 'dialog');
+		document.body.append(button, select, dialog);
+		try {
+			for (const [target, key, modifiers] of [
+				[document.body, 'r', { ctrlKey: true }],
+				[document.body, 'v', { metaKey: true }],
+				[button, 'Enter', {}],
+				[select, 'ArrowDown', {}],
+				[dialog, 'm', {}],
+			] as const) {
+				expect(
+					target.dispatchEvent(
+						new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }),
+					),
+				).toBe(true);
+			}
+			expect(ctx.onSelect).not.toHaveBeenCalled();
+			expect(ctx.onRefresh).not.toHaveBeenCalled();
+			expect(ctx.onToggleRead).not.toHaveBeenCalled();
+			expect(ctx.onOpenExternal).not.toHaveBeenCalled();
+		} finally {
+			button.remove();
+			select.remove();
+			dialog.remove();
+		}
+	});
+
 	it('opens the article in a new tab with v', () => {
 		const ctx = makeContext();
 		renderHook(() =>

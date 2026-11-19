@@ -23,7 +23,9 @@ export class ApiClientError extends Error {
 }
 
 let accessToken: string | null = null;
-let refreshPromise: Promise<boolean> | null = null;
+let sessionOwner: string | null = null;
+let sessionGeneration = 0;
+let pendingRefresh: { generation: number; result: Promise<boolean> } | null = null;
 export type RefreshOutcome = 'idle' | 'success' | 'rejected' | 'unavailable';
 let lastRefreshOutcome: RefreshOutcome = 'idle';
 let authLostHandler: ((message: string) => void) | null = null;
@@ -34,7 +36,29 @@ const clientId = crypto.randomUUID();
 // The refresh token is now handled securely via HttpOnly cookies.
 // We only keep the short-lived access token in memory.
 export function setTokens(access: string) {
+	sessionGeneration++;
 	accessToken = access;
+}
+
+function tokenOwner(token: string): string | null {
+	try {
+		const payload = token.split('.')[1];
+		if (!payload) return null;
+		const claims: unknown = JSON.parse(atob(payload.replaceAll('-', '+').replaceAll('_', '/')));
+		return claims && typeof claims === 'object' && 'sub' in claims && typeof claims.sub === 'string'
+			? claims.sub
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+// The server authenticates requests. The tab uses the subject only to keep
+// another account’s rotated cookie out of this reader’s cache and outbox.
+export function setSessionOwner(ownerId: string) {
+	if (sessionOwner !== ownerId) sessionGeneration++;
+	sessionOwner = ownerId;
+	if (accessToken && tokenOwner(accessToken) !== ownerId) accessToken = null;
 }
 
 export function loadTokens() {
@@ -43,6 +67,8 @@ export function loadTokens() {
 }
 
 export function clearTokens() {
+	sessionGeneration++;
+	sessionOwner = null;
 	accessToken = null;
 }
 
@@ -80,59 +106,84 @@ function getDeviceName() {
 	return 'Web browser';
 }
 
-function shouldNotifyAuthLost(path: string) {
-	return !(
-		path.startsWith('/auth/login') ||
-		path.startsWith('/auth/register') ||
-		path.startsWith('/auth/registration-status') ||
-		path.startsWith('/auth/refresh')
+const publicAuthPaths = new Set([
+	'/auth/login',
+	'/auth/register',
+	'/auth/registration-status',
+	'/auth/logout',
+	'/auth/refresh',
+]);
+const cookieWrites = new Set([
+	'/auth/login',
+	'/auth/register',
+	'/auth/logout',
+	'/auth/refresh',
+	'/auth/change-password',
+]);
+let pendingCookieWrite = Promise.resolve();
+
+// The browser applies Set-Cookie before fetch resolves, even after the initiating view closes.
+function withCookieLock<T>(operation: () => Promise<T>): Promise<T> {
+	if (navigator.locks) return navigator.locks.request('self-feed:auth-refresh', operation);
+	const result = pendingCookieWrite.then(operation);
+	pendingCookieWrite = result.then(
+		() => {},
+		() => {},
 	);
+	return result;
 }
 
-function notifyAuthLost(path: string) {
-	if (!shouldNotifyAuthLost(path)) return;
-	clearTokens();
-	authLostHandler?.(AUTH_LOST_MESSAGE);
+async function requestRefresh(generation: number): Promise<boolean> {
+	if (generation !== sessionGeneration) return false;
+	const res = await fetchWithTimeout(`${API_BASE}/auth/refresh`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Self-Feed-Client-Id': deviceClientId,
+			'X-Self-Feed-Device-Name': getDeviceName(),
+		},
+		credentials: 'include',
+	});
+	if (generation !== sessionGeneration) return false;
+	if (!res.ok) {
+		if (res.status === 401) {
+			accessToken = null;
+			lastRefreshOutcome = 'rejected';
+		} else {
+			lastRefreshOutcome = 'unavailable';
+		}
+		return false;
+	}
+	const { data } = await res.json();
+	if (generation !== sessionGeneration) return false;
+	if (sessionOwner && tokenOwner(data.tokens.accessToken) !== sessionOwner) {
+		accessToken = null;
+		lastRefreshOutcome = 'rejected';
+		return false;
+	}
+	accessToken = data.tokens.accessToken;
+	lastRefreshOutcome = 'success';
+	return true;
 }
 
 export async function refreshAccessToken(): Promise<boolean> {
-	if (refreshPromise) {
-		return refreshPromise;
-	}
-
-	refreshPromise = (async () => {
+	if (pendingRefresh?.generation === sessionGeneration) return pendingRefresh.result;
+	// Each tab needs its own access token, but all tabs rotate the same cookie.
+	// Hold the lock until the browser has applied the response's Set-Cookie.
+	const generation = sessionGeneration;
+	const refresh = () => requestRefresh(generation);
+	const result = (async () => {
 		try {
-			const res = await fetchWithTimeout(`${API_BASE}/auth/refresh`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'X-Self-Feed-Client-Id': deviceClientId,
-					'X-Self-Feed-Device-Name': getDeviceName(),
-				},
-				credentials: 'include',
-			});
-			if (!res.ok) {
-				if (res.status === 401) {
-					clearTokens();
-					lastRefreshOutcome = 'rejected';
-				} else {
-					lastRefreshOutcome = 'unavailable';
-				}
-				return false;
-			}
-			const { data } = await res.json();
-			setTokens(data.tokens.accessToken);
-			lastRefreshOutcome = 'success';
-			return true;
+			return await withCookieLock(refresh);
 		} catch {
-			lastRefreshOutcome = 'unavailable';
+			if (generation === sessionGeneration) lastRefreshOutcome = 'unavailable';
 			return false;
-		} finally {
-			refreshPromise = null;
 		}
-	})();
-
-	return refreshPromise;
+	})().finally(() => {
+		if (pendingRefresh?.result === result) pendingRefresh = null;
+	});
+	pendingRefresh = { generation, result };
+	return result;
 }
 
 function buildRequestHeaders(path: string, options: RequestInit) {
@@ -157,17 +208,25 @@ function buildRequestHeaders(path: string, options: RequestInit) {
 
 async function authorizedFetch(path: string, options: RequestInit = {}) {
 	throwIfAborted(options.signal);
+	const generation = sessionGeneration;
 	const headers = buildRequestHeaders(path, options);
 	const method = options.method?.toUpperCase() ?? 'GET';
 	const isMutation = method !== 'GET';
 
-	async function doFetch(): Promise<Response> {
+	const updateCookie =
+		isMutation &&
+		(cookieWrites.has(path) || (method === 'DELETE' && path.startsWith('/auth/sessions/')));
+	function sendRequest() {
+		throwIfAborted(options.signal);
+		if (!publicAuthPaths.has(path) && generation !== sessionGeneration) throw createAbortError();
 		return fetchWithTimeout(`${API_BASE}${path}`, {
 			...options,
 			headers,
 			credentials: 'include',
 		});
 	}
+
+	const doFetch = () => (updateCookie ? withCookieLock(sendRequest) : sendRequest());
 
 	let res: Response;
 	if (isMutation) {
@@ -176,11 +235,23 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 		res = await withRetry(doFetch, isRetriableResponse, options.signal);
 	}
 
-	if (res.status === 401) {
+	if (res.status === 401 && generation === sessionGeneration && !publicAuthPaths.has(path)) {
 		throwIfAborted(options.signal);
 		const refreshed = await refreshAccessToken();
 		throwIfAborted(options.signal);
+		if (generation !== sessionGeneration) return res;
+		if (!refreshed && lastRefreshOutcome === 'unavailable') {
+			await releaseResponseBody(res);
+			throw new ApiClientError(
+				'AUTH_UNAVAILABLE',
+				'Session refresh is temporarily unavailable',
+				503,
+			);
+		}
 		if (refreshed) {
+			await releaseResponseBody(res);
+			throwIfAborted(options.signal);
+			if (generation !== sessionGeneration) throw createAbortError();
 			headers.Authorization = `Bearer ${accessToken}`;
 			res = await doFetch();
 		}
@@ -188,8 +259,13 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 		// session was revoked. Keep the offline identity and cached data until
 		// the refresh endpoint explicitly rejects it. If refresh succeeded but
 		// the retried request is still unauthorized, the session is invalid.
-		if (res.status === 401 && (refreshed || lastRefreshOutcome === 'rejected')) {
-			notifyAuthLost(path);
+		if (
+			res.status === 401 &&
+			generation === sessionGeneration &&
+			(refreshed || lastRefreshOutcome === 'rejected')
+		) {
+			clearTokens();
+			authLostHandler?.(AUTH_LOST_MESSAGE);
 		}
 	}
 

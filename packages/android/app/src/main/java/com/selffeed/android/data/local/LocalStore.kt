@@ -17,6 +17,7 @@ import com.selffeed.android.network.ApiListResponse
 import com.selffeed.android.network.ArticleStateSnapshot
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
+import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.UserPreferences
@@ -377,8 +378,8 @@ class LocalStore internal constructor(
     fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem> =
         AnchoredArticlePagingSource(dao.articlePagingSource(queryKey, ownerId))
 
-    fun savedArticlePagingSource(ownerId: String?): PagingSource<Int, ArticleListItem> =
-        AnchoredArticlePagingSource(dao.savedArticlePagingSource(ownerId))
+    fun savedArticlePagingSource(ownerId: String?, unreadOnly: Boolean = false, oldest: Boolean = false): PagingSource<Int, ArticleListItem> =
+        AnchoredArticlePagingSource(dao.savedArticlePagingSource(ownerId, unreadOnly, oldest))
 
     /** Build an offline view from known metadata without claiming a fresh server snapshot. */
     suspend fun writeOfflineArticleQuery(query: ArticlePageQuery, feedIds: List<String>) = database.withTransaction {
@@ -392,8 +393,8 @@ class LocalStore internal constructor(
         dao.upsertArticleRemoteKey(ArticleRemoteKeyEntity(key, nextCursor = null, endReached = true, updatedAt = 0))
     }
 
-    suspend fun savedArticlesMissingFromQuery(queryKey: String): List<SavedArticleSnapshot> =
-        dao.savedArticlesMissingFromQuery(queryKey)
+    suspend fun savedArticlesMissingFromQuery(queryKey: String, unreadOnly: Boolean = false): List<SavedArticleSnapshot> =
+        dao.savedArticlesMissingFromQuery(queryKey, unreadOnly)
 
     /** Applies a confirmed remote removal only while the captured local intent is unchanged. */
     suspend fun clearSavedStateIfUnchanged(snapshot: SavedArticleSnapshot): Boolean {
@@ -636,7 +637,9 @@ class LocalStore internal constructor(
     suspend fun queueSavedStateMutation(
         articleId: String,
         saved: Boolean,
+        listItem: ArticleListItem? = null,
     ): PendingSavedStateMutationEntity {
+        require(listItem == null || listItem.id == articleId)
         lateinit var queued: PendingSavedStateMutationEntity
         database.withTransaction {
             if (!saved) dao.removeLegacyOfflineArticle(articleId)
@@ -649,8 +652,13 @@ class LocalStore internal constructor(
             }
             val article = dao.readArticle(articleId)
             val previousState = state.confirmedSavedState
-            if (article == null && detail != null) {
-                dao.upsertArticles(listOf(detail.toArticleEntity(saved)))
+            if (article == null) {
+                // Search can display a row before either its first page or its body has been cached.
+                val metadata = detail?.toArticleListItem() ?: listItem?.takeIf { saved }
+                if (metadata != null) {
+                    val row = projectArticleSnapshot(metadata).toEntity().copy(isSaved = saved)
+                    dao.upsertArticles(listOf(row))
+                }
             }
             queued = PendingSavedStateMutationEntity(
                 articleId = articleId,
@@ -1024,8 +1032,17 @@ class LocalStore internal constructor(
         }
     }
 
-    suspend fun searchArticles(query: String, categoryId: String?, limit: Int = 20): List<ArticleListItem> =
-        dao.searchArticles(query.trim(), categoryId, limit).map { it.toModel() }
+    suspend fun searchArticles(query: String, categoryIds: Set<String>?, limit: Int = 20): List<ArticleListItem> {
+        val term = query.trim()
+        if (categoryIds == null) return dao.searchArticles(term, emptyList(), true, limit).map { it.toModel() }
+        // Room expands IN lists into bind parameters. Bound each query on older SQLite versions.
+        val batches = categoryIds.chunked(900)
+        val matches = batches.flatMap { dao.searchArticles(term, it, false, limit) }
+        val ordered = if (batches.size <= 1) matches else matches.sortedWith(
+            compareByDescending<ArticleEntity> { it.displayedAt ?: it.publishedAt }.thenByDescending { it.id },
+        )
+        return ordered.take(limit).map { it.toModel() }
+    }
 
     override suspend fun clearAll() {
         database.withTransaction { clearActiveSnapshot() }
@@ -1217,24 +1234,6 @@ class LocalStore internal constructor(
             displayedAt = displayedAt,
             isRead = isRead,
             isSaved = isSaved,
-            contentStatus = contentStatus,
-            contentVersion = contentVersion,
-        )
-
-    private fun ArticleDetail.toArticleEntity(saved: Boolean): ArticleEntity =
-        ArticleEntity(
-            id = id,
-            feedId = feedId,
-            feedTitle = feedTitle,
-            feedFaviconUrl = feedFaviconUrl,
-            title = title,
-            author = author,
-            excerpt = excerpt,
-            heroImageUrl = heroImageUrl,
-            publishedAt = publishedAt,
-            displayedAt = publishedAt ?: fetchedAt,
-            isRead = isRead,
-            isSaved = saved,
             contentStatus = contentStatus,
             contentVersion = contentVersion,
         )

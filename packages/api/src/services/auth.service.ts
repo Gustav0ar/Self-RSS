@@ -348,6 +348,8 @@ export class AuthService {
 		metadata: AuthSessionMetadataInput,
 	) {
 		const refreshToken = createRefreshToken(sessionId);
+		// Finish signing before consuming the only refresh token the client has.
+		const accessToken = await this.tokenUtils.signAccessToken(userId, role, sessionId);
 		const session = await this.sessionRepo.rotate(
 			sessionId,
 			currentRefreshTokenHash,
@@ -360,7 +362,6 @@ export class AuthService {
 		if (!session) {
 			throw AppError.unauthorized(AUTH_LOST_MESSAGE);
 		}
-		const accessToken = await this.tokenUtils.signAccessToken(userId, role, sessionId);
 		return {
 			accessToken,
 			refreshToken,

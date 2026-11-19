@@ -1,9 +1,10 @@
-import { render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeedView } from '../../src/components/articles/feed-view';
 
 const onSelectArticle = vi.fn();
 let searchResult: { data?: { pages: Array<{ data: unknown[] }> } } = { data: undefined };
+const searchTerm = vi.fn((_term: string) => searchResult);
 let readerArticleIds: string[] = [];
 let currentResult: {
 	data: { pages: Array<{ data: unknown[]; hasMore: boolean; cursor: null }> } | undefined;
@@ -42,7 +43,7 @@ vi.mock('../../src/hooks/queries', () => ({
 	useCancelFeedReplacement: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: () => currentResult,
-	useSearch: () => searchResult,
+	useSearch: (term: string) => searchTerm(term),
 	useArticle: () => ({ data: null, isLoading: false }),
 	useEnrichArticle: () => ({ mutate: vi.fn(), isPending: false }),
 	useMarkAllRead: () => ({ mutate: vi.fn() }),
@@ -116,6 +117,36 @@ describe('FeedView selected article sync', () => {
 	beforeEach(() => {
 		searchResult = { data: undefined };
 		readerArticleIds = [];
+	});
+	it('waits for typing to settle before requesting the reading queue for a routed search', () => {
+		vi.useFakeTimers();
+		try {
+			const view = render(<FeedView selectedArticleId={null} onSelectArticle={onSelectArticle} />);
+			searchTerm.mockClear();
+			for (const q of ['al', 'alp', 'alpha']) {
+				view.rerender(
+					<FeedView searchQuery={q} selectedArticleId={null} onSelectArticle={onSelectArticle} />,
+				);
+				act(() => vi.advanceTimersByTime(50));
+			}
+			expect(searchTerm.mock.calls.every(([term]) => term === '')).toBe(true);
+			act(() => vi.advanceTimersByTime(300));
+			expect(searchTerm).toHaveBeenLastCalledWith('alpha');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it('explains an empty unread Saved view and offers a way back to all bookmarks', () => {
+		currentResult = {
+			...currentResult,
+			data: { pages: [{ data: [], cursor: null, hasMore: false }] },
+			isLoading: false,
+		};
+		render(<FeedView selectedArticleId={null} savedOnly onSelectArticle={onSelectArticle} />);
+		fireEvent.click(screen.getByRole('button', { name: 'Unread' }));
+		expect(screen.getByText('No unread articles')).toBeTruthy();
+		fireEvent.click(screen.getByRole('button', { name: 'Show all articles' }));
+		expect(screen.getByText('No saved articles yet')).toBeTruthy();
 	});
 	it('clears the active article when the article is not in the loaded list (list view)', () => {
 		currentResult = {

@@ -1,3 +1,4 @@
+import { articleUpdatedEventSchema } from '@self-feed/shared';
 import type { AppDeps } from '../config/deps.js';
 import { DurableFeedScheduler } from '../services/durable-feed-scheduler.js';
 import { DurableFeedWorker } from '../services/durable-feed-worker.js';
@@ -13,6 +14,52 @@ export function selectFeedPipelineWorkers(mode: 'legacy' | 'v2') {
 	return mode === 'v2'
 		? { legacyPublisherWorkers: false, durablePublisherWorkers: true }
 		: { legacyPublisherWorkers: true, durablePublisherWorkers: false };
+}
+
+export function createDurableDeliveryWorker(deps: AppDeps) {
+	return new FeedSnapshotDeliveryService(deps.repos.feedIngestion, deps.repos.article, {
+		afterCommit: async ({ feedId, userId, insertedArticleIds, updatedArticles }) => {
+			await deps.services.articleCache.invalidateCache(userId, {
+				updatedArticleIds: updatedArticles.map((article) => article.id),
+			});
+			const updatedAt = new Date().toISOString();
+			await deps.services.realtime.publishEvent(userId, {
+				type: 'feed.health.updated',
+				eventId: crypto.randomUUID(),
+				feedId,
+				severity: 'healthy',
+				syncStatus: 'idle',
+				lastSyncedAt: updatedAt,
+				lastSyncError: null,
+				lastSyncErrorAt: null,
+				updatedAt,
+			});
+			for (const { id: articleId, contentVersion, contentStatus } of updatedArticles) {
+				await deps.services.realtime.publishEvent(
+					userId,
+					articleUpdatedEventSchema.parse({
+						type: 'article.updated',
+						eventId: crypto.randomUUID(),
+						feedId,
+						updatedAt,
+						articleId,
+						contentVersion,
+						contentStatus,
+					}),
+				);
+			}
+			if (insertedArticleIds.length > 0) {
+				await deps.services.realtime.publishEvent(userId, {
+					type: 'articles.new',
+					eventId: crypto.randomUUID(),
+					feedId,
+					articleIds: insertedArticleIds,
+					count: insertedArticleIds.length,
+					updatedAt,
+				});
+			}
+		},
+	});
 }
 
 export function startDurableIngestionRuntime(
@@ -47,37 +94,8 @@ export function startDurableIngestionRuntime(
 		handleDiscovery: (input) => deps.services.durableFeed.persistDiscoveryCandidates(input),
 		telemetry,
 	});
-	const deliveryWorker = new FeedSnapshotDeliveryService(
-		deps.repos.feedIngestion,
-		deps.repos.article,
-		{
-			afterCommit: async ({ feedId, userId, insertedArticleIds }) => {
-				await deps.services.articleCache.invalidateCache(userId);
-				const updatedAt = new Date().toISOString();
-				await deps.services.realtime.publishEvent(userId, {
-					type: 'feed.health.updated',
-					eventId: crypto.randomUUID(),
-					feedId,
-					severity: 'healthy',
-					syncStatus: 'idle',
-					lastSyncedAt: updatedAt,
-					lastSyncError: null,
-					lastSyncErrorAt: null,
-					updatedAt,
-				});
-				if (insertedArticleIds.length > 0) {
-					await deps.services.realtime.publishEvent(userId, {
-						type: 'articles.new',
-						eventId: crypto.randomUUID(),
-						feedId,
-						articleIds: insertedArticleIds,
-						count: insertedArticleIds.length,
-						updatedAt,
-					});
-				}
-			},
-		},
-	);
+	const deliveryWorkerId = `durable-delivery-${crypto.randomUUID()}`;
+	const deliveryWorker = createDurableDeliveryWorker(deps);
 	const guarded = (name: DurableLoopName, tick: () => Promise<unknown>) => async () => {
 		try {
 			await tick();
@@ -102,7 +120,7 @@ export function startDurableIngestionRuntime(
 			signal: controller.signal,
 		}),
 		runNonOverlappingLoop({
-			tick: guarded('delivery', () => deliveryWorker.drainOnce('durable-delivery', { limit: 20 })),
+			tick: guarded('delivery', () => deliveryWorker.drainOnce(deliveryWorkerId, { limit: 20 })),
 			intervalMs: 250,
 			signal: controller.signal,
 		}),

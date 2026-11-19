@@ -113,6 +113,7 @@ describe('useFeedRefresh', () => {
 		});
 		expect(readLastFeedRefreshRequestId('account-a')).toBe('request-a');
 
+		queryClient.setQueryData(['feeds', 'sync', 'status'], { requestId: 'request-a', active: true });
 		allFeedsSyncStatus = {
 			queued: false,
 			running: false,
@@ -127,6 +128,7 @@ describe('useFeedRefresh', () => {
 		await waitFor(() => {
 			expect(requestedStatusRequestIds.at(-1)).toBeNull();
 			expect(readLastFeedRefreshRequestId('account-a')).toBeNull();
+			expect(queryClient.getQueryData(['feeds', 'sync', 'status'])).toEqual(allFeedsSyncStatus);
 		});
 	});
 
@@ -223,6 +225,30 @@ describe('useFeedRefresh', () => {
 		});
 	});
 
+	it('keeps another category available while a category refresh is running', async () => {
+		const { result, rerender } = renderHook(({ category }) => useFeedRefresh(category), {
+			initialProps: { category: 'news' },
+			wrapper: wrapperFor(makeQueryClient()),
+		});
+		await act(async () => {
+			await result.current.refreshFeed(undefined, { categoryId: 'news' });
+		});
+		allFeedsSyncStatus = {
+			active: true,
+			running: true,
+			queued: false,
+			scope: { categoryId: 'news' },
+		};
+		rerender({ category: 'news' });
+		expect(result.current.isRefreshingAllFeeds).toBe(true);
+		rerender({ category: 'sports' });
+		expect(result.current.isRefreshingAllFeeds).toBe(false);
+		expect(result.current.allFeedsRefreshActivity.shouldShowStatus).toBe(false);
+		await act(async () => {
+			expect(await result.current.refreshFeed(undefined, { categoryId: 'sports' })).toBe(true);
+		});
+	});
+
 	it('does not retry a failed publisher merely because the feed was selected', async () => {
 		feeds = [
 			{
@@ -268,6 +294,42 @@ describe('useFeedRefresh', () => {
 
 		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledOnce();
 		expect(syncAllFeedsMutateAsyncMock).toHaveBeenCalledWith({ feedId: 'new-feed' });
+	});
+
+	it('updates the reader when fallback status reports a single feed finished', () => {
+		const queryClient = makeQueryClient();
+		allFeedsSyncStatus = {
+			queued: false,
+			running: true,
+			active: true,
+			scope: { feedId: 'feed-a' },
+		};
+		const { result, rerender } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(queryClient),
+		});
+		expect(result.current.isRefreshingAllFeeds).toBe(false);
+		expect(result.current.isRefreshingFeed('feed-a')).toBe(true);
+		expect(result.current.isRefreshingFeed('feed-b')).toBe(false);
+		allFeedsSyncStatus = { ...allFeedsSyncStatus, running: false, active: false };
+		rerender();
+		expect(invalidateReaderQueriesMock).toHaveBeenCalledWith(queryClient);
+	});
+
+	it('allows a manual retry after the single-feed monitoring window expires', async () => {
+		allFeedsSyncStatus = {
+			active: true,
+			running: true,
+			queued: false,
+			scope: { feedId: 'feed-a' },
+			startedAt: new Date(nowMs - REFRESH_INTERVALS.SYNC_STATUS_MAX_MONITOR_MS).toISOString(),
+		};
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(makeQueryClient()),
+		});
+		expect(result.current.isRefreshingFeed('feed-a')).toBe(false);
+		await act(async () => {
+			expect(await result.current.refreshFeed('feed-a', { force: true })).toBe(true);
+		});
 	});
 
 	it('queues an explicit single-feed refresh instead of calling the synchronous endpoint', async () => {
@@ -342,6 +404,25 @@ describe('useFeedRefresh', () => {
 		expect(accepted).toBe(false);
 		expect(result.current.isRefreshingAllFeeds).toBe(false);
 		expect(result.current.feedSyncError).toBe('Worker unavailable');
+	});
+
+	it('reports a failed feed refresh when reconciliation finds a different feed running', async () => {
+		syncAllFeedsMutateAsyncMock.mockRejectedValue(new Error('Queue unavailable'));
+		refetchAllFeedsSyncStatusMock.mockResolvedValue({
+			data: {
+				active: true,
+				queued: false,
+				running: true,
+				scope: { feedId: 'other' },
+			},
+		});
+		const { result } = renderHook(() => useFeedRefresh(), {
+			wrapper: wrapperFor(makeQueryClient()),
+		});
+		await act(async () => {
+			expect(await result.current.refreshFeed('selected', { force: true })).toBe(false);
+		});
+		expect(result.current.feedSyncError).toBe('Queue unavailable');
 	});
 
 	it('keeps loading when the queue response fails after the backend accepted the refresh', async () => {

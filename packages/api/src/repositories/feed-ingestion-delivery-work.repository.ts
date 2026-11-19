@@ -6,6 +6,7 @@ import {
 	feedSources,
 	feeds,
 } from '../db/schema.js';
+import { recordDurableSyncRun } from './durable-sync-history.js';
 import { FeedIngestionSourceWorkRepository } from './feed-ingestion-source-work.repository.js';
 import { aggregateRefreshRequests } from './refresh-request-aggregation.js';
 
@@ -80,7 +81,19 @@ export class FeedIngestionDeliveryWorkRepository extends FeedIngestionSourceWork
 			const candidate = tx
 				.select({ id: feedSnapshotDeliveries.id })
 				.from(feedSnapshotDeliveries)
-				.where(eligible)
+				.where(
+					and(
+						eligible,
+						// Two snapshots for one subscription must not both prepare inserts for
+						// the same new GUID. A backed-off delivery holds no lease.
+						sql`NOT EXISTS (
+							SELECT 1 FROM feed_snapshot_deliveries writer
+							WHERE writer.feed_id = ${feedSnapshotDeliveries.feedId}
+								AND writer.status = 'running'
+								AND writer.lease_expires_at > ${Math.floor(now.getTime() / 1_000)}
+						)`,
+					),
+				)
 				.orderBy(asc(feedSnapshotDeliveries.availableAt), asc(feedSnapshotDeliveries.createdAt))
 				.limit(1)
 				.get();
@@ -167,10 +180,21 @@ export class FeedIngestionDeliveryWorkRepository extends FeedIngestionSourceWork
 				.returning()
 				.get();
 			const snapshot = tx
-				.select({ jobId: feedFetchSnapshots.jobId })
+				.select({ jobId: feedFetchSnapshots.jobId, httpStatus: feedFetchSnapshots.httpStatus })
 				.from(feedFetchSnapshots)
 				.where(eq(feedFetchSnapshots.id, delivery.snapshotId))
 				.get();
+			if (data.status === 'dead') {
+				recordDurableSyncRun(tx, {
+					id: delivery.id,
+					feedId: delivery.feedId,
+					startedAt: delivery.startedAt ?? now,
+					finishedAt: now,
+					status: 'failed',
+					httpStatus: snapshot?.httpStatus,
+					errorMessage: (data.error?.details ?? data.error?.code)?.slice(0, 500),
+				});
+			}
 			let requestIds: string[] = [];
 			if (snapshot?.jobId && data.status !== 'pending') {
 				requestIds = tx

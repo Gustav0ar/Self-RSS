@@ -27,6 +27,17 @@ let relayProcess: ChildProcess | undefined;
 let apiProcess: ChildProcess | undefined;
 let workerProcess: ChildProcess | undefined;
 let webProcess: ChildProcess | undefined;
+let shutdown: Promise<void> | undefined;
+
+function stopTestStack() {
+	shutdown ??= Promise.all(
+		[webProcess, workerProcess, apiProcess, relayProcess].map((child) => stopProcess(child)),
+	).then(() => services.stop());
+	return shutdown;
+}
+
+process.once('SIGINT', () => void stopTestStack().finally(() => process.exit(130)));
+process.once('SIGTERM', () => void stopTestStack().finally(() => process.exit(143)));
 
 try {
 	const env = {
@@ -150,9 +161,5 @@ try {
 		);
 	}
 } finally {
-	await stopProcess(webProcess);
-	await stopProcess(workerProcess);
-	await stopProcess(apiProcess);
-	await stopProcess(relayProcess);
-	await services.stop();
+	await stopTestStack();
 }

@@ -1,4 +1,4 @@
-import { and, asc, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, asc, inArray, isNotNull, lte, type SQLWrapper, sql } from 'drizzle-orm';
 import {
 	feedDiscoveryCandidates,
 	feedFetchJobs,
@@ -11,6 +11,46 @@ import type {
 	DurableIngestionOperationalSnapshot,
 } from '../services/durable-ingestion-ops.types.js';
 import { FeedIngestionDeliveryWorkRepository } from './feed-ingestion-delivery-work.repository.js';
+
+// Refresh status joins a request item to its job, snapshot delivery and sync run.
+// Keep that chain until the request itself has been pruned.
+export function noRetainedRefreshItem(jobId: SQLWrapper, feedId?: SQLWrapper) {
+	return sql`NOT EXISTS (
+		SELECT 1 FROM feed_refresh_request_items retained_item
+		WHERE retained_item.job_id = ${jobId}
+		${feedId ? sql`AND retained_item.feed_id = ${feedId}` : sql``}
+	)`;
+}
+
+// While older work is pending, retain the latest successful delivery as proof
+// of publisher order. The write fence needs only one such row per feed/source.
+function latestAppliedSnapshotForPendingFeed(feedId: SQLWrapper, snapshotId: SQLWrapper) {
+	return sql`EXISTS (
+		SELECT 1 FROM feed_snapshot_deliveries waiting
+		JOIN feed_fetch_snapshots pending_snapshot ON pending_snapshot.id = waiting.snapshot_id
+		WHERE waiting.feed_id = ${feedId} AND waiting.status IN ('pending', 'running')
+			AND ${snapshotId} = (
+				SELECT newer.id FROM feed_fetch_snapshots newer
+				JOIN feed_snapshot_deliveries applied ON applied.snapshot_id = newer.id AND applied.feed_id = waiting.feed_id
+				JOIN sync_runs run ON run.id = applied.id AND run.status = 'success'
+				WHERE newer.source_id = pending_snapshot.source_id
+					AND (newer.fetched_at, newer.rowid) > (pending_snapshot.fetched_at, pending_snapshot.rowid)
+				ORDER BY newer.fetched_at DESC, newer.rowid DESC LIMIT 1
+			)
+	)`;
+}
+
+export function noProtectedSnapshotDelivery(cutoff?: Date) {
+	return sql`NOT EXISTS (
+		SELECT 1 FROM feed_snapshot_deliveries retained_delivery
+		WHERE retained_delivery.snapshot_id = ${feedFetchSnapshots.id}
+			AND (
+				retained_delivery.status IN ('pending', 'running')
+				${cutoff ? sql`OR coalesce(retained_delivery.completed_at, retained_delivery.dead_at, retained_delivery.updated_at) > ${Math.floor(cutoff.getTime() / 1_000)}` : sql``}
+				OR ${latestAppliedSnapshotForPendingFeed(sql`retained_delivery.feed_id`, sql`retained_delivery.snapshot_id`)}
+			)
+	)`;
+}
 
 export class FeedIngestionOperationsRepository extends FeedIngestionDeliveryWorkRepository {
 	async getOperationalSnapshot(now = new Date()): Promise<DurableIngestionOperationalSnapshot> {
@@ -171,15 +211,9 @@ export class FeedIngestionOperationsRepository extends FeedIngestionDeliveryWork
 					and(
 						inArray(feedFetchSnapshots.parseState, ['parsed', 'expired']),
 						lte(feedFetchSnapshots.cleanupAfter, now),
+						noRetainedRefreshItem(feedFetchSnapshots.jobId),
 						sql`(${feedFetchSnapshots.retainUntil} IS NULL OR ${feedFetchSnapshots.retainUntil} <= ${Math.floor(now.getTime() / 1_000)})`,
-						sql`NOT EXISTS (
-							SELECT 1 FROM feed_snapshot_deliveries retained_delivery
-							WHERE retained_delivery.snapshot_id = ${feedFetchSnapshots.id}
-							AND (
-								retained_delivery.status IN ('pending', 'running')
-								OR coalesce(retained_delivery.completed_at, retained_delivery.dead_at, retained_delivery.updated_at) > ${Math.floor(cutoff.getTime() / 1_000)}
-							)
-						)`,
+						noProtectedSnapshotDelivery(cutoff),
 					),
 				)
 				.orderBy(asc(feedFetchSnapshots.cleanupAfter), asc(feedFetchSnapshots.id))
@@ -196,6 +230,11 @@ export class FeedIngestionOperationsRepository extends FeedIngestionDeliveryWork
 				.where(
 					and(
 						inArray(feedSnapshotDeliveries.status, ['completed', 'dead']),
+						sql`NOT ${latestAppliedSnapshotForPendingFeed(feedSnapshotDeliveries.feedId, feedSnapshotDeliveries.snapshotId)}`,
+						noRetainedRefreshItem(
+							sql`(SELECT job_id FROM feed_fetch_snapshots WHERE id = ${feedSnapshotDeliveries.snapshotId})`,
+							feedSnapshotDeliveries.feedId,
+						),
 						sql`coalesce(${feedSnapshotDeliveries.completedAt}, ${feedSnapshotDeliveries.deadAt}, ${feedSnapshotDeliveries.updatedAt}) <= ${Math.floor(cutoff.getTime() / 1_000)}`,
 					),
 				)
@@ -216,11 +255,7 @@ export class FeedIngestionOperationsRepository extends FeedIngestionDeliveryWork
 					and(
 						inArray(feedFetchJobs.status, ['completed', 'dead']),
 						sql`coalesce(${feedFetchJobs.completedAt}, ${feedFetchJobs.deadAt}, ${feedFetchJobs.updatedAt}) <= ${Math.floor(cutoff.getTime() / 1_000)}`,
-						sql`NOT EXISTS (
-							SELECT 1 FROM feed_refresh_request_items active_item
-							WHERE active_item.job_id = ${feedFetchJobs.id}
-							AND active_item.status IN ('pending', 'running')
-						)`,
+						noRetainedRefreshItem(feedFetchJobs.id),
 						sql`NOT EXISTS (
 							SELECT 1 FROM feed_fetch_snapshots job_snapshot
 							JOIN feed_snapshot_deliveries active_delivery

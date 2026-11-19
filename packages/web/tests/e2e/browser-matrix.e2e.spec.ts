@@ -418,16 +418,15 @@ test.describe('bounded browser matrix', () => {
 		await popup.close();
 	});
 
-	test('administrators can reach the protected account console', async ({ page }) => {
+	test('administrators can reach the protected account console', async ({ page }, testInfo) => {
+		const email = `matrix-${testInfo.project.name}@example.com`;
 		await installStableReaderFixture(page);
-		await loginThroughUi(page, 'admin@example.com');
+		await loginThroughUi(page, email);
 
 		await page.getByRole('link', { name: 'Administration' }).click();
 		await expect(page).toHaveURL(/\/admin$/);
 		await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();
-		await expect(
-			page.getByRole('main').getByText('admin@example.com', { exact: true }),
-		).toBeVisible();
+		await expect(page.getByRole('main').getByText(email, { exact: true })).toBeVisible();
 	});
 });

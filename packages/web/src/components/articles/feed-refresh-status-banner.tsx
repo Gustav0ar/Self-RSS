@@ -10,6 +10,7 @@ import {
 
 interface FeedRefreshStatusBannerProps {
 	feedId?: string;
+	categoryId?: string;
 	allFeedsRefreshActivity: AllFeedsRefreshActivity;
 	allFeedsSyncStatus: FeedSyncAllStatus | undefined;
 	isRefreshingCurrentSelection: boolean;
@@ -17,6 +18,7 @@ interface FeedRefreshStatusBannerProps {
 
 export function FeedRefreshStatusBanner({
 	feedId,
+	categoryId,
 	allFeedsRefreshActivity,
 	allFeedsSyncStatus,
 	isRefreshingCurrentSelection,
@@ -34,12 +36,17 @@ export function FeedRefreshStatusBanner({
 		);
 		return () => globalThis.clearTimeout(timer);
 	}, [terminalTimestamp]);
-	const isDurableTerminal = isFreshTerminalFeedSyncStatus(allFeedsSyncStatus);
-	const showStatus = feedId
-		? isRefreshingCurrentSelection ||
-			(isDurableTerminal && allFeedsSyncStatus?.scope?.feedId === feedId)
-		: allFeedsRefreshActivity.shouldShowStatus ||
-			(isDurableTerminal && !allFeedsSyncStatus?.scope?.feedId);
+	const scope = allFeedsSyncStatus?.scope;
+	const matchesSelection = feedId
+		? scope?.feedId === feedId
+		: !scope?.feedId && scope?.categoryId === categoryId;
+	const isDurableTerminal =
+		!allFeedsRefreshActivity.isActive &&
+		matchesSelection &&
+		isFreshTerminalFeedSyncStatus(allFeedsSyncStatus);
+	const showStatus =
+		isDurableTerminal ||
+		(feedId ? isRefreshingCurrentSelection : allFeedsRefreshActivity.shouldShowStatus);
 	if (!showStatus) {
 		return null;
 	}
@@ -58,7 +65,10 @@ export function FeedRefreshStatusBanner({
 					? 'Refresh queued'
 					: 'Loading new articles';
 	const counts = buildRefreshCounts(allFeedsSyncStatus);
-	const nextEligible = nextEligibleLabel(allFeedsSyncStatus);
+	const nextEligible =
+		matchesSelection && (allFeedsSyncStatus?.active || isDurableTerminal)
+			? nextEligibleLabel(allFeedsSyncStatus)
+			: null;
 	const detail = isDurableTerminal
 		? counts || 'Feeds are up to date'
 		: feedId

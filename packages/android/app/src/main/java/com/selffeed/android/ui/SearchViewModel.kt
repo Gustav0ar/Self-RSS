@@ -141,37 +141,20 @@ class SearchViewModel @Inject constructor(
         when (val result = repository.search(query, categoryId = categoryId, cursor = cursor)) {
             is AppResult.Success -> {
                 if (!isCurrentRequest(query, categoryId, generation)) return
-                if (cursor == null) {
-                    val page = result.data.data
-                    val capped = page.take(MAX_RESULTS)
-                    val reachedLimit =
-                        capped.size >= MAX_RESULTS && (result.data.hasMore || page.size > MAX_RESULTS)
-                    _state.update {
-                        it.copy(
-                            results = capped,
-                            cursor = result.data.cursor,
-                            hasMore = result.data.hasMore && !reachedLimit,
-                            resultLimitReached = reachedLimit,
-                            loading = false,
-                            loadingMore = false,
-                            errorMessage = null,
-                        )
-                    }
-                } else {
-                    _state.update {
-                        val uncapped = it.results + result.data.data
-                        val combined = uncapped.take(MAX_RESULTS)
-                        val reachedLimit = combined.size >= MAX_RESULTS &&
-                                (result.data.hasMore || uncapped.size > MAX_RESULTS)
-                        it.copy(
-                            results = combined,
-                            cursor = result.data.cursor,
-                            hasMore = result.data.hasMore && !reachedLimit,
-                            resultLimitReached = reachedLimit,
-                            loadingMore = false,
-                            errorMessage = null,
-                        )
-                    }
+                _state.update {
+                    val previous = if (cursor == null) emptyList() else it.results
+                    val results = (previous + result.data.data).distinctBy(ArticleListItem::id)
+                    val reachedLimit = results.size > MAX_RESULTS ||
+                        (results.size == MAX_RESULTS && result.data.hasMore)
+                    it.copy(
+                        results = results.take(MAX_RESULTS),
+                        cursor = result.data.cursor,
+                        hasMore = result.data.hasMore && !reachedLimit,
+                        resultLimitReached = reachedLimit,
+                        loading = false,
+                        loadingMore = false,
+                        errorMessage = null,
+                    )
                 }
             }
 

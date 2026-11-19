@@ -47,6 +47,20 @@ export function boundedState(state: DehydratedState): DehydratedState {
 	return { mutations: [], queries };
 }
 
+export function mergeQuerySnapshots(
+	previous: PersistedQueryCache | null,
+	current: DehydratedState,
+) {
+	const newestByHash = new Map(previous?.state.queries.map((query) => [query.queryHash, query]));
+	for (const query of current.queries) {
+		const existing = newestByHash.get(query.queryHash);
+		if (!existing || query.state.dataUpdatedAt >= existing.state.dataUpdatedAt) {
+			newestByHash.set(query.queryHash, query);
+		}
+	}
+	return boundedState({ mutations: [], queries: [...newestByHash.values()] });
+}
+
 export function cachedArticleIds(queries: DehydratedState['queries']) {
 	const ids = new Set<string>();
 	for (const query of queries) {

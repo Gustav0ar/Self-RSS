@@ -4,8 +4,11 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearTokens, setTokens } from '../../src/lib/api';
 import {
+	clearOfflineState,
 	flushOfflineArticleMutations,
+	getPendingArticleStateMutation,
 	hasPendingArticleStateMutation,
+	isSignedOutLocally,
 	loadOfflineUser,
 	persistQueryClient,
 	queueArticleStateMutation,
@@ -78,6 +81,25 @@ describe('offline article mutation outbox', () => {
 		).toBe(true);
 	});
 
+	it('keeps the durable head when opening IndexedDB for its acknowledgement fails', async () => {
+		setOfflineSessionUser('user-1');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		const open = indexedDB.open.bind(indexedDB);
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(async () => {
+				// Opening an existing store with a lower version fails asynchronously.
+				vi.spyOn(indexedDB, 'open').mockImplementationOnce((name) => open(name, 1));
+				return mutationResponse({ saved: true });
+			})
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'queued', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
+	});
+
 	it('retains the same durable mutation after a transient delivery failure', async () => {
 		setOfflineSessionUser('user-1');
 		const mutation = await queueArticleStateMutation('read', 'article-1', true, 'manual');
@@ -97,6 +119,38 @@ describe('offline article mutation outbox', () => {
 		expect(firstBody.mutationId).toBe(mutation.mutationId);
 		expect(secondBody.mutationId).toBe(mutation.mutationId);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		false,
+		true,
+	])('stops delivery if the outbox write aborts (conflict=%s)', async (conflict) => {
+		setOfflineSessionUser('user-1');
+		const queued = await queueArticleStateMutation('saved', 'article-1', true);
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(mutationResponse({ applied: !conflict, conflict, saved: true }))
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+		const put = IDBObjectStore.prototype.put;
+		const abortOutboxWrite = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
+			this: IDBObjectStore,
+			value,
+			key,
+		) {
+			const request = put.call(this, value, key);
+			if (String(key).includes(':outbox:')) this.transaction.abort();
+			return request;
+		});
+
+		expect(await flushOfflineArticleMutations()).toMatchObject([
+			{ status: 'queued', mutation: queued },
+		]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		abortOutboxWrite.mockRestore();
+		expect(await flushOfflineArticleMutations()).toMatchObject([
+			{ status: 'applied', mutation: queued },
+		]);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
 	});
 
 	it('retains a mutation when token refresh is temporarily unavailable', async () => {
@@ -192,6 +246,114 @@ describe('offline article mutation outbox', () => {
 		]);
 	});
 
+	it.each([
+		'success',
+		'conflict',
+		'rejection',
+	])('ignores a late %s after switching away and back', async (outcome) => {
+		setOfflineSessionUser('reader');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		const response = Promise.withResolvers<Response>();
+		const started = Promise.withResolvers<void>();
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(() => {
+				started.resolve();
+				return response.promise;
+			})
+			.mockImplementation(async () => mutationResponse({ saved: true, duplicate: true }));
+
+		const oldFlush = flushOfflineArticleMutations();
+		await started.promise;
+		setOfflineSessionUser('second-reader');
+		setOfflineSessionUser('reader');
+		response.resolve(
+			outcome === 'rejection'
+				? new Response(null, { status: 404 })
+				: mutationResponse({ conflict: outcome === 'conflict', saved: true, revision: 7 }),
+		);
+
+		expect(await oldFlush).toEqual([]);
+		expect(await getPendingArticleStateMutation('article-1', 'saved')).toEqual(mutation);
+		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('lets the returning reader replay while the earlier acknowledgement is waiting on IndexedDB', async () => {
+		setOfflineSessionUser('reader');
+		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+		let retry: ReturnType<typeof flushOfflineArticleMutations> | undefined;
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementationOnce(async () => {
+				const get = IDBObjectStore.prototype.get;
+				const reads = vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (
+					this: IDBObjectStore,
+					key,
+				) {
+					const request = get.call(this, key);
+					if (String(key).includes(':outbox:')) {
+						reads.mockRestore();
+						setOfflineSessionUser(null);
+						setOfflineSessionUser('reader');
+						retry = flushOfflineArticleMutations();
+					}
+					return request;
+				});
+				return mutationResponse({ saved: true });
+			})
+			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+
+		expect(await flushOfflineArticleMutations()).toEqual([]);
+		expect(await retry).toMatchObject([{ status: 'applied', mutation }]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps the outbox cleared after logout while an earlier edit waits for the outbox lock', async () => {
+		setOfflineSessionUser('reader');
+		const release = Promise.withResolvers<void>();
+		const request = vi.fn((_name: string, run: () => Promise<unknown>) =>
+			release.promise.then(run),
+		);
+		vi.stubGlobal('navigator', { locks: { request } });
+		try {
+			const pending = queueArticleStateMutation('saved', 'article-1', true);
+			expect(request).toHaveBeenCalledOnce();
+			await setSignedOutLocally(true);
+			setOfflineSessionUser(null);
+			await clearOfflineState('reader');
+			await setSignedOutLocally(false);
+			setOfflineSessionUser('reader');
+			release.resolve();
+
+			await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+			expect(await getPendingArticleStateMutation('article-1', 'saved')).toBeNull();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it('does not restore a cleared revision when a PATCH completes after logout', async () => {
+		setOfflineSessionUser('reader');
+		await queueArticleStateMutation('read', 'article-1', true);
+		const response = Promise.withResolvers<Response>();
+		const started = Promise.withResolvers<void>();
+		vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => {
+			started.resolve();
+			return response.promise;
+		});
+		const oldFlush = flushOfflineArticleMutations();
+		await started.promise;
+		setOfflineSessionUser(null);
+		await clearOfflineState('reader');
+		response.resolve(mutationResponse({ read: true, revision: 9 }));
+		await oldFlush;
+
+		setOfflineSessionUser('reader');
+		const next = await queueArticleStateMutation('read', 'article-1', false);
+		expect(next.baseRevision).toBeUndefined();
+	});
+
 	it('flushes a newly selected account independently of an older in-flight account', async () => {
 		setOfflineSessionUser('user-1');
 		await queueArticleStateMutation('read', 'article-user-1', true);
@@ -238,6 +400,41 @@ describe('offline identity and query cache', () => {
 		expect(await loadOfflineUser()).toBeNull();
 	});
 
+	it('retains pending edits and the newly verified offline reader when the old tab loses auth', async () => {
+		setOfflineSessionUser('old-reader');
+		await queueArticleStateMutation('saved', 'article-1', true);
+		const currentUser: User = {
+			id: 'current-reader',
+			email: 'current@example.com',
+			role: 'user',
+			isActive: true,
+			createdAt: '2026-01-01T00:00:00.000Z',
+			updatedAt: '2026-01-01T00:00:00.000Z',
+		};
+		await saveOfflineUser(currentUser);
+		await clearOfflineState('old-reader', { keepPendingChanges: true });
+
+		expect(await loadOfflineUser()).toEqual(currentUser);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(true);
+		setOfflineSessionUser(currentUser.id);
+		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
+	});
+
+	it('reports that local sign-out failed when the durable marker transaction aborts', async () => {
+		const put = IDBObjectStore.prototype.put;
+		vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementationOnce(function (
+			this: IDBObjectStore,
+			...args
+		) {
+			const request = put.apply(this, args);
+			this.transaction.abort();
+			return request;
+		});
+
+		expect(await setSignedOutLocally(true)).toBe(false);
+		expect(await isSignedOutLocally()).toBe(false);
+	});
+
 	it('rejects an offline identity lease created implausibly far in the future', async () => {
 		const user: User = {
 			id: 'user-1',
@@ -253,9 +450,30 @@ describe('offline identity and query cache', () => {
 		vi.mocked(Date.now).mockReturnValue(now);
 
 		expect(await loadOfflineUser()).toBeNull();
+		vi.mocked(Date.now).mockReturnValue(now + 10 * 60 * 1000);
+		expect(await loadOfflineUser()).toBeNull();
+	});
+
+	it('discards cache reads and writes that outlive the session', async () => {
+		setOfflineSessionUser('user-1');
+		const client = new QueryClient();
+		client.setQueryData(['feeds'], ['first']);
+		await persistQueryClient(client, 'user-1');
+		const restored = new QueryClient();
+		const restoring = restoreQueryClient(restored, 'user-1');
+		client.setQueryData(['feeds'], ['stale write']);
+		const writing = persistQueryClient(client, 'user-1');
+		setOfflineSessionUser(null);
+		setOfflineSessionUser('user-1');
+		await writing;
+		expect(await restoring).toBe(false);
+		expect(restored.getQueryData(['feeds'])).toBeUndefined();
+		expect(await restoreQueryClient(restored, 'user-1')).toBe(true);
+		expect(restored.getQueryData(['feeds'])).toEqual(['first']);
 	});
 
 	it('merges independent tab snapshots without crossing account boundaries', async () => {
+		setOfflineSessionUser('user-1');
 		const firstTab = new QueryClient();
 		firstTab.setQueryData(['articles', 'feed-1'], [{ id: 'article-1' }]);
 		await persistQueryClient(firstTab, 'user-1');

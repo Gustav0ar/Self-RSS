@@ -26,6 +26,13 @@ async function ensureUser(email: string, password: string, role: 'admin' | 'user
 
 async function seed() {
 	await ensureUser('admin@example.com', 'password123', 'admin');
+	if (env.NODE_ENV === 'test') {
+		// Each browser project gets its own quota for authenticated admin requests.
+		const { default: playwrightConfig } = await import('../packages/web/playwright.config.js');
+		for (const project of playwrightConfig.projects ?? []) {
+			await ensureUser(`matrix-${project.name}@example.com`, 'password123', 'admin');
+		}
+	}
 	const reader = await ensureUser('reader@example.com', 'password123', 'user');
 
 	await prefsRepo.upsert(reader.id, {

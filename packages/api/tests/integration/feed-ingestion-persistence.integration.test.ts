@@ -693,9 +693,13 @@ describe('durable feed ingestion persistence', () => {
 		expect(
 			(await service.cleanupExpired(new Date(now.getTime() + 23 * 60 * 60_000))).deleted,
 		).toEqual([]);
-		expect(
-			(await service.cleanupExpired(new Date(now.getTime() + 25 * 60 * 60_000))).deleted,
-		).toEqual([{ id: 'snapshot-retry' }]);
+		const afterRetention = new Date(now.getTime() + 25 * 60 * 60_000);
+		expect((await service.cleanupExpired(afterRetention)).deleted).toEqual([]);
+		const deliveries = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db));
+		expect(await deliveries.drainOnce('snapshot-retention', { now: afterRetention })).toBe(2);
+		expect((await service.cleanupExpired(afterRetention)).deleted).toEqual([
+			{ id: 'snapshot-retry' },
+		]);
 
 		const failingService = new FeedSnapshotParserService(repository);
 		const expiringSnapshot = await failingService.persistRawResponse({
@@ -1535,6 +1539,9 @@ describe('durable feed ingestion persistence', () => {
 			.update(schema.feedOrigins)
 			.set({ blockedUntil: new Date(now.getTime() + 24 * 60 * 60_000) })
 			.where(eq(schema.feedOrigins.id, job!.originId));
+		// The independent delivery loop can finish during the fetch worker's expired lease.
+		const earlyDelivery = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db));
+		expect(await earlyDelivery.drainOnce('early-delivery', { now })).toBe(1);
 		let refetches = 0;
 		const recovery = new DurableFeedWorker(repository, {
 			workerId: 'parsed-recovery-worker',
@@ -1546,6 +1553,9 @@ describe('durable feed ingestion persistence', () => {
 			},
 		});
 		expect(await recovery.drainOnce()).toBe(1);
+		expect(await facade.getRefreshStatus('user-1', replacement.requestId)).toMatchObject({
+			status: 'completed',
+		});
 		expect(refetches).toBe(0);
 		expect(
 			await db.query.feedFetchJobs.findFirst({ where: (row, { eq }) => eq(row.id, job!.id) }),
@@ -1604,6 +1614,101 @@ describe('durable feed ingestion persistence', () => {
 			}),
 		).not.toBeNull();
 		expect(await db.select().from(schema.articleReads)).toHaveLength(1);
+	});
+
+	it('keeps a subscription waiting when it attaches during a conditional fetch', async () => {
+		const { db, repository } = await setupDatabase();
+		const facade = new DurableFeedFacadeService(
+			db,
+			new FeedRepository(db),
+			new CategoryRepository(db),
+			repository,
+		);
+		const url = 'https://publisher.example/feed';
+		const { source } = await facade.ensureSource(url);
+		subscribeSource(db, source);
+		await db
+			.insert(schema.users)
+			.values({ id: 'user-2', email: 'second@example.com', passwordHash: 'hash' });
+		await db
+			.insert(schema.categories)
+			.values({ id: 'category-2', userId: 'user-2', name: 'News', slug: 'news' });
+		let now = new Date(Date.now() + 1000);
+		await db
+			.update(schema.feedSources)
+			.set({ etag: '"stable"', lastUnconditionalFetchAt: now, lastSuccessAt: now })
+			.where(eq(schema.feedSources.id, source.id));
+		await new DurableFeedScheduler(repository).tick(now);
+		let requestId: string | undefined;
+		const worker = new DurableFeedWorker(repository, {
+			now: () => now,
+			fetch: async (_url, init) => {
+				const conditional = new Headers(init.headers).has('if-none-match');
+				if (!requestId) {
+					expect(conditional).toBe(true);
+					requestId = (
+						await facade.createPendingFeed('user-2', { categoryId: 'category-2', feedUrl: url })
+					).requestId;
+					return new Response(null, { status: 304 });
+				}
+				expect(conditional).toBe(false);
+				return new Response(
+					'<rss version="2.0"><channel><title>News</title><item><guid>one</guid><title>One</title></item></channel></rss>',
+				);
+			},
+		});
+		expect(await worker.drainOnce()).toBe(1);
+		expect(await facade.getRefreshStatus('user-2', requestId)).toMatchObject({ active: true });
+		now = new Date(now.getTime() + 16 * 60_000);
+		expect(await worker.drainOnce()).toBe(1);
+		const delivery = new FeedSnapshotDeliveryService(repository, new ArticleRepository(db));
+		expect(await delivery.drainOnce('onboarding', { now })).toBe(2);
+		expect(await facade.getRefreshStatus('user-2', requestId)).toMatchObject({
+			status: 'completed',
+		});
+		expect(await db.select().from(schema.articles)).toHaveLength(2);
+	});
+
+	it('repairs existing source-less feeds without replacing their articles or subscription identity', async () => {
+		const { db, repository } = await setupDatabase();
+		const facade = new DurableFeedFacadeService(
+			db,
+			new FeedRepository(db),
+			new CategoryRepository(db),
+			repository,
+		);
+		const url = 'https://example.com/old.xml';
+		await db.insert(schema.feeds).values({
+			id: 'legacy-feed',
+			userId: 'user-1',
+			categoryId: 'category-1',
+			title: 'Personal title',
+			feedUrl: url,
+		});
+		await db.insert(schema.articles).values({
+			id: 'retained',
+			feedId: 'legacy-feed',
+			guid: 'retained',
+			title: 'Saved story',
+			hash: 'retained',
+		});
+		await db.insert(schema.articleSaves).values({ userId: 'user-1', articleId: 'retained' });
+		await facade.registerUnlinkedFeeds();
+		await facade.registerUnlinkedFeeds();
+		const sources = await db.select().from(schema.feedSources);
+		expect(sources).toHaveLength(1);
+		expect(await db.select().from(schema.feeds).get()).toMatchObject({
+			id: 'legacy-feed',
+			feedUrl: url,
+			sourceId: sources[0]!.id,
+			customTitle: 'Personal title',
+		});
+		expect(await db.select().from(schema.articleSaves).get()).toMatchObject({
+			articleId: 'retained',
+		});
+		expect(
+			await new DurableFeedScheduler(repository).tick(new Date(Date.now() + 1_000)),
+		).toHaveLength(1);
 	});
 
 	it('uses validators until the weekly unconditional boundary and completes 304 refreshes', async () => {
@@ -2341,7 +2446,7 @@ describe('durable feed ingestion persistence', () => {
 		expect(secondDelivery).not.toBeNull();
 		expect(
 			await delivery.drainOnce('snapshot-reuse-second', {
-				now: secondDelivery!.availableAt,
+				now: new Date(secondDelivery!.availableAt.getTime() + 4 * 60 * 60_000),
 				limit: 10,
 			}),
 		).toBe(1);
@@ -2355,6 +2460,18 @@ describe('durable feed ingestion persistence', () => {
 				where: (request, { eq }) => eq(request.id, second.requestId),
 			}),
 		).toMatchObject({ status: 'completed', completedItems: 1, pendingItems: 0 });
+		// This subscription finished four hours after the fetch it reused.
+		const cleanupAt = new Date(now.getTime() + 26 * 60 * 60_000);
+		await repository.cleanupExpiredSnapshots(cleanupAt);
+		await repository.cleanupOperationalHistory({
+			now: cleanupAt,
+			retentionDays: 1,
+			batchSize: 100,
+		});
+		expect(await facade.getRefreshStatus('user-1', second.requestId)).toMatchObject({
+			requestId: second.requestId,
+			newArticles: 1,
+		});
 		expect(publisherRequests).toBe(1);
 	});
 

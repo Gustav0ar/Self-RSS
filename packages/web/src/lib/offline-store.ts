@@ -9,9 +9,16 @@ import {
 	reportOfflineRejection,
 } from './offline-changes';
 import {
+	isUser,
+	leasedUser,
+	OFFLINE_ACCESS_LEASE_MS,
+	type PersistedOfflineUser,
+} from './offline-identity';
+import {
 	boundedState,
 	cachedArticleIds,
 	isPersistedQueryCache,
+	mergeQuerySnapshots,
 	PERSISTED_QUERY_ROOTS,
 	type PersistedQueryCache,
 	shouldPersistQuery,
@@ -23,16 +30,7 @@ const STORE_NAME = 'state';
 const DATABASE_VERSION = 3;
 // Version 3 migrates legacy records into the existing v2 record format.
 const SCHEMA_VERSION = 2;
-const OFFLINE_ACCESS_LEASE_MS = 7 * 24 * 60 * 60 * 1000;
-const OFFLINE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_OUTBOX_ENTRIES = 1_000;
-interface PersistedOfflineUser {
-	schemaVersion: number;
-	namespace: string;
-	cachedAt: number;
-	offlineAccessUntil: number;
-	user: User;
-}
 
 export type OfflineArticleMutationKind = 'read' | 'saved';
 
@@ -52,10 +50,7 @@ interface ArticleRevisionState {
 }
 
 interface ArticleStateMutationResponse {
-	success: true;
-	applied: boolean;
 	conflict: boolean;
-	duplicate: boolean;
 	read?: boolean;
 	saved?: boolean;
 	revision: number;
@@ -69,6 +64,7 @@ export interface OfflineMutationFlushResult {
 }
 
 let activeUserId: string | null = null;
+let activeSession = new AbortController();
 const flushPromises = new Map<string, Promise<OfflineMutationFlushResult[]>>();
 const memoryFallbackStore = new Map<string, unknown>();
 type WriteDurability = 'relaxed' | 'strict';
@@ -99,7 +95,7 @@ function revisionsKey(userId: string) {
 
 function openDatabase(): Promise<IDBDatabase | null> {
 	if (!('indexedDB' in globalThis)) return Promise.resolve(null);
-	return new Promise((resolve) => {
+	return new Promise<IDBDatabase | null>((resolve) => {
 		const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
 		request.onupgradeneeded = (event) => {
 			if (!request.result.objectStoreNames.contains(STORE_NAME)) {
@@ -111,7 +107,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
 		};
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => resolve(null);
-	});
+	}).catch(() => null);
 }
 
 /** Recover v1 records, including those stranded by the old v2 upgrade. */
@@ -177,34 +173,6 @@ function writeTransaction(database: IDBDatabase, durability: WriteDurability) {
 	}
 }
 
-async function writeValue(
-	key: string,
-	value: unknown,
-	durability: WriteDurability = 'relaxed',
-): Promise<boolean> {
-	const database = await openDatabase();
-	if (!database) {
-		memoryFallbackStore.set(key, value);
-		return true;
-	}
-	return new Promise((resolve) => {
-		const transaction = writeTransaction(database, durability);
-		transaction.objectStore(STORE_NAME).put(value, key);
-		transaction.oncomplete = () => {
-			database.close();
-			resolve(true);
-		};
-		transaction.onerror = () => {
-			database.close();
-			resolve(false);
-		};
-		transaction.onabort = () => {
-			database.close();
-			resolve(false);
-		};
-	});
-}
-
 /**
  * Atomically reads and updates one record. IndexedDB read/write transactions are
  * serialized across tabs, covering browsers that do not implement Web Locks.
@@ -213,28 +181,31 @@ async function updateValue<T>(
 	key: string,
 	update: (current: T | null) => T | null,
 	durability: WriteDurability = 'relaxed',
-): Promise<{ persisted: boolean; value: T | null }> {
+	signal?: AbortSignal,
+): Promise<boolean> {
 	const database = await openDatabase();
 	if (!database) {
+		if (signal?.aborted || 'indexedDB' in globalThis) return false;
 		const value = update((memoryFallbackStore.get(key) as T | undefined) ?? null);
 		if (value === null) memoryFallbackStore.delete(key);
 		else memoryFallbackStore.set(key, value);
 		notifyOfflineChange(key.includes(':query-cache:'));
-		return { persisted: true, value };
+		return true;
 	}
 	return new Promise((resolve, reject) => {
 		const transaction = writeTransaction(database, durability);
 		const store = transaction.objectStore(STORE_NAME);
 		const request = store.get(key);
-		let value: T | null = null;
-		let updaterFailed = false;
 		request.onsuccess = () => {
+			if (signal?.aborted) {
+				transaction.abort();
+				return;
+			}
 			try {
-				value = update((request.result as T | undefined) ?? null);
+				const value = update((request.result as T | undefined) ?? null);
 				if (value === null) store.delete(key);
 				else store.put(value, key);
 			} catch (error) {
-				updaterFailed = true;
 				transaction.abort();
 				database.close();
 				reject(error);
@@ -243,16 +214,13 @@ async function updateValue<T>(
 		transaction.oncomplete = () => {
 			database.close();
 			notifyOfflineChange(key.includes(':query-cache:'));
-			resolve({ persisted: true, value });
+			resolve(true);
 		};
 		transaction.onerror = () => {
 			database.close();
-			resolve({ persisted: false, value: null });
+			resolve(false);
 		};
-		transaction.onabort = () => {
-			database.close();
-			if (!updaterFailed) resolve({ persisted: false, value: null });
-		};
+		transaction.onabort = transaction.onerror;
 	});
 }
 
@@ -275,7 +243,8 @@ async function deleteValue(key: string, durability: WriteDurability = 'relaxed')
 			database.close();
 			resolve();
 		};
-	});
+		transaction.onabort = transaction.onerror;
+	}).catch(() => database.close());
 }
 
 async function withStoreLock<T>(name: string, operation: () => Promise<T>): Promise<T> {
@@ -285,20 +254,15 @@ async function withStoreLock<T>(name: string, operation: () => Promise<T>): Prom
 	return operation();
 }
 
-function isUser(value: unknown): value is User {
-	if (!value || typeof value !== 'object') return false;
-	const candidate = value as Partial<User>;
-	return (
-		typeof candidate.id === 'string' &&
-		typeof candidate.email === 'string' &&
-		typeof candidate.role === 'string' &&
-		typeof candidate.isActive === 'boolean'
-	);
-}
-
 export function setOfflineSessionUser(userId: string | null) {
-	activeUserId = userId;
+	if (userId !== activeUserId) {
+		activeSession.abort();
+		if (activeUserId) flushPromises.delete(activeUserId);
+		activeSession = new AbortController();
+		activeUserId = userId;
+	}
 	notifyOfflineChange();
+	return activeSession.signal;
 }
 
 export async function readOfflineSnapshot(
@@ -332,6 +296,8 @@ export async function readOfflineSnapshot(
 }
 
 export async function persistQueryClient(queryClient: QueryClient, userId: string): Promise<void> {
+	if (activeUserId !== userId) return;
+	const { signal } = activeSession;
 	const current = boundedState(
 		dehydrate(queryClient, {
 			shouldDehydrateMutation: () => false,
@@ -339,40 +305,46 @@ export async function persistQueryClient(queryClient: QueryClient, userId: strin
 				query.state.status === 'success' && shouldPersistQuery(query.queryKey),
 		}),
 	);
-	await withStoreLock(`cache:${userId}`, async () => {
-		await updateValue<PersistedQueryCache>(cacheKey(userId), (cached) => {
-			const newestByHash = new Map(
-				isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
-					? cached.state.queries.map((query) => [query.queryHash, query])
-					: [],
-			);
-			for (const query of current.queries) {
-				const existing = newestByHash.get(query.queryHash);
-				if (!existing || query.state.dataUpdatedAt >= existing.state.dataUpdatedAt) {
-					newestByHash.set(query.queryHash, query);
-				}
-			}
-			const state = boundedState({ mutations: [], queries: [...newestByHash.values()] });
-			return {
+	await withStoreLock(`cache:${userId}`, () =>
+		updateValue<PersistedQueryCache>(
+			cacheKey(userId),
+			(cached) => ({
 				schemaVersion: SCHEMA_VERSION,
 				ownerId: userId,
 				namespace: namespace(),
 				persistedAt: Date.now(),
-				state,
-			};
-		});
-	});
+				state: mergeQuerySnapshots(
+					isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION) ? cached : null,
+					current,
+				),
+			}),
+			'relaxed',
+			signal,
+		),
+	);
 }
 
 export async function restoreQueryClient(
 	queryClient: QueryClient,
 	userId: string,
 ): Promise<boolean> {
+	if (activeUserId !== userId) return false;
+	const { signal } = activeSession;
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return false;
+	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION))
+		return false;
 	const state = boundedState(cached.state);
 	if (state.queries.length === 0) {
-		await clearOfflineQueryCache(userId);
+		await updateValue(
+			cacheKey(userId),
+			(current) =>
+				isPersistedQueryCache(current, userId, namespace(), SCHEMA_VERSION) &&
+				boundedState(current.state).queries.length === 0
+					? null
+					: current,
+			'relaxed',
+			signal,
+		);
 		return false;
 	}
 	hydrate(queryClient, state);
@@ -383,12 +355,9 @@ export async function restoreQueryClient(
 export async function restoreOfflineArticle(queryClient: QueryClient, articleId: string) {
 	const userId = activeUserId;
 	if (!userId) return;
+	const { signal } = activeSession;
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (
-		activeUserId !== userId ||
-		!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
-	)
-		return;
+	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return;
 	const queries = boundedState(cached.state).queries.filter(
 		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
 	);
@@ -397,46 +366,40 @@ export async function restoreOfflineArticle(queryClient: QueryClient, articleId:
 
 export async function saveOfflineUser(user: User): Promise<void> {
 	const cachedAt = Date.now();
-	await writeValue(
+	await updateValue(
 		userKey(),
-		{
-			schemaVersion: SCHEMA_VERSION,
-			namespace: namespace(),
-			cachedAt,
-			offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
-			user,
-		} satisfies PersistedOfflineUser,
+		() =>
+			({
+				schemaVersion: SCHEMA_VERSION,
+				namespace: namespace(),
+				cachedAt,
+				offlineAccessUntil: cachedAt + OFFLINE_ACCESS_LEASE_MS,
+				user,
+			}) satisfies PersistedOfflineUser,
 		'strict',
+		activeSession.signal,
 	);
 }
 
 export async function loadOfflineUser(): Promise<User | null> {
 	if (await isSignedOutLocally()) return null;
 	const cached = await readValue<unknown>(userKey());
-	if (!cached || typeof cached !== 'object') return null;
-	const candidate = cached as Partial<PersistedOfflineUser>;
-	const now = Date.now();
-	if (
-		candidate.schemaVersion !== SCHEMA_VERSION ||
-		candidate.namespace !== namespace() ||
-		typeof candidate.cachedAt !== 'number' ||
-		typeof candidate.offlineAccessUntil !== 'number' ||
-		candidate.cachedAt > now + OFFLINE_CLOCK_SKEW_MS ||
-		now - candidate.cachedAt > OFFLINE_ACCESS_LEASE_MS ||
-		candidate.offlineAccessUntil < now ||
-		candidate.offlineAccessUntil - candidate.cachedAt >
-			OFFLINE_ACCESS_LEASE_MS + OFFLINE_CLOCK_SKEW_MS ||
-		!isUser(candidate.user)
-	) {
-		await deleteValue(userKey(), 'strict');
-		return null;
+	const reader = leasedUser(cached, namespace(), SCHEMA_VERSION);
+	if (cached && !reader) {
+		await updateValue(
+			userKey(),
+			(current) => (leasedUser(current, namespace(), SCHEMA_VERSION) ? current : null),
+			'strict',
+		);
 	}
-	return candidate.user;
+	return reader;
 }
 
-export async function setSignedOutLocally(value: boolean): Promise<void> {
-	if (value) await writeValue(signedOutKey(), { at: Date.now() }, 'strict');
-	else await deleteValue(signedOutKey(), 'strict');
+export async function setSignedOutLocally(value: boolean): Promise<boolean> {
+	if (!('indexedDB' in globalThis)) return false;
+	return updateValue(signedOutKey(), () => (value ? { at: Date.now() } : null), 'strict').catch(
+		() => false,
+	);
 }
 
 export async function isSignedOutLocally(): Promise<boolean> {
@@ -447,13 +410,24 @@ export async function clearOfflineQueryCache(userId = activeUserId): Promise<voi
 	if (userId) await deleteValue(cacheKey(userId));
 }
 
-export async function clearOfflineState(userId = activeUserId): Promise<void> {
-	const keys = [deleteValue(userKey(), 'strict')];
+export async function clearOfflineState(
+	userId = activeUserId,
+	{ keepPendingChanges = false } = {},
+): Promise<void> {
+	// A different tab may already have verified and cached the next account.
+	const clearIdentity = updateValue<PersistedOfflineUser>(
+		userKey(),
+		(current) => (current?.user?.id === userId ? null : current),
+		'strict',
+	).catch(() => false);
+	const keys: Promise<unknown>[] = [clearIdentity];
 	if (userId) {
 		dismissOfflineRejections(userId);
 		keys.push(deleteValue(cacheKey(userId)));
-		keys.push(deleteValue(outboxKey(userId), 'strict'));
-		keys.push(deleteValue(revisionsKey(userId), 'strict'));
+		if (!keepPendingChanges) {
+			keys.push(deleteValue(outboxKey(userId), 'strict'));
+			keys.push(deleteValue(revisionsKey(userId), 'strict'));
+		}
 	}
 	await Promise.all(keys);
 }
@@ -466,11 +440,12 @@ export async function queueArticleStateMutation(
 ): Promise<OfflineArticleMutation> {
 	const userId = activeUserId;
 	if (!userId) throw new Error('Cannot queue an offline mutation without an authenticated user');
+	const { signal } = activeSession;
 	return withStoreLock(`outbox:${userId}`, async () => {
 		const revisions =
 			(await readValue<Record<string, ArticleRevisionState>>(revisionsKey(userId))) ?? {};
 		let mutation: OfflineArticleMutation | null = null;
-		const result = await updateValue<OfflineArticleMutation[]>(
+		const persisted = await updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => {
 				const current = entries ?? [];
@@ -498,8 +473,10 @@ export async function queueArticleStateMutation(
 				return next;
 			},
 			'strict',
+			signal,
 		);
-		if (!result.persisted && 'indexedDB' in globalThis) {
+		signal.throwIfAborted();
+		if (!persisted) {
 			throw new Error('Offline storage is unavailable or full');
 		}
 		if (!mutation) throw new Error('Offline mutation could not be queued');
@@ -539,18 +516,19 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 	const userId = activeUserId;
 	if (!userId) return [];
 	if (typeof navigator !== 'undefined' && !navigator.onLine) return [];
+	const { signal } = activeSession;
 	const existingFlush = flushPromises.get(userId);
 	if (existingFlush) return existingFlush;
 	const flush = withStoreLock(`flush:${userId}`, async () => {
 		const results: OfflineMutationFlushResult[] = [];
 		let attempts = 0;
-		while (activeUserId === userId && attempts < MAX_OUTBOX_ENTRIES) {
+		while (!signal.aborted && attempts < MAX_OUTBOX_ENTRIES) {
 			attempts += 1;
 			const entries = ((await readValue<OfflineArticleMutation[]>(outboxKey(userId))) ?? []).sort(
 				(left, right) => left.createdAt - right.createdAt,
 			);
 			const mutation = entries[0];
-			if (!mutation) break;
+			if (!mutation || signal.aborted) break;
 			try {
 				const path = `/articles/${encodeURIComponent(mutation.articleId)}/${mutation.kind === 'read' ? 'read' : 'saved'}`;
 				const body =
@@ -568,11 +546,13 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 							};
 				const response = await apiFetch<ApiResponse<ArticleStateMutationResponse>>(path, {
 					method: 'PATCH',
+					signal,
 					body: JSON.stringify(body),
 				});
+				if (signal.aborted) break;
 				const authoritativeState =
 					mutation.kind === 'read' ? response.data.read : response.data.saved;
-				await updateValue<Record<string, ArticleRevisionState>>(
+				const recorded = await updateValue<Record<string, ArticleRevisionState>>(
 					revisionsKey(userId),
 					(revisions) => ({
 						...(revisions ?? {}),
@@ -582,11 +562,19 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 						},
 					}),
 					'strict',
+					signal,
 				);
-				if (response.data.conflict) {
-					await rebaseMutation(userId, mutation, response.data.revision);
-				} else {
-					await removeMutationIfCurrent(userId, mutation);
+				const acknowledged =
+					recorded &&
+					(await acknowledgeMutation(
+						userId,
+						mutation,
+						signal,
+						response.data.conflict ? response.data.revision : undefined,
+					));
+				if (!acknowledged) {
+					results.push({ mutation, status: 'queued' });
+					break;
 				}
 				results.push({
 					mutation,
@@ -595,16 +583,20 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 					revision: response.data.revision,
 				});
 			} catch (error) {
-				if (isTransientMutationError(error)) {
+				if (signal.aborted) break;
+				if (
+					isTransientMutationError(error) ||
+					!(await acknowledgeMutation(userId, mutation, signal))
+				) {
 					results.push({ mutation, status: 'queued' });
 					break;
 				}
-				await removeMutationIfCurrent(userId, mutation);
+				if (signal.aborted) break;
 				reportOfflineRejection(userId);
 				results.push({ mutation, status: 'discarded' });
 			}
 		}
-		return results;
+		return signal.aborted ? [] : results;
 	}).finally(() => {
 		if (flushPromises.get(userId) === flush) flushPromises.delete(userId);
 		notifyOfflineChange(false);
@@ -614,35 +606,28 @@ export async function flushOfflineArticleMutations(): Promise<OfflineMutationFlu
 	return flush;
 }
 
-async function removeMutationIfCurrent(userId: string, mutation: OfflineArticleMutation) {
-	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(
-			outboxKey(userId),
-			(entries) => (entries ?? []).filter((entry) => entry.mutationId !== mutation.mutationId),
-			'strict',
-		);
-	});
-}
-
-async function rebaseMutation(userId: string, mutation: OfflineArticleMutation, revision: number) {
-	await withStoreLock(`outbox:${userId}`, async () => {
-		await updateValue<OfflineArticleMutation[]>(
+async function acknowledgeMutation(
+	userId: string,
+	mutation: OfflineArticleMutation,
+	signal: AbortSignal,
+	conflictRevision?: number,
+) {
+	return withStoreLock(`outbox:${userId}`, () =>
+		updateValue<OfflineArticleMutation[]>(
 			outboxKey(userId),
 			(entries) => {
-				const current = (entries ?? []).find(
-					(entry) => entry.articleId === mutation.articleId && entry.kind === mutation.kind,
-				);
-				if (!current) return entries ?? [];
-				const rebased: OfflineArticleMutation = {
-					...current,
-					mutationId: crypto.randomUUID(),
-					baseRevision: revision,
-				};
-				return (entries ?? []).map((entry) =>
-					entry.mutationId === current.mutationId ? rebased : entry,
+				const pending = entries ?? [];
+				if (conflictRevision === undefined) {
+					return pending.filter((entry) => entry.mutationId !== mutation.mutationId);
+				}
+				return pending.map((entry) =>
+					entry.articleId === mutation.articleId && entry.kind === mutation.kind
+						? { ...entry, mutationId: crypto.randomUUID(), baseRevision: conflictRevision }
+						: entry,
 				);
 			},
 			'strict',
-		);
-	});
+			signal,
+		),
+	);
 }

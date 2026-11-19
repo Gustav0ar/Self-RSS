@@ -220,55 +220,70 @@ async function startMutableFeedServer(initialXml: string) {
 
 test.describe.configure({ mode: 'serial' });
 
-test('all-feeds refresh uses its queue snapshot without status polling', async ({ page }) => {
-	let statusRequests = 0;
-
+test('all-feeds refresh shows its queue snapshot and follows it through completion', async ({
+	page,
+}) => {
+	const requestId = 'e2e-refresh';
+	const queued = {
+		requestId,
+		queued: true,
+		running: false,
+		active: true,
+		scope: {},
+		queuedAt: new Date().toISOString(),
+	};
+	let latestReads = 0;
+	let trackedReads = 0;
+	await page.clock.install();
 	await page.route('**/api/v1/feeds/sync**', async (route) => {
-		if (route.request().method() !== 'POST') {
-			await route.continue();
-			return;
+		const request = route.request();
+		if (request.method() === 'POST') {
+			await route.fulfill({
+				status: 202,
+				json: { data: { accepted: true, alreadyQueued: false, requestId, status: queued } },
+			});
+		} else if (new URL(request.url()).searchParams.get('requestId') === requestId) {
+			trackedReads++;
+			const status =
+				trackedReads === 1
+					? queued
+					: {
+							...queued,
+							active: false,
+							queued: false,
+							status: 'completed',
+							newArticles: 2,
+							heartbeatAt: await page.evaluate(() => new Date().toISOString()),
+						};
+			await route.fulfill({ json: { data: status } });
+		} else {
+			latestReads++;
+			await route.fulfill({ json: { data: { queued: false, running: false, active: false } } });
 		}
-
-		await route.fulfill({
-			status: 202,
-			contentType: 'application/json',
-			body: JSON.stringify({
-				data: {
-					accepted: true,
-					alreadyQueued: false,
-					jobId: 'e2e-job',
-					status: {
-						queued: true,
-						running: false,
-						active: true,
-						jobId: 'e2e-job',
-						scope: {},
-						queuedAt: new Date().toISOString(),
-					},
-				},
-			}),
-		});
-	});
-
-	await page.route('**/api/v1/feeds/sync/status', async (route) => {
-		statusRequests += 1;
-		await route.fulfill({
-			status: 200,
-			contentType: 'application/json',
-			body: JSON.stringify({ data: { queued: false, running: false, active: false } }),
-		});
 	});
 
 	await loginThroughUi(page, 'reader@example.com', 'password123');
-	const initialStatusRequests = statusRequests;
-
+	await expect.poll(() => latestReads).toBeGreaterThan(0);
 	const refreshButton = page.getByRole('button', { name: 'Refresh', exact: true });
 	await refreshButton.click();
-
 	await expect(page.getByText('Refresh queued')).toBeVisible();
 	await expect(refreshButton).toBeDisabled();
 	await expect(refreshButton.locator('svg')).not.toHaveClass(/animate-spin/);
-	expect(statusRequests).toBe(initialStatusRequests);
+	expect(trackedReads).toBe(0);
+
+	const firstCheck = page.waitForResponse(
+		(response) => new URL(response.url()).searchParams.get('requestId') === requestId,
+	);
+	await page.clock.fastForward(60_000);
+	await (await firstCheck).finished();
+	await expect(page.getByText('Refresh queued')).toBeVisible();
+
+	await page.clock.fastForward(60_000);
+	await expect(page.getByText('Refresh complete')).toBeVisible();
+	await expect(page.getByText('2 new', { exact: true })).toBeVisible();
+	await expect(refreshButton).toBeEnabled();
+	await page.clock.fastForward(60_000);
+	expect(trackedReads).toBe(2);
 });
 
 test('an active backend refresh restores the loading state after page load', async ({ page }) => {
@@ -576,7 +591,16 @@ test('reader can toggle a read article back to unread', async ({ page, request }
 	await expect(page.getByRole('heading', { name: 'Alpha Launch' })).toBeVisible();
 
 	// The article is auto-marked read. Click "Mark unread" to flip it back.
+	const unreadWrite = page.waitForResponse(
+		(response) =>
+			response.request().method() === 'PATCH' &&
+			new URL(response.url()).pathname.endsWith('/read') &&
+			response.request().postDataJSON()?.read === false,
+	);
 	await page.getByRole('button', { name: 'Mark unread' }).click();
+	const acknowledgment = await unreadWrite;
+	expect(acknowledgment.ok()).toBe(true);
+	expect((await acknowledgment.json()).data).toMatchObject({ read: false, applied: true });
 	await expect(page.getByRole('button', { name: 'Mark read' })).toBeVisible();
 });
 

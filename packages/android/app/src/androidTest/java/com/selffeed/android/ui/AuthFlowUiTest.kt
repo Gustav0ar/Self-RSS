@@ -235,7 +235,7 @@ class AuthFlowUiTest {
             SelfFeedTheme {
                 SelfFeedApp(
                     state = appState,
-                    actions = noOpAppActions().copy(onToggleSaved = { id, saved -> bookmarkRequest = id to saved }),
+                    actions = noOpAppActions().copy(onToggleSaved = { article, saved -> bookmarkRequest = article.id to saved }),
                     articlePagingData = paging,
                 )
             }

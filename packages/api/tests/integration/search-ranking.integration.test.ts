@@ -334,6 +334,24 @@ describe('ArticleRepository searchByScope with FTS', () => {
 });
 
 describe('ArticleRepository state snapshots', () => {
+	it('marks a large unread backlog atomically and only advances changed revisions', async () => {
+		const { sqlite, repo } = await setupTestDatabase();
+		sqlite.exec(`
+			WITH RECURSIVE sequence(n) AS (
+				VALUES(1) UNION ALL SELECT n + 1 FROM sequence WHERE n < 65000
+			)
+			INSERT INTO articles(id, feed_id, guid, title, hash, fetched_at)
+			SELECT n, 'feed-1', n, 'Backlog', n, unixepoch() FROM sequence;
+		`);
+		expect(await repo.markAllRead('user-1', ['feed-1'])).toBe(65000);
+		expect(await repo.markAllRead('user-1', ['feed-1'])).toBe(0);
+		expect(
+			sqlite
+				.query('SELECT count(*) AS count FROM article_user_states WHERE read_revision = 1')
+				.get(),
+		).toEqual({ count: 65000 });
+	});
+
 	it('returns matching flags and revisions through list, detail and both search paths', async () => {
 		const { sqlite, repo, now } = await setupTestDatabase();
 		const articleId = 'f0000000-0000-0000-0000-000000000001';

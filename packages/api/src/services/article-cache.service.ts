@@ -375,7 +375,10 @@ export class ArticleCacheService {
 	 * This handles race conditions - if a user was reading during invalidation,
 	 * they'll detect the generation mismatch and fetch fresh data.
 	 */
-	async invalidateCache(userId: string, options: { cleanupScoped?: boolean } = {}): Promise<void> {
+	async invalidateCache(
+		userId: string,
+		options: { cleanupScoped?: boolean; updatedArticleIds?: string[] } = {},
+	): Promise<void> {
 		// Increment generation first - this marks cache as stale
 		// Any in-flight reads will detect the mismatch
 		await this.incrementGeneration(userId);
@@ -383,7 +386,11 @@ export class ArticleCacheService {
 		// Delete global cache
 		const cacheKey = CacheKeys.articleListCache(userId);
 		const metaKey = CacheKeys.articleListCacheMeta(userId);
-		await this.redis.del(cacheKey, metaKey);
+		await this.redis.del(
+			cacheKey,
+			metaKey,
+			...(options.updatedArticleIds ?? []).map((id) => CacheKeys.articleDetail(userId, id)),
+		);
 		if (options.cleanupScoped === false) return;
 
 		// Delete all feed/category scoped caches for this user. Use SCAN,
@@ -475,7 +482,7 @@ export class ArticleCacheService {
 	/**
 	 * Get current cache generation for a user
 	 */
-	private async getGeneration(userId: string): Promise<number> {
+	async getGeneration(userId: string): Promise<number> {
 		const genKey = CacheKeys.articleCacheGeneration(userId);
 		const gen = await this.redis.get(genKey);
 		return gen ? parseInt(gen, 10) : 0;
