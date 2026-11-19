@@ -456,6 +456,7 @@ export async function queueArticleStateMutation(
 ): Promise<OfflineArticleMutation> {
 	const userId = activeUserId;
 	if (!userId) throw new Error('Cannot queue an offline mutation without an authenticated user');
+	const { signal } = activeSession;
 	return withStoreLock(`outbox:${userId}`, async () => {
 		const revisions =
 			(await readValue<Record<string, ArticleRevisionState>>(revisionsKey(userId))) ?? {};
@@ -488,7 +489,9 @@ export async function queueArticleStateMutation(
 				return next;
 			},
 			'strict',
+			signal,
 		);
+		signal.throwIfAborted();
 		if (!persisted) {
 			throw new Error('Offline storage is unavailable or full');
 		}

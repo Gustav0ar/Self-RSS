@@ -309,6 +309,30 @@ describe('offline article mutation outbox', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
+	it('keeps the outbox cleared after logout while an earlier edit waits for the outbox lock', async () => {
+		setOfflineSessionUser('reader');
+		const release = Promise.withResolvers<void>();
+		const request = vi.fn((_name: string, run: () => Promise<unknown>) =>
+			release.promise.then(run),
+		);
+		vi.stubGlobal('navigator', { locks: { request } });
+		try {
+			const pending = queueArticleStateMutation('saved', 'article-1', true);
+			expect(request).toHaveBeenCalledOnce();
+			await setSignedOutLocally(true);
+			setOfflineSessionUser(null);
+			await clearOfflineState('reader');
+			await setSignedOutLocally(false);
+			setOfflineSessionUser('reader');
+			release.resolve();
+
+			await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+			expect(await getPendingArticleStateMutation('article-1', 'saved')).toBeNull();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it('does not restore a cleared revision when a PATCH completes after logout', async () => {
 		setOfflineSessionUser('reader');
 		await queueArticleStateMutation('read', 'article-1', true);
