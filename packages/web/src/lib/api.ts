@@ -106,19 +106,31 @@ function getDeviceName() {
 	return 'Web browser';
 }
 
-function shouldNotifyAuthLost(path: string) {
-	return !(
-		path.startsWith('/auth/login') ||
-		path.startsWith('/auth/register') ||
-		path.startsWith('/auth/registration-status') ||
-		path.startsWith('/auth/refresh')
-	);
-}
+const publicAuthPaths = new Set([
+	'/auth/login',
+	'/auth/register',
+	'/auth/registration-status',
+	'/auth/logout',
+	'/auth/refresh',
+]);
+const cookieWrites = new Set([
+	'/auth/login',
+	'/auth/register',
+	'/auth/logout',
+	'/auth/refresh',
+	'/auth/change-password',
+]);
+let pendingCookieWrite = Promise.resolve();
 
-function notifyAuthLost(path: string) {
-	if (!shouldNotifyAuthLost(path)) return;
-	clearTokens();
-	authLostHandler?.(AUTH_LOST_MESSAGE);
+// The browser applies Set-Cookie before fetch resolves, even after the initiating view closes.
+function withCookieLock<T>(operation: () => Promise<T>): Promise<T> {
+	if (navigator.locks) return navigator.locks.request('self-feed:auth-refresh', operation);
+	const result = pendingCookieWrite.then(operation);
+	pendingCookieWrite = result.then(
+		() => {},
+		() => {},
+	);
+	return result;
 }
 
 async function requestRefresh(generation: number): Promise<boolean> {
@@ -162,9 +174,7 @@ export async function refreshAccessToken(): Promise<boolean> {
 	const refresh = () => requestRefresh(generation);
 	const result = (async () => {
 		try {
-			return await (navigator.locks
-				? navigator.locks.request('self-feed:auth-refresh', refresh)
-				: refresh());
+			return await withCookieLock(refresh);
 		} catch {
 			if (generation === sessionGeneration) lastRefreshOutcome = 'unavailable';
 			return false;
@@ -203,13 +213,20 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 	const method = options.method?.toUpperCase() ?? 'GET';
 	const isMutation = method !== 'GET';
 
-	async function doFetch(): Promise<Response> {
+	const updateCookie =
+		isMutation &&
+		(cookieWrites.has(path) || (method === 'DELETE' && path.startsWith('/auth/sessions/')));
+	function sendRequest() {
+		throwIfAborted(options.signal);
+		if (!publicAuthPaths.has(path) && generation !== sessionGeneration) throw createAbortError();
 		return fetchWithTimeout(`${API_BASE}${path}`, {
 			...options,
 			headers,
 			credentials: 'include',
 		});
 	}
+
+	const doFetch = () => (updateCookie ? withCookieLock(sendRequest) : sendRequest());
 
 	let res: Response;
 	if (isMutation) {
@@ -218,7 +235,7 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 		res = await withRetry(doFetch, isRetriableResponse, options.signal);
 	}
 
-	if (res.status === 401 && generation === sessionGeneration) {
+	if (res.status === 401 && generation === sessionGeneration && !publicAuthPaths.has(path)) {
 		throwIfAborted(options.signal);
 		const refreshed = await refreshAccessToken();
 		throwIfAborted(options.signal);
@@ -232,6 +249,9 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 			);
 		}
 		if (refreshed) {
+			await releaseResponseBody(res);
+			throwIfAborted(options.signal);
+			if (generation !== sessionGeneration) throw createAbortError();
 			headers.Authorization = `Bearer ${accessToken}`;
 			res = await doFetch();
 		}
@@ -244,7 +264,8 @@ async function authorizedFetch(path: string, options: RequestInit = {}) {
 			generation === sessionGeneration &&
 			(refreshed || lastRefreshOutcome === 'rejected')
 		) {
-			notifyAuthLost(path);
+			clearTokens();
+			authLostHandler?.(AUTH_LOST_MESSAGE);
 		}
 	}
 

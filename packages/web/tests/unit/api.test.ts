@@ -108,6 +108,29 @@ describe('api module', () => {
 			}
 		});
 
+		it('waits for a pending sign-out to finish changing the cookie before signing in again', async () => {
+			const signOut = Promise.withResolvers<Response>();
+			const started = Promise.withResolvers<void>();
+			let cookie = 'old';
+			const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+				if (String(url).endsWith('/logout')) {
+					started.resolve();
+					const result = await signOut.promise;
+					cookie = '';
+					return result;
+				}
+				cookie = 'new';
+				return Response.json({});
+			});
+			const loggingOut = apiFetch('/auth/logout', { method: 'POST' });
+			await started.promise;
+			const loggingIn = apiFetch('/auth/login', { method: 'POST' });
+			signOut.resolve(Response.json({}));
+			await Promise.all([loggingOut, loggingIn]);
+			expect(fetch).toHaveBeenCalledTimes(2);
+			expect(cookie).toBe('new');
+		});
+
 		it('includes device metadata headers on refresh requests', async () => {
 			const fetchMock = vi.fn(
 				async () =>
@@ -150,6 +173,23 @@ describe('api module', () => {
 			expect(result).toBe(false);
 			expect(getAccessToken()).toBeNull();
 			expect(getLastRefreshOutcome()).toBe('rejected');
+		});
+
+		it('shows the login error directly when credentials are rejected', async () => {
+			const fetch = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValueOnce(
+					Response.json(
+						{ error: { code: 'UNAUTHORIZED', message: 'Invalid email or password' } },
+						{ status: 401 },
+					),
+				)
+				.mockResolvedValue(new Response(null, { status: 503 }));
+			await expect(apiFetch('/auth/login', { method: 'POST' })).rejects.toMatchObject({
+				status: 401,
+				message: 'Invalid email or password',
+			});
+			expect(fetch).toHaveBeenCalledOnce();
 		});
 
 		it('apiFetch retries after token refresh on 401', async () => {

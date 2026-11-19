@@ -44,7 +44,7 @@ vi.mock('../../src/lib/api', () => ({
 	setSessionOwner: vi.fn(),
 }));
 
-vi.mock('../../src/lib/offline-store', () => ({
+vi.mock('../../src/lib/offline-store', async (importOriginal) => ({
 	clearOfflineQueryCache: () => clearOfflineQueryCacheMock(),
 	clearOfflineState: (...args: unknown[]) => clearOfflineStateMock(...args),
 	flushOfflineArticleMutations: vi.fn(async () => []),
@@ -53,7 +53,8 @@ vi.mock('../../src/lib/offline-store', () => ({
 	persistQueryClient: vi.fn(async () => undefined),
 	restoreQueryClient: (...args: unknown[]) => restoreQueryClientMock(...args),
 	saveOfflineUser: (user: unknown) => saveOfflineUserMock(user),
-	setOfflineSessionUser: vi.fn(),
+	setOfflineSessionUser: (await importOriginal<typeof import('../../src/lib/offline-store')>())
+		.setOfflineSessionUser,
 	setSignedOutLocally: (value: boolean) => setSignedOutLocallyMock(value),
 }));
 
@@ -428,6 +429,41 @@ describe('AuthProvider', () => {
 		await screen.findByText('offline');
 		expect(screen.getByText('current@example.com')).toBeTruthy();
 		expect(clearOfflineStateMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'verify',
+		'restore',
+	])('honors another tab signing out during bootstrap (%s)', async (stage) => {
+		getAccessTokenMock.mockReturnValue('current-token');
+		const verify = Promise.withResolvers<{ data: ReturnType<typeof user> }>();
+		const restore = Promise.withResolvers<boolean>();
+		apiFetchMock.mockReturnValue(verify.promise);
+		restoreQueryClientMock.mockReturnValue(restore.promise);
+		renderWithQuery(
+			<AuthProvider>
+				<AuthActionsProbe />
+			</AuthProvider>,
+		);
+		await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith('/auth/me'));
+		const reader = { data: user('current@example.com') };
+		if (stage === 'restore') {
+			verify.resolve(reader);
+			await waitFor(() => expect(restoreQueryClientMock).toHaveBeenCalled());
+		}
+		fireEvent(
+			window,
+			new StorageEvent('storage', {
+				key: 'self-feed-auth-event',
+				newValue: JSON.stringify({ type: 'signed-out', userId: 'user-1', nonce: 'other-tab' }),
+			}),
+		);
+		await act(async () => {
+			verify.resolve(reader);
+			restore.resolve(true);
+		});
+		expect(await screen.findByText('logged-out')).toBeTruthy();
+		expect(saveOfflineUserMock).not.toHaveBeenCalled();
 	});
 
 	it('clears the session when another tab signs out the same account', async () => {

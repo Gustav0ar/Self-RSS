@@ -149,10 +149,7 @@ export function FeedView({
 		sort,
 		unreadOnly,
 	});
-	const searchArticles = useMemo(
-		() => searchData?.pages.flatMap((page) => page.data) ?? [],
-		[searchData?.pages],
-	);
+	const searchArticles = useMemo(() => dedupeArticlePages(searchData?.pages), [searchData?.pages]);
 	const readingQueue = searchTerm && searchArticles.length > 0 ? searchArticles : articles;
 	const articleIds = useMemo(() => readingQueue.map((a) => a.id), [readingQueue]);
 	const listArticleIds = useMemo(() => articles.map((a) => a.id), [articles]);

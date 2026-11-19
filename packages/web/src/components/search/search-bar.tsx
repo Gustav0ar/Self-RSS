@@ -2,6 +2,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
+import { dedupeArticlePages } from '@/components/articles/feed-view-model';
 import { QueryFailure } from '@/components/query-failure';
 import { usePreferences, usePrefetchArticle, useSearch } from '@/hooks/queries';
 import { useDebouncedSearchTerm } from '@/hooks/search-queries';
@@ -101,12 +102,12 @@ export function SearchBar({
 		return () => window.removeEventListener('keydown', handleKey);
 	}, [shortcutsEnabled]);
 
-	const resultIds = useMemo(
-		() => (debouncedQuery ? (results?.pages.flatMap((page) => page.data) ?? []) : []),
-		[debouncedQuery, results],
+	const matches = useMemo(
+		() => (debouncedQuery ? dedupeArticlePages(results?.pages) : []),
+		[debouncedQuery, results?.pages],
 	);
-	const renderedResults = useMemo(() => resultIds.slice(0, MAX_RENDERED_RESULTS), [resultIds]);
-	const reachedRenderLimit = resultIds.length >= MAX_RENDERED_RESULTS;
+	const renderedResults = useMemo(() => matches.slice(0, MAX_RENDERED_RESULTS), [matches]);
+	const reachedRenderLimit = matches.length >= MAX_RENDERED_RESULTS;
 	const showDropdown = isOpen && query.trim().length >= 2;
 	const activeArticle =
 		activeIndex >= 0 && activeIndex < renderedResults.length

@@ -452,7 +452,26 @@ describe('offline identity and query cache', () => {
 		expect(await loadOfflineUser()).toBeNull();
 	});
 
+	it('discards cache reads and writes that outlive the session', async () => {
+		setOfflineSessionUser('user-1');
+		const client = new QueryClient();
+		client.setQueryData(['feeds'], ['first']);
+		await persistQueryClient(client, 'user-1');
+		const restored = new QueryClient();
+		const restoring = restoreQueryClient(restored, 'user-1');
+		client.setQueryData(['feeds'], ['stale write']);
+		const writing = persistQueryClient(client, 'user-1');
+		setOfflineSessionUser(null);
+		setOfflineSessionUser('user-1');
+		await writing;
+		expect(await restoring).toBe(false);
+		expect(restored.getQueryData(['feeds'])).toBeUndefined();
+		expect(await restoreQueryClient(restored, 'user-1')).toBe(true);
+		expect(restored.getQueryData(['feeds'])).toEqual(['first']);
+	});
+
 	it('merges independent tab snapshots without crossing account boundaries', async () => {
+		setOfflineSessionUser('user-1');
 		const firstTab = new QueryClient();
 		firstTab.setQueryData(['articles', 'feed-1'], [{ id: 'article-1' }]);
 		await persistQueryClient(firstTab, 'user-1');

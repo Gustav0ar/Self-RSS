@@ -313,6 +313,11 @@ describe('SearchBar', () => {
 								heroImageUrl: null,
 							},
 						],
+						cursor: 'page-2',
+						hasMore: true,
+					},
+					{
+						data: [{ id: 'a-1', title: 'Alpha', feedTitle: 'Feed A' }],
 						cursor: null,
 						hasMore: false,
 					},

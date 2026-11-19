@@ -12,6 +12,7 @@ import {
 	boundedState,
 	cachedArticleIds,
 	isPersistedQueryCache,
+	mergeQuerySnapshots,
 	PERSISTED_QUERY_ROOTS,
 	type PersistedQueryCache,
 	shouldPersistQuery,
@@ -275,6 +276,7 @@ export function setOfflineSessionUser(userId: string | null) {
 		activeUserId = userId;
 	}
 	notifyOfflineChange();
+	return activeSession.signal;
 }
 
 export async function readOfflineSnapshot(
@@ -308,6 +310,8 @@ export async function readOfflineSnapshot(
 }
 
 export async function persistQueryClient(queryClient: QueryClient, userId: string): Promise<void> {
+	if (activeUserId !== userId) return;
+	const { signal } = activeSession;
 	const current = boundedState(
 		dehydrate(queryClient, {
 			shouldDehydrateMutation: () => false,
@@ -315,42 +319,36 @@ export async function persistQueryClient(queryClient: QueryClient, userId: strin
 				query.state.status === 'success' && shouldPersistQuery(query.queryKey),
 		}),
 	);
-	await withStoreLock(`cache:${userId}`, async () => {
-		await updateValue<PersistedQueryCache>(cacheKey(userId), (cached) => {
-			const newestByHash = new Map(
-				isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
-					? cached.state.queries.map((query) => [query.queryHash, query])
-					: [],
-			);
-			for (const query of current.queries) {
-				const existing = newestByHash.get(query.queryHash);
-				if (!existing || query.state.dataUpdatedAt >= existing.state.dataUpdatedAt) {
-					newestByHash.set(query.queryHash, query);
-				}
-			}
-			const state = boundedState({ mutations: [], queries: [...newestByHash.values()] });
-			return {
+	await withStoreLock(`cache:${userId}`, () =>
+		updateValue<PersistedQueryCache>(
+			cacheKey(userId),
+			(cached) => ({
 				schemaVersion: SCHEMA_VERSION,
 				ownerId: userId,
 				namespace: namespace(),
 				persistedAt: Date.now(),
-				state,
-			};
-		});
-	});
+				state: mergeQuerySnapshots(
+					isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION) ? cached : null,
+					current,
+				),
+			}),
+			'relaxed',
+			signal,
+		),
+	);
 }
 
 export async function restoreQueryClient(
 	queryClient: QueryClient,
 	userId: string,
 ): Promise<boolean> {
+	if (activeUserId !== userId) return false;
+	const { signal } = activeSession;
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return false;
-	const state = boundedState(cached.state);
-	if (state.queries.length === 0) {
-		await clearOfflineQueryCache(userId);
+	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION))
 		return false;
-	}
+	const state = boundedState(cached.state);
+	if (state.queries.length === 0) return false;
 	hydrate(queryClient, state);
 	return true;
 }
@@ -359,12 +357,9 @@ export async function restoreQueryClient(
 export async function restoreOfflineArticle(queryClient: QueryClient, articleId: string) {
 	const userId = activeUserId;
 	if (!userId) return;
+	const { signal } = activeSession;
 	const cached = await readValue<unknown>(cacheKey(userId));
-	if (
-		activeUserId !== userId ||
-		!isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)
-	)
-		return;
+	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return;
 	const queries = boundedState(cached.state).queries.filter(
 		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
 	);
@@ -384,6 +379,7 @@ export async function saveOfflineUser(user: User): Promise<void> {
 				user,
 			}) satisfies PersistedOfflineUser,
 		'strict',
+		activeSession.signal,
 	);
 }
 
@@ -405,7 +401,6 @@ export async function loadOfflineUser(): Promise<User | null> {
 			OFFLINE_ACCESS_LEASE_MS + OFFLINE_CLOCK_SKEW_MS ||
 		!isUser(candidate.user)
 	) {
-		await deleteValue(userKey(), 'strict');
 		return null;
 	}
 	return candidate.user;
@@ -433,7 +428,7 @@ export async function clearOfflineState(
 	// A different tab may already have verified and cached the next account.
 	const clearIdentity = updateValue<PersistedOfflineUser>(
 		userKey(),
-		(current) => (keepPendingChanges && current?.user?.id !== userId ? current : null),
+		(current) => (current?.user?.id === userId ? null : current),
 		'strict',
 	).catch(() => false);
 	const keys: Promise<unknown>[] = [clearIdentity];
