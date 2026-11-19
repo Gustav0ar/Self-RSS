@@ -1032,8 +1032,17 @@ class LocalStore internal constructor(
         }
     }
 
-    suspend fun searchArticles(query: String, categoryId: String?, limit: Int = 20): List<ArticleListItem> =
-        dao.searchArticles(query.trim(), categoryId, limit).map { it.toModel() }
+    suspend fun searchArticles(query: String, categoryIds: Set<String>?, limit: Int = 20): List<ArticleListItem> {
+        val term = query.trim()
+        if (categoryIds == null) return dao.searchArticles(term, emptyList(), true, limit).map { it.toModel() }
+        // Room expands IN lists into bind parameters. Bound each query on older SQLite versions.
+        val batches = categoryIds.chunked(900)
+        val matches = batches.flatMap { dao.searchArticles(term, it, false, limit) }
+        val ordered = if (batches.size <= 1) matches else matches.sortedWith(
+            compareByDescending<ArticleEntity> { it.displayedAt ?: it.publishedAt }.thenByDescending { it.id },
+        )
+        return ordered.take(limit).map { it.toModel() }
+    }
 
     override suspend fun clearAll() {
         database.withTransaction { clearActiveSnapshot() }

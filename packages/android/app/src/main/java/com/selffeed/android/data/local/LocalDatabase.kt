@@ -350,14 +350,14 @@ interface LocalStoreDao {
         """
         SELECT articles.* FROM articles
         LEFT JOIN feeds ON feeds.id = articles.feedId
-        WHERE (:categoryId IS NULL OR feeds.categoryId = :categoryId)
-          AND (articles.title LIKE '%' || :query || '%' COLLATE NOCASE
-               OR COALESCE(articles.excerpt, '') LIKE '%' || :query || '%' COLLATE NOCASE)
-        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC
+        WHERE (:allCategories OR feeds.categoryId IN (:categoryIds))
+          AND (instr(lower(articles.title), lower(:query)) > 0
+               OR instr(lower(articles.excerpt), lower(:query)) > 0)
+        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC, articles.id DESC
         LIMIT :limit
         """,
     )
-    suspend fun searchArticles(query: String, categoryId: String?, limit: Int): List<ArticleEntity>
+    suspend fun searchArticles(query: String, categoryIds: List<String>, allCategories: Boolean, limit: Int): List<ArticleEntity>
 
     @Query(
         """

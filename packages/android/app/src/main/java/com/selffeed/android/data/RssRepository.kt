@@ -353,8 +353,7 @@ class RssRepository @Inject constructor(
         try {
             fetchCategories(session)
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            account.requireCurrent(session)
+            requireSessionForCachedRead(session, e)
             account.commit(session) { offlineReadStore.readCategories() }.takeIf { it.isNotEmpty() } ?: throw e
         }
     }
@@ -437,8 +436,7 @@ class RssRepository @Inject constructor(
                 fetchFeeds(categoryId, session)
             }
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            account.requireCurrent(session)
+            requireSessionForCachedRead(session, e)
             val cached = account.commit(session) { offlineReadStore.readFeeds() }
             val filtered = filterCachedFeeds(cached, categoryId, session)
             filtered.takeIf { it.isNotEmpty() } ?: throw e
@@ -652,8 +650,7 @@ class RssRepository @Inject constructor(
             return@safeReadCall try {
                 fetchAndStoreArticle(articleId, session)
             } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                account.requireCurrent(session)
+                requireSessionForCachedRead(session, error)
                 articleStateProjectionMutex.withLock {
                     account.commit(session) {
                         offlineReadStore.readArticleDetail(articleId)?.let { localStore.applyPendingArticleState(it) }
@@ -698,8 +695,7 @@ class RssRepository @Inject constructor(
         try {
             fetchAndStoreArticle(articleId, session)
         } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            account.requireCurrent(session)
+            requireSessionForCachedRead(session, e)
             account.commit(session) { offlineReadStore.readArticleDetail(articleId) } ?: throw e
         }
     }
@@ -1025,12 +1021,12 @@ class RssRepository @Inject constructor(
                 }
                 throw IOException("Article state changed while searching. Please try again.")
             } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                account.requireCurrent(session)
+                requireSessionForCachedRead(session, error)
                 // A later page cannot restart the first local page under an old cursor.
                 if (!cursor.isNullOrBlank()) throw error
-                val cached = account.commit(session) { localStore.searchArticles(query, categoryId) }
-                if (cached.isEmpty()) throw error
+                val categoryIds = categoryId?.let { cachedCategoryScope(it, session) }
+                val cached = account.commit(session) { localStore.searchArticles(query, categoryIds) }
+                if (cached.isEmpty() && networkMonitor.online.value) throw error
                 ApiListResponse(data = cached, cursor = null, hasMore = false)
             }
         }
@@ -1073,8 +1069,7 @@ class RssRepository @Inject constructor(
             account.commit(session) { localStore.writeRemoteStats(remote, ticket) }
                 ?: throw IllegalStateException("Stats will be available after pending changes are synchronized")
         } catch (error: Exception) {
-            if (error is CancellationException || isAuthenticationLost(error)) throw error
-            account.requireCurrent(session)
+            requireSessionForCachedRead(session, error)
             account.commit(session) { localStore.readStats() } ?: stored ?: throw error
         }
     }
@@ -1224,6 +1219,11 @@ class RssRepository @Inject constructor(
             }
         }
         return result
+    }
+
+    private fun requireSessionForCachedRead(session: ApiSession, error: Exception) {
+        if (error is CancellationException || isAuthenticationLost(error)) throw error
+        account.requireCurrent(session)
     }
 
     private fun isAuthenticationLost(cause: Throwable?): Boolean =
@@ -1599,6 +1599,11 @@ class RssRepository @Inject constructor(
         session: ApiSession,
     ): List<FeedWithCounts> {
         if (categoryId == null) return feeds
+        val categoryIds = cachedCategoryScope(categoryId, session)
+        return feeds.filter { it.categoryId in categoryIds }
+    }
+
+    private suspend fun cachedCategoryScope(categoryId: String, session: ApiSession): Set<String> {
         val flattened = buildList {
             fun append(categories: List<CategoryWithCounts>) {
                 for (category in categories) {
@@ -1621,7 +1626,7 @@ class RssRepository @Inject constructor(
                 }
             }
         } while (changed)
-        return feeds.filter { it.categoryId in includedCategoryIds }
+        return includedCategoryIds
     }
 
     private data class SearchSnapshot(val payload: ApiListResponse<ArticleListItem>, val epoch: Long)

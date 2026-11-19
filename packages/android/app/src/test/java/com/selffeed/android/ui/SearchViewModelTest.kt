@@ -160,7 +160,7 @@ class SearchViewModelTest {
         assertEquals("next", viewModel.state.value.cursor)
 
         coEvery { repository.search("query", null, "next") } returns AppResult.Success(
-            ApiListResponse(listOf(sampleArticle("second", "f-1")), null, false),
+            ApiListResponse(listOf(sampleArticle("first", "f-1"), sampleArticle("second", "f-1")), null, false),
         )
         viewModel.loadMore()
 
