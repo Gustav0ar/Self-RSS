@@ -4,6 +4,12 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.UUID
 
+enum class ShortcutDestination(val shortcutId: String) {
+    UNREAD("shortcut_unread"),
+    SAVED("shortcut_saved"),
+    SEARCH("shortcut_search"),
+}
+
 sealed interface ExternalAction {
     val key: String
 
@@ -16,6 +22,10 @@ sealed interface ExternalAction {
 
     data class AddFeed(val feedUrl: String) : ExternalAction {
         override val key: String = "feed:$feedUrl"
+    }
+
+    data class OpenDestination(val destination: ShortcutDestination) : ExternalAction {
+        override val key: String = "destination:${destination.name}"
     }
 }
 
@@ -39,6 +49,18 @@ fun parseSelfFeedAction(raw: String): ExternalAction? {
             if (uri.path !in listOf("", "/") || parameters.keys != setOf("url")) return null
             val feedUrl = parameters["url"]?.let(::validatedHttpsUrl) ?: return null
             ExternalAction.AddFeed(feedUrl)
+        }
+        "unread" -> {
+            if (uri.path !in listOf("", "/") || parameters.isNotEmpty()) return null
+            ExternalAction.OpenDestination(ShortcutDestination.UNREAD)
+        }
+        "saved" -> {
+            if (uri.path !in listOf("", "/") || parameters.isNotEmpty()) return null
+            ExternalAction.OpenDestination(ShortcutDestination.SAVED)
+        }
+        "search" -> {
+            if (uri.path !in listOf("", "/") || parameters.isNotEmpty()) return null
+            ExternalAction.OpenDestination(ShortcutDestination.SEARCH)
         }
         else -> null
     }

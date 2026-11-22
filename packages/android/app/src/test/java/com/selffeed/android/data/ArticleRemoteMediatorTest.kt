@@ -32,7 +32,7 @@ class ArticleRemoteMediatorTest {
     fun setUp() {
         store = LocalStore(
             context = ApplicationProvider.getApplicationContext(),
-            moshi = NetworkModule.provideMoshi(),
+            json = NetworkModule.provideJson(),
         )
         runBlocking { store.clearAll() }
     }
@@ -217,7 +217,7 @@ class ArticleRemoteMediatorTest {
         assertTrue(mediator.load(LoadType.APPEND, pagingState()) is androidx.paging.RemoteMediator.MediatorResult.Error)
         assertTrue(savedIds().contains("removed-save"))
 
-        store = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideMoshi())
+        store = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideJson())
         val restarted = ArticleRemoteMediator(
             forceInitialRefresh = false,
             readRemoteKey = { store.readArticleRemoteKey(QUERY_KEY) },

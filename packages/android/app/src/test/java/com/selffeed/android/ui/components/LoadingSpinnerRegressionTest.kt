@@ -27,19 +27,11 @@ import org.robolectric.annotation.Config
  * The two indicators together rendered as a single static dot that
  * the user reported as a "frozen spinner" during refresh.
  *
- * The fix is to render the spinner exactly the way Material3 ships it
- * — `CircularProgressIndicator` for the bare loading screen, and
- * `PullToRefreshDefaults.Indicator` for the pull-to-refresh slot. The
- * default indicator owns the animation (arc sweep + global rotation);
- * we don't add any custom rotation transforms on top.
- *
- * This test guards the loading-screen path: a bare
+ * The loading screen uses a bare Material3 indicator so Material owns
+ * its animation. A bare
  * `CircularProgressIndicator` in `SelfFeedTheme` must render with
  * indeterminate progress semantics and must NOT carry a custom
- * `graphicsLayer { ... }` block modifier in its layout chain. The
- * `pullToRefresh` indicator slot is verified by the production code
- * itself: it uses `PullToRefreshDefaults.Indicator` directly, which
- * is Material3's own animated implementation.
+ * `graphicsLayer { ... }` block modifier in its layout chain.
  *
  * Note on animation testing: the test environment cannot verify that
  * the spinner actually animates. `captureToImage` is broken under

@@ -58,7 +58,7 @@ class AndroidMainThreadUiTest {
         val context = composeRule.activity.applicationContext
         val name = "reader-main-${UUID.randomUUID()}"
         val database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
-        val store = LocalStore(database, NetworkModule.provideMoshi())
+        val store = LocalStore(database, NetworkModule.provideJson())
         val gate = ReaderPreparationGate()
         val preparer = ReaderContentPreparer(gate)
         val ready = CopyOnWriteArrayList<String>()

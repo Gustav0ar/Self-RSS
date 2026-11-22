@@ -3,7 +3,7 @@ package com.selffeed.android.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-const val LOCAL_DATABASE_VERSION = 10
+const val LOCAL_DATABASE_VERSION = 12
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -185,6 +185,33 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
     }
 }
 
+/** Indexes cached article titles, excerpts, and offline bodies for full-text search. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS `article_search_fts` USING FTS4(" +
+                "`articleId` TEXT NOT NULL, `title` TEXT NOT NULL, `excerpt` TEXT NOT NULL, " +
+                "`contentText` TEXT NOT NULL, tokenize=unicode61)",
+        )
+        db.execSQL(
+            """
+            INSERT INTO `article_search_fts`(`articleId`, `title`, `excerpt`, `contentText`)
+            SELECT `id`, `title`, COALESCE(`excerpt`, ''), '' FROM `articles`
+            """.trimIndent(),
+        )
+    }
+}
+
+/** Adds a composite index for Paging 3's `WHERE queryKey = ? ORDER BY position` scans. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_article_query_entries_queryKey_position` " +
+                "ON `article_query_entries` (`queryKey`, `position`)",
+        )
+    }
+}
+
 private fun SupportSQLiteDatabase.createOwnershipTables() {
     execSQL("""
         CREATE TABLE IF NOT EXISTS current_local_owner (
@@ -242,4 +269,6 @@ val LOCAL_DATABASE_MIGRATIONS: Array<Migration> =
         MIGRATION_7_8,
         MIGRATION_8_9,
         MIGRATION_9_10,
+        MIGRATION_10_11,
+        MIGRATION_11_12,
     )

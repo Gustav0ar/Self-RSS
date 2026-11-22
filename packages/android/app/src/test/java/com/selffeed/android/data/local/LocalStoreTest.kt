@@ -46,7 +46,7 @@ class LocalStoreTest {
     // KotlinJsonAdapterFactory as a fallback for DTOs whose generated
     // adapters aren't on the test classpath. Without this fallback the
     // generated-adapter lookup fails for every payload in this test.
-    private val moshi = NetworkModule.provideMoshi()
+    private val moshi = NetworkModule.provideJson()
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val databaseName = "state-store-${UUID.randomUUID()}"
     private lateinit var database: LocalDatabase
@@ -81,7 +81,7 @@ class LocalStoreTest {
     @Test
     fun `a remote save receipt needs article metadata for Saved membership`() = runBlocking {
         store.updateArticleSavedState("unseen-saved", true, revision = 1)
-        assertEquals(true, store.readArticleState("unseen-saved")?.isSaved)
+        assertEquals(true, store.readArticleState("unseen-saved").isSaved)
         val page = store.savedArticlePagingSource(ownerId = null).load(
             PagingSource.LoadParams.Refresh<Int>(null, 30, false),
         ) as PagingSource.LoadResult.Page<Int, ArticleListItem>
@@ -499,6 +499,77 @@ class LocalStoreTest {
                 assertEquals(120, page.itemsBefore)
             }
         }
+    }
+
+    @Test
+    fun `offline FTS4 search matches cached full article bodies and prefix queries`() = runBlocking {
+        val a1 = sampleArticle("a-body").copy(
+            title = "Weekly Notes",
+            excerpt = "Short summary",
+        )
+        val a2 = sampleArticle("a-other").copy(
+            title = "Unrelated Post",
+            excerpt = "Nothing matching",
+        )
+        store.writeArticleRemotePage("fts-q", ApiListResponse(listOf(a1, a2), null, false), clearExisting = true)
+        store.writeArticleDetail(
+            ArticleDetail(
+                id = "a-body",
+                feedId = a1.feedId,
+                guid = "a-body",
+                title = a1.title,
+                excerpt = a1.excerpt,
+                contentText = "Deep dive into Wayland compositor scheduling and zero-copy DMA-BUF frames.",
+                hash = "h-body",
+                feedTitle = a1.feedTitle,
+                isRead = false,
+            ),
+        )
+
+        val bodyHits = store.searchArticles("wayland composit", categoryIds = null)
+        assertEquals(listOf("a-body"), bodyHits.map { it.id })
+
+        // Subsequent metadata page refreshes preserve indexed body text for offline search.
+        store.upsertOfflineArticles(listOf(a1.copy(title = "Weekly Notes Updated")))
+        val stillMatchesBody = store.searchArticles("dmabuf", categoryIds = null)
+        assertEquals(emptyList<String>(), stillMatchesBody.map { it.id })
+        val hyphenTokenHits = store.searchArticles("DMA-BUF", categoryIds = null)
+        assertEquals(listOf("a-body"), hyphenTokenHits.map { it.id })
+
+        // Clearing article details + lists prunes orphaned FTS4 entries cleanly.
+        store.clearArticleDetails()
+        store.clearArticleLists()
+        assertEquals(emptyList<String>(), store.searchArticles("wayland", categoryIds = null).map { it.id })
+        assertTrue(database.localStoreDao().readArticleSearchBodies(listOf("a-body")).isEmpty())
+    }
+
+    @Test
+    fun `saved unread paging retains articles read in the active query session until refresh`() = runBlocking {
+        val queryKey = ArticlePageQuery(unreadOnly = true, savedOnly = true).remoteKey()
+        val a1 = sampleArticle("s-1").copy(isSaved = true, isRead = false)
+        val a2 = sampleArticle("s-2").copy(isSaved = true, isRead = false)
+        store.writeArticleRemotePage(queryKey, ApiListResponse(listOf(a1, a2), null, false), clearExisting = true)
+
+        // Marking s-1 read keeps it visible in the active unread-only saved session.
+        store.queueReadStateMutation("s-1", read = true)
+        val duringSession = store.savedArticlePagingSource(
+            ownerId = null,
+            unreadOnly = true,
+            oldest = false,
+            queryKey = queryKey,
+        ).load(PagingSource.LoadParams.Refresh(null, 30, false)) as PagingSource.LoadResult.Page
+        assertEquals(listOf("s-2", "s-1"), duringSession.data.map { it.id })
+        assertEquals(true, duringSession.data.first { it.id == "s-1" }.isRead)
+
+        // Refreshing the saved unread query replaces membership and drops s-1.
+        store.writeArticleRemotePage(queryKey, ApiListResponse(listOf(a2), null, false), clearExisting = true)
+        val afterRefresh = store.savedArticlePagingSource(
+            ownerId = null,
+            unreadOnly = true,
+            oldest = false,
+            queryKey = queryKey,
+        ).load(PagingSource.LoadParams.Refresh(null, 30, false)) as PagingSource.LoadResult.Page
+        assertEquals(listOf("s-2"), afterRefresh.data.map { it.id })
     }
 
     @Test

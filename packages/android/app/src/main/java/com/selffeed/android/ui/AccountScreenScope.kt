@@ -15,6 +15,7 @@ import androidx.lifecycle.DEFAULT_ARGS_KEY
 import androidx.lifecycle.HasDefaultViewModelProviderFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.MutableCreationExtras
+import androidx.lifecycle.viewmodel.compose.rememberViewModelStoreProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -35,11 +36,13 @@ internal fun AccountScreenScope(ownerId: String?, restoring: Boolean = false, co
     })
     var renderedOwner by rememberSaveable { mutableStateOf(history.ownerId) }
     val stackOwner = renderedOwner
+    // Both the retained history and the account stores belong to the same activity across recreation.
+    val stores = rememberViewModelStoreProvider(key = "SelfFeedAccountStores")
     val entries = rememberDecoratedNavEntries(
         backStack = listOfNotNull(stackOwner),
         entryDecorators = listOf(
             rememberSaveableStateHolderNavEntryDecorator(),
-            rememberViewModelStoreNavEntryDecorator(removeViewModelStoreOnPop = { true }),
+            rememberViewModelStoreNavEntryDecorator(stores),
         ),
     ) { owner ->
         NavEntry(owner, contentKey = "account:$owner") { latestContent(owner) }

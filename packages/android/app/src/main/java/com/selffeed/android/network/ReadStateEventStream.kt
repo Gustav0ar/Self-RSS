@@ -1,6 +1,6 @@
 package com.selffeed.android.network
 
-import com.squareup.moshi.JsonAdapter
+import kotlinx.serialization.json.Json
 
 data class SseMessage(
     val eventName: String,
@@ -48,10 +48,10 @@ class SseEventParser {
     }
 }
 
-fun SseMessage.toReadStateEvent(adapter: JsonAdapter<ReadStateEventPayload>): ReadStateSyncEvent? {
+fun SseMessage.toReadStateEvent(json: Json): ReadStateSyncEvent? {
     if (eventName != "read-state") {
         return null
     }
 
-    return runCatching { adapter.fromJson(data)?.toEvent() }.getOrNull()
+    return runCatching { json.decodeFromString(ReadStateEventPayload.serializer(), data).toEvent() }.getOrNull()
 }

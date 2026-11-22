@@ -1,31 +1,29 @@
 package com.selffeed.android.network
 
-import com.squareup.moshi.Types
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class FeedMutationContractTest {
-    private val moshi = NetworkModule.provideMoshi()
-    private val envelopeType = Types.newParameterizedType(
-        ApiEnvelope::class.java,
-        FeedWithCounts::class.java,
-    )
-    private val adapter = moshi.adapter<ApiEnvelope<FeedWithCounts>>(envelopeType)
+    private val json = NetworkModule.provideJson()
+    private val envelopeSerializer = ApiEnvelope.serializer(FeedWithCounts.serializer())
 
     @Test
     fun `category reorder matches the existing API request and response`() {
         val request = ReorderCategoriesRequest(listOf(CategoryOrderUpdate("second", 0), CategoryOrderUpdate("first", 1)))
         assertEquals(
             """{"updates":[{"id":"second","sortOrder":0},{"id":"first","sortOrder":1}]}""",
-            moshi.adapter(ReorderCategoriesRequest::class.java).toJson(request),
+            json.encodeToString(ReorderCategoriesRequest.serializer(), request),
         )
-        assertEquals(2, moshi.adapter(ReorderCategoriesResponse::class.java).fromJson("""{"updatedCount":2}""")?.updatedCount)
+        assertEquals(
+            2,
+            json.decodeFromString(ReorderCategoriesResponse.serializer(), """{"updatedCount":2}""").updatedCount,
+        )
     }
 
     @Test
     fun `create and update response fixture decodes unread count`() {
-        val response = adapter.fromJson(
+        val response = json.decodeFromString(
+            envelopeSerializer,
             """
             {
               "data": {
@@ -50,8 +48,7 @@ class FeedMutationContractTest {
             """.trimIndent(),
         )
 
-        assertNotNull(response)
-        assertEquals("Example Feed", response?.data?.title)
-        assertEquals(7, response?.data?.unreadCount)
+        assertEquals("Example Feed", response.data.title)
+        assertEquals(7, response.data.unreadCount)
     }
 }

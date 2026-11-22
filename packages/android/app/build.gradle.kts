@@ -118,12 +118,16 @@ val releaseBackupCertificatePins = certificatePinsFromEnvironment("SELF_FEED_BAC
 
 android {
     namespace = "com.selffeed.android"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId = "com.selffeed.android"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = androidVersionCode
         versionName = androidVersionName
 
@@ -208,24 +212,44 @@ android {
     }
 
     sourceSets {
-        getByName("debug").assets.setSrcDirs(listOf("$projectDir/schemas"))
+        getByName("debug").assets.directories.apply {
+            clear()
+            add("$projectDir/schemas")
+        }
         // `testBuildType` uses this variant for both connected and local
         // tests, so Room's migration fixtures must be packaged here too.
-        getByName("deviceTest").assets.setSrcDirs(listOf("$projectDir/schemas"))
-        getByName("test").assets.setSrcDirs(listOf("$projectDir/schemas"))
-        getByName("test").kotlin.srcDir("src/sharedTest/java")
-        getByName("androidTest").assets.setSrcDirs(listOf("$projectDir/schemas", "$projectDir/src/androidTest/assets"))
-        getByName("androidTest").kotlin.srcDir("src/sharedTest/java")
-        getByName("performanceTest").assets.srcDir("src/androidTest/assets")
+        getByName("deviceTest").assets.directories.apply {
+            clear()
+            add("$projectDir/schemas")
+        }
+        getByName("test").assets.directories.apply {
+            clear()
+            add("$projectDir/schemas")
+        }
+        getByName("test").kotlin.directories.add("src/sharedTest/java")
+        getByName("androidTest").assets.directories.apply {
+            clear()
+            add("$projectDir/schemas")
+            add("$projectDir/src/androidTest/assets")
+        }
+        getByName("androidTest").kotlin.directories.add("src/sharedTest/java")
+        getByName("performanceTest").assets.directories.add("src/androidTest/assets")
     }
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.maxHeapSize = "1536m"
+        }
     }
 
     lint {
         disable += "MutableCollectionMutableState"
     }
+}
+
+baselineProfile {
+    dexLayoutOptimization = true
 }
 
 jacoco {
@@ -349,29 +373,29 @@ ksp {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2025.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
 
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.browser:browser:1.10.0")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-navigation3:2.10.0")
-    implementation("androidx.hilt:hilt-lifecycle-viewmodel-compose:1.3.0")
-    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-navigation3:2.11.1")
+    implementation("androidx.hilt:hilt-lifecycle-viewmodel-compose:1.4.0")
+    implementation("androidx.lifecycle:lifecycle-process:2.11.1")
     implementation("androidx.metrics:metrics-performance:1.0.0")
     // Installs the packaged Baseline Profile for sideloaded builds on devices
     // where the package installer does not do so automatically.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
-    implementation("androidx.navigation3:navigation3-runtime:1.1.4")
-    implementation("androidx.navigation3:navigation3-ui:1.1.4")
-    implementation("androidx.compose.material3.adaptive:adaptive-navigation3:1.3.0-rc01")
-    implementation("androidx.paging:paging-compose:3.5.0")
-    implementation("androidx.paging:paging-runtime-ktx:3.5.0")
-    implementation("androidx.webkit:webkit:1.17.0")
+    implementation("androidx.navigation3:navigation3-runtime:1.2.2")
+    implementation("androidx.navigation3:navigation3-ui:1.2.2")
+    implementation("androidx.compose.material3.adaptive:adaptive-navigation3")
+    implementation("androidx.paging:paging-compose:3.5.3")
+    implementation("androidx.paging:paging-runtime-ktx:3.5.3")
+    implementation("androidx.webkit:webkit:1.18.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -380,34 +404,35 @@ dependencies {
     implementation("com.google.android.material:material:1.14.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.13.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
 
-    implementation(platform("com.squareup.okhttp3:okhttp-bom:5.4.0"))
+    implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.1"))
     implementation("com.squareup.okhttp3:okhttp")
+    implementation("com.squareup.okhttp3:okhttp-brotli")
     implementation("com.squareup.okhttp3:logging-interceptor")
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
-    implementation("com.squareup.retrofit2:converter-moshi:3.0.0")
-    implementation("com.squareup.moshi:moshi:1.15.2")
-    // Codegen-only — runs at build time, not packaged in the APK.
-    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.2")
+    implementation("com.squareup.retrofit2:converter-kotlinx-serialization:3.0.0")
 
-    implementation("androidx.datastore:datastore-preferences:1.2.1")
+    baselineProfile(project(":macrobenchmark"))
+
+    implementation("androidx.datastore:datastore-preferences:1.3.0")
     // EncryptedFile + MasterKey are still part of security-crypto, but
     // SessionStore now uses them only at the file level (not via
     // EncryptedSharedPreferences).
     implementation("androidx.security:security-crypto:1.1.0")
-    implementation("androidx.work:work-runtime-ktx:2.11.2")
-    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
-    implementation("androidx.room:room-runtime:2.8.4")
-    implementation("androidx.room:room-ktx:2.8.4")
-    implementation("androidx.room:room-paging:2.8.4")
-    ksp("androidx.room:room-compiler:2.8.4")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
+    implementation("androidx.room:room-runtime:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
+    implementation("androidx.room:room-paging:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
     implementation("androidx.core:core-splashscreen:1.2.0")
-    implementation("com.google.dagger:hilt-android:2.59.2")
-    ksp("com.google.dagger:hilt-compiler:2.59.2")
-    implementation("androidx.hilt:hilt-work:1.3.0")
-    ksp("androidx.hilt:hilt-compiler:1.3.0")
+    implementation("com.google.dagger:hilt-android:2.60.1")
+    ksp("com.google.dagger:hilt-compiler:2.60.1")
+    implementation("androidx.hilt:hilt-work:1.4.0")
+    ksp("androidx.hilt:hilt-compiler:1.4.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
@@ -415,22 +440,20 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("io.mockk:mockk:1.14.11")
-    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("io.mockk:mockk:1.14.12")
+    testImplementation("org.robolectric:robolectric:4.18.1")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("androidx.test:runner:1.7.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")
-    testImplementation("androidx.room:room-testing:2.8.4")
-    testImplementation("androidx.work:work-testing:2.11.2")
+    testImplementation("androidx.room:room-testing:2.8.5")
+    testImplementation("androidx.work:work-testing:2.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("com.google.dagger:hilt-android-testing:2.59.2")
-    androidTestImplementation("androidx.room:room-testing:2.8.4")
-    androidTestImplementation("androidx.work:work-testing:2.11.2")
-    kspAndroidTest("com.google.dagger:hilt-compiler:2.59.2")
-
-    baselineProfile(project(":macrobenchmark"))
+    androidTestImplementation("com.google.dagger:hilt-android-testing:2.60.1")
+    androidTestImplementation("androidx.room:room-testing:2.8.5")
+    androidTestImplementation("androidx.work:work-testing:2.12.0")
+    kspAndroidTest("com.google.dagger:hilt-compiler:2.60.1")
 }

@@ -83,7 +83,7 @@ class ArticlesViewModel @Inject constructor(
     private val readStateManager: ReadStateManager,
     private val enrichmentManager: EnrichmentManager,
     private val articleWarmingManager: ArticleWarmingManager,
-    private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     // These subscriptions belong to this account, not the Activity's global chrome.
     val pendingArticleChanges: Flow<Int> = flow { emitAll(repository.observePendingArticleChanges()) }
@@ -329,6 +329,15 @@ class ArticlesViewModel @Inject constructor(
         refreshArticlePager()
     }
 
+    /** Opens the Unread launcher shortcut and protects hideRead from bootstrap preference overwrite. */
+    fun openUnreadShortcut() {
+        closeArticle()
+        setSavedOnly(false)
+        setScope(feedId = null, categoryId = null)
+        preserveRestoredFiltersOnBootstrap = true
+        setFilter(sort = null, hideRead = true)
+    }
+
     fun applyPreferences(defaultSort: String, hideRead: Boolean, autoMarkReadMode: String) {
         if (preserveRestoredFiltersOnBootstrap) {
             preserveRestoredFiltersOnBootstrap = false
@@ -345,6 +354,10 @@ class ArticlesViewModel @Inject constructor(
     fun refreshArticles() {
         stateProjection.restartObservation()
         refreshArticlePager()
+    }
+
+    fun scheduleOfflineContentSync() {
+        repository.scheduleOfflineContentSync()
     }
 
     fun warmVisibleArticles(articles: List<ArticleListItem>) {
@@ -565,9 +578,11 @@ class ArticlesViewModel @Inject constructor(
                     it.copy(errorMessage = PresentationText.resource(R.string.article_update_read_failed))
                 }
             },
-            onConfirm = { confirmed, previous ->
+            onConfirm = { _, _ ->
+                // Keep articles read during this session visible in the list (dimmed as
+                // read) even when hideRead is enabled, until the user explicitly refreshes
+                // the list or changes scope/filters.
                 saveReadingSession()
-                if (_state.value.hideRead && previous != confirmed) refreshArticlePager()
             },
         )
         saveReadingSession()
@@ -644,7 +659,6 @@ class ArticlesViewModel @Inject constructor(
     override fun onCleared() {
         cancelReaderWork()
         articleWarmingManager.setOnArticlesWarmed {}
-        super.onCleared()
     }
 
     private fun selectArticle(article: ArticleDetail) {

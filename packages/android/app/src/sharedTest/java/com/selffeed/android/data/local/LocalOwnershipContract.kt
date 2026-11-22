@@ -29,8 +29,7 @@ import java.util.UUID
 abstract class LocalOwnershipContract {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val name = "owned-storage-${UUID.randomUUID()}"
-    private val moshi = NetworkModule.provideMoshi()
-    private val detailAdapter = moshi.adapter(ArticleDetail::class.java)
+    private val json = NetworkModule.provideJson()
     private lateinit var database: LocalDatabase
     private lateinit var store: LocalStore
     private val dao get() = database.localStoreDao()
@@ -41,7 +40,7 @@ abstract class LocalOwnershipContract {
     fun openStore() {
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
-        store = LocalStore(database, moshi)
+        store = LocalStore(database, json)
     }
 
     @After
@@ -144,7 +143,7 @@ abstract class LocalOwnershipContract {
     @Test
     fun expiredLegacyPinsSurviveReadsCleanupAndRemoteBookmarkRemoval() = runBlocking {
         for (id in listOf("readable", "malformed", "orphan")) pin(id)
-        val original = detailAdapter.toJson(detail("readable"))
+        val original = json.encodeToString(ArticleDetail.serializer(), detail("readable"))
         dao.upsertArticleDetail(ArticleDetailEntity("readable", "feed", original, 1L))
         dao.upsertArticleDetail(ArticleDetailEntity("malformed", "feed", "{recoverable raw bytes", 2L))
         assertEquals("Offline text readable", store.readArticleDetail("readable")?.contentText)

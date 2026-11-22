@@ -49,6 +49,24 @@ class ExternalActionParserTest {
     }
 
     @Test
+    fun `parses launcher shortcut destinations`() {
+        assertEquals(
+            ExternalAction.OpenDestination(ShortcutDestination.UNREAD),
+            parseSelfFeedAction("selffeed://unread"),
+        )
+        assertEquals(
+            ExternalAction.OpenDestination(ShortcutDestination.SAVED),
+            parseSelfFeedAction("selffeed://saved"),
+        )
+        assertEquals(
+            ExternalAction.OpenDestination(ShortcutDestination.SEARCH),
+            parseSelfFeedAction("selffeed://search"),
+        )
+        assertNull(parseSelfFeedAction("selffeed://unread/extra"))
+        assertNull(parseSelfFeedAction("selffeed://saved?foo=bar"))
+    }
+
+    @Test
     fun `shared text only accepts one https url`() {
         assertEquals(
             ExternalAction.AddFeed("https://example.com/feed"),

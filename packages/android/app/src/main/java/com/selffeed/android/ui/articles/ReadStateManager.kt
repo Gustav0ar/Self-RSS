@@ -114,7 +114,7 @@ class ReadStateManager @Inject constructor(private val repository: ArticleReposi
             val local = (repository.localArticleState(rejection.articleId) as? AppResult.Success)?.data
             if (epoch != readActionEpoch) continue
             val matches = local?.lastReadMutationId == rejection.mutationId
-            if (matches && local?.isRead == null) stateProjection.restartObservation()
+            if (matches && local.isRead == null) stateProjection.restartObservation()
             return matches
         }
     }

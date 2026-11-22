@@ -1,7 +1,6 @@
 package com.selffeed.android.ui.screens
 
 import androidx.annotation.StringRes
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,54 +22,41 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.RssFeed
-import androidx.compose.material.icons.filled.MarkEmailRead
-import androidx.compose.material.icons.filled.MarkEmailUnread
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -79,22 +65,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -102,38 +84,24 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
-import androidx.paging.LoadState
-import androidx.paging.compose.LazyPagingItems
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
-import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.R
-import com.selffeed.android.network.ArticleListItem
-import com.selffeed.android.network.AuthSession
+import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.OpmlImportSummary
-import com.selffeed.android.network.StatsResponse
 import com.selffeed.android.network.SyncRun
-import com.selffeed.android.network.UserPreferences
-import com.selffeed.android.ui.ArticleSortPreference
-import com.selffeed.android.ui.AutoMarkReadPreference
-import com.selffeed.android.ui.DensityPreference
-import com.selffeed.android.ui.ReaderFontPreference
 import com.selffeed.android.ui.PresentationText
-import com.selffeed.android.ui.ThemePreference
 import com.selffeed.android.ui.feedLifecyclePresentation
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.theme.WarningAmber
 import com.selffeed.android.ui.utils.formatPublishedAt
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.distinctUntilChanged
 import java.time.Duration
 import java.time.Instant
 
@@ -476,7 +444,7 @@ fun FeedsTab(
                             onMove = { direction -> actions.onMoveCategory(category.id, direction) },
                             canMoveUp = !state.reorderingCategories && row.siblingIndex > 0,
                             canMoveDown = !state.reorderingCategories && row.siblingIndex < row.siblingCount - 1,
-                            menuModifier = Modifier.testTag("category-overflow-${category.id}"),
+                            overflowTestTag = "category-overflow-${category.id}",
                             onEdit = { managementDialog = FeedManagementDialog.CategoryEditor(category) },
                             onDelete = { managementDialog = FeedManagementDialog.DeleteCategory(category) },
                         )
@@ -621,7 +589,7 @@ private fun CategoryEditorDialog(
     onDismiss: () -> Unit,
     onSave: (name: String, parentCategoryId: String?) -> Unit,
 ) {
-    var name by remember(category?.id) { mutableStateOf(category?.name.orEmpty()) }
+    val name = remember(category?.id) { TextFieldState(category?.name.orEmpty()) }
     var parentCategoryId by remember(category?.id) { mutableStateOf(category?.parentCategoryId) }
 
     AlertDialog(
@@ -636,10 +604,9 @@ private fun CategoryEditorDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
+                    state = name,
                     label = { Text(stringResource(R.string.feeds_name)) },
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 CategoryPicker(
@@ -656,8 +623,8 @@ private fun CategoryEditorDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = name.trim().isNotEmpty(),
-                onClick = { onSave(name.trim(), parentCategoryId) },
+                enabled = name.text.toString().trim().isNotEmpty(),
+                onClick = { onSave(name.text.toString().trim(), parentCategoryId) },
             ) { Text(stringResource(R.string.action_save)) }
         },
     )
@@ -680,12 +647,12 @@ private fun FeedEditorDialog(
     onCancelReplacement: () -> Unit,
     onSave: (url: String, title: String?, categoryId: String, pollingIntervalMinutes: Int?) -> Unit,
 ) {
-    var url by remember(feed?.id, initialUrl) {
-        mutableStateOf(feed?.feedUrl ?: initialUrl.orEmpty())
+    val url = remember(feed?.id, initialUrl) {
+        TextFieldState(feed?.feedUrl ?: initialUrl.orEmpty())
     }
-    var title by remember(feed?.id) { mutableStateOf(feed?.title.orEmpty()) }
+    val title = remember(feed?.id) { TextFieldState(feed?.title.orEmpty()) }
     var categoryId by remember(feed?.id) { mutableStateOf(feed?.categoryId ?: categories.firstOrNull()?.id.orEmpty()) }
-    var pollingInterval by remember(feed?.id) { mutableStateOf(feed?.pollingIntervalMinutes?.toString().orEmpty()) }
+    val pollingInterval = remember(feed?.id) { TextFieldState(feed?.pollingIntervalMinutes?.toString().orEmpty()) }
     var showCreateCategory by remember(feed?.id) { mutableStateOf(false) }
     val firstCategoryId = categories.firstOrNull()?.id
     LaunchedEffect(feed?.id, firstCategoryId) {
@@ -693,8 +660,9 @@ private fun FeedEditorDialog(
             categoryId = firstCategoryId.orEmpty()
         }
     }
-    val validInterval = pollingInterval.toIntOrNull()?.takeIf { it in 5..1440 }
-    val canSave = url.trim().isNotEmpty() &&
+    val pollingIntervalText = pollingInterval.text.toString()
+    val validInterval = pollingIntervalText.toIntOrNull()?.takeIf { it in 5..1440 }
+    val canSave = url.text.toString().trim().isNotEmpty() &&
         (feed == null || (categoryId.isNotBlank() && validInterval != null))
     val healthIssue = feed?.let(::feedHealthIssue)
     val lifecycle = feed?.takeIf { it.lifecycleStatus != null }?.let(::feedLifecyclePresentation)
@@ -894,18 +862,21 @@ private fun FeedEditorDialog(
                     }
                 }
                 OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
+                    state = url,
                     label = { Text(stringResource(R.string.feeds_url)) },
                     supportingText = { Text(stringResource(R.string.feeds_url_hint)) },
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Uri,
+                    ),
                     modifier = Modifier.fillMaxWidth().testTag("feed-url-field"),
                 )
                 OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
+                    state = title,
                     label = { Text(stringResource(R.string.feeds_display_name_optional)) },
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 CategoryPicker(
@@ -918,12 +889,15 @@ private fun FeedEditorDialog(
                 )
                 if (feed != null) {
                     OutlinedTextField(
-                        value = pollingInterval,
-                        onValueChange = { pollingInterval = it.filter(Char::isDigit) },
+                        state = pollingInterval,
+                        inputTransformation = InputTransformation {
+                            if (!asCharSequence().all(Char::isDigit)) revertAllChanges()
+                        },
                         label = { Text(stringResource(R.string.feeds_refresh_interval_minutes)) },
                         supportingText = { Text(stringResource(R.string.feeds_refresh_interval_range)) },
-                        isError = pollingInterval.isNotEmpty() && validInterval == null,
-                        singleLine = true,
+                        isError = pollingIntervalText.isNotEmpty() && validInterval == null,
+                        lineLimits = TextFieldLineLimits.SingleLine,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -935,7 +909,14 @@ private fun FeedEditorDialog(
         confirmButton = {
             TextButton(
                 enabled = canSave,
-                onClick = { onSave(url.trim(), title.trim().ifBlank { null }, categoryId, validInterval) },
+                onClick = {
+                    onSave(
+                        url.text.toString().trim(),
+                        title.text.toString().trim().ifBlank { null },
+                        categoryId,
+                        validInterval,
+                    )
+                },
             ) {
                 Text(
                     stringResource(if (feed == null) R.string.action_add else R.string.action_save),
@@ -945,16 +926,15 @@ private fun FeedEditorDialog(
     )
 
     if (showCreateCategory) {
-        var categoryName by remember { mutableStateOf("") }
+        val categoryName = remember { TextFieldState() }
         AlertDialog(
             onDismissRequest = { showCreateCategory = false },
             title = { Text(stringResource(R.string.feeds_create_category)) },
             text = {
                 OutlinedTextField(
-                    value = categoryName,
-                    onValueChange = { categoryName = it },
+                    state = categoryName,
                     label = { Text(stringResource(R.string.feeds_category_name)) },
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
                 )
             },
             dismissButton = {
@@ -964,9 +944,9 @@ private fun FeedEditorDialog(
             },
             confirmButton = {
                 TextButton(
-                    enabled = categoryName.trim().isNotEmpty(),
+                    enabled = categoryName.text.toString().trim().isNotEmpty(),
                     onClick = {
-                        onCreateCategory(categoryName.trim())
+                        onCreateCategory(categoryName.text.toString().trim())
                         showCreateCategory = false
                     },
                 ) { Text(stringResource(R.string.action_create)) }
@@ -980,10 +960,10 @@ private fun CategoryPicker(
     @StringRes labelRes: Int,
     categoryId: String?,
     categories: List<CategoryWithCounts>,
-    includeRoot: Boolean = false,
     onCategorySelected: (String?) -> Unit,
-    onCreateCategory: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    includeRoot: Boolean = false,
+    onCreateCategory: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = categories.firstOrNull { it.id == categoryId }?.name
@@ -1130,7 +1110,7 @@ private fun DrawerItem(
     onMove: ((CategoryMoveDirection) -> Unit)? = null,
     canMoveUp: Boolean = false,
     canMoveDown: Boolean = false,
-    menuModifier: Modifier = Modifier,
+    overflowTestTag: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -1175,8 +1155,12 @@ private fun DrawerItem(
         }
         if (onEdit != null || onDelete != null) {
             FeedOverflowMenu(
-                onEdit = onEdit, onDelete = onDelete, onMove = onMove,
-                canMoveUp = canMoveUp, canMoveDown = canMoveDown, modifier = menuModifier,
+                onEdit = onEdit,
+                onDelete = onDelete,
+                onMove = onMove,
+                canMoveUp = canMoveUp,
+                canMoveDown = canMoveDown,
+                modifier = overflowTestTag?.let(Modifier::testTag) ?: Modifier,
             )
         }
     }
@@ -1265,8 +1249,20 @@ private fun FeedRow(
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val context = LocalContext.current
+        val faviconSizePx = with(LocalDensity.current) { 24.dp.roundToPx() }
+        val faviconRequest = remember(context, feed.faviconUrl, faviconSizePx) {
+            feed.faviconUrl?.let { url ->
+                ImageRequest.Builder(context)
+                    .data(url)
+                    .size(faviconSizePx)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .build()
+            }
+        }
         AsyncImage(
-            model = feed.faviconUrl,
+            model = faviconRequest,
             contentDescription = stringResource(R.string.feeds_icon_cd, feed.title),
             modifier = Modifier
                 .size(24.dp)

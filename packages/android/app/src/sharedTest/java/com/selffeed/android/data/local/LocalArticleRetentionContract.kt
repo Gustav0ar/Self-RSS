@@ -46,7 +46,7 @@ abstract class LocalArticleRetentionContract {
     private fun open() {
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
-        store = LocalStore(database, NetworkModule.provideMoshi())
+        store = LocalStore(database, NetworkModule.provideJson())
     }
 
     private fun reopen() { database.close(); open() }

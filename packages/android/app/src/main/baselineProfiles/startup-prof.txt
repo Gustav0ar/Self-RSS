@@ -1,0 +1,17 @@
+Lcom/selffeed/android/SelfFeedApplication;
+Lcom/selffeed/android/MainActivity;
+Lcom/selffeed/android/di/AppModule;
+Lcom/selffeed/android/data/SessionStore;
+Lcom/selffeed/android/data/RssRepository;
+Lcom/selffeed/android/data/local/LocalDatabase;
+Lcom/selffeed/android/data/local/LocalStore;
+Lcom/selffeed/android/network/NetworkModule;
+Lcom/selffeed/android/network/AndroidNetworkMonitor;
+Lcom/selffeed/android/ui/AppViewModel;
+Lcom/selffeed/android/ui/AuthViewModel;
+Lcom/selffeed/android/ui/ArticlesViewModel;
+Lcom/selffeed/android/ui/FeedsViewModel;
+Lcom/selffeed/android/ui/SelfFeedAppRouteKt;
+Lcom/selffeed/android/ui/SelfFeedAppKt;
+Lcom/selffeed/android/ui/screens/ArticlesTabKt;
+Lcom/selffeed/android/ui/theme/ThemeKt;

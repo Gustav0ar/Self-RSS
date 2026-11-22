@@ -41,18 +41,22 @@ import java.util.concurrent.CountDownLatch
 class NetworkModuleTest {
     @Test
     fun `state lookup rejects missing revision metadata instead of inventing revision zero`() {
-        val adapter = NetworkModule.provideMoshi().adapter(ArticleStateLookupResponse::class.java)
+        val json = NetworkModule.provideJson()
         val data = """{"states":[{"id":"article","isRead":false,"isSaved":true,"readRevision":2,"savedRevision":1}],"missingIds":["missing"]}"""
         assertEquals(
             ArticleStateLookupResponse(listOf(ArticleStateSnapshot("article", false, true, 2, 1)), listOf("missing")),
-            adapter.fromJson(data),
+            json.decodeFromString(ArticleStateLookupResponse.serializer(), data),
         )
-        org.junit.Assert.assertThrows(com.squareup.moshi.JsonDataException::class.java) {
-            adapter.fromJson(data.replace(",\"readRevision\":2", ""))
+        org.junit.Assert.assertThrows(kotlinx.serialization.SerializationException::class.java) {
+            json.decodeFromString(ArticleStateLookupResponse.serializer(), data.replace(",\"readRevision\":2", ""))
         }
-        assertEquals(ArticleStateLookupResponse(emptyList(), listOf("missing")), adapter.fromJson(
-            """{"states":[],"missingIds":["missing"]}""",
-        ))
+        assertEquals(
+            ArticleStateLookupResponse(emptyList(), listOf("missing")),
+            json.decodeFromString(
+                ArticleStateLookupResponse.serializer(),
+                """{"states":[],"missingIds":["missing"]}""",
+            ),
+        )
     }
 
     private fun stubSession(store: SessionStore) {
@@ -114,7 +118,7 @@ class NetworkModuleTest {
             }
         }.build()
         try {
-            val remote = AuthRemoteDataSource(NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store))
+            val remote = AuthRemoteDataSource(NetworkModule.provideApi(client, NetworkModule.provideJson(), store))
             val pending = CompletableFuture.supplyAsync {
                 runBlocking { remote.logout("old-access", "rss_refresh_token=old-refresh; Path=/api/v1/auth", store.currentSession()) }
             }
@@ -157,7 +161,7 @@ class NetworkModuleTest {
             ApplicationProvider.getApplicationContext(), store, coordinator,
         )
         try {
-            val api = NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store)
+            val api = NetworkModule.provideApi(client, NetworkModule.provideJson(), store)
             val pending = CompletableFuture.supplyAsync { runBlocking { runCatching { api.me() } } }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             every { store.isCurrentSession(any()) } returns false
@@ -209,7 +213,7 @@ class NetworkModuleTest {
         coEvery { store.setAccessToken(any()) } answers { accessToken.set(firstArg()) }
         coEvery { store.setRefreshCookie(any()) } answers { refreshCookie.set(firstArg()) }
         try {
-            val coordinator = SessionRefreshCoordinator(store, NetworkModule.provideMoshi())
+            val coordinator = SessionRefreshCoordinator(store, NetworkModule.provideJson())
             val pending = CompletableFuture.supplyAsync { coordinator.refreshAccessToken() }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             if (clearSession) {
@@ -236,25 +240,20 @@ class NetworkModuleTest {
     }
 
     @Test
-    fun `provideMoshi returns a Moshi with the boolean adapter installed`() {
-        val moshi = NetworkModule.provideMoshi()
-        val adapter = moshi.adapter(Boolean::class.java)
-        // Wrap each scalar in a JSON value so the adapter sees a
-        // top-level value, not a bare token (which Moshi rejects).
-        assertEquals(true, adapter.fromJson("1"))
-        assertEquals(false, adapter.fromJson("0"))
-        assertEquals(true, adapter.fromJson("true"))
-        assertEquals(false, adapter.fromJson("false"))
-        // Unknown strings are conservatively treated as false.
-        assertEquals(false, adapter.fromJson("\"nope\""))
+    fun `provideJson decodes mixed boolean encodings via FlexibleBooleanSerializer`() {
+        val json = NetworkModule.provideJson()
+        assertEquals(true, json.decodeFromString(FlexibleBooleanSerializer, "1"))
+        assertEquals(false, json.decodeFromString(FlexibleBooleanSerializer, "0"))
+        assertEquals(true, json.decodeFromString(FlexibleBooleanSerializer, "true"))
+        assertEquals(false, json.decodeFromString(FlexibleBooleanSerializer, "false"))
+        assertEquals(false, json.decodeFromString(FlexibleBooleanSerializer, "\"nope\""))
     }
 
     @Test
-    fun `provideMoshi round-trips booleans`() {
-        val moshi = NetworkModule.provideMoshi()
-        val adapter = moshi.adapter(Boolean::class.java)
-        assertEquals("true", adapter.toJson(true))
-        assertEquals("false", adapter.toJson(false))
+    fun `provideJson round-trips booleans`() {
+        val json = NetworkModule.provideJson()
+        assertEquals("true", json.encodeToString(FlexibleBooleanSerializer, true))
+        assertEquals("false", json.encodeToString(FlexibleBooleanSerializer, false))
     }
 
     @Test
@@ -284,6 +283,14 @@ class NetworkModuleTest {
             "10.0.22.22:3000",
             normalizeApiServerHost("http://10.0.22.22:3000/api/rss"),
         )
+    }
+
+    @Test
+    fun `an explicit HTTPS LAN server keeps its scheme and port through sign-in`() = runBlocking {
+        for (origin in listOf("https://192.168.1.5", "https://192.168.1.5:8443")) {
+            val stored = normalizeApiServerHost("$origin/api/v1/")
+            assertEquals("$origin/api/v1/auth/login", loginRequestUrlForConfiguredServer(stored).toString())
+        }
     }
 
     @Test
@@ -419,7 +426,7 @@ class NetworkModuleTest {
                     .build()
             }
             .build()
-        val api = NetworkModule.provideApi(client, NetworkModule.provideMoshi(), store)
+        val api = NetworkModule.provideApi(client, NetworkModule.provideJson(), store)
 
         val response = api.login(LoginRequest("reader@example.com", "password123"))
 
@@ -431,7 +438,15 @@ class NetworkModuleTest {
     fun `debug network security allows host only local development servers`() {
         val xml = androidAppFile("src/debug/res/xml/network_security_config.xml").readText()
 
-        assertTrue(xml.contains("""<base-config cleartextTrafficPermitted="true">"""))
+        val document = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(xml.byteInputStream())
+        val base = document.getElementsByTagName("base-config").item(0) as org.w3c.dom.Element
+        assertEquals("false", base.getAttribute("cleartextTrafficPermitted"))
+        val allowed = document.getElementsByTagName("domain-config").item(0) as org.w3c.dom.Element
+        assertEquals("true", allowed.getAttribute("cleartextTrafficPermitted"))
+        val hosts = allowed.getElementsByTagName("domain")
+        val names = (0 until hosts.length).map { hosts.item(it).textContent }
+        assertTrue(names.containsAll(listOf("localhost", "127.0.0.1", "10.0.2.2")))
     }
 
     @Test
@@ -584,7 +599,7 @@ class NetworkModuleTest {
             .path("/")
             .build()
         jar.saveFromResponse(parsedUrl, listOf(sessionCookie, refreshCookie))
-        coVerify { store.setRefreshCookie(match { it!!.contains("refresh-value") }) }
+        coVerify { store.setRefreshCookie(match { it.contains("refresh-value") }) }
     }
 
     @Test

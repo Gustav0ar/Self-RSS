@@ -1,6 +1,6 @@
 # SelfFeed Android App
 
-Jetpack Compose Android client for SelfFeed API, compiling with **API 37** and targeting **API 35**.
+Jetpack Compose Android client for SelfFeed API, compiling with **API 37.1** and targeting **API 37**.
 
 ## Highlights
 
@@ -46,7 +46,7 @@ packages/android/
 - Release builds require `SELF_FEED_API_BASE_URL` to be set to an HTTPS API endpoint.
 - Release certificate pinning is configured with pipe- or comma-separated `sha256/...` values in `SELF_FEED_CERTIFICATE_PINS` and `SELF_FEED_BACKUP_CERTIFICATE_PINS`.
 
-For physical-device debug testing, update the debug `API_BASE_URL` in `app/build.gradle.kts` to your LAN host IP.
+For USB debugging, run `adb reverse tcp:3000 tcp:3000` and enter `localhost:3000` at sign-in. For HTTP over Wi-Fi, add your development server’s exact hostname or IP to `src/debug/res/xml/network_security_config.xml` in the app module and rebuild. HTTPS servers work without an exception. On Android 17 and later, choose **Allow local server access** on the sign-in screen or in Settings to connect to a LAN server.
 
 ## Run
 
@@ -61,7 +61,7 @@ For physical-device debug testing, update the debug `API_BASE_URL` in `app/build
 
 Install these in Android Studio SDK Manager:
 
-- Android SDK Platform 37
+- Android SDK Platform 37.1
 - Android SDK Build-Tools (latest)
 - Android SDK Platform-Tools
 - Android Emulator
@@ -76,7 +76,7 @@ Install these in Android Studio SDK Manager:
 
 - API server is running on host at `http://localhost:3000`
 - Android debug build uses `http://10.0.2.2:3000/api/v1/`
-- If using a physical device, change `API_BASE_URL` to your LAN host IP
+- On a physical device, use the USB port forwarding or Wi-Fi setup above.
 
 ### Common Issues
 

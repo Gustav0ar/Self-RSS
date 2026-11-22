@@ -192,14 +192,14 @@ abstract class LocalDatabaseMigrationContract {
     @Test
     fun historicalOfflineDocumentRemainsReadableAfterUpgradeAndNormalCacheCleanup() = runBlocking {
         val name = "historical-offline-reopen"
-        val moshi = NetworkModule.provideMoshi()
+        val json = NetworkModule.provideJson()
         val detail = ArticleDetail(
             id = "legacy-offline", feedId = "feed", guid = "legacy", canonicalUrl = null,
             title = "Offline", excerpt = null, contentHtml = "<p>Previously saved offline</p>",
             contentText = "Previously saved offline", heroImageUrl = null, publishedAt = null,
             fetchedAt = "2026-01-01T00:00:00Z", hash = "legacy", feedTitle = "Local", isRead = false,
         )
-        val legacyJson = JSONObject(moshi.adapter(ArticleDetail::class.java).toJson(detail)).apply {
+        val legacyJson = JSONObject(json.encodeToString(ArticleDetail.serializer(), detail)).apply {
             remove("isSaved")
         }.toString()
         helper.createDatabase(name, 6).use { database ->
@@ -216,7 +216,7 @@ abstract class LocalDatabaseMigrationContract {
         val database = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), LocalDatabase::class.java, name)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
         try {
-            val store = LocalStore(database, moshi)
+            val store = LocalStore(database, json)
             val dao = database.localStoreDao()
             assertEquals(legacyJson, dao.readArticleDetail(detail.id)?.payloadJson)
             assertEquals(3L, dao.readArticleDetail(detail.id)?.writtenAt)
@@ -258,7 +258,7 @@ abstract class LocalDatabaseMigrationContract {
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
         try {
             val dao = database.localStoreDao()
-            val store = LocalStore(database, NetworkModule.provideMoshi())
+            val store = LocalStore(database, NetworkModule.provideJson())
             assertEquals("owner-8", store.readOwner()?.ownerId)
             for (id in listOf("row", "pending")) {
                 val state = requireNotNull(dao.readArticleStateRevision(id))
@@ -297,7 +297,7 @@ abstract class LocalDatabaseMigrationContract {
         val database = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), LocalDatabase::class.java, name)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
         try {
-            val store = LocalStore(database, NetworkModule.provideMoshi())
+            val store = LocalStore(database, NetworkModule.provideJson())
             val dao = database.localStoreDao()
             val state = requireNotNull(dao.readArticleStateRevision("article"))
             assertEquals("read-9", state.lastReadMutationId)
@@ -311,6 +311,59 @@ abstract class LocalDatabaseMigrationContract {
             assertEquals("{unchanged bytes", dao.readArticleDetail("article")?.payloadJson)
             assertEquals(null, store.readStats())
         } finally { database.close() }
+    }
+
+    @Test
+    fun version10MigratesToFts4PreservingExistingDataAndBackfillingSearchIndex() = runBlocking {
+        val name = "fts4-migration-v10"
+        helper.createDatabase(name, 10).use { database ->
+            database.execSQL("INSERT INTO current_local_owner VALUES ('current', 'owner-10', 'https://example.invalid/api/v1/', 'user-10')")
+            database.execSQL("""
+                INSERT INTO articles(id, feedId, feedTitle, title, excerpt, isRead, isSaved, contentStatus, contentVersion)
+                VALUES ('a-fts', 'feed-1', 'Feed', 'Quantum Networking', 'Distributed entanglement notes', 0, 1, 'full_ready', 2)
+            """.trimIndent())
+            database.execSQL("INSERT INTO article_details VALUES ('a-fts', 'feed-1', '{preserved detail bytes', 99)")
+        }
+        helper.runMigrationsAndValidate(name, LOCAL_DATABASE_VERSION, true, *LOCAL_DATABASE_MIGRATIONS).close()
+        val database = Room.databaseBuilder(ApplicationProvider.getApplicationContext(), LocalDatabase::class.java, name)
+            .addMigrations(*LOCAL_DATABASE_MIGRATIONS).build()
+        try {
+            val store = LocalStore(database, NetworkModule.provideJson())
+            assertEquals("owner-10", store.readOwner()?.ownerId)
+            assertEquals("{preserved detail bytes", database.localStoreDao().readArticleDetail("a-fts")?.payloadJson)
+            val hits = store.searchArticles("entanglement", categoryIds = null)
+            assertEquals(listOf("a-fts"), hits.map { it.id })
+        } finally { database.close() }
+    }
+
+    @Test
+    fun version11MigratesWithCompositeQueryPositionIndexAndPreservesEntries() {
+        val name = "composite-index-v11"
+        helper.createDatabase(name, 11).use { database ->
+            database.execSQL("INSERT INTO current_local_owner VALUES ('current', 'owner-11', 'https://example.invalid/api/v1/', 'user-11')")
+            database.execSQL("""
+                INSERT INTO articles(id, feedId, feedTitle, title, excerpt, isRead, isSaved, contentStatus, contentVersion)
+                VALUES ('a-1', 'feed-1', 'Feed', 'First', 'Excerpt', 0, 0, 'feed_ready', 1),
+                       ('a-2', 'feed-1', 'Feed', 'Second', 'Excerpt', 0, 1, 'feed_ready', 1)
+            """.trimIndent())
+            database.execSQL("""
+                INSERT INTO article_query_entries(queryKey, articleId, position)
+                VALUES ('q-default', 'a-2', 0), ('q-default', 'a-1', 1)
+            """.trimIndent())
+        }
+        helper.runMigrationsAndValidate(name, LOCAL_DATABASE_VERSION, true, *LOCAL_DATABASE_MIGRATIONS).use { database ->
+            database.query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_article_query_entries_queryKey_position'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+            }
+            database.query(
+                "SELECT articleId FROM article_query_entries WHERE queryKey = 'q-default' ORDER BY position ASC",
+            ).use { cursor ->
+                val ordered = buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+                assertEquals(listOf("a-2", "a-1"), ordered)
+            }
+        }
     }
 
     @Test
@@ -377,6 +430,7 @@ abstract class LocalDatabaseMigrationContract {
 private fun seedExistingTables(database: SupportSQLiteDatabase): Map<String, List<Map<String, String?>>> {
     val tables = database.query(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
+            "AND name NOT LIKE 'article_search_fts%' " +
             "AND name NOT IN ('room_master_table', 'android_metadata', 'article_pages') ORDER BY name",
     ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
     return tables.associateWith { table ->

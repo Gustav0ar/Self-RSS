@@ -2,23 +2,20 @@ package com.selffeed.android.data.local
 
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.StatsResponse
-import com.squareup.moshi.JsonClass
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.Types
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 /** Captured before dispatch, then checked inside the transaction accepting a remote count snapshot. */
+@ConsistentCopyVisibility
 data class CountSnapshotTicket internal constructor(val readEpoch: Long, val hadPendingReads: Boolean)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 internal data class ReadCountScope(val feedId: String?, val categoryIds: Set<String>, val includeStats: Boolean)
 
 /** Count updates share the caller's Room transaction with the corresponding outbox change. */
-internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
-    private val scopeAdapter = moshi.adapter(ReadCountScope::class.java)
-    private val statsAdapter = moshi.adapter(StatsResponse::class.java)
-    private val childrenAdapter = moshi.adapter<List<CategoryWithCounts>>(
-        Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
-    )
+internal class LocalCountStore(private val dao: LocalStoreDao, private val json: Json) {
+    private val childrenSerializer = ListSerializer(CategoryWithCounts.serializer())
 
     suspend fun capture(): CountSnapshotTicket = CountSnapshotTicket(
         state().readEpoch,
@@ -39,16 +36,19 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
         }
         dao.readCategories().forEach { root ->
             if (root.id == feed?.categoryId) categoryIds.add(root.id)
-            root.childrenJson?.let { runCatching { childrenAdapter.fromJson(it) }.getOrNull() }
+            root.childrenJson?.let { runCatching { json.decodeFromString(childrenSerializer, it) }.getOrNull() }
                 ?.forEach { findPath(it, setOf(root.id)) }
         }
         val current = state()
-        return scopeAdapter.toJson(ReadCountScope(feed?.id, categoryIds, current.totalRead != null && current.totalUnread != null))
+        return json.encodeToString(
+            ReadCountScope.serializer(),
+            ReadCountScope(feed?.id, categoryIds, current.totalRead != null && current.totalUnread != null),
+        )
     }
 
     /** Keep signed totals internally: clamping each edit would make a rejected edit change the baseline. */
     suspend fun recordLocalReadChange(scopeJson: String?, before: Boolean?, after: Boolean?) {
-        val scope = scopeJson?.let { runCatching { scopeAdapter.fromJson(it) }.getOrNull() }
+        val scope = scopeJson?.let { runCatching { json.decodeFromString(ReadCountScope.serializer(), it) }.getOrNull() }
         val delta = if (before == null || after == null || before == after) 0 else if (after) -1 else 1
         val current = state()
         dao.upsertCountState(current.copy(
@@ -63,11 +63,11 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
             children = category.children?.map(::adjust),
         )
         val changed = dao.readCategories().mapNotNull { category ->
-            val children = category.childrenJson?.let { runCatching { childrenAdapter.fromJson(it) }.getOrNull() }
+            val children = category.childrenJson?.let { runCatching { json.decodeFromString(childrenSerializer, it) }.getOrNull() }
             val adjusted = children?.map(::adjust)
             if (category.id !in scope.categoryIds && adjusted == children) null else category.copy(
                 unreadCount = category.unreadCount + if (category.id in scope.categoryIds) delta else 0,
-                childrenJson = adjusted?.let(childrenAdapter::toJson) ?: category.childrenJson,
+                childrenJson = adjusted?.let { json.encodeToString(childrenSerializer, it) } ?: category.childrenJson,
             )
         }
         if (changed.isNotEmpty()) dao.upsertCategories(changed)
@@ -75,9 +75,9 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
 
     /** A deleted feed no longer contributes to any count baseline, even if delivery later fails. */
     suspend fun forgetFeedScope(feedId: String) {
-        val retired = scopeAdapter.toJson(ReadCountScope(null, emptySet(), false))
+        val retired = json.encodeToString(ReadCountScope.serializer(), ReadCountScope(null, emptySet(), false))
         dao.readPendingReadStateMutations().forEach { mutation ->
-            val scope = mutation.countScopeJson?.let { runCatching { scopeAdapter.fromJson(it) }.getOrNull() }
+            val scope = mutation.countScopeJson?.let { runCatching { json.decodeFromString(ReadCountScope.serializer(), it) }.getOrNull() }
             if (scope?.feedId == feedId) {
                 dao.upsertPendingReadStateMutation(mutation.copy(countScopeJson = retired))
             }
@@ -94,7 +94,7 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
         val current = state()
         val accept = mayAccept(ticket)
         dao.upsertCountState(current.copy(
-            statsJson = statsAdapter.toJson(stats),
+            statsJson = json.encodeToString(StatsResponse.serializer(), stats),
             totalRead = if (accept) stats.totalRead else current.totalRead,
             totalUnread = if (accept) stats.totalUnread else current.totalUnread,
         ))
@@ -105,8 +105,9 @@ internal class LocalCountStore(private val dao: LocalStoreDao, moshi: Moshi) {
         val current = state()
         val read = current.totalRead ?: return null
         val unread = current.totalUnread ?: return null
-        return current.statsJson?.let { json ->
-            runCatching { statsAdapter.fromJson(json) }.getOrNull()?.copy(totalRead = read.coerceAtLeast(0), totalUnread = unread.coerceAtLeast(0))
+        return current.statsJson?.let { raw ->
+            runCatching { json.decodeFromString(StatsResponse.serializer(), raw) }.getOrNull()
+                ?.copy(totalRead = read.coerceAtLeast(0), totalUnread = unread.coerceAtLeast(0))
         }
     }
 

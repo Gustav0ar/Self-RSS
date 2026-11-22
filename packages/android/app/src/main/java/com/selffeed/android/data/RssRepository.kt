@@ -15,7 +15,9 @@ import androidx.paging.PagingData
 import androidx.paging.map
 import com.selffeed.android.data.local.LocalOwnerEntity
 import com.selffeed.android.data.local.LocalStore
+import com.selffeed.android.data.local.OfflineMediaCache
 import com.selffeed.android.data.local.OfflineReadStore
+import com.selffeed.android.data.local.extractArticleMediaUrls
 import com.selffeed.android.data.remote.ArticleRemoteDataSource
 import com.selffeed.android.data.remote.AuthRemoteDataSource
 import com.selffeed.android.data.remote.FeedRemoteDataSource
@@ -39,7 +41,7 @@ import com.selffeed.android.network.RecordProductAnalyticsEventsRequest
 import com.selffeed.android.network.SessionRefreshCoordinator
 import com.selffeed.android.network.SessionRefreshResult
 import com.selffeed.android.network.UpdatePreferencesRequest
-import com.squareup.moshi.Moshi
+import kotlinx.serialization.json.Json
 import coil3.ImageLoader
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
@@ -68,7 +70,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.atomic.AtomicBoolean
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -94,14 +99,49 @@ class RssRepository @Inject constructor(
     private val sessionStore: SessionStore,
     private val sessionRefreshCoordinator: SessionRefreshCoordinator,
     okHttpClient: OkHttpClient,
-    moshi: Moshi,
+    json: Json,
     private val localStore: LocalStore,
     private val offlineReadStore: OfflineReadStore,
     private val imageRequestContext: Context,
     private val imageLoader: ImageLoader,
     private val networkMonitor: NetworkMonitor,
     @param:ApplicationCoroutineScope private val refreshScope: CoroutineScope,
+    private val offlineMediaCache: OfflineMediaCache,
 ) : SelfFeedRepository {
+    internal constructor(
+        authRemote: AuthRemoteDataSource,
+        feedRemote: FeedRemoteDataSource,
+        articleRemote: ArticleRemoteDataSource,
+        searchRemote: SearchRemoteDataSource,
+        settingsRemote: SettingsRemoteDataSource,
+        sessionStore: SessionStore,
+        sessionRefreshCoordinator: SessionRefreshCoordinator,
+        okHttpClient: OkHttpClient,
+        json: Json,
+        localStore: LocalStore,
+        offlineReadStore: OfflineReadStore,
+        imageRequestContext: Context,
+        imageLoader: ImageLoader,
+        networkMonitor: NetworkMonitor,
+        refreshScope: CoroutineScope,
+    ) : this(
+        authRemote = authRemote,
+        feedRemote = feedRemote,
+        articleRemote = articleRemote,
+        searchRemote = searchRemote,
+        settingsRemote = settingsRemote,
+        sessionStore = sessionStore,
+        sessionRefreshCoordinator = sessionRefreshCoordinator,
+        okHttpClient = okHttpClient,
+        json = json,
+        localStore = localStore,
+        offlineReadStore = offlineReadStore,
+        imageRequestContext = imageRequestContext,
+        imageLoader = imageLoader,
+        networkMonitor = networkMonitor,
+        refreshScope = refreshScope,
+        offlineMediaCache = OfflineMediaCache(imageRequestContext),
+    )
     private class ArticleLoad(val result: Deferred<ArticleDetail>, var readers: Int = 0)
     private val articleLoadsLock = Any()
     private val articleLoads = mutableMapOf<Pair<ApiSession, String>, ArticleLoad>()
@@ -112,7 +152,7 @@ class RssRepository @Inject constructor(
     private val categoryReadMutex = Mutex()
     private val statsReadMutex = Mutex()
     private val runtime = RepositoryRuntime(
-        moshi = moshi,
+        json = json,
         maxMemoryCacheEntries = MAX_MEMORY_CACHE_ENTRIES,
         logTag = "RssRepository",
         apiBaseUrl = sessionStore::getApiBaseUrl,
@@ -121,7 +161,7 @@ class RssRepository @Inject constructor(
     )
     private val readStateStreamClient = ReadStateStreamClient(
         okHttpClient = okHttpClient,
-        moshi = moshi,
+        json = json,
         runtime = runtime,
     )
 
@@ -136,12 +176,17 @@ class RssRepository @Inject constructor(
     private val account = AccountSessionBoundary(sessionStore, localStore, ::clearSessionMemory)
     private val articleStateFlushMutex = Mutex()
     private val articleStateProjectionMutex = Mutex()
+    private val offlineContentSyncMutex = Mutex()
+    private val lastOfflineSyncCompletedAtMs = AtomicLong(0L)
 
     init {
         refreshScope.launch {
             networkMonitor.online.collect { online ->
                 if (online) {
-                    try { flushProductAnalyticsEvents() } catch (_: SessionChangedException) {
+                    try {
+                        flushProductAnalyticsEvents()
+                        if (isLoggedIn()) scheduleOfflineContentSync()
+                    } catch (_: SessionChangedException) {
                         // A departing account cancels its flush, not this process-wide observer.
                     }
                 }
@@ -166,7 +211,9 @@ class RssRepository @Inject constructor(
     override fun getApiBaseUrl(): String = sessionStore.getApiBaseUrl()
 
     override suspend fun setApiBaseUrl(rawBaseUrl: String) = runtime.safeCall {
-        account.replace { sessionStore.setApiBaseUrl(rawBaseUrl) }
+        account.replace { sessionStore.setApiBaseUrl(rawBaseUrl) }.also {
+            refreshScope.launch { runCatching { offlineMediaCache.clearAll() } }
+        }
     }
 
     override suspend fun registrationStatus() = safePublicCall { session ->
@@ -256,6 +303,7 @@ class RssRepository @Inject constructor(
         // Revocation carries the departed owner's explicit credentials and server.
         // It cannot delay local logout or acquire the next account's credentials.
         refreshScope.launch {
+            runCatching { offlineMediaCache.clearAll() }
             runCatching { authRemote.logout(credentials.second, credentials.third, credentials.first) }
                 .onFailure { runtime.debugLog("Remote logout could not be confirmed; local session was cleared") }
         }
@@ -498,7 +546,11 @@ class RssRepository @Inject constructor(
         if (status.active && status.requestId != null) {
             account.commit(session) { sessionStore.setFeedRefreshRequestId(status.requestId) }
         }
-        if (!status.active) invalidateFeedAndArticleRuntimeCaches(session)
+        if (!status.active && trackedRequestId != null) {
+            account.commit(session) { sessionStore.setFeedRefreshRequestId(null) }
+            invalidateFeedAndArticleRuntimeCaches(session)
+            scheduleOfflineContentSync(force = true)
+        }
         status
     }
 
@@ -586,13 +638,20 @@ class RssRepository @Inject constructor(
                                         val effective = localStore.writeArticleRemotePage(queryKey, payload, clearExisting)
                                         effective.forEach { projectCachedArticleState(it.id) }
                                         payload
+                                    }.also { payload ->
+                                        if (clearExisting && payload.data.isNotEmpty()) scheduleOfflineContentSync()
                                     }
                                 }
                             },
                         ),
                         pagingSourceFactory = {
                             if (query.savedOnly) {
-                                localStore.savedArticlePagingSource(session.ownerId, query.unreadOnly, oldest = query.sort == "oldest")
+                                localStore.savedArticlePagingSource(
+                                    ownerId = session.ownerId,
+                                    unreadOnly = query.unreadOnly,
+                                    oldest = query.sort == "oldest",
+                                    queryKey = queryKey,
+                                )
                             } else localStore.articlePagingSource(queryKey, session.ownerId)
                         },
                     ).flow,
@@ -856,16 +915,34 @@ class RssRepository @Inject constructor(
     }
 
     private fun cacheArticleImages(detail: ArticleDetail) {
-        sequenceOf(detail.heroImageUrl)
-            .plus(detail.media.asSequence().filter { it.type == "image" }.map { it.url })
+        val urls = extractArticleMediaUrls(detail, maxUrlsPerArticle = SAVED_ARTICLE_IMAGE_CACHE_LIMIT)
+        urls.forEach { imageUrl ->
+            imageLoader.enqueue(
+                ImageRequest.Builder(imageRequestContext)
+                    .data(imageUrl)
+                    .memoryCachePolicy(CachePolicy.DISABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .build(),
+            )
+        }
+        refreshScope.launch {
+            runCatching { offlineMediaCache.prefetchAll(urls, maxConcurrency = 3) }
+        }
+    }
+
+    private fun prefetchThumbnailsToDisk(imageUrls: Iterable<String?>, sizePx: Int, limit: Int) {
+        imageUrls
+            .asSequence()
             .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
             .distinct()
-            .take(SAVED_ARTICLE_IMAGE_CACHE_LIMIT)
+            .take(limit)
             .forEach { imageUrl ->
                 imageLoader.enqueue(
                     ImageRequest.Builder(imageRequestContext)
                         .data(imageUrl)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .size(sizePx)
+                        .scale(Scale.FILL)
+                        .memoryCachePolicy(CachePolicy.DISABLED)
                         .diskCachePolicy(CachePolicy.ENABLED)
                         .build(),
                 )
@@ -1365,6 +1442,7 @@ class RssRepository @Inject constructor(
             appOpenRecordedOn = null
         }
         runtime.clearCache()
+        lastOfflineSyncCompletedAtMs.set(0L)
         synchronized(articleLoadsLock) {
             articleLoads.values.forEach { it.result.cancel() }
             articleLoads.clear()
@@ -1421,6 +1499,220 @@ class RssRepository @Inject constructor(
     }) {
         is AppResult.Success -> result.data
         is AppResult.Error -> false
+    }
+
+    override fun scheduleOfflineContentSync() {
+        scheduleOfflineContentSync(force = false)
+    }
+
+    private fun scheduleOfflineContentSync(force: Boolean) {
+        if (!force) {
+            val completedAt = lastOfflineSyncCompletedAtMs.get()
+            if (completedAt > 0L && System.currentTimeMillis() - completedAt < OFFLINE_SYNC_COOLDOWN_MS) {
+                return
+            }
+        }
+        refreshScope.launch {
+            try {
+                OfflineContentSyncWorker.kickOnce(imageRequestContext, appendIfRunning = force)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                runtime.debugLog("Offline content sync scheduling unavailable; will retry on startup")
+            }
+        }
+    }
+
+    /**
+     * Incrementally pulls recent article metadata across all synced feeds,
+     * downloads missing full bodies into Room, and caches inline/hero media
+     * into [OfflineMediaCache] and Coil's persistent disk cache.
+     *
+     * Adapts concurrency and byte budgets to unmetered vs. metered networks and
+     * backs off cleanly on 429/5xx/disconnect so WorkManager can resume.
+     */
+    suspend fun syncOfflineContent(): Boolean = offlineContentSyncMutex.withLock {
+        val result = safeReadCall { session ->
+            runtime.requireNetwork()
+            val unmetered = networkMonitor.unmetered.value
+            val maxListPages = if (unmetered) OFFLINE_SYNC_UNMETERED_LIST_PAGES else OFFLINE_SYNC_METERED_LIST_PAGES
+            val maxDetails = if (unmetered) OFFLINE_SYNC_UNMETERED_DETAILS else OFFLINE_SYNC_METERED_DETAILS
+            val detailConcurrency = if (unmetered) OFFLINE_SYNC_UNMETERED_CONCURRENCY else OFFLINE_SYNC_METERED_CONCURRENCY
+            val mediaConcurrency = if (unmetered) OFFLINE_SYNC_UNMETERED_CONCURRENCY else OFFLINE_SYNC_METERED_CONCURRENCY
+            val maxAssetBytes = if (unmetered) {
+                OfflineMediaCache.DEFAULT_MAX_ASSET_BYTES
+            } else {
+                OfflineMediaCache.METERED_MAX_ASSET_BYTES
+            }
+            val maxMediaRunBytes = if (unmetered) {
+                OFFLINE_SYNC_UNMETERED_MEDIA_BYTES
+            } else {
+                OFFLINE_SYNC_METERED_MEDIA_BYTES
+            }
+            val recentDetailsForMedia = if (unmetered) {
+                OFFLINE_SYNC_UNMETERED_MEDIA_ARTICLES
+            } else {
+                OFFLINE_SYNC_METERED_MEDIA_ARTICLES
+            }
+
+            val maxMediaDurationMs = if (unmetered) {
+                OFFLINE_SYNC_UNMETERED_MEDIA_MAX_MS
+            } else {
+                OFFLINE_SYNC_METERED_MEDIA_MAX_MS
+            }
+
+            // 1. Keep feeds/categories fresh (reusing fresh in-memory cache) and cache feed favicons.
+            val feeds = runtime.getCached<List<FeedWithCounts>>("feeds:") ?: runCatching {
+                fetchFeeds(null, session)
+            }.getOrElse { error ->
+                if (error is CancellationException || isAuthenticationLost(error)) throw error
+                account.commit(session) { offlineReadStore.readFeeds() }
+            }
+            if (runtime.getCached<List<CategoryWithCounts>>("categories") == null) {
+                runCatching { fetchCategories(session) }.onFailure { error ->
+                    if (error is CancellationException || isAuthenticationLost(error)) throw error
+                }
+            }
+            val faviconSizePx = (24f * imageRequestContext.resources.displayMetrics.density).toInt().coerceAtLeast(24)
+            prefetchThumbnailsToDisk(feeds.map { it.faviconUrl }, faviconSizePx, OFFLINE_SYNC_FAVICON_LIMIT)
+
+            // 2. Pull recent article pages across all feeds + saved articles into Room.
+            val pulledArticles = mutableListOf<ArticleListItem>()
+            var cursor: String? = null
+            for (page in 0 until maxListPages) {
+                currentCoroutineContext().ensureActive()
+                if (!networkMonitor.online.value) return@safeReadCall false
+                val payload = fetchArticleSnapshot(
+                    session,
+                    fetch = {
+                        withRetry(session) {
+                            articleRemote.articles(
+                                feedId = null,
+                                categoryId = null,
+                                unreadOnly = false,
+                                savedOnly = false,
+                                sort = "latest",
+                                limit = OFFLINE_SYNC_PAGE_SIZE,
+                                cursor = cursor,
+                                session = session,
+                            )
+                        }
+                    },
+                ) { remotePage ->
+                    val effective = localStore.upsertOfflineArticles(remotePage.data)
+                    effective.forEach { projectCachedArticleState(it.id) }
+                    remotePage
+                }
+                pulledArticles += payload.data
+                if (!payload.hasMore || payload.cursor.isNullOrBlank()) break
+                cursor = payload.cursor
+            }
+
+            // Also ensure saved articles metadata is present in Room.
+            if (networkMonitor.online.value) {
+                runCatching {
+                    fetchArticleSnapshot(
+                        session,
+                        fetch = {
+                            withRetry(session) {
+                                articleRemote.articles(
+                                    feedId = null,
+                                    categoryId = null,
+                                    unreadOnly = false,
+                                    savedOnly = true,
+                                    sort = "latest",
+                                    limit = OFFLINE_SYNC_PAGE_SIZE,
+                                    cursor = null,
+                                    session = session,
+                                )
+                            }
+                        },
+                    ) { remotePage ->
+                        val effective = localStore.upsertOfflineArticles(remotePage.data)
+                        effective.forEach { projectCachedArticleState(it.id) }
+                        remotePage
+                    }
+                }.onSuccess { pulledArticles += it.data }
+                    .onFailure { error ->
+                        if (error is CancellationException || isAuthenticationLost(error)) throw error
+                    }
+            }
+
+            val thumbnailPixels = imageRequestContext.resources.getDimensionPixelSize(R.dimen.article_thumbnail_size)
+            prefetchThumbnailsToDisk(
+                pulledArticles.map { it.heroImageUrl },
+                thumbnailPixels,
+                if (unmetered) OFFLINE_SYNC_UNMETERED_THUMBNAIL_LIMIT else OFFLINE_SYNC_METERED_THUMBNAIL_LIMIT,
+            )
+
+            // 3. Incrementally fetch missing full bodies with bounded HTTP/2 concurrency.
+            val missingIds = account.commit(session) { localStore.articleIdsNeedingOfflineDetails(maxDetails) }
+            val fetchedDetails = java.util.Collections.synchronizedList(mutableListOf<ArticleDetail>())
+            val hitTransientFailure = AtomicBoolean(false)
+
+            if (missingIds.isNotEmpty()) {
+                val semaphore = Semaphore(detailConcurrency)
+                coroutineScope {
+                    missingIds.map { articleId ->
+                        async {
+                            if (hitTransientFailure.get() || !networkMonitor.online.value) return@async
+                            semaphore.withPermit {
+                                currentCoroutineContext().ensureActive()
+                                if (hitTransientFailure.get() || !networkMonitor.online.value) return@withPermit
+                                try {
+                                    fetchedDetails += fetchAndStoreArticle(articleId, session)
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: HttpException) {
+                                    if (isAuthenticationLost(error)) throw error
+                                    // Skip deleted/inaccessible articles permanently; pause on 429/5xx.
+                                    if (error.code() != 404 && error.code() != 403) {
+                                        hitTransientFailure.set(true)
+                                    }
+                                } catch (_: Exception) {
+                                    hitTransientFailure.set(true)
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+
+            // 4. Stream inline article media and hero images to OfflineMediaCache (zero bitmap decode).
+            if (networkMonitor.online.value) {
+                val recentCached = account.commit(session) {
+                    localStore.recentArticleDetailsForMediaCache(recentDetailsForMedia)
+                }
+                val detailsForMedia = (fetchedDetails.toList() + recentCached).distinctBy { it.id }
+                val mediaUrls = detailsForMedia.flatMap { detail ->
+                    extractArticleMediaUrls(
+                        detail = detail,
+                        maxUrlsPerArticle = if (unmetered) {
+                            OFFLINE_SYNC_UNMETERED_MEDIA_PER_ARTICLE
+                        } else {
+                            OFFLINE_SYNC_METERED_MEDIA_PER_ARTICLE
+                        },
+                    )
+                }
+                offlineMediaCache.prefetchAll(
+                    urls = mediaUrls,
+                    maxConcurrency = mediaConcurrency,
+                    maxAssetBytes = maxAssetBytes,
+                    maxTotalDownloadBytes = maxMediaRunBytes,
+                    maxDurationMs = maxMediaDurationMs,
+                )
+            }
+
+            val completed = !hitTransientFailure.get()
+            if (completed) {
+                lastOfflineSyncCompletedAtMs.set(System.currentTimeMillis())
+            }
+            completed
+        }
+        when (result) {
+            is AppResult.Success -> result.data
+            is AppResult.Error -> false
+        }
     }
 
     /** Missing saved bodies are durable work derived from Room, including after a process restart. */
@@ -1648,6 +1940,25 @@ class RssRepository @Inject constructor(
         const val MAX_MEMORY_CACHE_ENTRIES = 160
         const val ARTICLE_PAGE_SIZE = 30
         const val ARTICLE_PAGING_PREFETCH_DISTANCE = 8
+        const val OFFLINE_SYNC_COOLDOWN_MS = 2L * 60 * 1000
+        const val OFFLINE_SYNC_PAGE_SIZE = 50
+        const val OFFLINE_SYNC_UNMETERED_LIST_PAGES = 2
+        const val OFFLINE_SYNC_METERED_LIST_PAGES = 1
+        const val OFFLINE_SYNC_UNMETERED_DETAILS = 40
+        const val OFFLINE_SYNC_METERED_DETAILS = 20
+        const val OFFLINE_SYNC_UNMETERED_CONCURRENCY = 6
+        const val OFFLINE_SYNC_METERED_CONCURRENCY = 3
+        const val OFFLINE_SYNC_UNMETERED_MEDIA_BYTES = 15L * 1024 * 1024
+        const val OFFLINE_SYNC_METERED_MEDIA_BYTES = 4L * 1024 * 1024
+        const val OFFLINE_SYNC_UNMETERED_MEDIA_MAX_MS = 15_000L
+        const val OFFLINE_SYNC_METERED_MEDIA_MAX_MS = 8_000L
+        const val OFFLINE_SYNC_UNMETERED_MEDIA_ARTICLES = 30
+        const val OFFLINE_SYNC_METERED_MEDIA_ARTICLES = 15
+        const val OFFLINE_SYNC_UNMETERED_MEDIA_PER_ARTICLE = 8
+        const val OFFLINE_SYNC_METERED_MEDIA_PER_ARTICLE = 3
+        const val OFFLINE_SYNC_UNMETERED_THUMBNAIL_LIMIT = 50
+        const val OFFLINE_SYNC_METERED_THUMBNAIL_LIMIT = 25
+        const val OFFLINE_SYNC_FAVICON_LIMIT = 100
         const val MAX_OUTBOX_CONFLICTS = 10
         const val AUTH_LOST_MESSAGE = "Authentication was lost. Please sign in again."
         const val SESSION_REFRESH_UNAVAILABLE_MESSAGE =

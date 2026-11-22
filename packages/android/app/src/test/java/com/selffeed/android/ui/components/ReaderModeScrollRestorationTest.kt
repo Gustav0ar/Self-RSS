@@ -124,7 +124,7 @@ class ReaderModeScrollRestorationTest {
     fun memoryTrimKeepsRetainedTextReadyForReadingCompletion() {
         showReader(rich = false)
         composeRule.runOnIdle {
-            composeRule.activity.application.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
+            composeRule.activity.application.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
         }
         composeRule.waitForIdle()
         composeRule.onRoot().performTouchInput { swipeLeft() }

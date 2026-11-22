@@ -4,18 +4,16 @@
 -keep class com.selffeed.android.ui.ArticleListDestination { *; }
 -keep class com.selffeed.android.ui.ArticleDetailDestination { *; }
 
-# Moshi discovers KSP-generated adapters from the model's runtime class name.
-# AGP does not currently merge the keep rules emitted into KSP's generated
-# resource directory, so R8 otherwise removes those adapters and the minified
-# app crashes during dependency injection on startup.
--keepnames @com.squareup.moshi.JsonClass class com.selffeed.android.network.**
--keep class com.selffeed.android.network.**JsonAdapter { *; }
-
-# Moshi's generated adapters use reflection to call Kotlin's synthetic
-# default-argument constructors when an optional JSON field is absent. Those
-# constructor calls are invisible to R8. KSP emits exact keep rules under its
-# generated META-INF/proguard directory, but AGP does not merge that directory
-# for this app module, so preserve the equivalent members here.
--keepclassmembers @com.squareup.moshi.JsonClass class com.selffeed.android.network.** {
-    public synthetic <init>(...);
+# Retrofit 3 uses reflection on interface method generic return/parameter types
+# (e.g., ApiEnvelope<User>, ApiListResponse<ArticleListItem>) when resolving
+# kotlinx.serialization converters. Keep the runtime serializer companion hooks
+# on @Serializable DTOs in network and local packages under R8 strict full mode.
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+-if @kotlinx.serialization.Serializable class com.selffeed.android.**
+-keepclassmembers class <1> {
+    static <1>$Companion Companion;
+}
+-if @kotlinx.serialization.Serializable class com.selffeed.android.**
+-keepclassmembers class <1>$Companion {
+    kotlinx.serialization.KSerializer serializer(...);
 }

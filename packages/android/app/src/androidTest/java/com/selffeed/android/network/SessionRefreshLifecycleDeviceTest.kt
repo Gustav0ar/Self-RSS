@@ -59,7 +59,7 @@ class SessionRefreshLifecycleDeviceTest {
             }
         }).build()
         val server = StalledRefreshServer(blockBody)
-        val coordinator = SessionRefreshCoordinator(store, NetworkModule.provideMoshi()) { client }
+        val coordinator = SessionRefreshCoordinator(store, NetworkModule.provideJson()) { client }
         store.setApiBaseUrl("127.0.0.1:${server.port}")
         store.setRefreshCookie("rss_refresh_token=fixture-cookie; Path=/api/v1/auth")
         var published = false

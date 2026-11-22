@@ -18,6 +18,7 @@ import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.FeedSyncAllStatus
 import com.selffeed.android.network.OpmlImportSummary
 import com.selffeed.android.network.SyncResponse
+import kotlinx.serialization.json.JsonPrimitive
 import com.selffeed.android.network.UpdateCategoryRequest
 import com.selffeed.android.network.UpdateFeedRequest
 import io.mockk.coEvery
@@ -390,7 +391,7 @@ class FeedsViewModelTest {
         viewModel.syncAllFeeds()
         first.cancelAndJoin()
         assertFalse(queued.isCancelled)
-        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        queued.complete(AppResult.Success(SyncResponse(status = JsonPrimitive("queued"))))
         runCurrent()
         coVerify(exactly = 1) { repository.syncAllFeedsStatus() }
         assertTrue(viewModel.state.value.syncInBackground)
@@ -417,7 +418,7 @@ class FeedsViewModelTest {
         assertTrue(viewModel.state.value.syncInBackground)
         coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
 
-        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        queued.complete(AppResult.Success(SyncResponse(status = JsonPrimitive("queued"))))
         runCurrent()
         assertEquals(1L, viewModel.state.value.syncRevision)
         coVerify(exactly = 1) { repository.syncAllFeedsStatus() }
@@ -443,7 +444,7 @@ class FeedsViewModelTest {
         assertEquals(0L, viewModel.state.value.syncRevision)
         assertTrue(viewModel.state.value.syncInBackground)
 
-        queued.complete(AppResult.Success(SyncResponse(status = "queued")))
+        queued.complete(AppResult.Success(SyncResponse(status = JsonPrimitive("queued"))))
         runCurrent()
         assertEquals(1L, viewModel.state.value.syncRevision)
         assertEquals(2, statusCalls)
@@ -637,7 +638,7 @@ class FeedsViewModelTest {
         )
         coVerify(exactly = 0) { repository.syncAllFeedsStatus() }
 
-        delayedResponse.complete(AppResult.Success(SyncResponse(status = "queued")))
+        delayedResponse.complete(AppResult.Success(SyncResponse(status = JsonPrimitive("queued"))))
         runCurrent()
 
         assertEquals(1L, viewModel.state.value.syncRevision)
@@ -648,7 +649,7 @@ class FeedsViewModelTest {
     @Test
     fun `syncAllFeeds forwards the selected scope`() = runTest {
         coEvery { repository.syncAllFeeds("feed-1", "category-1") } returns
-            AppResult.Success(SyncResponse(status = "queued"))
+            AppResult.Success(SyncResponse(status = JsonPrimitive("queued")))
         val viewModel = FeedsViewModel(repository, opmlReader, opmlExportStore)
 
         viewModel.syncAllFeeds(feedId = "feed-1", categoryId = "category-1")

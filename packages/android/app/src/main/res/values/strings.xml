@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">SelfFeed</string>
 
     <!-- Shared actions -->
     <string name="action_add">Add</string>
     <string name="action_cancel">Cancel</string>
-    <string name="action_close">Close</string>
     <string name="action_confirm">Confirm</string>
     <string name="action_create">Create</string>
     <string name="action_done">Done</string>
@@ -37,6 +36,11 @@
     <string name="cd_back_to_article_list">Back to list</string>
     <string name="cd_open_feeds">Open feeds</string>
     <string name="cd_share_article">Share article</string>
+    <string name="cd_reader_typography">Reader appearance</string>
+    <string name="reader_typography_title">Reader appearance</string>
+    <string name="reader_reading_time_minutes">%1$d min read</string>
+    <string name="reader_image_close_cd">Close image</string>
+    <string name="reader_image_preview_cd">Zoomable article image</string>
     <string name="cd_offline">Offline</string>
     <string name="loading_reading_workspace">Loading your reading workspace</string>
 
@@ -77,6 +81,8 @@
     <string name="article_update_saved_failed">Failed to update saved state</string>
     <string name="article_save">Save article</string>
     <string name="article_remove_saved">Remove from saved</string>
+    <string name="article_swipe_save">Save</string>
+    <string name="article_swipe_unsave">Remove</string>
     <string name="article_empty_cd">No articles</string>
     <string name="article_empty_no_feeds_title">Start by adding a feed</string>
     <string name="article_empty_no_feeds_detail">Open Feeds to add a subscription or import an OPML file.</string>
@@ -89,16 +95,16 @@
     <string name="article_read_state_unread">Unread</string>
     <string name="article_accessibility_label">%1$s article: %2$s, from %3$s</string>
     <string name="reader_open_original">Open original article</string>
+    <string name="reader_next_article">Next article</string>
     <string name="reader_rich_mode">Rich</string>
     <string name="reader_text_mode">Text</string>
-    <string name="reader_unknown_author">Unknown author</string>
-    <string name="reader_media">Media</string>
-    <string name="reader_media_preview">Preview</string>
-    <string name="reader_embedded_media">Embedded Media</string>
     <string name="reader_loading_article">Loading %1$s</string>
     <string name="reader_no_text_content">No text content</string>
     <string name="share_opml_chooser">Share OPML</string>
     <string name="share_article_chooser">Share article</string>
+    <string name="share_action_copy_link">Copy link</string>
+    <string name="share_action_open_browser">Open in browser</string>
+    <string name="share_link_copied">Link copied</string>
     <string name="sync_finished">Sync finished</string>
     <plurals name="sync_refreshed_count">
         <item quantity="one">%d refreshed</item>
@@ -120,6 +126,7 @@
     <!-- Search -->
     <string name="search_hint">Search titles and article content</string>
     <string name="search_articles_cd">Search articles</string>
+    <string name="search_clear_cd">Clear search</string>
     <string name="search_scope_all">All</string>
     <string name="search_scope_current">Current</string>
     <string name="search_load_more">Load more results</string>
@@ -127,7 +134,7 @@
     <string name="search_loading_more">Loading more results…</string>
     <string name="search_no_matches">No matching articles</string>
     <string name="search_no_cached_matches">No matching cached articles</string>
-    <string name="search_limit_notice">Showing first %1$d results. Refine the search to narrow them.</string>
+    <string name="search_limit_notice" tools:ignore="PluralsCandidate">Showing first %1$d results. Refine the search to narrow them.</string>
     <plurals name="search_result_count">
         <item quantity="one">%d result</item>
         <item quantity="other">%d results</item>
@@ -169,6 +176,15 @@
     <string name="settings_sign_out_cd">Sign out</string>
     <string name="auth_logout_failed">Could not finish signing out. Please try again.</string>
     <string name="settings_logout">Logout</string>
+    <string name="settings_offline_storage">Offline storage</string>
+    <string name="settings_offline_storage_detail">Cached article images and media for offline reading.</string>
+    <string name="settings_offline_cache_summary" tools:ignore="PluralsCandidate">%1$s · %2$d cached assets</string>
+    <string name="settings_offline_cache_empty">No cached media yet</string>
+    <string name="settings_offline_download_now">Sync offline</string>
+    <string name="settings_offline_downloading">Syncing…</string>
+    <string name="settings_offline_download_started">Offline download queued</string>
+    <string name="settings_offline_clear_cache">Clear cache</string>
+    <string name="settings_offline_cache_cleared">Media cache cleared</string>
     <string name="settings_saved">Preferences saved</string>
     <string name="settings_sessions_title">Authenticated devices</string>
     <string name="settings_sessions_description">Review active app and browser sessions, then revoke any device you no longer use.</string>
@@ -244,7 +260,7 @@
     <string name="feeds_create_new_category">Create new category</string>
     <string name="feeds_picker_value">%1$s: %2$s</string>
     <string name="feeds_imported_title">OPML imported</string>
-    <string name="feeds_imported_summary">Added %1$d feeds in %2$d categories.</string>
+    <string name="feeds_imported_summary" tools:ignore="PluralsCandidate">Added %1$d feeds in %2$d categories.</string>
     <string name="feeds_more_options_cd">More options</string>
     <string name="feeds_icon_cd">Feed icon for %1$s</string>
     <string name="feeds_attention_cd">Feed needs attention. Open Edit for details.</string>
@@ -253,7 +269,7 @@
     <string name="feeds_health_last_attempt"> Last attempt %1$s.</string>
     <string name="feeds_waiting_progress">Waiting for progress</string>
     <string name="feeds_up_to_date">Feeds are up to date</string>
-    <string name="feeds_sync_checked">%1$d/%2$d checked</string>
+    <string name="feeds_sync_checked" tools:ignore="PluralsCandidate">%1$d/%2$d checked</string>
     <string name="feeds_sync_background">Refreshing feeds in the background</string>
     <string name="feeds_sync_background_progress">Refreshing feeds in background · %1$d/%2$d</string>
     <string name="feeds_sync_checking">Checking background refresh</string>
@@ -270,7 +286,7 @@
     <string name="feeds_removed">Feed removed</string>
     <string name="feeds_selected_validation_queued">Feed selected · validation queued</string>
     <string name="feeds_replacement_cancelled">Replacement cancelled · existing feed kept</string>
-    <string name="feeds_import_status">OPML imported: %1$d feeds, %2$d categories</string>
+    <string name="feeds_import_status" tools:ignore="PluralsCandidate">OPML imported: %1$d feeds, %2$d categories</string>
     <string name="feeds_export_ready">OPML export is ready to share</string>
     <string name="feeds_export_error">Unable to export OPML. Try again.</string>
     <plurals name="feeds_count">
@@ -339,11 +355,11 @@
     <string name="settings_registration_lock">Lock new registrations</string>
     <string name="stats_recent_syncs">Recent feed refreshes</string>
     <string name="stats_unknown_feed">Deleted feed</string>
-    <string name="stats_sync_outcome">%1$s · HTTP %2$s · %3$d items</string>
+    <string name="stats_sync_outcome" tools:ignore="PluralsCandidate">%1$s · HTTP %2$s · %3$d items</string>
     <string name="stats_retry_sync">Retry now</string>
     <string name="feeds_refresh_history_empty">No refresh attempts recorded yet.</string>
     <string name="feeds_refresh_history_error">Refresh history could not be loaded.</string>
-    <string name="feeds_refresh_history_duration">%1$s · %2$d items · %3$ds</string>
+    <string name="feeds_refresh_history_duration" tools:ignore="PluralsCandidate">%1$s · %2$d items · %3$ds</string>
     <string name="stats_sync_no_http">No HTTP status</string>
     <string name="feeds_refresh_status_failed">Failed</string>
     <string name="feeds_refresh_status_running">Running</string>
@@ -378,4 +394,16 @@
     <string name="action_move_down">Move down</string>
     <string name="feeds_category_moved_up">Category moved up</string>
     <string name="feeds_category_moved_down">Category moved down</string>
+
+    <!-- Launcher shortcuts -->
+    <string name="shortcut_unread_short">Unread</string>
+    <string name="shortcut_unread_long">Unread articles</string>
+    <string name="shortcut_saved_short">Saved</string>
+    <string name="shortcut_saved_long">Saved articles</string>
+    <string name="shortcut_search_short">Search</string>
+    <string name="shortcut_search_long">Search articles</string>
+    <string name="allow_local_server_access">Allow local server access</string>
+    <string name="local_server_permission_settings">Open local network permission settings</string>
+    <string name="settings_offline_download_failed">Couldn’t queue the offline download.</string>
+    <string name="settings_offline_clear_failed">Couldn’t clear all cached media.</string>
 </resources>

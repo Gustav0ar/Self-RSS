@@ -158,7 +158,7 @@ class CookieOnlyBootstrapTest {
         private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         private val executor = Executors.newCachedThreadPool()
         private val background = SupervisorJob()
-        private val moshi = NetworkModule.provideMoshi()
+        private val moshi = NetworkModule.provideJson()
         private val refreshClient = OkHttpClient.Builder().eventListener(object : EventListener() {
             override fun callStart(call: Call) {
                 assertNotEquals("The real refresh transport must not execute on Main", caller, Thread.currentThread())

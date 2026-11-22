@@ -1,45 +1,45 @@
 package com.selffeed.android.network
 
-import com.squareup.moshi.JsonClass
+import kotlinx.serialization.Serializable
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class LoginRequest(
     val email: String,
     val password: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class RegisterRequest(
     val email: String,
     val password: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ChangePasswordRequest(
     val currentPassword: String,
     val newPassword: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class CreateCategoryRequest(
     val name: String,
     val parentCategoryId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class UpdateCategoryRequest(
     val name: String? = null,
     val parentCategoryId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class CreateFeedRequest(
     val feedUrl: String,
     val categoryId: String,
     val title: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class UpdateFeedRequest(
     val feedUrl: String? = null,
     val categoryId: String? = null,
@@ -47,10 +47,10 @@ data class UpdateFeedRequest(
     val pollingIntervalMinutes: Int? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleStateLookupRequest(val articleIds: List<String>)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class MarkReadRequest(
     val read: Boolean,
     val source: String = "manual",
@@ -58,20 +58,20 @@ data class MarkReadRequest(
     val baseRevision: Int? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class SaveArticleRequest(
     val saved: Boolean,
     val mutationId: String? = null,
     val baseRevision: Int? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class MarkAllReadRequest(
     val feedId: String? = null,
     val categoryId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class UpdatePreferencesRequest(
     val theme: String? = null,
     val fontFamily: String? = null,
@@ -83,7 +83,7 @@ data class UpdatePreferencesRequest(
     val autoMarkReadMode: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class UpdateAppSettingsRequest(
     val registrationLocked: Boolean,
 )

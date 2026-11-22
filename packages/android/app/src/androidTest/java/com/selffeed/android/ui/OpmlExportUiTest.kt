@@ -120,7 +120,7 @@ class OpmlExportUiTest {
             }
             withContext(Dispatchers.Main) { shareOpmlFile(recipient, prepared.uri) }
             assertEquals(Intent.ACTION_CHOOSER, chooser!!.action)
-            val send = chooser!!.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+            val send = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
             assertEquals(Intent.ACTION_SEND, send.action)
             assertEquals("application/xml", send.type)
             assertEquals(prepared.uri, send.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java))

@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import androidx.lifecycle.SavedStateHandle
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
 import io.mockk.coEvery
@@ -43,7 +44,7 @@ class AppViewModelTest {
 
     @Test
     fun `chrome defaults to ARTICLES tab and online`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         val chrome = viewModel.chrome.value
         assertEquals(HomeTab.ARTICLES, chrome.activeTab)
         assertTrue(chrome.isOnline)
@@ -54,7 +55,7 @@ class AppViewModelTest {
 
     @Test
     fun `setTab updates active tab and clears messages`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.postError("oops")
         viewModel.postStatus("done")
         viewModel.setTab(HomeTab.SEARCH)
@@ -66,7 +67,7 @@ class AppViewModelTest {
 
     @Test
     fun `reader returns to the tab where it was opened`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
 
         viewModel.openReaderFrom(HomeTab.SEARCH)
         assertEquals(HomeTab.ARTICLES, viewModel.chrome.value.activeTab)
@@ -78,7 +79,7 @@ class AppViewModelTest {
 
     @Test
     fun `postError bumps the message and stores it`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.postError("first")
         assertEquals(PresentationText.dynamic("first"), viewModel.chrome.value.globalError)
         viewModel.postError("second")
@@ -87,7 +88,7 @@ class AppViewModelTest {
 
     @Test
     fun `postStatus null clears the message`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.postStatus("hello")
         assertEquals(PresentationText.dynamic("hello"), viewModel.chrome.value.globalStatus)
         viewModel.postStatus(null)
@@ -96,7 +97,7 @@ class AppViewModelTest {
 
     @Test
     fun `setSyncingFeeds toggles the flag`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.setSyncingFeeds(true)
         assertTrue(viewModel.chrome.value.isSyncingFeeds)
         viewModel.setSyncingFeeds(false)
@@ -105,7 +106,7 @@ class AppViewModelTest {
 
     @Test
     fun `clearMessages wipes both error and status`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.postError("err")
         viewModel.postStatus("ok")
         viewModel.clearMessages()
@@ -116,7 +117,7 @@ class AppViewModelTest {
 
     @Test
     fun `isOnline exposes the initial value from the repository`() = runTest {
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         // The stateIn initial is repository.isOnline() = true, so the flow
         // emits true immediately even without a collector.
         assertEquals(true, viewModel.isOnline.value)
@@ -126,14 +127,14 @@ class AppViewModelTest {
     fun `isOnline reflects a flow that starts offline`() = runTest {
         every { repository.isOnline() } returns false
         every { repository.observeOnline() } returns MutableStateFlow(false)
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         assertEquals(false, viewModel.isOnline.value)
     }
 
     @Test
     fun `wrong-server article waits for explicit switch confirmation`() = runTest {
         every { sessionStore.getApiBaseUrl() } returns "https://current.example/api/v1/"
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         val action = ExternalAction.OpenArticle(
             articleId = "00000000-0000-0000-0000-000000000001",
             serverOrigin = "https://other.example",
@@ -152,7 +153,7 @@ class AppViewModelTest {
     @Test
     fun `cancelling a server switch discards the untrusted action`() = runTest {
         every { sessionStore.getApiBaseUrl() } returns "https://current.example/api/v1/"
-        val viewModel = AppViewModel(repository, sessionStore)
+        val viewModel = AppViewModel(repository, sessionStore, SavedStateHandle())
         viewModel.offerExternalAction(
             ExternalAction.OpenArticle(
                 articleId = "00000000-0000-0000-0000-000000000001",

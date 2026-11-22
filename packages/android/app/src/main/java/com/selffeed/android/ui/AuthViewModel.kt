@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -98,6 +99,14 @@ class AuthViewModel @Inject constructor(
                     registrationEnabled = enabled,
                 )
             }
+        }
+    }
+
+    fun refreshRegistrationStatus() {
+        if (_state.value.isAuthenticated || _state.value.loading) return
+        launchAuthAction {
+            val enabled = loadRegistrationEnabled()
+            _state.update { it.copy(registrationEnabled = enabled) }
         }
     }
 

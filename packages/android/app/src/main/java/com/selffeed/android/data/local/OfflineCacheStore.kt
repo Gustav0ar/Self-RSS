@@ -7,11 +7,10 @@ import com.selffeed.android.BuildConfig
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
 
@@ -29,45 +28,40 @@ import java.io.IOException
  */
 class OfflineCacheStore(
     context: Context,
-    moshi: Moshi,
+    private val json: Json,
     private val maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
     private val maxTotalBytes: Long = DEFAULT_MAX_TOTAL_BYTES,
 ) {
     private val root: File = File(context.cacheDir, ROOT_DIR).apply { mkdirs() }
 
-    private val categoriesAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
-        Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
-    )
-    private val feedsAdapter: JsonAdapter<List<FeedWithCounts>> = moshi.adapter(
-        Types.newParameterizedType(List::class.java, FeedWithCounts::class.java),
-    )
-    private val articleDetailAdapter: JsonAdapter<ArticleDetail> = moshi.adapter(ArticleDetail::class.java)
+    private val categoriesSerializer = ListSerializer(CategoryWithCounts.serializer())
+    private val feedsSerializer = ListSerializer(FeedWithCounts.serializer())
 
     suspend fun writeCategories(categories: List<CategoryWithCounts>) = withContext(Dispatchers.IO) {
-        atomicWrite("categories.json", categoriesAdapter.toJson(categories))
+        atomicWrite("categories.json", json.encodeToString(categoriesSerializer, categories))
         pruneCacheFiles()
     }
 
     suspend fun readCategories(): List<CategoryWithCounts> = withContext(Dispatchers.IO) {
-        readIfFresh("categories.json", categoriesAdapter::fromJson) ?: emptyList()
+        readIfFresh("categories.json") { json.decodeFromString(categoriesSerializer, it) } ?: emptyList()
     }
 
     suspend fun writeFeeds(feeds: List<FeedWithCounts>) = withContext(Dispatchers.IO) {
-        atomicWrite("feeds.json", feedsAdapter.toJson(feeds))
+        atomicWrite("feeds.json", json.encodeToString(feedsSerializer, feeds))
         pruneCacheFiles()
     }
 
     suspend fun readFeeds(): List<FeedWithCounts> = withContext(Dispatchers.IO) {
-        readIfFresh("feeds.json", feedsAdapter::fromJson) ?: emptyList()
+        readIfFresh("feeds.json") { json.decodeFromString(feedsSerializer, it) } ?: emptyList()
     }
 
     suspend fun writeArticleDetail(article: ArticleDetail) = withContext(Dispatchers.IO) {
-        atomicWrite(sanitizeKey("article-${article.id}.json"), articleDetailAdapter.toJson(article))
+        atomicWrite(sanitizeKey("article-${article.id}.json"), json.encodeToString(ArticleDetail.serializer(), article))
         pruneCacheFiles()
     }
 
     suspend fun readArticleDetail(articleId: String): ArticleDetail? = withContext(Dispatchers.IO) {
-        readIfFresh(sanitizeKey("article-$articleId.json"), articleDetailAdapter::fromJson)
+        readIfFresh(sanitizeKey("article-$articleId.json")) { json.decodeFromString(ArticleDetail.serializer(), it) }
     }
 
     suspend fun clearByPrefix(prefix: String) = withContext(Dispatchers.IO) {
