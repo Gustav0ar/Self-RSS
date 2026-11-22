@@ -5,9 +5,13 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.disk.DiskCache
 import coil3.disk.directory
+import coil3.intercept.Interceptor as CoilInterceptor
+import coil3.memory.MemoryCache
+import coil3.request.ImageResult
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.local.LocalStore
+import com.selffeed.android.data.local.OfflineMediaCache
 import com.selffeed.android.data.local.OfflineReadStore
 import com.selffeed.android.data.repository.AppStatusRepository
 import com.selffeed.android.data.repository.AppStatusRepositoryImpl
@@ -27,7 +31,7 @@ import com.selffeed.android.network.NetworkModule
 import com.selffeed.android.network.NetworkMonitor
 import com.selffeed.android.network.RssApi
 import com.selffeed.android.network.SessionRefreshCoordinator
-import com.squareup.moshi.Moshi
+import kotlinx.serialization.json.Json
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -47,6 +51,7 @@ import javax.inject.Qualifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
 
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
@@ -66,14 +71,14 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideMoshi(): Moshi = NetworkModule.provideMoshi()
+    fun provideJson(): Json = NetworkModule.provideJson()
 
     @Provides
     @Singleton
     fun provideSessionRefreshCoordinator(
         sessionStore: SessionStore,
-        moshi: Moshi,
-    ): SessionRefreshCoordinator = SessionRefreshCoordinator(sessionStore, moshi)
+        json: Json,
+    ): SessionRefreshCoordinator = SessionRefreshCoordinator(sessionStore, json)
 
     @Provides
     @Singleton
@@ -89,15 +94,15 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideApi(client: OkHttpClient, moshi: Moshi, sessionStore: SessionStore): RssApi =
-        NetworkModule.provideApi(client, moshi, sessionStore)
+    fun provideApi(client: OkHttpClient, json: Json, sessionStore: SessionStore): RssApi =
+        NetworkModule.provideApi(client, json, sessionStore)
 
     @Provides
     @Singleton
     fun provideLocalStore(
         @ApplicationContext context: Context,
-        moshi: Moshi,
-    ): LocalStore = LocalStore(context, moshi)
+        json: Json,
+    ): LocalStore = LocalStore(context, json)
 
     @Provides
     @Singleton
@@ -112,17 +117,40 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideImageLoader(@ApplicationContext context: Context): ImageLoader =
-        createImageLoader(context)
+    fun provideImageLoader(
+        @ApplicationContext context: Context,
+        offlineMediaCache: OfflineMediaCache,
+    ): ImageLoader = createImageLoader(context, offlineMediaCache)
+
+    @Provides
+    @Singleton
+    fun provideOfflineMediaCache(@ApplicationContext context: Context): OfflineMediaCache =
+        OfflineMediaCache(context)
 
     @Provides
     fun provideImageRequestContext(@ApplicationContext context: Context): Context = context
 
-    fun createImageLoader(context: PlatformContext): ImageLoader {
+    fun createImageLoader(
+        context: PlatformContext,
+        offlineMediaCache: OfflineMediaCache? = null,
+    ): ImageLoader {
         // Saved articles promise offline media across ordinary OS cache
         // eviction, so keep Coil's bounded cache in app-owned persistent data.
+        // Cap in-memory bitmaps at 15% of app heap for article-list thumbnails.
         val diskCacheDir = File(context.filesDir, "image_cache").toOkioPath()
         return ImageLoader.Builder(context)
+            .apply {
+                if (offlineMediaCache != null) {
+                    components {
+                        add(OfflineMediaCacheCoilInterceptor(offlineMediaCache))
+                    }
+                }
+            }
+            .memoryCache {
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.15)
+                    .build()
+            }
             .diskCache {
                 DiskCache.Builder()
                     .directory(diskCacheDir)
@@ -130,6 +158,30 @@ object AppModule {
                     .build()
             }
             .build()
+    }
+}
+
+/**
+ * Serves already-prefetched hero images from [OfflineMediaCache] directly to
+ * Coil so list thumbnails avoid duplicate downloads and render offline.
+ */
+private class OfflineMediaCacheCoilInterceptor(
+    private val offlineMediaCache: OfflineMediaCache,
+) : CoilInterceptor {
+    override suspend fun intercept(chain: CoilInterceptor.Chain): ImageResult {
+        val rawUrl = when (val data = chain.request.data) {
+            is String -> data
+            is coil3.Uri -> data.toString()
+            else -> null
+        }
+        val cached = rawUrl
+            ?.takeIf { it.startsWith("https://", ignoreCase = true) || it.startsWith("http://", ignoreCase = true) }
+            ?.let { url -> withContext(Dispatchers.IO) { offlineMediaCache.cachedFile(url) } }
+        if (cached == null) return chain.proceed()
+        val localRequest = chain.request.newBuilder()
+            .data(cached)
+            .build()
+        return chain.withRequest(localRequest).proceed()
     }
 }
 

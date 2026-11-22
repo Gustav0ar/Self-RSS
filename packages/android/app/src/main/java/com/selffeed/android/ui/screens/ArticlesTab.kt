@@ -1,7 +1,15 @@
 package com.selffeed.android.ui.screens
 
+import androidx.compose.animation.CapturedAnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,13 +26,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
-import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.AssistChip
@@ -40,7 +50,6 @@ import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,12 +63,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.dimensionResource
@@ -70,6 +82,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
@@ -82,15 +95,18 @@ import com.selffeed.android.ui.components.OfflineTextStatus
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.DensityPreference
+import com.selffeed.android.ui.ReadingMotionEasing
 import com.selffeed.android.ui.articles.withArticleFlags
+import com.selffeed.android.ui.components.ArticleBookmarkIcon
 import com.selffeed.android.ui.resolve
 import com.selffeed.android.ui.shouldOfferUnreadUndo
 import com.selffeed.android.ui.utils.formatPublishedAt
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ArticlesTab(
     state: ArticleTabState,
@@ -99,11 +115,12 @@ fun ArticlesTab(
     listState: LazyListState = rememberLazyListState(),
     observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
+    val haptic = LocalHapticFeedback.current
     val pullToRefreshState = rememberPullToRefreshState()
-    var keepTopAfterRefresh by remember { mutableStateOf(false) }
-    var wasRefreshing by remember { mutableStateOf(false) }
     val refreshState = pagedArticles.loadState.refresh
     val articleCount = pagedArticles.itemCount
+    val firstArticleId = pagedArticles.itemSnapshotList.items.firstOrNull()?.id
+    var refreshAnchorId by remember(state.queryKey) { mutableStateOf<String?>(null) }
     var settledEmpty by remember(state.queryKey) { mutableStateOf(false) }
     if ((refreshState is LoadState.NotLoading && !state.isManualRefreshInProgress) || articleCount > 0) {
         settledEmpty = articleCount == 0
@@ -120,6 +137,7 @@ fun ArticlesTab(
             .filterNotNull()
             // Layout changes on every scroll frame. Resolve the loaded articles
             // only when visible keys change, not for each pixel of movement.
+            .distinctUntilChanged()
             .map { visibleKeys ->
                 val loadedArticlesById = pagedArticles.itemSnapshotList.items.associateBy { it.id }
                 visibleKeys.mapNotNull(loadedArticlesById::get)
@@ -136,51 +154,115 @@ fun ArticlesTab(
     // revalidates, without claiming a new query is empty before it has loaded.
     val isEmpty = articleCount == 0 && refreshState !is LoadState.Error && settledEmpty
 
-    LaunchedEffect(isRefreshing, articleCount) {
-        if (!wasRefreshing && isRefreshing && listState.firstVisibleItemIndex == 0) {
-            keepTopAfterRefresh = true
+    fun refreshAnchorAtTop() = firstArticleId.takeIf {
+        listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+    }
+
+    LaunchedEffect(isRefreshing, state.queryKey) {
+        if (isRefreshing && refreshAnchorId == null) refreshAnchorId = refreshAnchorAtTop()
+    }
+    LaunchedEffect(isRefreshing, firstArticleId, refreshAnchorId) {
+        val previousFirstId = refreshAnchorId ?: return@LaunchedEffect
+        // Feed sync can finish while Paging is still presenting the old head.
+        if (isRefreshing || firstArticleId == null || firstArticleId == previousFirstId) return@LaunchedEffect
+
+        refreshAnchorId = null
+        val visibleIndex = listState.firstVisibleItemIndex
+        val visibleKey = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == visibleIndex }?.key
+        if (
+            !listState.isScrollInProgress && listState.firstVisibleItemScrollOffset == 0 &&
+            (visibleIndex == 0 || visibleKey == previousFirstId)
+        ) {
+            listState.requestScrollToItem(0)
         }
-        if (wasRefreshing && !isRefreshing && keepTopAfterRefresh && articleCount > 0) {
-            listState.scrollToItem(0)
-            keepTopAfterRefresh = false
-        }
-        wasRefreshing = isRefreshing
+    }
+
+    LaunchedEffect(pullToRefreshState, isRefreshing) {
+        if (isRefreshing) return@LaunchedEffect
+        var armed = pullToRefreshState.distanceFraction >= 1f
+        snapshotFlow { pullToRefreshState.distanceFraction >= 1f }
+            .distinctUntilChanged()
+            .collect { reached ->
+                if (reached && !armed) {
+                    haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                }
+                armed = reached
+            }
     }
 
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = {
-            keepTopAfterRefresh = listState.firstVisibleItemIndex == 0
-            if (state.refreshBlockedGuidance == null && !state.isSyncingFeeds) actions.onRefresh()
+            if (state.refreshBlockedGuidance == null && !state.isSyncingFeeds) {
+                refreshAnchorId = refreshAnchorAtTop()
+                actions.onRefresh()
+            }
         },
         modifier = Modifier.fillMaxSize(),
         state = pullToRefreshState,
         indicator = {
-            // Use the default Material3 indicator in both states. It
-            // owns the animation (arc sweep + global rotation) and the
-            // pull-arrow transition. Do NOT wrap it in a custom Box
-            // with `pullToRefreshIndicator` and then place a second
-            // `CircularProgressIndicator` inside that Box — the second
-            // indicator overlays the default one and the two together
-            // render as a single static dot, which is what the user
-            // sees as a "frozen spinner" during refresh.
-            PullToRefreshDefaults.Indicator(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .testTag("articles-refresh-indicator"),
-                isRefreshing = isRefreshing,
-                state = pullToRefreshState,
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            var suppressPullLine by remember { mutableStateOf(isRefreshing) }
+            LaunchedEffect(isRefreshing) {
+                // Material retracts from the refresh threshold after completion.
+                if (isRefreshing) {
+                    suppressPullLine = true
+                } else if (suppressPullLine) {
+                    snapshotFlow { pullToRefreshState.distanceFraction }.first { it == 0f }
+                    suppressPullLine = false
+                }
+            }
+            val accent = MaterialTheme.colorScheme.primary
+            if (!isRefreshing && !suppressPullLine) {
+                Canvas(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp)) {
+                    val fraction = pullToRefreshState.distanceFraction.coerceIn(0f, 1f)
+                    val width = size.width * fraction
+                    drawRect(
+                        color = accent,
+                        topLeft = Offset(
+                            if (layoutDirection == LayoutDirection.Ltr) 0f else size.width - width,
+                            0f,
+                        ),
+                        size = Size(width, size.height),
+                    )
+                }
+            }
+            CapturedAnimatedVisibility(
+                visible = isRefreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+                enter = slideInVertically(tween(150, easing = ReadingMotionEasing)) { -it / 2 } +
+                    fadeIn(tween(150)),
+                exit = fadeOut(tween(110)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 38.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .progressSemantics()
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                        .testTag("articles-refresh-indicator")
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(
+                        text = stringResource(R.string.feeds_refreshing),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
         },
     ) {
+        val articleCacheWindow = remember {
+            LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
+        }
         LazyColumn(
             state = listState,
+            // Pre-compose 1x viewport ahead and retain 0.5x behind for smooth 120Hz flings.
+            cacheWindow = articleCacheWindow,
             // PullToRefreshBox draws its indicator above this list. Keep the
-            // content at its normal position instead of translating it with
-            // the pull distance; otherwise the active spinner appears to
-            // reserve vertical space even though it is an overlay.
+            // content at its normal position so the refresh status never
+            // shifts the list.
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("articles-list"),
@@ -279,6 +361,15 @@ fun ArticlesTab(
                 } else {
                     val displayedArticle = article.withArticleFlags(state.articleStates[article.id])
                     ArticleListRow(
+                        modifier = if (index == 0) {
+                            // Stable keys distinguish a new leading article
+                            // from one that just scrolled into view.
+                            Modifier.animateItem(
+                                fadeInSpec = tween(175, easing = ReadingMotionEasing),
+                                placementSpec = null,
+                                fadeOutSpec = null,
+                            )
+                        } else Modifier,
                         observeOfflineText = observeOfflineText,
                         article = displayedArticle,
                         isRead = displayedArticle.isRead,
@@ -396,7 +487,6 @@ private fun OfflineArticlesBanner() {
 }
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
 private fun ArticleListRow(
     article: ArticleListItem,
     isRead: Boolean,
@@ -406,6 +496,7 @@ private fun ArticleListRow(
     onToggleSaved: (() -> Unit)?,
     density: DensityPreference,
     observeOfflineText: (String) -> Flow<Boolean>,
+    modifier: Modifier = Modifier,
 ) {
     val swipeDensity = LocalDensity.current
     val positionalThreshold = SwipeToDismissBoxDefaults.positionalThreshold
@@ -413,23 +504,54 @@ private fun ArticleListRow(
     val dismissState = remember(swipeDensity) {
         SwipeToDismissBoxState(
             initialValue = SwipeToDismissBoxValue.Settled,
-            density = swipeDensity,
             positionalThreshold = positionalThreshold,
         )
     }
+    val haptic = LocalHapticFeedback.current
     var pendingRead by remember { mutableStateOf<Boolean?>(null) }
+    var pendingSave by remember { mutableStateOf(false) }
     val currentIsRead by rememberUpdatedState(isRead)
+    val currentIsSaved by rememberUpdatedState(article.isSaved)
     val currentOnToggleRead by rememberUpdatedState(onToggleRead)
+    val currentOnToggleSaved by rememberUpdatedState(onToggleSaved)
 
     LaunchedEffect(dismissState) {
-        snapshotFlow { dismissState.currentValue }.collect { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                val read = !currentIsRead
-                pendingRead = read
-                // Apply the action before resetting, since it can remove this row from the list.
-                currentOnToggleRead(read)
-                dismissState.reset()
-                pendingRead = null
+        var armed = dismissState.targetValue != SwipeToDismissBoxValue.Settled
+        snapshotFlow { dismissState.targetValue != SwipeToDismissBoxValue.Settled }
+            .distinctUntilChanged()
+            .collect { crossed ->
+                if (crossed && !armed && dismissState.settledValue == SwipeToDismissBoxValue.Settled) {
+                    haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                }
+                armed = crossed
+            }
+    }
+
+    LaunchedEffect(dismissState) {
+        snapshotFlow { dismissState.settledValue }.collect { value ->
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    val read = !currentIsRead
+                    pendingRead = read
+                    // Apply the action before resetting, since it can remove this row from the list.
+                    currentOnToggleRead(read)
+                    dismissState.reset()
+                    pendingRead = null
+                }
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    val toggleSaved = currentOnToggleSaved
+                    if (toggleSaved != null) {
+                        haptic.performHapticFeedback(
+                            if (currentIsSaved) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                        )
+                        pendingSave = true
+                        toggleSaved()
+                    }
+                    dismissState.reset()
+                    pendingSave = false
+                }
+                SwipeToDismissBoxValue.Settled -> Unit
             }
         }
     }
@@ -438,15 +560,34 @@ private fun ArticleListRow(
 
     SwipeToDismissBox(
         state = dismissState,
-        enableDismissFromStartToEnd = false,
-        gesturesEnabled = pendingRead == null,
+        modifier = modifier,
+        enableDismissFromStartToEnd = onToggleSaved != null,
+        gesturesEnabled = pendingRead == null && !pendingSave,
         backgroundContent = {
-            val color =
-                if (effectiveIsRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
-            val icon =
-                if (effectiveIsRead) Icons.Default.MarkEmailUnread else Icons.Default.MarkEmailRead
+            val direction = dismissState.dismissDirection
+            if (direction == SwipeToDismissBoxValue.Settled) {
+                Box(Modifier.fillMaxSize())
+                return@SwipeToDismissBox
+            }
+            val isStartToEnd = direction == SwipeToDismissBoxValue.StartToEnd
+            val color = when {
+                isStartToEnd -> MaterialTheme.colorScheme.tertiary
+                effectiveIsRead -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.secondary
+            }
+            val icon = when {
+                isStartToEnd && article.isSaved -> Icons.Outlined.BookmarkBorder
+                isStartToEnd -> Icons.Default.Bookmark
+                effectiveIsRead -> Icons.Default.MarkEmailUnread
+                else -> Icons.Default.MarkEmailRead
+            }
             val label = stringResource(
-                if (effectiveIsRead) R.string.article_mark_unread else R.string.article_mark_read,
+                when {
+                    isStartToEnd && article.isSaved -> R.string.article_swipe_unsave
+                    isStartToEnd -> R.string.article_swipe_save
+                    effectiveIsRead -> R.string.article_mark_unread
+                    else -> R.string.article_mark_read
+                },
             )
 
             Box(
@@ -454,28 +595,52 @@ private fun ArticleListRow(
                     .fillMaxSize()
                     .background(color.copy(alpha = 0.9f))
                     .padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd,
+                contentAlignment = if (isStartToEnd) Alignment.CenterStart else Alignment.CenterEnd,
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.graphicsLayer {
                         this.alpha = (dismissState.progress * 2f - 1f).coerceIn(0f, 1f)
-                        this.translationX = (1f - dismissState.progress) * 100f
+                        val shift = (1f - dismissState.progress) * 100f
+                        this.translationX = if (isStartToEnd) -shift else shift
                     },
                 ) {
-                    Text(
-                        text = label,
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Icon(
-                        icon,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.scale(dismissState.progress.coerceIn(0.8f, 1.2f)),
-                    )
+                    if (isStartToEnd) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.graphicsLayer {
+                                val scale = dismissState.progress.coerceIn(0.8f, 1.2f)
+                                scaleX = scale
+                                scaleY = scale
+                            },
+                        )
+                        Text(
+                            text = label,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    } else {
+                        Text(
+                            text = label,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.graphicsLayer {
+                                val scale = dismissState.progress.coerceIn(0.8f, 1.2f)
+                                scaleX = scale
+                                scaleY = scale
+                            },
+                        )
+                    }
                 }
             }
         },
@@ -491,6 +656,7 @@ private fun ArticleListRow(
         )
         Column(
             modifier = Modifier
+                .background(MaterialTheme.colorScheme.background)
                 .semantics { contentDescription = articleDescription }
                 .clickable(onClick = onClick),
         ) {
@@ -622,8 +788,10 @@ internal fun ArticleCard(
                             modifier = Modifier.weight(1f, fill = true),
                         )
                     }
+                    val timestamp = article.displayedAt ?: article.publishedAt
+                    val formattedTimestamp = remember(timestamp) { formatPublishedAt(timestamp) }
                     Text(
-                        text = formatPublishedAt(article.displayedAt ?: article.publishedAt),
+                        text = formattedTimestamp,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         modifier = Modifier.padding(start = if (isRead) 0.dp else 14.dp),
@@ -677,18 +845,19 @@ internal fun ArticleCard(
                     contentScale = ContentScale.Crop,
                 )
             }
+            val haptic = LocalHapticFeedback.current
             IconButton(
-                onClick = { onToggleSaved?.invoke() },
+                onClick = {
+                    val toggle = onToggleSaved ?: return@IconButton
+                    haptic.performHapticFeedback(
+                        if (article.isSaved) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                    )
+                    toggle()
+                },
                 enabled = onToggleSaved != null,
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(
-                    imageVector = if (article.isSaved) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                    contentDescription = stringResource(
-                        if (article.isSaved) R.string.article_remove_saved else R.string.article_save,
-                    ),
-                    tint = if (article.isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ArticleBookmarkIcon(articleId = article.id, isSaved = article.isSaved)
             }
         }
     }

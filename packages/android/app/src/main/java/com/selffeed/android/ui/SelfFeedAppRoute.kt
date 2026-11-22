@@ -1,11 +1,13 @@
 package com.selffeed.android.ui
 
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -14,6 +16,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import com.selffeed.android.R
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.metrics.performance.PerformanceMetricsState
 import com.selffeed.android.ui.theme.SelfFeedTheme
 import kotlinx.coroutines.currentCoroutineContext
@@ -28,6 +31,7 @@ fun SelfFeedAppRoute(
     authViewModel: AuthViewModel,
     performanceMetricsState: PerformanceMetricsState.Holder,
     benchmarkScenario: BenchmarkScenario? = null,
+    onActiveArticleUrlChanged: (String?) -> Unit = {},
 ) {
     if (benchmarkScenario == BenchmarkScenario.READER) {
         SelfFeedTheme { BenchmarkReaderScenario() }
@@ -45,6 +49,9 @@ fun SelfFeedAppRoute(
     val session = authState.session?.takeIf {
         authState.isAuthenticated && authViewModel.isCurrentSession(it)
     }
+    ReportDrawnWhen {
+        !authState.loading && (session == null || !chromeState.restoringReadingSession)
+    }
     LaunchedEffect(authState.loading, session?.ownerId) {
         if (!authState.loading && session == null) appViewModel.clearReadingSession()
     }
@@ -60,9 +67,11 @@ fun SelfFeedAppRoute(
             searchViewModel = accountViewModel(ownerId),
             settingsViewModel = accountViewModel(ownerId),
             performanceMetricsState = performanceMetricsState,
+            onActiveArticleUrlChanged = onActiveArticleUrlChanged,
         )
     }
     if (authState.loading || session == null) {
+        LaunchedEffect(Unit) { onActiveArticleUrlChanged(null) }
         SelfFeedTheme {
             ServerChangeConfirmation(chromeState, authState, appViewModel, authViewModel)
             if (authState.loading || authState.isAuthenticated) {
@@ -76,6 +85,7 @@ fun SelfFeedAppRoute(
                     onModeChange = authViewModel::setAuthMode,
                     onLogin = authViewModel::login,
                     onRegister = authViewModel::register,
+                    onLocalServerAccessGranted = authViewModel::refreshRegistrationStatus,
                 )
             }
         }
@@ -133,15 +143,25 @@ private fun AuthenticatedAppRoute(
     searchViewModel: SearchViewModel,
     settingsViewModel: SettingsViewModel,
     performanceMetricsState: PerformanceMetricsState.Holder,
+    onActiveArticleUrlChanged: (String?) -> Unit = {},
 ) {
     if (authState.session?.ownerId != accountOwnerId) return
     val chromeState by appViewModel.chrome.collectAsStateWithLifecycle()
+    val context = LocalContext.current.applicationContext
     val isOnline by appViewModel.isOnline.collectAsStateWithLifecycle()
     val feedsState by feedsViewModel.state.collectAsStateWithLifecycle()
     val articlesState by articlesViewModel.state.collectAsStateWithLifecycle()
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val readingSessionKey = authState.session?.ownerId.takeIf { authState.isAuthenticated }
+    val activeArticleUrl = articlesState.selectedArticle?.canonicalUrl.takeIf {
+        chromeState.activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED)
+    }
+    val latestOnActiveArticleUrlChanged by rememberUpdatedState(onActiveArticleUrlChanged)
+    DisposableEffect(activeArticleUrl) {
+        latestOnActiveArticleUrlChanged(activeArticleUrl)
+        onDispose { latestOnActiveArticleUrlChanged(null) }
+    }
+    val readingSessionKey = authState.session.ownerId.takeIf { authState.isAuthenticated }
     val themePreference = ThemePreference.fromApiValue(settingsState.preferences?.theme).apiValue
     val darkTheme = when (themePreference) {
         "light" -> false
@@ -161,6 +181,7 @@ private fun AuthenticatedAppRoute(
                     settingsViewModel.loadAdminSettings()
                 }
                 articlesViewModel.refreshArticles()
+                articlesViewModel.scheduleOfflineContentSync()
             }
 
             override fun clearUnauthenticatedSession() {
@@ -179,6 +200,7 @@ private fun AuthenticatedAppRoute(
             override fun refreshAfterFeedSync() {
                 contentRefreshRequests.trySend(Unit)
                 articlesViewModel.refreshArticles()
+                articlesViewModel.scheduleOfflineContentSync()
             }
 
             override fun refreshArticleState() {
@@ -192,7 +214,7 @@ private fun AuthenticatedAppRoute(
         }
 
         OpmlExportEffect(feedsViewModel, isCurrentSession = {
-            authState.session?.let(authViewModel::isCurrentSession) == true
+            authViewModel.isCurrentSession(authState.session)
         })
 
         LaunchedEffect(authState.loading, authState.isAuthenticated, readingSessionKey) {
@@ -223,6 +245,25 @@ private fun AuthenticatedAppRoute(
                 is ExternalAction.AddFeed -> {
                     feedsViewModel.offerExternalFeed(action.feedUrl)
                     appViewModel.setTab(HomeTab.FEEDS)
+                }
+
+                is ExternalAction.OpenDestination -> {
+                    ShortcutManagerCompat.reportShortcutUsed(context, action.destination.shortcutId)
+                    when (action.destination) {
+                        ShortcutDestination.UNREAD -> {
+                            articlesViewModel.openUnreadShortcut()
+                            appViewModel.setTab(HomeTab.ARTICLES)
+                        }
+                        ShortcutDestination.SAVED -> {
+                            articlesViewModel.closeArticle()
+                            articlesViewModel.setSavedOnly(true)
+                            appViewModel.setTab(HomeTab.SAVED)
+                        }
+                        ShortcutDestination.SEARCH -> {
+                            articlesViewModel.closeArticle()
+                            appViewModel.setTab(HomeTab.SEARCH)
+                        }
+                    }
                 }
 
                 null -> Unit
@@ -307,29 +348,26 @@ private fun AuthenticatedAppRoute(
             )
         }
 
-        SelfFeedApp(
-            state = SelfFeedAppState(
-                auth = authState.copy(
-                    loading = authState.loading || authState.isAuthenticated && !appViewModel.hasReadingSession(readingSessionKey),
-                ),
-                chrome = chromeState,
-                feeds = feedsState,
-                articles = articlesState,
-                search = searchState,
-                settings = settingsState,
-                isOnline = isOnline,
-            ),
-            pendingArticleChanges = articlesViewModel.pendingArticleChanges,
-            observeOfflineText = remember(articlesViewModel) { articlesViewModel::observeArticleTextAvailability },
-            onRetryPendingChanges = articlesViewModel::retryPendingArticleChanges,
-            actions = SelfFeedAppActions(
+        val appActions = remember(
+            authViewModel,
+            appViewModel,
+            feedsViewModel,
+            articlesViewModel,
+            searchViewModel,
+            settingsViewModel,
+        ) {
+            SelfFeedAppActions(
                 onAuthModeChange = authViewModel::setAuthMode,
                 onLogin = authViewModel::login,
                 onRegister = authViewModel::register,
                 onLogout = authViewModel::logout,
                 onTabSelected = { tab ->
                     when (tab) {
-                        HomeTab.SAVED -> articlesViewModel.setSavedOnly(true)
+                        HomeTab.SAVED -> {
+                            articlesViewModel.setSavedOnly(true)
+                            ShortcutManagerCompat.reportShortcutUsed(context, ShortcutDestination.SAVED.shortcutId)
+                        }
+                        HomeTab.SEARCH -> ShortcutManagerCompat.reportShortcutUsed(context, ShortcutDestination.SEARCH.shortcutId)
                         HomeTab.ARTICLES -> articlesViewModel.setSavedOnly(false)
                         else -> Unit
                     }
@@ -374,21 +412,22 @@ private fun AuthenticatedAppRoute(
                     // Refresh the API/Room list immediately. Publisher fetches
                     // continue independently and publish revisions as they land.
                     articlesViewModel.refreshArticles()
-                    if (!articlesState.savedOnly) {
+                    val currentArticles = articlesViewModel.state.value
+                    if (!currentArticles.savedOnly) {
                         feedsViewModel.syncAllFeeds(
-                            feedId = articlesState.selectedFeedId,
-                            categoryId = articlesState.selectedCategoryId,
+                            feedId = currentArticles.selectedFeedId,
+                            categoryId = currentArticles.selectedCategoryId,
                         )
                     }
                 },
                 onOpenArticle = {
-                    val origin = when (chromeState.activeTab) {
+                    val origin = when (appViewModel.chrome.value.activeTab) {
                         HomeTab.SEARCH -> HomeTab.SEARCH
                         HomeTab.SAVED -> HomeTab.SAVED
                         else -> HomeTab.ARTICLES
                     }
                     if (origin == HomeTab.SEARCH) {
-                        articlesViewModel.openArticleFromQueue(it, searchState.results)
+                        articlesViewModel.openArticleFromQueue(it, searchViewModel.state.value.results)
                     } else {
                         articlesViewModel.openArticle(it)
                     }
@@ -401,7 +440,7 @@ private fun AuthenticatedAppRoute(
                         tracksPaging = true,
                     )
                     appViewModel.openReaderFrom(
-                        if (chromeState.activeTab == HomeTab.SAVED) HomeTab.SAVED else HomeTab.ARTICLES,
+                        if (appViewModel.chrome.value.activeTab == HomeTab.SAVED) HomeTab.SAVED else HomeTab.ARTICLES,
                     )
                 },
                 onArticleDisplayed = articlesViewModel::onArticleDisplayed,
@@ -450,7 +489,25 @@ private fun AuthenticatedAppRoute(
                     settingsViewModel.clearMessages()
                     appViewModel.clearMessages()
                 },
+            )
+        }
+
+        SelfFeedApp(
+            state = SelfFeedAppState(
+                auth = authState.copy(
+                    loading = authState.loading || authState.isAuthenticated && !appViewModel.hasReadingSession(readingSessionKey),
+                ),
+                chrome = chromeState,
+                feeds = feedsState,
+                articles = articlesState,
+                search = searchState,
+                settings = settingsState,
+                isOnline = isOnline,
             ),
+            pendingArticleChanges = articlesViewModel.pendingArticleChanges,
+            observeOfflineText = remember(articlesViewModel) { articlesViewModel::observeArticleTextAvailability },
+            onRetryPendingChanges = remember(articlesViewModel) { articlesViewModel::retryPendingArticleChanges },
+            actions = appActions,
             articlePagingData = articlesViewModel.articlePagingData,
         )
     }

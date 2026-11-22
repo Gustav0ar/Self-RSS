@@ -17,7 +17,6 @@ import androidx.paging.PagingData
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flowOf
 
 /** Intent extra understood only by baseline-profile target variants. */
 internal const val BenchmarkScenarioExtra = "com.selffeed.android.extra.BENCHMARK_SCENARIO"
@@ -59,7 +58,7 @@ private val benchmarkBuildTypes = setOf(
 internal fun BenchmarkReaderScenario() {
     var selectedArticle by remember { mutableStateOf<ArticleDetail?>(null) }
     var readyArticleId by remember { mutableStateOf<String?>(null) }
-    val pagingData = remember { flowOf(PagingData.from(listOf(benchmarkArticle))) }
+    val pagingData = remember { MutableStateFlow(PagingData.from(listOf(benchmarkArticle))) }
     val state = SelfFeedAppState(
         auth = AuthUiState(loading = false, isAuthenticated = true),
         chrome = AppChromeState(activeTab = HomeTab.ARTICLES),

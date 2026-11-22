@@ -10,12 +10,14 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import com.selffeed.android.data.FeedSyncWorker
 import com.selffeed.android.data.ArticleStateSyncWorker
+import com.selffeed.android.data.OfflineContentSyncWorker
 import com.selffeed.android.data.RssRepository
 import com.selffeed.android.data.OpmlExportStore
 import com.selffeed.android.data.local.LocalStore
 import com.selffeed.android.di.AppModule
 import com.selffeed.android.di.ApplicationCoroutineScope
 import com.selffeed.android.network.NetworkMonitor
+import com.selffeed.android.ui.AppShortcuts
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -52,14 +54,17 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
 
     override fun onCreate() {
         super.onCreate()
-        applicationScope.launch { opmlExports.reapStaleExports() }
-
-        FeedSyncWorker.schedule(this)
+        // Keep binder IPC (ShortcutManager) and WorkManager initialization off
+        // the cold-start main thread so MainActivity can render immediately.
         applicationScope.launch {
+            AppShortcuts.publish(this@SelfFeedApplication)
+            opmlExports.reapStaleExports()
+            FeedSyncWorker.schedule(this@SelfFeedApplication)
             repository.withAuthenticatedAccount {
                 FeedSyncWorker.ensureScheduled(this@SelfFeedApplication)
                 ArticleStateSyncWorker.ensureScheduled(this@SelfFeedApplication)
                 ArticleStateSyncWorker.ensureScheduled(this@SelfFeedApplication, downloadSaved = true)
+                OfflineContentSyncWorker.ensureScheduled(this@SelfFeedApplication)
             }
         }
     }
@@ -80,14 +85,13 @@ class SelfFeedApplication : Application(), SingletonImageLoader.Factory, WorkCon
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // Free in-memory caches under pressure so the system can reclaim pages.
-        // The TRIM_MEMORY_RUNNING_LOW constant is deprecated in API 35
-        // (replaced with the onTrimMemory components of ComponentCallbacks2
-        // taking an Int that maps to a finer-grained bucket). The semantics
-        // haven't changed: anything at or above RUNNING_LOW means we're
-        // under visible pressure.
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+        // Android 14+ (API 34+) only dispatches TRIM_MEMORY_UI_HIDDEN and
+        // TRIM_MEMORY_BACKGROUND; TRIM_MEMORY_RUNNING_* levels are deprecated.
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             repository.trimMemoryCaches()
+        }
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND && ::imageLoader.isInitialized) {
+            imageLoader.memoryCache?.clear()
         }
     }
 

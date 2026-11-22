@@ -1,5 +1,6 @@
 package com.selffeed.android.ui
 
+import androidx.lifecycle.SavedStateHandle
 import com.selffeed.android.data.repository.LocalArticleState
 import com.selffeed.android.data.repository.SavedStateRejection
 import com.selffeed.android.data.repository.ReadStateRejection
@@ -144,7 +145,8 @@ class ArticlesViewModelTest {
             repository,
             readStateManager,
             enrichmentManager,
-            articleWarmingManager
+            articleWarmingManager,
+            SavedStateHandle(),
         )
     }
 
@@ -753,17 +755,40 @@ class ArticlesViewModelTest {
     }
 
     @Test
-    fun `markRead refreshes unread-only paging after durable acceptance`() = runTest {
+    fun `navigating and marking articles read under hideRead preserves the session list until refresh`() = runTest {
+        coEvery { repository.article(any(), false) } answers {
+            AppResult.Success(sampleDetail(firstArg()))
+        }
         val viewModel = createViewModel()
         val collection = backgroundScope.launch { viewModel.articlePagingData.collect {} }
         runCurrent()
         viewModel.setFilter(sort = null, hideRead = true)
         runCurrent()
-        primeArticleQueue(viewModel)
+        viewModel.updateArticleQueueSnapshot(
+            listOf(
+                sampleArticle("a1", title = "First"),
+                sampleArticle("a2", title = "Second"),
+                sampleArticle("a3", title = "Third"),
+            ),
+        )
 
-        viewModel.markRead("a1", true)
+        // Open and navigate across multiple articles in reader under unread-only filter.
+        viewModel.openArticle("a1")
+        runCurrent()
+        viewModel.openAdjacentArticle(1)
+        runCurrent()
+        viewModel.closeArticle()
         runCurrent()
 
+        // Both read articles stay marked read in the active paging generation (initial + setFilter = 2).
+        assertEquals(true, viewModel.state.value.articleStates["a1"]?.isRead)
+        assertEquals(true, viewModel.state.value.articleStates["a2"]?.isRead)
+        assertEquals(listOf("a1", "a2", "a3"), viewModel.state.value.items.map { it.id })
+        verify(exactly = 2) { repository.articlePagingData(any()) }
+
+        // Explicit list refresh starts a new paging generation to drop read items.
+        viewModel.refreshArticles()
+        runCurrent()
         verify(exactly = 3) { repository.articlePagingData(any()) }
         collection.cancel()
     }
@@ -861,6 +886,24 @@ class ArticlesViewModelTest {
         assertTrue(s.articleStates["a1"]?.isRead == true)
         foreground.cancel()
         coVerify { repository.markAllRead(null, null) }
+    }
+
+    @Test
+    fun `openUnreadShortcut preserves hideRead across bootstrap preference application`() = runTest {
+        val viewModel = createViewModel()
+        viewModel.openUnreadShortcut()
+        assertEquals(true, viewModel.state.value.hideRead)
+        assertEquals(false, viewModel.state.value.savedOnly)
+
+        // Bootstrap preferences with hideRead=false must not override the shortcut destination.
+        viewModel.applyPreferences(defaultSort = "latest", hideRead = false, autoMarkReadMode = "on_open")
+        assertEquals(true, viewModel.state.value.hideRead)
+        assertEquals(AutoMarkReadPreference.ON_OPEN, viewModel.state.value.autoMarkReadMode)
+
+        // Subsequent explicit preference updates from Settings still apply normally.
+        viewModel.applyPreferences(defaultSort = "oldest", hideRead = false, autoMarkReadMode = "disabled")
+        assertEquals(false, viewModel.state.value.hideRead)
+        assertEquals("oldest", viewModel.state.value.sort)
     }
 
     @Test

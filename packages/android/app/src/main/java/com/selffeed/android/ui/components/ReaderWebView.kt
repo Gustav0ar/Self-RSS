@@ -1,4 +1,4 @@
-@file:android.annotation.SuppressLint("SetJavaScriptEnabled")
+@file:android.annotation.SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 
 package com.selffeed.android.ui.components
 
@@ -11,31 +11,46 @@ import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import com.selffeed.android.data.local.OfflineMediaCache
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
 import java.util.UUID
 
+internal val LocalOfflineMediaCache = staticCompositionLocalOf<OfflineMediaCache?> { null }
+
 /** One Activity-bound renderer owns its bridge, posted work, document and fullscreen media. */
-internal class ReaderWebView(context: Context) : WebView(context) {
+internal class ReaderWebView(
+    context: Context,
+    private val offlineMediaCache: OfflineMediaCache? = null,
+    private val customTabsPrewarmer: CustomTabsPrewarmer? = null,
+) : WebView(context) {
     private val callbacks = Handler(Looper.getMainLooper())
     private var documentToken = ""
     private var documentKey: Pair<String, String>? = null
     private var active = false
     private var lifecycleApplied = false
     private var fullscreen: ReaderFullscreenMedia? = null
+    private val usesWebMessageListener: Boolean
     @Volatile var released = false
         private set
     var onHeight: (Int) -> Unit = {}
     var onReady: () -> Unit = {}
     var onRendererGone: () -> Unit = {}
     var onFullscreen: (ReaderFullscreenMedia?) -> Unit = {}
+    var onImageTap: (String) -> Unit = {}
 
     init {
         settings.apply {
@@ -51,35 +66,8 @@ internal class ReaderWebView(context: Context) : WebView(context) {
         }
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = true
-        webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                if (released) return true
-                val url = request.url.toString()
-                if (!request.isForMainFrame && isTrustedEmbedUrl(url)) return false
-                openExternalUrl(context, url)
-                return true
-            }
-
-            override fun onPageFinished(view: WebView, url: String?) {
-                if (released || url == "about:blank") return
-                val token = documentToken
-                evaluateJavascript("window.SelfFeedApp && window.SelfFeedApp.setActive($active); window.postHeight && window.postHeight();", null)
-                postVisualStateCallback(0, object : VisualStateCallback() {
-                    override fun onComplete(requestId: Long) {
-                        if (!released && token == documentToken) onReady()
-                    }
-                })
-            }
-
-            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                if (!released) {
-                    val notifyGone = onRendererGone
-                    releaseReaderResources()
-                    notifyGone()
-                }
-                return true
-            }
-        }
+        usesWebMessageListener = installWebMessageHeightBridge()
+        webViewClient = ReaderWebViewClient()
         webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (released || !active || view == null || fullscreen != null) {
@@ -94,6 +82,7 @@ internal class ReaderWebView(context: Context) : WebView(context) {
                 onFullscreen(media)
             }
 
+            @Deprecated("Compatibility callback for older WebView implementations")
             override fun onShowCustomView(view: View?, requestedOrientation: Int, callback: CustomViewCallback?) =
                 onShowCustomView(view, callback)
 
@@ -101,7 +90,34 @@ internal class ReaderWebView(context: Context) : WebView(context) {
         }
     }
 
-    private fun installHeightBridge(token: String) {
+    private fun installWebMessageHeightBridge(): Boolean = runCatching {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            return@runCatching false
+        }
+        WebViewCompat.addWebMessageListener(
+            this,
+            WEB_MESSAGE_BRIDGE_NAME,
+            setOf("*"),
+        ) { _, message, _, isMainFrame, _ ->
+            if (released || !isMainFrame || documentKey == null) return@addWebMessageListener
+            val height = message.data?.toFloatOrNull() ?: return@addWebMessageListener
+            if (height.isFinite()) {
+                height.toInt().coerceIn(0, 50_000).takeIf { it > 0 }?.let(onHeight)
+            }
+        }
+        WebViewCompat.addWebMessageListener(
+            this,
+            WEB_MESSAGE_IMAGE_BRIDGE_NAME,
+            setOf("*"),
+        ) { _, message, _, isMainFrame, _ ->
+            if (released || !active || !isMainFrame || documentKey == null) return@addWebMessageListener
+            val url = message.data?.trim()?.takeIf(::isHttpUrl) ?: return@addWebMessageListener
+            onImageTap(url)
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun installLegacyHeightBridge(token: String) {
         addJavascriptInterface(object {
             @JavascriptInterface
             fun updateHeight(height: Float) {
@@ -111,6 +127,17 @@ internal class ReaderWebView(context: Context) : WebView(context) {
                 callbacks.post {
                     if (!released && token == documentToken && height.isFinite()) {
                         height.toInt().coerceIn(0, 50_000).takeIf { it > 0 }?.let(onHeight)
+                    }
+                }
+            }
+
+            @JavascriptInterface
+            fun openImage(url: String?) {
+                if (released) return
+                val safeUrl = url?.trim()?.takeIf(::isHttpUrl) ?: return
+                callbacks.post {
+                    if (!released && active && token == documentToken) {
+                        onImageTap(safeUrl)
                     }
                 }
             }
@@ -125,10 +152,21 @@ internal class ReaderWebView(context: Context) : WebView(context) {
         documentToken = UUID.randomUUID().toString()
         documentKey = key
         setBackgroundColor(backgroundColor)
+        applyAlgorithmicDarkening(ColorUtils.calculateLuminance(backgroundColor) < 0.5)
         callbacks.removeCallbacksAndMessages(null)
-        removeJavascriptInterface("Android")
-        installHeightBridge(documentToken)
+        if (!usesWebMessageListener) {
+            removeJavascriptInterface("Android")
+            installLegacyHeightBridge(documentToken)
+        }
         loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", baseUrl)
+    }
+
+    private fun applyAlgorithmicDarkening(isDarkTheme: Boolean) {
+        runCatching {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, isDarkTheme)
+            }
+        }
     }
 
     /** Activating a page grants permission for a new gesture; it never resumes playback. */
@@ -157,16 +195,106 @@ internal class ReaderWebView(context: Context) : WebView(context) {
         onHeight = {}
         onReady = {}
         onRendererGone = {}
+        onImageTap = {}
         runCatching { evaluateJavascript("window.SelfFeedApp && window.SelfFeedApp.cleanup();", null) }
         runCatching { onPause() }
         runCatching { stopLoading() }
-        runCatching { removeJavascriptInterface("Android") }
+        if (usesWebMessageListener) {
+            runCatching {
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                    WebViewCompat.removeWebMessageListener(this, WEB_MESSAGE_BRIDGE_NAME)
+                    WebViewCompat.removeWebMessageListener(this, WEB_MESSAGE_IMAGE_BRIDGE_NAME)
+                }
+            }
+        } else {
+            runCatching { removeJavascriptInterface("Android") }
+        }
         runCatching { webChromeClient = null }
-        runCatching { webViewClient = WebViewClient() }
+        runCatching { webViewClient = DetachedWebViewClient }
         runCatching { loadUrl("about:blank") }
         runCatching { (parent as? ViewGroup)?.removeView(this) }
         runCatching { removeAllViews() }
         runCatching { destroy() }
+    }
+
+    private inner class ReaderWebViewClient : WebViewClient() {
+        override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+        ): WebResourceResponse? {
+            val cache = offlineMediaCache ?: return null
+            if (released || request.isForMainFrame) return null
+            if (!request.method.equals("GET", ignoreCase = true)) return null
+            val url = request.url?.toString() ?: return null
+            if (!url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://", ignoreCase = true)) {
+                return null
+            }
+            // Serve cached offline media immediately (0 ms latency both online and offline).
+            cache.openCachedResponse(url)?.let { return it }
+            // On a cache miss, let Chromium stream the image natively so slow or
+            // dead publisher hosts never stall onPageFinished / visualReady, while
+            // warming the offline disk cache asynchronously in the background.
+            if (isImageSubresourceRequest(request, url)) {
+                cache.prefetchInBackground(url)
+            }
+            return null
+        }
+
+        private fun isImageSubresourceRequest(request: WebResourceRequest, url: String): Boolean {
+            if (isTrustedEmbedUrl(url)) return false
+            val accept = request.requestHeaders?.entries
+                ?.firstOrNull { it.key.equals("Accept", ignoreCase = true) }
+                ?.value
+            if (accept != null && accept.contains("image/", ignoreCase = true) &&
+                !accept.contains("text/html", ignoreCase = true)
+            ) {
+                return true
+            }
+            return OfflineMediaCache.isLikelyImageUrl(url)
+        }
+
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (released) return true
+            val url = request.url.toString()
+            if (!request.isForMainFrame && isTrustedEmbedUrl(url)) return false
+            openExternalUrl(context, url, session = customTabsPrewarmer?.session)
+            return true
+        }
+
+        override fun onPageFinished(view: WebView, url: String?) {
+            if (released || url == "about:blank") return
+            val token = documentToken
+            evaluateJavascript(
+                "window.SelfFeedApp && window.SelfFeedApp.setActive($active); window.postHeight && window.postHeight();",
+                null,
+            )
+            postVisualStateCallback(0, object : VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    if (!released && token == documentToken) onReady()
+                }
+            })
+        }
+
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            if (!released) {
+                val notifyGone = onRendererGone
+                releaseReaderResources()
+                notifyGone()
+            }
+            return true
+        }
+    }
+
+    private object DetachedWebViewClient : WebViewClient() {
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean = true
+    }
+
+    private companion object {
+        const val WEB_MESSAGE_BRIDGE_NAME = "SelfFeedHeightBridge"
+        const val WEB_MESSAGE_IMAGE_BRIDGE_NAME = "SelfFeedImageBridge"
+
+        fun isHttpUrl(url: String): Boolean =
+            url.startsWith("https://", ignoreCase = true) || url.startsWith("http://", ignoreCase = true)
     }
 }
 

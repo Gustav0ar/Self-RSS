@@ -1,16 +1,12 @@
 package com.selffeed.android.network
 
-import com.squareup.moshi.Moshi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadStateEventStreamTest {
-    // Use the production Moshi (no reflective fallback) to ensure the
-    // generated adapter is what the app actually uses.
-    private val adapter = NetworkModule.provideMoshi()
-        .adapter(ReadStateEventPayload::class.java)
+    private val json = NetworkModule.provideJson()
 
     @Test
     fun parser_handlesCommentsCrLfSplitAndMultiLineData() {
@@ -36,10 +32,10 @@ class ReadStateEventStreamTest {
             data = """{"type":"article.read_state_changed","eventId":"event-1","articleId":"article-1","feedId":"feed-1","isRead":true,"source":"manual","clientId":"web-client","updatedAt":"2026-06-01T00:00:00.000Z"}""",
         )
 
-        assertNull(connected.toReadStateEvent(adapter))
-        assertNull(invalidType.toReadStateEvent(adapter))
+        assertNull(connected.toReadStateEvent(json))
+        assertNull(invalidType.toReadStateEvent(json))
 
-        val event = readState.toReadStateEvent(adapter)
+        val event = readState.toReadStateEvent(json)
 
         assertTrue(event is ArticleReadStateChangedEvent)
         event as ArticleReadStateChangedEvent
@@ -54,11 +50,11 @@ class ReadStateEventStreamTest {
         val newArticles = SseMessage(
             eventName = "read-state",
             data = """{"type":"articles.new","eventId":"event-2","feedId":"feed-1","articleIds":["article-1"],"count":1,"updatedAt":"2026-07-11T12:00:00.000Z"}""",
-        ).toReadStateEvent(adapter)
+        ).toReadStateEvent(json)
         val updatedArticle = SseMessage(
             eventName = "read-state",
             data = """{"type":"article.updated","eventId":"event-3","articleId":"article-1","feedId":"feed-1","contentStatus":"full_ready","contentVersion":2,"updatedAt":"2026-07-11T12:00:01.000Z"}""",
-        ).toReadStateEvent(adapter)
+        ).toReadStateEvent(json)
 
         assertTrue(newArticles is ArticlesNewEvent)
         assertEquals(listOf("article-1"), (newArticles as ArticlesNewEvent).articleIds)

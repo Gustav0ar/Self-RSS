@@ -38,7 +38,7 @@ data class AppChromeState(
 class AppViewModel @Inject constructor(
     private val repository: AppStatusRepository,
     private val sessionStore: SessionStore,
-    private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val _chrome = MutableStateFlow(AppChromeState(restoringReadingSession = true))
     val chrome: StateFlow<AppChromeState> = _chrome.asStateFlow()

@@ -4,7 +4,7 @@ import android.content.res.Resources
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 
 /**
  * User-facing text that stays independent of Android [android.content.Context]
@@ -46,7 +46,7 @@ sealed interface PresentationText {
 }
 
 @Composable
-fun PresentationText.resolve(): String = resolve(LocalContext.current.resources)
+fun PresentationText.resolve(): String = resolve(LocalResources.current)
 
 internal fun PresentationText.resolve(resources: Resources): String = when (this) {
     is PresentationText.Resource -> resources.getString(

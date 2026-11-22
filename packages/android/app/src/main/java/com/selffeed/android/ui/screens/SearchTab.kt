@@ -13,29 +13,41 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.foundation.shape.RoundedCornerShape
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
 import com.selffeed.android.R
 import com.selffeed.android.ui.PresentationText
 import com.selffeed.android.ui.resolve
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 @Composable
 fun SearchTab(
@@ -43,6 +55,22 @@ fun SearchTab(
     actions: SearchTabActions,
     observeOfflineText: (String) -> Flow<Boolean> = { emptyFlow() },
 ) {
+    val queryState = rememberTextFieldState(initialText = state.query)
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val latestActions by rememberUpdatedState(actions)
+    val initialQuery = state.query
+    LaunchedEffect(queryState) {
+        // The field owns edits while mounted. The view model retains the query across tab changes.
+        var dispatched = initialQuery
+        snapshotFlow { queryState.text.toString() }.collect { typed ->
+            if (typed != dispatched) {
+                dispatched = typed
+                latestActions.onQueryChanged(typed)
+                if (typed.trim().length >= 2) latestActions.onSearchRequested()
+            }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -51,11 +79,7 @@ fun SearchTab(
         item {
             FeedSurfaceCard {
                 OutlinedTextField(
-                    value = state.query,
-                    onValueChange = {
-                        actions.onQueryChanged(it)
-                        if (it.trim().length >= 2) actions.onSearchRequested()
-                    },
+                    state = queryState,
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text(stringResource(R.string.search_hint)) },
                     leadingIcon = {
@@ -64,7 +88,26 @@ fun SearchTab(
                             contentDescription = stringResource(R.string.search_articles_cd),
                         )
                     },
-                    singleLine = true,
+                    trailingIcon = if (queryState.text.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { queryState.clearText() }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.search_clear_cd),
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    lineLimits = TextFieldLineLimits.SingleLine,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    onKeyboardAction = {
+                        if (queryState.text.toString().trim().length >= 2) {
+                            latestActions.onSearchRequested()
+                        }
+                        keyboardController?.hide()
+                    },
                     shape = RoundedCornerShape(20.dp),
                 )
                 if (state.currentCategoryAvailable) {

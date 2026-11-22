@@ -8,10 +8,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -37,6 +40,7 @@ import dagger.hilt.android.testing.HiltAndroidTest
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -74,6 +78,17 @@ class MainActivityHiltUiTest {
         launchActivity()
 
         composeRule.onNodeWithText("Injected Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun bottomTabExposesItsLabelOnlyOnceInTheMergedSemanticsTree() {
+        repository.reset(authenticated = true)
+        launchActivity()
+        waitForText("Injected Article")
+
+        val settings = composeRule.onNodeWithText("Settings").fetchSemanticsNode().config
+        assertEquals(Role.Tab, settings[SemanticsProperties.Role])
+        assertNull(settings.getOrNull(SemanticsProperties.ContentDescription))
     }
 
     @Test

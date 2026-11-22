@@ -5,11 +5,14 @@ import androidx.room.Database
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Embedded
+import androidx.room.Fts4
+import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.RoomWarnings
 import androidx.room.RoomDatabase
 import androidx.paging.PagingSource
 import com.selffeed.android.data.repository.LocalArticleState
@@ -21,10 +24,13 @@ data class LocalArticleStateRow(val articleId: String, @Embedded val state: Loca
 
 data class SavedArticleContentRow(val id: String, val payloadJson: String?)
 
+data class ArticleSearchBodyRow(val articleId: String, val contentText: String)
+
 object LocalTables {
     const val CATEGORIES = "categories"
     const val FEEDS = "feeds"
     const val ARTICLES = "articles"
+    const val ARTICLE_SEARCH_FTS = "article_search_fts"
     const val ARTICLE_QUERY_ENTRIES = "article_query_entries"
     const val ARTICLE_REMOTE_KEYS = "article_remote_keys"
     const val PENDING_READ_STATE_MUTATIONS = "pending_read_state_mutations"
@@ -104,10 +110,29 @@ data class ArticleEntity(
     val contentVersion: Int,
 )
 
+/**
+ * Full-text search index over cached article titles, excerpts, and offline bodies.
+ * Uses SQLite FTS4 + Unicode61 tokenizer for fast, accent-insensitive offline search
+ * across all supported Android API levels without bundling an extra SQLite binary.
+ */
+@Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61)
+@Entity(tableName = LocalTables.ARTICLE_SEARCH_FTS)
+data class ArticleSearchFtsEntity(
+    val articleId: String,
+    val title: String,
+    val excerpt: String,
+    val contentText: String,
+)
+
 @Entity(
     tableName = LocalTables.ARTICLE_QUERY_ENTRIES,
     primaryKeys = ["queryKey", "articleId"],
-    indices = [Index("queryKey"), Index("articleId"), Index("position")],
+    indices = [
+        Index("queryKey"),
+        Index("articleId"),
+        Index("position"),
+        Index(value = ["queryKey", "position"]),
+    ],
 )
 data class ArticleQueryEntryEntity(
     val queryKey: String,
@@ -160,6 +185,7 @@ data class ArchivedReadStateMutationEntity(
     val ownerId: String,
     val apiBaseUrl: String,
     val userId: String?,
+    @field:SuppressWarnings(RoomWarnings.PRIMARY_KEY_FROM_EMBEDDED_IS_DROPPED)
     @Embedded val mutation: PendingReadStateMutationEntity,
 )
 
@@ -168,6 +194,7 @@ data class ArchivedSavedStateMutationEntity(
     val ownerId: String,
     val apiBaseUrl: String,
     val userId: String?,
+    @field:SuppressWarnings(RoomWarnings.PRIMARY_KEY_FROM_EMBEDDED_IS_DROPPED)
     @Embedded val mutation: PendingSavedStateMutationEntity,
 )
 
@@ -331,6 +358,25 @@ interface LocalStoreDao {
     suspend fun readSavedArticleContent(): List<SavedArticleContentRow>
 
     @Query("""
+        SELECT articles.id FROM articles
+        LEFT JOIN article_details ON article_details.id = articles.id
+        WHERE article_details.id IS NULL
+        ORDER BY articles.isSaved DESC,
+                 articles.isRead ASC,
+                 COALESCE(articles.displayedAt, articles.publishedAt) DESC,
+                 articles.id DESC
+        LIMIT :limit
+    """)
+    suspend fun readArticleIdsMissingDetails(limit: Int): List<String>
+
+    @Query("""
+        SELECT * FROM article_details
+        ORDER BY writtenAt DESC
+        LIMIT :limit
+    """)
+    suspend fun readRecentArticleDetails(limit: Int): List<ArticleDetailEntity>
+
+    @Query("""
         SELECT id FROM articles
         WHERE (:allFeeds OR feedId IN (:feedIds))
           AND (NOT :unreadOnly OR isRead = 0)
@@ -348,11 +394,49 @@ interface LocalStoreDao {
 
     @Query(
         """
+        SELECT articles.* FROM article_search_fts
+        INNER JOIN articles ON articles.id = article_search_fts.articleId
+        LEFT JOIN feeds ON feeds.id = articles.feedId
+        WHERE article_search_fts MATCH :ftsQuery
+          AND (:allCategories OR feeds.categoryId IN (:categoryIds))
+        ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC, articles.id DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun searchArticlesFts(
+        ftsQuery: String,
+        categoryIds: List<String>,
+        allCategories: Boolean,
+        limit: Int,
+    ): List<ArticleEntity>
+
+    @Insert
+    suspend fun insertArticleSearchFts(entries: List<ArticleSearchFtsEntity>)
+
+    @Query("SELECT articleId, contentText FROM article_search_fts WHERE articleId IN (:articleIds)")
+    suspend fun readArticleSearchBodies(articleIds: List<String>): List<ArticleSearchBodyRow>
+
+    @Query("DELETE FROM article_search_fts WHERE articleId IN (:articleIds)")
+    suspend fun deleteArticleSearchFtsByIds(articleIds: List<String>)
+
+    @Query("DELETE FROM article_search_fts WHERE articleId NOT IN (SELECT id FROM articles)")
+    suspend fun pruneOrphanArticleSearchFts()
+
+    @Query("DELETE FROM article_search_fts")
+    suspend fun clearArticleSearchFts()
+
+    @Query(
+        """
         SELECT articles.* FROM articles
         LEFT JOIN feeds ON feeds.id = articles.feedId
         WHERE (:allCategories OR feeds.categoryId IN (:categoryIds))
           AND (instr(lower(articles.title), lower(:query)) > 0
-               OR instr(lower(articles.excerpt), lower(:query)) > 0)
+               OR instr(lower(articles.excerpt), lower(:query)) > 0
+               OR EXISTS (
+                   SELECT 1 FROM article_search_fts
+                   WHERE article_search_fts.articleId = articles.id
+                     AND instr(lower(article_search_fts.contentText), lower(:query)) > 0
+               ))
         ORDER BY COALESCE(articles.displayedAt, articles.publishedAt) DESC, articles.id DESC
         LIMIT :limit
         """,
@@ -373,14 +457,24 @@ interface LocalStoreDao {
     @Query(
         """
         SELECT articles.*, NULL AS readRevision, NULL AS savedRevision FROM articles
-        WHERE isSaved = 1 AND (NOT :unreadOnly OR isRead = 0)
+        WHERE isSaved = 1
+          AND (
+            NOT :unreadOnly
+            OR isRead = 0
+            OR (:queryKey IS NOT NULL AND id IN (SELECT articleId FROM article_query_entries WHERE queryKey = :queryKey))
+          )
           AND (:ownerId IS NULL OR EXISTS (SELECT 1 FROM current_local_owner WHERE `key` = 'current' AND ownerId = :ownerId))
         ORDER BY CASE WHEN :oldest THEN COALESCE(displayedAt, publishedAt) END ASC,
                  CASE WHEN :oldest THEN id END ASC,
                  COALESCE(displayedAt, publishedAt) DESC, id DESC
         """,
     )
-    fun savedArticlePagingSource(ownerId: String?, unreadOnly: Boolean, oldest: Boolean): PagingSource<Int, ArticleListItem>
+    fun savedArticlePagingSource(
+        ownerId: String?,
+        unreadOnly: Boolean,
+        oldest: Boolean,
+        queryKey: String? = null,
+    ): PagingSource<Int, ArticleListItem>
 
     @Query(
         """
@@ -654,6 +748,7 @@ interface LocalStoreDao {
         CategoryEntity::class,
         FeedEntity::class,
         ArticleEntity::class,
+        ArticleSearchFtsEntity::class,
         ArticleQueryEntryEntity::class,
         ArticleRemoteKeyEntity::class,
         PendingReadStateMutationEntity::class,

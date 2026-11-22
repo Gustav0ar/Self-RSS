@@ -31,7 +31,7 @@ abstract class LocalArticleObservationContract {
 
     @Before fun setup() = runBlocking<Unit> {
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
-        store = LocalStore(database, NetworkModule.provideMoshi())
+        store = LocalStore(database, NetworkModule.provideJson())
         store.switchOwner(owner)
     }
     @After fun close() { database.close(); context.deleteDatabase(name) }
@@ -45,7 +45,9 @@ abstract class LocalArticleObservationContract {
             val read = store.queueReadStateMutation("article", true)
             val saved = store.queueSavedStateMutation("article", true)
             withTimeout(5_000) {
-                while (updates.receive()["article"]?.isSaved != true) Unit
+                do {
+                    val savedState = updates.receive()["article"]?.isSaved
+                } while (savedState != true)
             }
             store.rebaseReadStateMutation(read, 4, false)
             store.rebaseSavedStateMutation(saved, 4, false)

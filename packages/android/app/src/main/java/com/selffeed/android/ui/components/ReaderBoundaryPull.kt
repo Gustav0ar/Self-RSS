@@ -11,9 +11,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Velocity
@@ -32,12 +34,19 @@ internal fun rememberReaderBoundaryPull(
     atFeedEnd: Boolean,
 ): ReaderBoundaryPull {
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
     val limit = with(LocalDensity.current) { 22.dp.toPx() }
     val direction = if (LocalLayoutDirection.current == LayoutDirection.Ltr) 1f else -1f
     val start by rememberUpdatedState(atFeedStart)
     val end by rememberUpdatedState(atFeedEnd)
-    return remember(pager, scope, limit, direction) {
-        ReaderBoundaryPull(scope, limit) { delta ->
+    return remember(pager, scope, haptic, limit, direction) {
+        ReaderBoundaryPull(
+            scope = scope,
+            limit = limit,
+            onBoundaryReached = {
+                haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+            },
+        ) { delta ->
             // A loaded page boundary is not necessarily the end of the feed.
             if (delta * direction > 0f) start && !pager.canScrollBackward
             else end && !pager.canScrollForward
@@ -49,10 +58,12 @@ internal fun rememberReaderBoundaryPull(
 internal class ReaderBoundaryPull(
     private val scope: CoroutineScope,
     private val limit: Float,
+    private val onBoundaryReached: () -> Unit = {},
     private val isBoundary: (Float) -> Boolean,
 ) : NestedScrollConnection {
     private var pull by mutableFloatStateOf(0f)
     private var settling: Job? = null
+    private var boundaryHapticPlayed = false
 
     val translation: Float
         get() = if (isBoundary(pull)) {
@@ -83,6 +94,10 @@ internal class ReaderBoundaryPull(
         }
         // Bound the stored drag as well as its visual displacement, so reversal stays responsive.
         pull = (pull + available.x).coerceIn(-limit * 9f, limit * 9f)
+        if (!boundaryHapticPlayed && abs(pull) >= limit * 1.5f) {
+            boundaryHapticPlayed = true
+            onBoundaryReached()
+        }
         return Offset(available.x, 0f)
     }
 
@@ -98,6 +113,7 @@ internal class ReaderBoundaryPull(
     }
 
     private fun release() {
+        boundaryHapticPlayed = false
         if (pull == 0f || settling?.isActive == true) return
         settling = scope.launch {
             // No oscillation, layout changes, or work after the spring has settled.

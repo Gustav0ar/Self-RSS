@@ -1,6 +1,7 @@
 package com.selffeed.android.data
 
 import android.content.Context
+import androidx.lifecycle.SavedStateHandle
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
@@ -37,7 +38,7 @@ import com.selffeed.android.ui.MainDispatcherRule
 import com.selffeed.android.ui.articles.ArticleWarmingManager
 import com.selffeed.android.ui.articles.EnrichmentManager
 import com.selffeed.android.ui.articles.ReadStateManager
-import com.squareup.moshi.Moshi
+import kotlinx.serialization.json.JsonPrimitive
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -139,11 +140,11 @@ class RssRepositoryTest {
         // KotlinJsonAdapterFactory as a fallback for DTOs whose generated
         // adapters aren't on the test classpath. The test suite uses the
         // same Moshi so writes through LocalStore can encode payloads.
-        val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
+        val json = com.selffeed.android.network.NetworkModule.provideJson()
         database = androidx.room.Room.databaseBuilder(
             context, com.selffeed.android.data.local.LocalDatabase::class.java, databaseName,
         ).build()
-        localStore = LocalStore(database, moshi)
+        localStore = LocalStore(database, json)
         offlineReadStore = localStore
         imageLoader = mockk(relaxed = true)
         networkMonitor = mockk(relaxed = true)
@@ -159,7 +160,7 @@ class RssRepositoryTest {
             sessionStore = sessionStore,
             sessionRefreshCoordinator = sessionRefreshCoordinator,
             okHttpClient = OkHttpClient(),
-            moshi = moshi,
+            json = json,
             localStore = localStore,
             offlineReadStore = offlineReadStore,
             imageRequestContext = context,
@@ -671,7 +672,11 @@ class RssRepositoryTest {
         assertTrue(repository.article(articleId) is AppResult.Success)
         onlineState.value = false
         val viewModel = ArticlesViewModel(
-            repository, ReadStateManager(repository), EnrichmentManager(repository), ArticleWarmingManager(repository),
+            repository,
+            ReadStateManager(repository),
+            EnrichmentManager(repository),
+            ArticleWarmingManager(repository),
+            SavedStateHandle(),
         )
         val viewModelStore = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
@@ -1155,7 +1160,7 @@ class RssRepositoryTest {
         coEvery {
             api.syncAllFeeds(match { it.isNotBlank() }, null, null, session = any())
         } returns com.selffeed.android.network.ApiEnvelope(
-            SyncResponse(status = "queued", totalFeeds = 1),
+            SyncResponse(status = JsonPrimitive("queued"), totalFeeds = 1),
         )
 
         val syncResult = repository.syncAllFeeds()
@@ -1405,8 +1410,11 @@ class RssRepositoryTest {
             override fun readStateEvents() = remoteEvents
         }
         val viewModel = ArticlesViewModel(
-            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            articleRepository,
+            ReadStateManager(articleRepository),
+            EnrichmentManager(articleRepository),
             ArticleWarmingManager(articleRepository),
+            SavedStateHandle(),
         )
         val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
@@ -1461,8 +1469,11 @@ class RssRepositoryTest {
             }
         }
         val viewModel = ArticlesViewModel(
-            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            articleRepository,
+            ReadStateManager(articleRepository),
+            EnrichmentManager(articleRepository),
             ArticleWarmingManager(articleRepository),
+            SavedStateHandle(),
         )
         val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
@@ -1511,8 +1522,11 @@ class RssRepositoryTest {
             override fun readStateEvents() = remoteEvents
         }
         val viewModel = ArticlesViewModel(
-            articleRepository, ReadStateManager(articleRepository), EnrichmentManager(articleRepository),
+            articleRepository,
+            ReadStateManager(articleRepository),
+            EnrichmentManager(articleRepository),
             ArticleWarmingManager(articleRepository),
+            SavedStateHandle(),
         )
         val store = androidx.lifecycle.ViewModelStore().apply { put("articles", viewModel) }
         try {
@@ -1999,7 +2013,7 @@ class RssRepositoryTest {
             context, com.selffeed.android.data.local.LocalDatabase::class.java, databaseName,
         ).build()
         try {
-            val reopened = LocalStore(reopenedDatabase, com.selffeed.android.network.NetworkModule.provideMoshi())
+            val reopened = LocalStore(reopenedDatabase, com.selffeed.android.network.NetworkModule.provideJson())
             assertTrue(reopened.savedArticlesMissingFromQuery("saved-current").isEmpty())
             assertEquals(false, reopened.readArticleDetail("unsaved")?.isSaved)
             assertEquals(false, reopened.readArticleDetail("deleted")?.isSaved)

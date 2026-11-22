@@ -8,14 +8,15 @@ private const val REQUIRED_API_SEGMENT = "api"
 private const val REQUIRED_API_VERSION_SEGMENT = "v1"
 private val REQUIRED_API_PATH = listOf(REQUIRED_API_SEGMENT, REQUIRED_API_VERSION_SEGMENT)
 
-fun normalizeApiBaseUrl(rawBaseUrl: String): String {
-    val serverHost = normalizeApiServerHost(rawBaseUrl)
-    return apiBaseUrlFromServerHost(serverHost)
-}
+fun normalizeApiBaseUrl(rawBaseUrl: String): String = apiBaseUrlFromServerHost(rawBaseUrl)
 
 fun normalizeApiServerHost(rawServerHost: String): String {
     val authority = parseServerHost(rawServerHost)
-    return formatServerHost(authority.host, authority.port)
+    val host = formatServerHost(authority.host, authority.port)
+    val scheme = authority.scheme ?: return host
+    val origin = "$scheme://$host"
+    // Keep the existing host-only identity whenever it resolves to the same endpoint.
+    return if (apiBaseUrlFromServerHost(host) == apiBaseUrlFromServerHost(origin)) host else origin
 }
 
 fun apiBaseUrlFromServerHost(
@@ -30,7 +31,7 @@ fun apiBaseUrlFromServerHost(
         ?: defaultBase.url.scheme
     val port = when {
         authority.port != -1 -> authority.port
-        hostKind == HostKind.PUBLIC -> -1
+        authority.scheme != null || hostKind == HostKind.PUBLIC -> -1
         defaultBase.explicitPort != -1 -> defaultBase.explicitPort
         else -> -1
     }

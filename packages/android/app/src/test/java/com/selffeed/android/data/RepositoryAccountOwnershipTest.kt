@@ -86,7 +86,7 @@ class RepositoryAccountOwnershipTest {
         )
         store = spyk(SessionStore(context, dataStore = preferences))
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
-        local = LocalStore(database, NetworkModule.provideMoshi())
+        local = LocalStore(database, NetworkModule.provideJson())
         boundary = AccountSessionBoundary(store, local) {}
     }
 
@@ -102,7 +102,7 @@ class RepositoryAccountOwnershipTest {
             every { online } returns this@RepositoryAccountOwnershipTest.online
             every { unmetered } returns MutableStateFlow(false)
         }
-        val moshi = NetworkModule.provideMoshi()
+        val moshi = NetworkModule.provideJson()
         return RssRepository(
             AuthRemoteDataSource(api), FeedRemoteDataSource(api), ArticleRemoteDataSource(api),
             SearchRemoteDataSource(api), SettingsRemoteDataSource(api), store,

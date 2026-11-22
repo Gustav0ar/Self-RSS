@@ -8,10 +8,9 @@ import com.selffeed.android.network.RealtimeConnectedEvent
 import com.selffeed.android.network.SseEventParser
 import com.selffeed.android.network.SseMessage
 import com.selffeed.android.network.toReadStateEvent
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.Moshi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -33,10 +32,9 @@ import kotlin.coroutines.coroutineContext
 
 class ReadStateStreamClient(
     okHttpClient: OkHttpClient,
-    moshi: Moshi,
+    private val json: Json,
     private val runtime: RepositoryRuntime,
 ) {
-    private val readStateEventAdapter: JsonAdapter<ReadStateEventPayload> = moshi.adapter(ReadStateEventPayload::class.java)
 
     /**
      * Reuses the authenticated app client while configuring timeouts for SSE streams.
@@ -89,6 +87,7 @@ class ReadStateStreamClient(
             .url(apiEndpointUrl(session.apiBaseUrl, "events/read-state"))
             .tag(ApiSession::class.java, session)
             .header("Accept", "text/event-stream")
+            .header("Accept-Encoding", "identity")
             .header("Cache-Control", "no-cache")
             .build()
         val call = readStateClient.newCall(request)
@@ -134,7 +133,7 @@ class ReadStateStreamClient(
                                     connected = true
                                     this@stream.trySend(RealtimeConnectedEvent())
                                 }
-                                else -> message.toReadStateEvent(readStateEventAdapter)
+                                else -> message.toReadStateEvent(json)
                                     ?.let { this@stream.trySend(it) }
                             }
                         }

@@ -1,9 +1,12 @@
 package com.selffeed.android.ui.screens
 
+import android.text.format.Formatter
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.TextObfuscationMode
+import androidx.compose.foundation.text.input.clearText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.outlined.DarkMode
@@ -23,38 +31,61 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedSecureTextField
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.platform.LocalAutofillManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import coil3.SingletonImageLoader
+import com.selffeed.android.ui.components.LocalServerAccessButton
 import com.selffeed.android.R
+import com.selffeed.android.data.OfflineContentSyncWorker
+import com.selffeed.android.data.local.OfflineMediaCacheStats
 import com.selffeed.android.ui.ArticleSortPreference
 import com.selffeed.android.ui.AutoMarkReadPreference
 import com.selffeed.android.ui.DensityPreference
 import com.selffeed.android.ui.ReaderFontPreference
 import com.selffeed.android.ui.ThemePreference
+import com.selffeed.android.ui.components.LocalOfflineMediaCache
 import com.selffeed.android.ui.resolve
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
     val prefs = state.preferences
@@ -87,6 +118,7 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    LocalServerAccessButton(onGranted = actions.onRetryPreferences)
                     Button(onClick = actions.onRetryPreferences) {
                         Text(stringResource(R.string.action_retry))
                     }
@@ -100,7 +132,12 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
     val selectedDensity = DensityPreference.fromApiValue(prefs.density)
     val selectedFont = ReaderFontPreference.fromApiValue(prefs.fontFamily)
     val selectedAutoMark = AutoMarkReadPreference.fromApiValue(prefs.autoMarkReadMode)
-    val draftTextSize = remember(prefs.textSize) { mutableIntStateOf(prefs.textSize) }
+    val textSizeSliderState = remember(prefs.textSize) {
+        SliderState(
+            value = prefs.textSize.toFloat().coerceIn(12f, 24f),
+            trackRange = 12f..24f,
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("settings-list"),
@@ -253,13 +290,17 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Slider(
-                    value = draftTextSize.intValue.toFloat(),
-                    onValueChange = { draftTextSize.intValue = it.roundToInt() },
-                    onValueChangeFinished = { actions.onTextSizeChanged(draftTextSize.intValue) },
-                    valueRange = 12f..24f,
+                    state = textSizeSliderState,
+                    onValueChange = { textSizeSliderState.value = it },
+                    onValueChangeFinished = {
+                        actions.onTextSizeChanged(textSizeSliderState.value.roundToInt())
+                    },
                 )
                 Text(
-                    stringResource(R.string.settings_text_size_sp, draftTextSize.intValue),
+                    stringResource(
+                        R.string.settings_text_size_sp,
+                        textSizeSliderState.value.roundToInt(),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -333,6 +374,10 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                 }
             }
         }
+        item {
+            LocalServerAccessButton(onGranted = actions.onRetryPreferences)
+            OfflineStorageSection(isOnline = state.isOnline)
+        }
         if (!state.stats?.recentSyncRuns.isNullOrEmpty()) {
             item {
                 FeedSurfaceCard {
@@ -342,7 +387,7 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
-                    state.stats?.recentSyncRuns?.forEach { syncRun ->
+                    state.stats.recentSyncRuns.forEach { syncRun ->
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -415,21 +460,165 @@ fun SettingsTab(state: SettingsTabState, actions: SettingsTabActions) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OfflineStorageSection(isOnline: Boolean) {
+    val context = LocalContext.current
+    val mediaCache = LocalOfflineMediaCache.current ?: return
+    val scope = rememberCoroutineScope()
+    var stats by remember(mediaCache) { mutableStateOf<OfflineMediaCacheStats?>(null) }
+    var feedbackRes by remember { mutableStateOf<Int?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var offlineWorkQueued by remember { mutableStateOf(false) }
+    var syncingOffline by remember { mutableStateOf(false) }
+
+    LaunchedEffect(mediaCache) {
+        stats = mediaCache.stats()
+    }
+
+    LaunchedEffect(context, mediaCache) {
+        val workManager = runCatching { WorkManager.getInstance(context) }.getOrNull() ?: return@LaunchedEffect
+        workManager.getWorkInfosForUniqueWorkFlow(OfflineContentSyncWorker.WORK_NAME).collect { infos ->
+            val wasPending = offlineWorkQueued
+            offlineWorkQueued = infos.any { !it.state.isFinished }
+            syncingOffline = infos.any { it.state == WorkInfo.State.RUNNING }
+            if (wasPending && !offlineWorkQueued) {
+                stats = mediaCache.stats()
+                if (feedbackRes == R.string.settings_offline_download_started) feedbackRes = null
+            }
+        }
+    }
+
+    FeedSurfaceCard {
+        Text(
+            text = stringResource(R.string.settings_offline_storage),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = stringResource(R.string.settings_offline_storage_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        val currentStats = stats
+        val summaryText = when {
+            currentStats == null || currentStats.fileCount == 0 ->
+                stringResource(R.string.settings_offline_cache_empty)
+            else -> stringResource(
+                R.string.settings_offline_cache_summary,
+                Formatter.formatShortFileSize(context, currentStats.totalBytes),
+                currentStats.fileCount,
+            )
+        }
+        Text(
+            text = summaryText,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        feedbackRes?.let { res ->
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(res),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        try {
+                            OfflineContentSyncWorker.kickOnce(context)
+                            feedbackRes = R.string.settings_offline_download_started
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            feedbackRes = R.string.settings_offline_download_failed
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                enabled = isOnline && !busy && !offlineWorkQueued,
+            ) {
+                Text(
+                    text = stringResource(
+                        when {
+                            syncingOffline -> R.string.settings_offline_downloading
+                            offlineWorkQueued -> R.string.settings_offline_download_started
+                            else -> R.string.settings_offline_download_now
+                        },
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        try {
+                            mediaCache.clearAll()
+                            withContext(Dispatchers.IO) {
+                                val loader = SingletonImageLoader.get(context)
+                                loader.memoryCache?.clear()
+                                loader.diskCache?.clear()
+                            }
+                            stats = mediaCache.stats()
+                            feedbackRes = if (stats?.fileCount == 0) R.string.settings_offline_cache_cleared
+                                else R.string.settings_offline_clear_failed
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            feedbackRes = R.string.settings_offline_clear_failed
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                enabled = !busy && !syncingOffline && (currentStats?.fileCount ?: 0) > 0,
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_offline_clear_cache),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun PasswordSection(
     state: SettingsTabState,
     onChangePassword: (String, String) -> Unit,
 ) {
-    var currentPassword by remember { mutableStateOf("") }
-    var newPassword by remember { mutableStateOf("") }
-    var confirmation by remember { mutableStateOf("") }
-    val passwordsMatch = newPassword == confirmation
+    val autofillManager = LocalAutofillManager.current
+    val currentPassword = remember { TextFieldState() }
+    val newPassword = remember { TextFieldState() }
+    val confirmation = remember { TextFieldState() }
+    val passwordsMatch = newPassword.text.contentEquals(confirmation.text)
+    val canSubmit = state.isOnline &&
+        !state.passwordChangePending &&
+        currentPassword.text.isNotEmpty() &&
+        newPassword.text.length >= 8 &&
+        passwordsMatch
+    val submitPasswordChange = {
+        autofillManager?.commit()
+        onChangePassword(currentPassword.text.toString(), newPassword.text.toString())
+    }
 
     LaunchedEffect(state.passwordChangeGeneration) {
         if (state.passwordChangeGeneration > 0) {
-            currentPassword = ""
-            newPassword = ""
-            confirmation = ""
+            currentPassword.clearAndResetHistory()
+            newPassword.clearAndResetHistory()
+            confirmation.clearAndResetHistory()
         }
     }
 
@@ -445,43 +634,45 @@ private fun PasswordSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = currentPassword,
-            onValueChange = { currentPassword = it },
+        OutlinedSecureTextField(
+            state = currentPassword,
             label = { Text(stringResource(R.string.settings_current_password)) },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentType = ContentType.Password },
+            textObfuscationMode = TextObfuscationMode.Hidden,
+            keyboardOptions = passwordKeyboardOptions(ImeAction.Next),
         )
-        OutlinedTextField(
-            value = newPassword,
-            onValueChange = { newPassword = it },
+        OutlinedSecureTextField(
+            state = newPassword,
             label = { Text(stringResource(R.string.settings_new_password)) },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentType = ContentType.NewPassword },
+            textObfuscationMode = TextObfuscationMode.Hidden,
+            keyboardOptions = passwordKeyboardOptions(ImeAction.Next),
         )
-        OutlinedTextField(
-            value = confirmation,
-            onValueChange = { confirmation = it },
+        OutlinedSecureTextField(
+            state = confirmation,
             label = { Text(stringResource(R.string.settings_confirm_password)) },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            supportingText = if (confirmation.isNotEmpty() && !passwordsMatch) {
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentType = ContentType.NewPassword },
+            textObfuscationMode = TextObfuscationMode.Hidden,
+            keyboardOptions = passwordKeyboardOptions(ImeAction.Done),
+            onKeyboardAction = {
+                if (canSubmit) submitPasswordChange()
+            },
+            supportingText = if (confirmation.text.isNotEmpty() && !passwordsMatch) {
                 { Text(stringResource(R.string.settings_passwords_do_not_match)) }
             } else {
                 null
             },
-            isError = confirmation.isNotEmpty() && !passwordsMatch,
-            singleLine = true,
+            isError = confirmation.text.isNotEmpty() && !passwordsMatch,
         )
         Button(
-            onClick = { onChangePassword(currentPassword, newPassword) },
-            enabled = state.isOnline &&
-                    !state.passwordChangePending &&
-                    currentPassword.isNotEmpty() &&
-                    newPassword.length >= 8 &&
-                    passwordsMatch,
+            onClick = submitPasswordChange,
+            enabled = canSubmit,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
@@ -510,11 +701,10 @@ private fun AdminSection(
     actions: SettingsTabActions,
     registrationLocked: Boolean,
 ) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    val email = remember { TextFieldState() }
+    val password = remember { TextFieldState() }
     var createAsAdmin by remember { mutableStateOf(false) }
     var resetUserId by remember { mutableStateOf<String?>(null) }
-    var resetPassword by remember { mutableStateOf("") }
     var pendingUserUpdate by remember {
         mutableStateOf<Triple<String, String?, Boolean?>?>(null)
     }
@@ -544,19 +734,23 @@ private fun AdminSection(
     Spacer(modifier = Modifier.height(16.dp))
     Text(stringResource(R.string.settings_admin_create_user), fontWeight = FontWeight.SemiBold)
     OutlinedTextField(
-        value = email,
-        onValueChange = { email = it },
+        state = email,
         label = { Text(stringResource(R.string.auth_email)) },
         modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
+        lineLimits = TextFieldLineLimits.SingleLine,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+            keyboardType = KeyboardType.Email,
+            imeAction = ImeAction.Next,
+        ),
     )
-    OutlinedTextField(
-        value = password,
-        onValueChange = { password = it },
+    OutlinedSecureTextField(
+        state = password,
         label = { Text(stringResource(R.string.auth_password)) },
         modifier = Modifier.fillMaxWidth(),
-        visualTransformation = PasswordVisualTransformation(),
-        singleLine = true,
+        textObfuscationMode = TextObfuscationMode.Hidden,
+        keyboardOptions = passwordKeyboardOptions(ImeAction.Done),
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.settings_admin_role))
@@ -565,15 +759,15 @@ private fun AdminSection(
     Button(
         onClick = {
             actions.onCreateAdminUser(
-                email,
-                password,
+                email.text.toString(),
+                password.text.toString(),
                 if (createAsAdmin) "admin" else "user",
             )
-            email = ""
-            password = ""
+            email.clearText()
+            password.clearAndResetHistory()
             createAsAdmin = false
         },
-        enabled = email.isNotBlank() && password.length >= 8,
+        enabled = email.text.isNotBlank() && password.text.length >= 8,
     ) {
         Text(stringResource(R.string.settings_admin_create))
     }
@@ -634,35 +828,35 @@ private fun AdminSection(
         }
     }
 
-    if (resetUserId != null) {
+    resetUserId?.let { userId ->
+        val resetPassword = remember(userId) { TextFieldState() }
+        val closeResetDialog = {
+            resetPassword.clearAndResetHistory()
+            resetUserId = null
+        }
         AlertDialog(
-            onDismissRequest = {
-                resetUserId = null
-                resetPassword = ""
-            },
+            onDismissRequest = closeResetDialog,
             title = { Text(stringResource(R.string.settings_admin_reset_password)) },
             text = {
-                OutlinedTextField(
-                    value = resetPassword,
-                    onValueChange = { resetPassword = it },
+                OutlinedSecureTextField(
+                    state = resetPassword,
                     label = { Text(stringResource(R.string.auth_password)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
+                    textObfuscationMode = TextObfuscationMode.Hidden,
+                    keyboardOptions = passwordKeyboardOptions(ImeAction.Done),
                 )
             },
             dismissButton = {
-                TextButton(onClick = { resetUserId = null }) {
+                TextButton(onClick = closeResetDialog) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        actions.onResetAdminPassword(resetUserId.orEmpty(), resetPassword)
-                        resetUserId = null
-                        resetPassword = ""
+                        actions.onResetAdminPassword(userId, resetPassword.text.toString())
+                        closeResetDialog()
                     },
-                    enabled = resetPassword.length >= 8,
+                    enabled = resetPassword.text.length >= 8,
                 ) {
                     Text(stringResource(R.string.settings_admin_reset_password))
                 }
@@ -691,6 +885,17 @@ private fun AdminSection(
             },
         )
     }
+}
+
+private fun passwordKeyboardOptions(imeAction: ImeAction) = KeyboardOptions(
+    autoCorrectEnabled = false,
+    keyboardType = KeyboardType.Password,
+    imeAction = imeAction,
+)
+
+private fun TextFieldState.clearAndResetHistory() {
+    clearText()
+    undoState.clearHistory()
 }
 
 @Composable

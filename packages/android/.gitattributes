@@ -1,0 +1,2 @@
+# The Gradle wrapper generates the Windows launcher with CRLF line endings.
+gradlew.bat whitespace=trailing-space,space-before-tab,cr-at-eol

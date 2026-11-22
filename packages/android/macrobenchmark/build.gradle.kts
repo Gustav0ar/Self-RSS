@@ -5,11 +5,15 @@ plugins {
 
 android {
     namespace = "com.selffeed.android.macrobenchmark"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "TARGET_PACKAGE", "\"com.selffeed.android\"")
     }
@@ -42,7 +46,7 @@ baselineProfile {
 }
 
 dependencies {
-    implementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    implementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
     implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0-alpha07")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.test.ext:junit:1.3.0")

@@ -5,7 +5,6 @@ import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
-import com.squareup.moshi.Moshi
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -28,7 +27,7 @@ class OfflineCacheStoreTest {
     // KotlinJsonAdapterFactory as a fallback for DTOs whose generated
     // adapters aren't on the test classpath. Without this fallback the
     // generated-adapter lookup fails for every payload in this test.
-    private val moshi = com.selffeed.android.network.NetworkModule.provideMoshi()
+    private val json = com.selffeed.android.network.NetworkModule.provideJson()
 
     @Before
     fun setup() {
@@ -37,7 +36,7 @@ class OfflineCacheStoreTest {
         // expiry behavior in real time.
         store = OfflineCacheStore(
             context = context,
-            moshi = moshi,
+            json = json,
             maxAgeMs = 1_000L, // 1 second
             maxTotalBytes = 8 * 1024L, // 8 KB cap to exercise eviction
         )

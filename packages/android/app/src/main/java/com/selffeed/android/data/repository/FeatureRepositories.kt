@@ -221,6 +221,10 @@ class ArticleRepositoryImpl @Inject constructor(
 
     override suspend fun recordArticleCompletion(articleId: String) =
         access.withAccount { delegate.recordArticleCompletion(articleId) }
+
+    override fun scheduleOfflineContentSync() {
+        if (access.isCurrent()) delegate.scheduleOfflineContentSync()
+    }
 }
 
 class SearchRepositoryImpl @Inject constructor(

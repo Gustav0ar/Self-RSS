@@ -5,14 +5,13 @@ import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.AppResult
 import com.selffeed.android.data.MemoryCache
 import com.selffeed.android.network.ApiErrorEnvelope
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.Moshi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import retrofit2.HttpException
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -23,7 +22,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
 class RepositoryRuntime(
-    moshi: Moshi,
+    private val json: Json,
     maxMemoryCacheEntries: Int,
     private val logTag: String,
     private val apiBaseUrl: () -> String = { BuildConfig.API_BASE_URL },
@@ -48,7 +47,6 @@ class RepositoryRuntime(
     private val cacheInvalidationCount = AtomicLong(0)
     private val cacheInvalidatedEntriesCount = AtomicLong(0)
     private val memoryCache = MemoryCache(maxMemoryCacheEntries)
-    private val apiErrorAdapter: JsonAdapter<ApiErrorEnvelope> = moshi.adapter(ApiErrorEnvelope::class.java)
 
     suspend fun <T> safeCall(block: suspend () -> T): AppResult<T> =
         try {
@@ -218,7 +216,7 @@ class RepositoryRuntime(
     }
 
     private fun extractApiErrorMessage(rawBody: String): String? {
-        val parsed = runCatching { apiErrorAdapter.fromJson(rawBody) }.getOrNull()
+        val parsed = runCatching { json.decodeFromString(ApiErrorEnvelope.serializer(), rawBody) }.getOrNull()
         return parsed?.error?.message?.trim()?.takeIf { it.isNotEmpty() }
     }
 

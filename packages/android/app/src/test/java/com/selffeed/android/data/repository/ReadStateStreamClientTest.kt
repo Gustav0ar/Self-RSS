@@ -62,7 +62,7 @@ class ReadStateStreamClientTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK").body(body.toResponseBody()).build()
         }.build()
-        val moshi = NetworkModule.provideMoshi()
+        val moshi = NetworkModule.provideJson()
         val client = ReadStateStreamClient(http, moshi, RepositoryRuntime(moshi, 2, "stream-test"))
         try {
             val events = withTimeout(5_000) {
@@ -87,7 +87,7 @@ class ReadStateStreamClientTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK").body(body.toResponseBody()).build()
         }.build()
-        val moshi = NetworkModule.provideMoshi()
+        val moshi = NetworkModule.provideJson()
         val client = ReadStateStreamClient(http, moshi, RepositoryRuntime(moshi, 2, "stream-test"))
         val collection = launch {
             client.events(ApiSession(0, "https://example.test/api/v1/", "owner")) { true }

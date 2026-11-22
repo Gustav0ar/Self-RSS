@@ -12,8 +12,12 @@ import android.content.pm.ActivityInfo
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,13 +28,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,11 +55,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.computedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,18 +71,40 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import com.selffeed.android.data.local.OfflineMediaCache
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import com.selffeed.android.R
@@ -81,9 +118,12 @@ import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.ui.ReaderAppearance
 import com.selffeed.android.ui.utils.formatPublishedAt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,13 +131,16 @@ import kotlin.math.abs
 fun ArticleReaderPane(
     articles: List<ArticleListItem>,
     isVisible: Boolean = true,
+    isOnline: Boolean = true,
     atFeedStart: Boolean = true,
     atFeedEnd: Boolean = true,
     selectedArticle: ArticleDetail,
     prefetchedArticles: Map<String, ArticleDetail> = emptyMap(),
     articleStates: Map<String, ArticleFlags> = emptyMap(),
     onOpenOriginal: (ArticleDetail) -> Unit,
-    onBackToList: () -> Unit,
+    onToggleRead: (() -> Unit)? = null,
+    onToggleSaved: (() -> Unit)? = null,
+    onBackToList: (() -> Unit)? = null,
     onArticleSelected: (String) -> Unit,
     onVisibleArticleChanged: (String) -> Unit = {},
     onArticleDisplayed: (String) -> Unit = {},
@@ -112,6 +155,12 @@ fun ArticleReaderPane(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateAsState()
     val foreground = isVisible && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    val customTabsPrewarmer = LocalCustomTabsPrewarmer.current
+    LaunchedEffect(selectedArticle.canonicalUrl, foreground, isOnline) {
+        if (foreground && isOnline) {
+            customTabsPrewarmer?.mayLaunchUrl(selectedArticle.canonicalUrl)
+        }
+    }
     var retainAdjacentRenderers by remember { mutableStateOf(true) }
     LaunchedEffect(isVisible) {
         if (isVisible) retainAdjacentRenderers = true
@@ -123,13 +172,15 @@ fun ArticleReaderPane(
         }
         val callbacks = object : ComponentCallbacks2 {
             override fun onConfigurationChanged(config: Configuration) = Unit
+            @Deprecated("Only delivered on older Android versions")
             override fun onLowMemory() { retainAdjacentRenderers = false }
             override fun onTrimMemory(level: Int) {
-                // UI_HIDDEN is numerically above RUNNING_LOW, but only means
-                // the app went into the background. It is not memory pressure.
-                if (level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN &&
-                    level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
-                ) retainAdjacentRenderers = false
+                // Keep adjacent WebViews across brief background switches
+                // (TRIM_MEMORY_UI_HIDDEN), releasing them under background
+                // memory pressure (TRIM_MEMORY_BACKGROUND and above).
+                if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+                    retainAdjacentRenderers = false
+                }
             }
         }
         appContext.registerComponentCallbacks(callbacks)
@@ -146,7 +197,7 @@ fun ArticleReaderPane(
         readerArticles.indexOfFirst { it.id == selectedArticle.id }
     }
 
-    BackHandler(onBack = onBackToList)
+    if (onBackToList != null) BackHandler(onBack = onBackToList)
 
     if (readerArticles.isEmpty() || selectedArticleIndex == -1) {
         ArticleDetailView(
@@ -155,6 +206,7 @@ fun ArticleReaderPane(
             loadError = loadError,
             onRetry = { onArticleSelected(selectedArticle.id) },
             isActive = foreground,
+            isOnline = isOnline,
             onOpenOriginal = { onOpenOriginal(selectedArticle) },
             onDisplayed = { onArticleDisplayed(selectedArticle.id) },
             onCompleted = { onArticleCompleted(selectedArticle.id) },
@@ -218,10 +270,55 @@ fun ArticleReaderPane(
     }
 
     val boundaryPull = rememberReaderBoundaryPull(pagerState, atFeedStart, atFeedEnd)
+    val pagerScope = rememberCoroutineScope()
+    val readerFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(foreground) {
+        if (foreground) runCatching { readerFocusRequester.requestFocus() }
+    }
+    val latestOnOpenOriginal by rememberUpdatedState(onOpenOriginal)
+    val latestOnToggleRead by rememberUpdatedState(onToggleRead)
+    val latestOnToggleSaved by rememberUpdatedState(onToggleSaved)
+    val latestSelectedArticle by rememberUpdatedState(selectedArticle)
     Box(
         Modifier.fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .clipToBounds()
+            .focusRequester(readerFocusRequester)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyUp ||
+                    event.isCtrlPressed || event.isAltPressed || event.isMetaPressed
+                ) {
+                    return@onPreviewKeyEvent false
+                }
+                when (event.key) {
+                    Key.J, Key.DirectionRight -> {
+                        val next = pagerState.currentPage + 1
+                        if (next < readerArticles.size) {
+                            pagerScope.launch { pagerState.animateScrollToPage(next) }
+                        }
+                        true
+                    }
+                    Key.K, Key.DirectionLeft -> {
+                        val prev = pagerState.currentPage - 1
+                        if (prev >= 0) {
+                            pagerScope.launch { pagerState.animateScrollToPage(prev) }
+                        }
+                        true
+                    }
+                    Key.S -> {
+                        latestOnToggleSaved?.invoke() != null
+                    }
+                    Key.M -> {
+                        latestOnToggleRead?.invoke() != null
+                    }
+                    Key.O -> {
+                        latestOnOpenOriginal(latestSelectedArticle)
+                        true
+                    }
+                    else -> false
+                }
+            }
             .nestedScroll(boundaryPull),
     ) {
         HorizontalPager(
@@ -238,15 +335,35 @@ fun ArticleReaderPane(
             if (readerArticles.isEmpty()) return@HorizontalPager
             val articleItem = readerArticles[page].withArticleFlags(articleStates[readerArticles[page].id])
             val article = selectedDetails[articleItem.id]?.withArticleFlags(articleStates[articleItem.id])
+            val nextArticle = readerArticles.getOrNull(page + 1)
             if (article != null) {
+                val isCurrentPage by remember(pagerState, page) {
+                    computedStateOf { page == pagerState.currentPage }
+                }
+                val allowRenderer by remember(pagerState, page) {
+                    computedStateOf {
+                        val currentPage = pagerState.currentPage
+                        page == currentPage ||
+                            (retainAdjacentRenderers && abs(page - currentPage) == 1)
+                    }
+                }
                 ArticleDetailView(
                     observeOfflineText = observeOfflineText,
                     article = article,
+                    nextArticle = nextArticle,
+                    onOpenNextArticle = if (nextArticle != null) {
+                        {
+                            val target = page + 1
+                            if (target < readerArticles.size) {
+                                pagerScope.launch { pagerState.animateScrollToPage(target) }
+                            }
+                        }
+                    } else null,
                     loadError = loadError.takeIf { article.id == selectedArticle.id },
                     onRetry = { onArticleSelected(article.id) },
-                    isActive = foreground && page == pagerState.currentPage,
-                    allowRenderer = page == pagerState.currentPage ||
-                        (retainAdjacentRenderers && abs(page - pagerState.currentPage) <= 1),
+                    isActive = foreground && isCurrentPage,
+                    isOnline = isOnline,
+                    allowRenderer = allowRenderer,
                     onOpenOriginal = { onOpenOriginal(article) },
                     onDisplayed = { onArticleDisplayed(article.id) },
                     onCompleted = { onArticleCompleted(article.id) },
@@ -268,8 +385,11 @@ fun ArticleReaderPane(
 private fun ArticleDetailView(
     article: ArticleDetail,
     isActive: Boolean,
+    isOnline: Boolean = true,
     allowRenderer: Boolean = true,
     onOpenOriginal: () -> Unit,
+    nextArticle: ArticleListItem? = null,
+    onOpenNextArticle: (() -> Unit)? = null,
     onDisplayed: () -> Unit = {},
     onCompleted: () -> Unit = {},
     onBodyReady: () -> Unit = {},
@@ -291,6 +411,9 @@ private fun ArticleDetailView(
     val bodyKind = when {
         richHtml != null -> ReaderBodyKind.Rich
         loadError != null -> ReaderBodyKind.Error
+        // When offline, show any retained plain text instead of waiting on
+        // enrichment that cannot run without connectivity.
+        !isOnline && !retainedContent.text.isNullOrBlank() -> ReaderBodyKind.Text
         // Pager prefetch can compose a page outside the retained WebView window.
         // Keep that rich page lightweight instead of laying out its entire text
         // fallback during the current swipe. Its renderer is enabled before entry.
@@ -324,7 +447,11 @@ private fun ArticleDetailView(
         }
     }
     var fullscreenMedia by remember { mutableStateOf<ReaderFullscreenMedia?>(null) }
+    var zoomedImageUrl by remember(article.id) { mutableStateOf<String?>(null) }
     val documentBaseUrl = readerDocumentBaseUrl(article.canonicalUrl, article.feedSiteUrl)
+    val readingMinutes = remember(article.id, retainedContent.html, retainedContent.text) {
+        estimateReadingMinutes(retainedContent.html, retainedContent.text)
+    }
 
     LaunchedEffect(article.id, isActive) {
         if (isActive) onDisplayed()
@@ -347,31 +474,38 @@ private fun ArticleDetailView(
     val linkColor = MaterialTheme.colorScheme.primary
     val textScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Text(
-                    text = article.feedTitle,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    val progressAccent = MaterialTheme.colorScheme.primary
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Text(
+                        text = article.feedTitle,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val publishedLabel = article.publishedAt?.let(::formatPublishedAt)
+                val readingTimeLabel = readingMinutes?.let {
+                    stringResource(R.string.reader_reading_time_minutes, it)
+                }
+                val metaLine = listOfNotNull(publishedLabel, readingTimeLabel).joinToString(" · ")
+                if (metaLine.isNotEmpty()) {
+                    Text(
+                        text = metaLine,
+                        modifier = Modifier.padding(start = 12.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            article.publishedAt?.let {
-                Text(
-                    text = formatPublishedAt(it),
-                    modifier = Modifier.padding(start = 12.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
 
         val titleModifier = if (article.canonicalUrl.isNullOrBlank()) {
             Modifier
@@ -429,6 +563,7 @@ private fun ArticleDetailView(
                     documentBaseUrl = documentBaseUrl,
                     isActive = isActive,
                     onFullscreen = { fullscreenMedia = it },
+                    onImageTap = { zoomedImageUrl = it },
                     onReady = {
                         // The first body must replace the skeleton before
                         // restoring. Later documents keep that placed body.
@@ -467,12 +602,91 @@ private fun ArticleDetailView(
                     text = retainedContent.text,
                     fallback = article.excerpt,
                     appearance = appearance,
+                    documentBaseUrl = documentBaseUrl,
                     onReady = { bodyPrepared = true; placedBody++ },
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+            if (isActive && nextArticle != null && onOpenNextArticle != null) {
+                val nextLabel = stringResource(R.string.reader_next_article)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button, onClick = onOpenNextArticle)
+                            .clearAndSetSemantics {
+                                contentDescription = nextLabel
+                                role = Role.Button
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = nextLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = nextArticle.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+
+        // Draw-phase reading progress hairline: updates on scroll without recomposing the pane.
+        Canvas(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(2.dp),
+        ) {
+            val maxScroll = scrollState.maxValue
+            if (maxScroll <= 0) return@Canvas
+            val fraction = (scrollState.value.toFloat() / maxScroll.toFloat()).coerceIn(0f, 1f)
+            if (fraction <= 0f) return@Canvas
+            val width = size.width * fraction
+            drawRect(
+                color = progressAccent,
+                topLeft = Offset(
+                    if (layoutDirection == LayoutDirection.Ltr) 0f else size.width - width,
+                    0f,
+                ),
+                size = Size(width, size.height),
+            )
+        }
+    }
+
+    zoomedImageUrl?.let { imageUrl ->
+        ZoomableImageOverlay(
+            imageUrl = imageUrl,
+            offlineMediaCache = LocalOfflineMediaCache.current,
+            onDismiss = { zoomedImageUrl = null },
+        )
     }
 
     FullscreenMediaHost(
@@ -504,14 +718,11 @@ private fun ArticlePlaceholderView(article: ArticleListItem) {
             .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            CircularProgressIndicator()
-            Text(
-                text = stringResource(R.string.reader_loading_article, article.title),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        Text(
+            text = stringResource(R.string.reader_loading_article, article.title),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -562,6 +773,7 @@ internal fun ReaderHtmlContent(
     isActive: Boolean = true,
     fixedHeightDp: Int? = null,
     onFullscreen: (ReaderFullscreenMedia?) -> Unit = { it?.close() },
+    onImageTap: (String) -> Unit = {},
     onReady: () -> Unit = {},
     onRendererFailure: () -> Unit = {},
     preparer: ReaderContentPreparer = LocalReaderContentPreparer.current,
@@ -584,14 +796,26 @@ internal fun ReaderHtmlContent(
     var failures by remember(html, documentBaseUrl) { mutableIntStateOf(0) }
     val ready by rememberUpdatedState(onReady)
     val fullscreen by rememberUpdatedState(onFullscreen)
+    val imageTap by rememberUpdatedState(onImageTap)
     val failed by rememberUpdatedState(onRendererFailure)
     ReaderViewLifecycle(view, isActive)
     // One automatic replacement tolerates a renderer killed under pressure.
     // A second failure keeps the retained text instead of a crash/recreate loop.
     if (failures > 1) {
-        ReaderTextContent(documentId = documentId, html = html, text = null, fallback = null, appearance = appearance, preparer = preparer, onReady = { ready() })
+        ReaderTextContent(
+            documentId = documentId,
+            html = html,
+            text = null,
+            fallback = null,
+            appearance = appearance,
+            documentBaseUrl = documentBaseUrl,
+            preparer = preparer,
+            onReady = { ready() },
+        )
         return
     }
+    val offlineMediaCache = LocalOfflineMediaCache.current
+    val customTabsPrewarmer = LocalCustomTabsPrewarmer.current
     val document = prepared ?: return
     key(documentId, failures) {
         var hasMeasuredHeight by remember(document) { mutableStateOf(false) }
@@ -603,7 +827,7 @@ internal fun ReaderHtmlContent(
         AndroidView(
             modifier = Modifier.fillMaxWidth().height((fixedHeightDp ?: webViewHeightDp).dp),
             factory = { context ->
-                ReaderWebView(context).also {
+                ReaderWebView(context, offlineMediaCache, customTabsPrewarmer).also {
                     // Chromium can submit its initial surface before Compose places
                     // this body. The loading placeholder owns that interval.
                     it.alpha = 0f
@@ -620,6 +844,7 @@ internal fun ReaderHtmlContent(
                 }
                 renderer.onReady = { visualReady = true }
                 renderer.onFullscreen = { fullscreen(it) }
+                renderer.onImageTap = { imageTap(it) }
                 renderer.onRendererGone = {
                     view = null
                     failures += 1
@@ -658,8 +883,8 @@ private fun FullscreenMediaHost(
 
         onDispose {
             runCatching { media.close() }
-            previousOrientation?.let { activity?.requestedOrientation = it }
-            previousBarsBehavior?.let { insetsController?.systemBarsBehavior = it }
+            previousOrientation?.let { activity.requestedOrientation = it }
+            previousBarsBehavior?.let { insetsController.systemBarsBehavior = it }
             insetsController?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
@@ -687,6 +912,128 @@ private fun FullscreenMediaHost(
         }
     }
 }
+
+/**
+ * Fullscreen pinch-to-zoom image viewer for tapped article images.
+ * Loads directly from [OfflineMediaCache] when cached on disk so diagrams and
+ * figures stay zoomable offline.
+ */
+@Composable
+private fun ZoomableImageOverlay(
+    imageUrl: String,
+    offlineMediaCache: OfflineMediaCache?,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var scale by remember(imageUrl) { mutableFloatStateOf(1f) }
+    var offset by remember(imageUrl) { mutableStateOf(Offset.Zero) }
+    val resolvedData by produceState<Any?>(null, imageUrl, offlineMediaCache) {
+        value = withContext(Dispatchers.IO) {
+            offlineMediaCache?.cachedFile(imageUrl) ?: imageUrl
+        }
+    }
+    val imageModel = remember(context, resolvedData) {
+        resolvedData?.let { data ->
+            ImageRequest.Builder(context)
+                .data(data)
+                .build()
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            decorFitsSystemWindows = false,
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(imageUrl) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                        scale = nextScale
+                        offset = if (nextScale <= 1.01f) {
+                            Offset.Zero
+                        } else {
+                            val maxX = (size.width * (nextScale - 1f)) / 2f
+                            val maxY = (size.height * (nextScale - 1f)) / 2f
+                            Offset(
+                                x = (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                y = (offset.y + pan.y).coerceIn(-maxY, maxY),
+                            )
+                        }
+                    }
+                }
+                .pointerInput(imageUrl) {
+                    detectTapGestures(
+                        onTap = {
+                            if (scale <= 1.01f) onDismiss()
+                        },
+                        onDoubleTap = {
+                            if (scale > 1.2f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = 2.5f
+                                offset = Offset.Zero
+                            }
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (imageModel != null) {
+                AsyncImage(
+                    model = imageModel,
+                    contentDescription = stringResource(R.string.reader_image_preview_cd),
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offset.x
+                            translationY = offset.y
+                        },
+                )
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(16.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.65f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.reader_image_close_cd),
+                    tint = Color.White,
+                )
+            }
+        }
+    }
+}
+
+/** Estimates reading time in whole minutes at 220 words per minute. */
+internal fun estimateReadingMinutes(html: String?, text: String?): Int? {
+    val source = text?.takeIf(String::isNotBlank)
+        ?: html?.takeIf(String::isNotBlank)?.replace(READING_TIME_HTML_TAG_REGEX, " ")
+        ?: return null
+    val words = READING_TIME_WORD_REGEX.findAll(source).count()
+    if (words < MIN_WORDS_FOR_READING_TIME) return null
+    return ((words + WORDS_PER_MINUTE - 1) / WORDS_PER_MINUTE).coerceAtLeast(1)
+}
+
+private const val WORDS_PER_MINUTE = 220
+private const val MIN_WORDS_FOR_READING_TIME = 40
+private val READING_TIME_HTML_TAG_REGEX = Regex("<[^>]+>")
+private val READING_TIME_WORD_REGEX = Regex("[\\p{L}\\p{N}]+")
 
 private fun View.detachFromParent() {
     (parent as? ViewGroup)?.removeView(this)

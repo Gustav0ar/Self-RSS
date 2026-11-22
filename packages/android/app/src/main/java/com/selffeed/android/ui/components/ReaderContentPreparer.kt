@@ -30,9 +30,14 @@ internal class ReaderContentPreparer(
         PreparedReaderHtml(input, document)
     }
 
-    suspend fun text(html: String?, text: String?, fallback: String?): List<ReaderTextBlock> = withContext(dispatcher) {
+    suspend fun text(
+        html: String?,
+        text: String?,
+        fallback: String?,
+        baseUrl: String? = null,
+    ): List<ReaderTextBlock> = withContext(dispatcher) {
         currentCoroutineContext().ensureActive()
-        val blocks = readerTextBlocks(html, text, fallback)
+        val blocks = readerTextBlocks(html, text, fallback, baseUrl)
         currentCoroutineContext().ensureActive()
         blocks
     }

@@ -144,5 +144,45 @@ class ReaderHtmlDocumentTest {
 
         assertTrue(document.contains("font-family: Georgia"))
         assertTrue(document.contains("font-size: 24px"))
+        assertTrue(document.contains("SelfFeedHeightBridge.postMessage(String(height))"))
+        assertTrue(document.contains("SelfFeedImageBridge"))
+        assertTrue(document.contains("removeEventListener('click', handleImageTap)"))
+    }
+
+    @Test
+    fun readerHtmlDocumentScriptHasUniqueTopLevelDeclarationsAndHeightBridge() {
+        val document = buildReaderHtmlDocument(
+            html = "<p>Article body</p><img src=\"https://example.com/photo.jpg\" />",
+            colors = ReaderHtmlColors("#000000", "#FFFFFF", "#121212", "#A3A3A3", "#7C8CFF"),
+        )
+        val script = document.substringAfter("<script>").substringBeforeLast("</script>")
+        assertTrue("Script must report height via SelfFeedHeightBridge", script.contains("window.SelfFeedHeightBridge"))
+        assertTrue("Script must keep legacy Android bridge fallback", script.contains("window.Android.updateHeight(height)"))
+
+        // Guard against duplicate top-level const/let declarations that abort the script with SyntaxError.
+        val topLevelDecls = mutableListOf<String>()
+        var depth = 0
+        for (line in script.lines()) {
+            val trimmed = line.trim()
+            if (depth == 0) {
+                val match = Regex("""^(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b""").find(trimmed)
+                if (match != null) {
+                    topLevelDecls += match.groupValues[1]
+                }
+            }
+            depth += trimmed.count { it == '{' } - trimmed.count { it == '}' }
+        }
+        val duplicates = topLevelDecls.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+        assertEquals("Duplicate top-level script declarations break WebView height bridge", emptySet<String>(), duplicates)
+    }
+
+    @Test
+    fun estimateReadingMinutesHandlesShortAndLongArticles() {
+        assertEquals(null, estimateReadingMinutes(null, null))
+        assertEquals(null, estimateReadingMinutes("<p>Too short.</p>", null))
+        val shortRead = List(100) { "word" }.joinToString(" ")
+        assertEquals(1, estimateReadingMinutes(null, shortRead))
+        val longerRead = "<p>${List(650) { "word" }.joinToString(" ")}</p>"
+        assertEquals(3, estimateReadingMinutes(longerRead, null))
     }
 }

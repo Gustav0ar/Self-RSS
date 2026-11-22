@@ -1,6 +1,9 @@
 package com.selffeed.android.ui
 
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +14,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -67,6 +72,82 @@ class ArticleListDetailNavigationTest {
         composeRule.waitUntil(timeoutMillis = 5_000) { readerClosed }
         assertTrue(readerClosed)
         composeRule.onNodeWithText("Open article").assertIsDisplayed()
+    }
+
+    @Test
+    fun predictiveBackCommitsBeforeTheSelectedArticleClears() {
+        var closeRequests = 0
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleListDetailNavigation(
+                    selectedArticleId = "article-1",
+                    onCloseArticle = { closeRequests++ },
+                    listContent = { Text("Article list") },
+                    detailContent = { _, _ -> Text("Article detail") },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Article detail").assertIsDisplayed()
+        val dispatcher = composeRule.activity.onBackPressedDispatcher
+        val start = BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)
+        val progress = BackEventCompat(0f, 0f, 0.6f, BackEventCompat.EDGE_LEFT)
+
+        composeRule.runOnIdle {
+            dispatcher.dispatchOnBackStarted(start)
+            dispatcher.dispatchOnBackProgressed(progress)
+        }
+        composeRule.onNodeWithText("Article list").assertExists()
+        composeRule.runOnIdle { dispatcher.dispatchOnBackCancelled() }
+        composeRule.onNodeWithText("Article detail").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(0, closeRequests)
+            dispatcher.dispatchOnBackStarted(start)
+            dispatcher.dispatchOnBackProgressed(progress)
+        }
+        composeRule.onNodeWithText("Article list").assertExists()
+        composeRule.runOnIdle { dispatcher.onBackPressed() }
+
+        composeRule.onNodeWithText("Article list").assertIsDisplayed()
+        composeRule.onNodeWithText("Article detail").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(1, closeRequests) }
+    }
+
+    @Test
+    fun predictiveBackMovesTheReaderInTheDirectionOfEitherEdgeSwipe() {
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleListDetailNavigation(
+                    selectedArticleId = "article-1",
+                    onCloseArticle = {},
+                    listContent = { Text("Article list") },
+                    detailContent = { _, _ ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Article detail")
+                        }
+                    },
+                )
+            }
+        }
+
+        val reader = composeRule.onNodeWithText("Article detail")
+        val restingX = reader.fetchSemanticsNode().positionInRoot.x
+        val dispatcher = composeRule.activity.onBackPressedDispatcher
+        for (edge in listOf(BackEventCompat.EDGE_LEFT, BackEventCompat.EDGE_RIGHT)) {
+            composeRule.runOnIdle {
+                dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, edge))
+                dispatcher.dispatchOnBackProgressed(BackEventCompat(0f, 0f, 0.15f, edge))
+            }
+
+            val movedX = reader.fetchSemanticsNode().positionInRoot.x
+            if (edge == BackEventCompat.EDGE_LEFT) {
+                assertTrue("Left-edge swipe should move the reader right", movedX > restingX)
+            } else {
+                assertTrue("Right-edge swipe should move the reader left", movedX < restingX)
+            }
+            composeRule.runOnIdle { dispatcher.dispatchOnBackCancelled() }
+            assertEquals(restingX, reader.fetchSemanticsNode().positionInRoot.x, 0.5f)
+        }
     }
 
     @Test

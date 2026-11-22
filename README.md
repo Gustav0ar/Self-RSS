@@ -145,7 +145,7 @@ SelfFeed/
 │       │   ├── providers/    # Auth, theme providers
 │       │   └── routes/       # TanStack Router pages
 │       └── tests/
-│   └── android/      # Jetpack Compose Android client (compile API 37, target API 35)
+│   └── android/      # Jetpack Compose Android client (compile API 37.1, target API 37)
 ├── compose.yaml      # Podman/Docker Compose stack
 ├── Dockerfile.api    # API container image
 ├── Dockerfile.web    # Web container image (nginx)
@@ -156,7 +156,7 @@ SelfFeed/
 
 An Android app using Jetpack Compose is available in `packages/android`.
 
-- Build SDK: **compile API 37**, **target API 35**
+- Build SDK: **compile API 37.1**, **target API 37**
 - Auth: JWT access token + refresh-cookie flow
 - Core coverage: auth, feeds/categories, articles, search, preferences, stats, admin registration lock
 

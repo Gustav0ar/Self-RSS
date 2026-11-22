@@ -427,8 +427,11 @@ internal fun buildReaderHtmlDocument(
 
                 function postHeight() {
                     const height = measureContentHeight();
+                    if (height <= 50) return;
 
-                    if (height > 50 && window.Android && typeof window.Android.updateHeight === 'function') {
+                    if (window.SelfFeedHeightBridge && typeof window.SelfFeedHeightBridge.postMessage === 'function') {
+                        window.SelfFeedHeightBridge.postMessage(String(height));
+                    } else if (window.Android && typeof window.Android.updateHeight === 'function') {
                         window.Android.updateHeight(height);
                     }
                 }
@@ -544,6 +547,10 @@ internal fun buildReaderHtmlDocument(
                         window.removeEventListener('load', handleLoad);
                         window.removeEventListener('resize', handleResize);
                         document.removeEventListener('DOMContentLoaded', handleDomContentLoaded);
+                        const container = document.getElementById('content-container');
+                        if (container) {
+                            container.removeEventListener('click', handleImageTap);
+                        }
                         if (pendingHeightUpdate !== null) {
                             clearTimeout(pendingHeightUpdate);
                             pendingHeightUpdate = null;
@@ -612,6 +619,25 @@ internal fun buildReaderHtmlDocument(
                     }
                 }
                 window.addEventListener('message', handleEmbedMessage);
+
+                function handleImageTap(e) {
+                    const target = e.target;
+                    if (!target || target.tagName !== 'IMG') return;
+                    if (target.closest('a[href]')) return;
+                    const width = target.naturalWidth || target.clientWidth || 0;
+                    const height = target.naturalHeight || target.clientHeight || 0;
+                    if (width < 48 || height < 48) return;
+                    const src = target.currentSrc || target.getAttribute('src') || '';
+                    if (!/^https?:\/\//i.test(src)) return;
+                    if (window.SelfFeedImageBridge && window.SelfFeedImageBridge.postMessage) {
+                        window.SelfFeedImageBridge.postMessage(src);
+                    } else if (window.Android && window.Android.openImage) {
+                        window.Android.openImage(src);
+                    }
+                }
+                if (contentContainer) {
+                    contentContainer.addEventListener('click', handleImageTap);
+                }
 
                 postHeight();
             </script>

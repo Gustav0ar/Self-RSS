@@ -1,6 +1,7 @@
 package com.selffeed.android.ui
 
 import android.net.Uri
+import androidx.annotation.StringRes
 
 import com.selffeed.android.ui.articles.withArticleFlags
 
@@ -8,23 +9,40 @@ import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.data.remoteKey
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.CapturedAnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.TextObfuscationMode
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -45,6 +63,7 @@ import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.Button
@@ -57,20 +76,25 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedSecureTextField
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,29 +103,47 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalAutofillManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.ColorUtils
 import androidx.paging.LoadState
 import androidx.paging.PagingData
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.selffeed.android.ui.components.LocalServerAccessButton
 import com.selffeed.android.R
 import com.selffeed.android.network.ArticleDetail
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
+import com.selffeed.android.ui.components.ArticleBookmarkIcon
 import com.selffeed.android.ui.components.ArticleReaderPane
+import com.selffeed.android.ui.components.LocalCustomTabsPrewarmer
 import com.selffeed.android.ui.components.openExternalUrl
 import com.selffeed.android.ui.components.shareArticle
 import com.selffeed.android.ui.screens.ArticleTabActions
@@ -214,6 +256,7 @@ fun SelfFeedApp(
     val scope = rememberCoroutineScope()
     val unreadUndoScope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val customTabsPrewarmer = LocalCustomTabsPrewarmer.current
     val activeTab = state.chrome.activeTab
     val selectedArticle = state.articles.selectedArticle
     val readerVisible = selectedArticle != null && activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED)
@@ -221,6 +264,10 @@ fun SelfFeedApp(
     val selectedCategoryId = state.articles.selectedCategoryId
     val readerFeedTitle = state.articles.currentReaderFeedTitle()
     var confirmMarkAllRead by rememberSaveable { mutableStateOf(false) }
+    var showReaderTypographySheet by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedArticle?.id) {
+        if (selectedArticle == null) showReaderTypographySheet = false
+    }
     val markedUnreadMessage = stringResource(R.string.article_marked_unread)
     val undoLabel = stringResource(R.string.action_undo)
     val offerUnreadUndo: (String) -> Unit = remember(
@@ -550,37 +597,62 @@ fun SelfFeedApp(
     }
     val readerContent: @Composable (Boolean, (Boolean) -> Unit) -> Unit =
         { preferHtml, onPreferHtmlChanged ->
-            selectedArticle?.let { article ->
+            var lastReader by remember(state.auth.user?.id, state.auth.apiBaseUrl) {
+                mutableStateOf<PresentedReader?>(null)
+            }
+            val currentReader = selectedArticle?.let { article ->
+                PresentedReader(
+                    article = article,
+                    queue = articleQueue,
+                    details = state.articles.readerDetails,
+                    loadError = state.articles.articleLoadError?.resolve(),
+                    atStart = readerAtFeedStart,
+                    atEnd = readerAtFeedEnd,
+                )
+            }
+            // Selection clears before NavDisplay animates the entry out.
+            // Retain its content inside that entry until it is disposed.
+            if (currentReader != null) SideEffect { lastReader = currentReader }
+            (currentReader ?: lastReader)?.let { reader ->
                 ArticleReaderPane(
                     isVisible = readerVisible,
-                    atFeedStart = readerAtFeedStart,
-                    atFeedEnd = readerAtFeedEnd,
+                    isOnline = state.isOnline,
+                    atFeedStart = reader.atStart,
+                    atFeedEnd = reader.atEnd,
                     onArticleBodyReady = onArticleBodyReady,
-                    articles = articleQueue,
+                    articles = reader.queue,
                     articleStates = state.articles.articleStates,
-                    selectedArticle = article,
-                    loadError = state.articles.articleLoadError?.resolve(),
-                    prefetchedArticles = state.articles.readerDetails,
+                    selectedArticle = reader.article,
+                    loadError = reader.loadError,
+                    prefetchedArticles = reader.details,
                     observeOfflineText = scopedOfflineText,
                     onOpenOriginal = { openedArticle ->
-                        openedArticle.canonicalUrl?.let { url ->
-                            openExternalUrl(context, url)
+                        if (readerVisible) {
+                            openedArticle.canonicalUrl?.let { url ->
+                                openExternalUrl(context, url, session = customTabsPrewarmer?.session)
+                            }
                         }
                     },
-                    onBackToList = actions.onCloseArticle,
-                    onArticleSelected = actions.onOpenArticle,
+                    onToggleRead = {
+                        if (readerVisible) {
+                            toggleReadWithUndo(selectedArticle.id, !selectedArticle.isRead)
+                        }
+                    },
+                    onToggleSaved = {
+                        if (readerVisible) {
+                            actions.onToggleSaved(selectedArticle.toArticleListItem(), !selectedArticle.isSaved)
+                        }
+                    },
+                    onArticleSelected = { if (readerVisible) actions.onOpenArticle(it) },
                     onVisibleArticleChanged = { articleId ->
-                        actions.onReaderPageChanged(articleId)
-                        if (
-                            activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED) &&
-                            shouldPrefetchNextReaderPage(articleId, articleQueue)
-                        ) {
-                            // Unlike LazyColumn, the full-screen reader does not
-                            // access LazyPagingItems as the user swipes. Reading
-                            // the last presented item emits the Paging access hint
-                            // that loads the next API cursor before the queue ends.
-                            articlePagingItems.lastIndexOrNull()?.let { lastIndex ->
-                                articlePagingItems[lastIndex]
+                        if (readerVisible) {
+                            actions.onReaderPageChanged(articleId)
+                            // Access the tail to send a Paging load hint as
+                            // the reader approaches the end of the queue.
+                            if (shouldPrefetchNextReaderPage(articleId, reader.queue)) {
+                                articlePagingItems.lastIndexOrNull()?.let { lastIndex ->
+                                    articlePagingItems[lastIndex]
+                                }
                             }
                         }
                     },
@@ -612,7 +684,20 @@ fun SelfFeedApp(
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = MaterialTheme.colorScheme.background,
-            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+            snackbarHost = {
+                SnackbarHost(hostState = snackbarHostState) { data ->
+                    val colors = MaterialTheme.colorScheme
+                    val container = colors.surfaceContainerHigh
+                    val actionContrast = ColorUtils.calculateContrast(colors.primary.toArgb(), container.toArgb())
+                    Snackbar(
+                        snackbarData = data,
+                        shape = RectangleShape,
+                        containerColor = container,
+                        contentColor = colors.onSurface,
+                        actionColor = if (actionContrast >= 4.5) colors.primary else colors.onSurface,
+                    )
+                }
+            },
             topBar = {
                 AppTopBar(
                     activeTab = activeTab,
@@ -622,9 +707,17 @@ fun SelfFeedApp(
                             selectedArticle == null &&
                             articleQueue.isNotEmpty(),
                     isOnline = state.isOnline,
+                    onTitleClick = if (activeTab in setOf(HomeTab.ARTICLES, HomeTab.SAVED) && selectedArticle == null) {
+                        {
+                            if (articleListState.firstVisibleItemIndex > 0 || articleListState.firstVisibleItemScrollOffset > 0) {
+                                scope.launch { articleListState.animateScrollToItem(0) }
+                            }
+                        }
+                    } else null,
                     onOpenDrawer = { scope.launch { drawerState.open() } },
                     onMarkAllRead = { confirmMarkAllRead = true },
                     onBack = actions.onCloseArticle,
+                    onOpenReaderTypography = { showReaderTypographySheet = true },
                     onToggleRead = {
                         selectedArticle?.let { article ->
                             toggleReadWithUndo(article.id, !article.isRead)
@@ -653,21 +746,32 @@ fun SelfFeedApp(
                     }
                     AppBottomBar(
                         activeTab = activeTab,
-                        onTabSelected = actions.onTabSelected,
+                        onTabSelected = { tab ->
+                            if (tab == activeTab && tab in setOf(HomeTab.ARTICLES, HomeTab.SAVED) && selectedArticle == null) {
+                                if (articleListState.firstVisibleItemIndex > 0 || articleListState.firstVisibleItemScrollOffset > 0) {
+                                    scope.launch { articleListState.animateScrollToItem(0) }
+                                }
+                            } else {
+                                actions.onTabSelected(tab)
+                            }
+                        },
                     )
                 }
             },
         ) { paddingValues ->
-            if (state.auth.isAuthenticated) {
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues),
+                    .padding(paddingValues)
+                    .clipToBounds(),
             ) {
                 AnimatedContent(
                     targetState = activeTab,
+                    contentKey = { tab -> if (tab == HomeTab.SAVED) HomeTab.ARTICLES else tab },
+                    transitionSpec = {
+                        (fadeIn(tween(135, easing = ReadingMotionEasing)) togetherWith
+                            fadeOut(tween(110))) using null
+                    },
                     label = "android-main-tabs",
                 ) { tab ->
                     when (tab) {
@@ -738,7 +842,111 @@ fun SelfFeedApp(
         )
     }
 
+    if (showReaderTypographySheet && selectedArticle != null) {
+        val currentAppearance = state.settings.preferences?.toReaderAppearance() ?: ReaderAppearance()
+        ReaderTypographySheet(
+            appearance = currentAppearance,
+            onFontChanged = actions.onFontChanged,
+            onTextSizeChanged = actions.onTextSizeChanged,
+            onDismiss = { showReaderTypographySheet = false },
+        )
+    }
+
 }
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun ReaderTypographySheet(
+    appearance: ReaderAppearance,
+    onFontChanged: (ReaderFontPreference) -> Unit,
+    onTextSizeChanged: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sliderState = remember(appearance.boundedTextSizeSp) {
+        SliderState(
+            value = appearance.boundedTextSizeSp.toFloat().coerceIn(12f, 24f),
+            trackRange = 12f..24f,
+        )
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.reader_typography_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_reader_font),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ReaderFontPreference.entries.forEach { font ->
+                        val labelRes = when (font) {
+                            ReaderFontPreference.SYSTEM -> R.string.reader_font_system
+                            ReaderFontPreference.SANS -> R.string.reader_font_sans_serif
+                            ReaderFontPreference.SERIF -> R.string.reader_font_serif
+                            ReaderFontPreference.MONOSPACE -> R.string.reader_font_monospace
+                        }
+                        FilterChip(
+                            selected = appearance.font == font,
+                            onClick = { onFontChanged(font) },
+                            label = { Text(stringResource(labelRes), maxLines = 1) },
+                        )
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_reader_text_size),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_text_size_sp, kotlin.math.round(sliderState.value).toInt()),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                Slider(
+                    state = sliderState,
+                    onValueChange = { sliderState.value = it },
+                    onValueChangeFinished = {
+                        onTextSizeChanged(kotlin.math.round(sliderState.value).toInt())
+                    },
+                )
+            }
+        }
+    }
+}
+
+private data class PresentedReader(
+    val article: ArticleDetail,
+    val queue: List<ArticleListItem>,
+    val details: Map<String, ArticleDetail>,
+    val loadError: String?,
+    val atStart: Boolean,
+    val atEnd: Boolean,
+)
 
 internal fun settledArticleSnapshot(
     snapshot: List<ArticleListItem>,
@@ -805,9 +1013,11 @@ private fun AppTopBar(
     currentLabel: String,
     showMarkAllRead: Boolean,
     isOnline: Boolean,
+    onTitleClick: (() -> Unit)? = null,
     onOpenDrawer: () -> Unit,
     onMarkAllRead: () -> Unit,
     onBack: () -> Unit,
+    onOpenReaderTypography: () -> Unit = {},
     onToggleRead: () -> Unit,
     onToggleSaved: () -> Unit,
     onShare: () -> Unit,
@@ -818,90 +1028,130 @@ private fun AppTopBar(
     // width, so a Back button would be redundant and could incorrectly send
     // a search-origin reader away from its visible context. System Back still
     // follows the Navigation 3 stack.
-    val showReaderBack = isArticleSelected && LocalConfiguration.current.screenWidthDp < 600
+    val showReaderBack = isArticleSelected && LocalWindowInfo.current.containerDpSize.width < 600.dp
 
-    CenterAlignedTopAppBar(
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = currentLabel,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+    val titleContent: @Composable () -> Unit = {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (onTitleClick != null) Modifier.clickable(onClick = onTitleClick) else Modifier,
+        ) {
+            Text(
+                text = currentLabel,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (!isOnline) {
+                Spacer(modifier = Modifier.width(8.dp))
+                OnlineDot()
+            }
+        }
+    }
+    val navigationContent: @Composable () -> Unit = {
+        if (showReaderBack) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.cd_back_to_article_list),
                 )
-                if (!isOnline) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    OnlineDot()
-                }
             }
-        },
-        navigationIcon = {
-            if (showReaderBack) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.cd_back_to_article_list),
-                    )
-                }
-            } else {
-                IconButton(onClick = onOpenDrawer) {
-                    Icon(
-                        Icons.Default.Menu,
-                        contentDescription = stringResource(R.string.cd_open_feeds)
-                    )
-                }
+        } else {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(
+                    Icons.Default.Menu,
+                    contentDescription = stringResource(R.string.cd_open_feeds)
+                )
             }
-        },
-        actions = {
-            if (isArticleSelected) {
-                IconButton(onClick = onToggleSaved) {
-                    val isSaved = selectedArticle?.isSaved == true
-                    Icon(
-                        imageVector = if (isSaved) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                        contentDescription = stringResource(
-                            if (isSaved) R.string.article_remove_saved else R.string.article_save,
-                        ),
-                        tint = if (isSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                IconButton(onClick = onShare) {
-                    Icon(
-                        Icons.Default.Share,
-                        contentDescription = stringResource(R.string.cd_share_article)
-                    )
-                }
-                IconButton(onClick = onToggleRead) {
-                    val isRead = selectedArticle?.isRead == true
-                    val icon = if (isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
-                    val description = stringResource(
-                        if (isRead) R.string.article_mark_as_unread else R.string.article_mark_as_read,
-                    )
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = description,
-                        tint = if (isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            } else if (showMarkAllRead) {
-                IconButton(onClick = onMarkAllRead) {
-                    Icon(
-                        Icons.Default.MarkEmailRead,
-                        contentDescription = stringResource(R.string.article_mark_all_cd),
-                    )
-                }
-            } else {
-                Spacer(modifier = Modifier.width(48.dp))
+        }
+    }
+    val actionsContent: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+        if (isArticleSelected) {
+            val haptic = LocalHapticFeedback.current
+            IconButton(onClick = onOpenReaderTypography) {
+                Icon(
+                    Icons.Default.TextFields,
+                    contentDescription = stringResource(R.string.cd_reader_typography),
+                )
             }
-        },
-        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-            containerColor = MaterialTheme.colorScheme.background,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-            actionIconContentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-        modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(
+                        if (selectedArticle.isSaved) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                    )
+                    onToggleSaved()
+                },
+            ) {
+                ArticleBookmarkIcon(
+                    articleId = selectedArticle.id,
+                    isSaved = selectedArticle.isSaved,
+                    unsavedColor = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            IconButton(onClick = onShare) {
+                Icon(
+                    Icons.Default.Share,
+                    contentDescription = stringResource(R.string.cd_share_article)
+                )
+            }
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(
+                        if (selectedArticle.isRead) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                    )
+                    onToggleRead()
+                },
+            ) {
+                val isRead = selectedArticle.isRead
+                val icon = if (isRead) Icons.Default.MarkEmailRead else Icons.Default.Email
+                val description = stringResource(
+                    if (isRead) R.string.article_mark_as_unread else R.string.article_mark_as_read,
+                )
+                Icon(
+                    imageVector = icon,
+                    contentDescription = description,
+                    tint = if (isRead) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        } else if (showMarkAllRead) {
+            IconButton(onClick = onMarkAllRead) {
+                Icon(
+                    Icons.Default.MarkEmailRead,
+                    contentDescription = stringResource(R.string.article_mark_all_cd),
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.width(48.dp))
+        }
+    }
+    val barColors = TopAppBarDefaults.topAppBarColors(
+        containerColor = MaterialTheme.colorScheme.background,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+        actionIconContentColor = MaterialTheme.colorScheme.onSurface,
     )
+    val barModifier = Modifier.windowInsetsPadding(WindowInsets.statusBars)
+
+    // Use a start-aligned TopAppBar in reader mode so 4 action icons do not
+    // symmetrically crush the title on narrow phones.
+    if (isArticleSelected) {
+        TopAppBar(
+            title = titleContent,
+            navigationIcon = navigationContent,
+            actions = actionsContent,
+            colors = barColors,
+            modifier = barModifier,
+        )
+    } else {
+        CenterAlignedTopAppBar(
+            title = titleContent,
+            navigationIcon = navigationContent,
+            actions = actionsContent,
+            colors = barColors,
+            modifier = barModifier,
+        )
+    }
 }
 
 @Composable
@@ -909,67 +1159,83 @@ private fun AppBottomBar(
     activeTab: HomeTab,
     onTabSelected: (HomeTab) -> Unit,
 ) {
-    NavigationBar(
-        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars),
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp,
+    val activeIndex = BottomTab.entries.indexOfFirst { it.tab == activeTab }
+    val position by animateFloatAsState(
+        targetValue = activeIndex.coerceAtLeast(0).toFloat(),
+        animationSpec = tween(220, easing = ReadingMotionEasing),
+        label = "selected-tab-position",
+    )
+    val colors = MaterialTheme.colorScheme
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.surface)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .drawWithContent {
+                drawContent()
+                val borderY = 0.5.dp.toPx()
+                drawLine(colors.outline, Offset(0f, borderY), Offset(size.width, borderY), 1.dp.toPx())
+                if (activeIndex >= 0) {
+                    val fromStart = size.width * (position + 0.5f) / BottomTab.entries.size
+                    val center = if (layoutDirection == LayoutDirection.Ltr) fromStart else size.width - fromStart
+                    val halfWidth = 12.dp.toPx()
+                    val y = 1.dp.toPx()
+                    drawLine(colors.primary, Offset(center - halfWidth, y), Offset(center + halfWidth, y), 2.dp.toPx())
+                }
+            }
+            .selectableGroup(),
     ) {
-        NavigationBarItem(
-            selected = activeTab == HomeTab.ARTICLES,
-            onClick = { onTabSelected(HomeTab.ARTICLES) },
-            icon = {
-                Icon(
-                    Icons.Default.GridView,
-                    contentDescription = stringResource(R.string.cd_articles_tab)
+        for (destination in BottomTab.entries) {
+            val selected = destination.tab == activeTab
+            val tint = if (selected) colors.onSurface else colors.onSurfaceVariant
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 56.dp)
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = { onTabSelected(destination.tab) },
+                    )
+                    .padding(horizontal = 2.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Box(Modifier.clearAndSetSemantics {}) {
+                    Icon(
+                        imageVector = if (destination.tab == HomeTab.SAVED && selected) {
+                            Icons.Default.Bookmark
+                        } else destination.icon,
+                        contentDescription = stringResource(destination.description),
+                        tint = tint,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = stringResource(destination.label),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            },
-            label = { Text(stringResource(R.string.nav_articles)) },
-        )
-        NavigationBarItem(
-            selected = activeTab == HomeTab.SAVED,
-            onClick = { onTabSelected(HomeTab.SAVED) },
-            icon = {
-                Icon(
-                    if (activeTab == HomeTab.SAVED) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                    contentDescription = stringResource(R.string.cd_saved_tab),
-                )
-            },
-            label = { Text(stringResource(R.string.nav_saved)) },
-        )
-        NavigationBarItem(
-            selected = activeTab == HomeTab.SEARCH,
-            onClick = { onTabSelected(HomeTab.SEARCH) },
-            icon = {
-                Icon(
-                    Icons.Default.Search,
-                    contentDescription = stringResource(R.string.cd_search_tab)
-                )
-            },
-            label = { Text(stringResource(R.string.nav_search)) },
-        )
-        NavigationBarItem(
-            selected = activeTab == HomeTab.FEEDS,
-            onClick = { onTabSelected(HomeTab.FEEDS) },
-            icon = {
-                Icon(
-                    Icons.Default.RssFeed,
-                    contentDescription = stringResource(R.string.cd_feeds_tab)
-                )
-            },
-            label = { Text(stringResource(R.string.nav_feeds)) },
-        )
-        NavigationBarItem(
-            selected = activeTab == HomeTab.SETTINGS,
-            onClick = { onTabSelected(HomeTab.SETTINGS) },
-            icon = {
-                Icon(
-                    Icons.Outlined.Settings,
-                    contentDescription = stringResource(R.string.cd_settings_tab)
-                )
-            },
-            label = { Text(stringResource(R.string.nav_settings)) },
-        )
+            }
+        }
     }
+}
+
+private enum class BottomTab(
+    val tab: HomeTab,
+    @param:StringRes val label: Int,
+    @param:StringRes val description: Int,
+    val icon: ImageVector,
+) {
+    Articles(HomeTab.ARTICLES, R.string.nav_articles, R.string.cd_articles_tab, Icons.Default.GridView),
+    Saved(HomeTab.SAVED, R.string.nav_saved, R.string.cd_saved_tab, Icons.Outlined.BookmarkBorder),
+    Search(HomeTab.SEARCH, R.string.nav_search, R.string.cd_search_tab, Icons.Default.Search),
+    Feeds(HomeTab.FEEDS, R.string.nav_feeds, R.string.cd_feeds_tab, Icons.Default.RssFeed),
+    Settings(HomeTab.SETTINGS, R.string.nav_settings, R.string.cd_settings_tab, Icons.Outlined.Settings),
 }
 
 private fun topBarLabel(
@@ -1017,7 +1283,6 @@ internal fun ArticlesUiState.currentReaderFeedTitle(): String? {
         ?: selectedArticle?.takeIf { it.id == articleId }?.feedTitle
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AuthScreen(
     mode: AuthMode,
@@ -1027,23 +1292,29 @@ internal fun AuthScreen(
     onModeChange: (AuthMode) -> Unit,
     onLogin: (String, String, String) -> Unit,
     onRegister: (String, String, String) -> Unit,
+    onLocalServerAccessGranted: () -> Unit = {},
 ) {
-    var serverUrl by rememberSaveable(apiBaseUrl) { mutableStateOf("") }
-    var email by rememberSaveable { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    val autofillManager = LocalAutofillManager.current
+    val serverUrl = rememberSaveable(apiBaseUrl, saver = TextFieldState.Saver) { TextFieldState() }
+    val email = rememberTextFieldState()
+    val password = remember { TextFieldState() }
     val configuredServer = apiBaseUrl.trim()
     val serverPlaceholder = configuredServer.ifEmpty {
         stringResource(R.string.auth_server_placeholder)
     }
     val resolvedErrorMessage = errorMessage?.resolve().orEmpty()
     val submit = {
-        val submittedServer = serverUrl.trim().ifEmpty { configuredServer }
+        val submittedServer = serverUrl.text.toString().trim().ifEmpty { configuredServer }
+        val submittedEmail = email.text.toString()
+        val submittedPassword = password.text.toString()
+        autofillManager?.commit()
         if (mode == AuthMode.LOGIN) {
-            onLogin(email, password, submittedServer)
+            onLogin(submittedEmail, submittedPassword, submittedServer)
         } else {
-            onRegister(email, password, submittedServer)
+            onRegister(submittedEmail, submittedPassword, submittedServer)
         }
-        password = ""
+        password.clearText()
+        password.undoState.clearHistory()
     }
 
     Box(
@@ -1117,8 +1388,7 @@ internal fun AuthScreen(
                 }
 
                 OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
+                    state = serverUrl,
                     label = { Text(stringResource(R.string.auth_server)) },
                     placeholder = { Text(serverPlaceholder) },
                     leadingIcon = {
@@ -1128,16 +1398,18 @@ internal fun AuthScreen(
                         )
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
                     shape = RoundedCornerShape(20.dp),
                     keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
                         keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Next
+                        imeAction = ImeAction.Next,
                     ),
                 )
+                LocalServerAccessButton(onGranted = onLocalServerAccessGranted)
                 OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
+                    state = email,
                     label = { Text(stringResource(R.string.auth_email)) },
                     leadingIcon = {
                         Icon(
@@ -1145,17 +1417,22 @@ internal fun AuthScreen(
                             contentDescription = stringResource(R.string.auth_email_address),
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            contentType = ContentType.EmailAddress + ContentType.Username
+                        },
+                    lineLimits = TextFieldLineLimits.SingleLine,
                     shape = RoundedCornerShape(20.dp),
                     keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
                         keyboardType = KeyboardType.Email,
-                        imeAction = ImeAction.Next
+                        imeAction = ImeAction.Next,
                     ),
                 )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
+                OutlinedSecureTextField(
+                    state = password,
                     label = { Text(stringResource(R.string.auth_password)) },
                     leadingIcon = {
                         Icon(
@@ -1163,15 +1440,23 @@ internal fun AuthScreen(
                             contentDescription = stringResource(R.string.auth_password),
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            contentType = if (mode == AuthMode.LOGIN) {
+                                ContentType.Password
+                            } else {
+                                ContentType.NewPassword
+                            }
+                        },
+                    textObfuscationMode = TextObfuscationMode.Hidden,
                     shape = RoundedCornerShape(20.dp),
                     keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
                     ),
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    onKeyboardAction = { submit() },
                 )
                 Button(
                     onClick = submit,
@@ -1184,7 +1469,11 @@ internal fun AuthScreen(
                         ),
                     )
                 }
-                AnimatedVisibility(visible = resolvedErrorMessage.isNotBlank()) {
+                CapturedAnimatedVisibility(
+                    visible = resolvedErrorMessage.isNotBlank(),
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
                     Text(
                         text = resolvedErrorMessage,
                         color = MaterialTheme.colorScheme.error,

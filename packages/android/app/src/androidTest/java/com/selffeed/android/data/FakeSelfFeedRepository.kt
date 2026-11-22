@@ -373,8 +373,9 @@ class FakeSelfFeedRepository @Inject constructor() : SelfFeedRepository {
         query: ArticlePageQuery,
     ): Flow<PagingData<ArticleListItem>> {
         articlePagingRequests++
-        val articles = currentArticles(query.unreadOnly, query.savedOnly)
-        return flowOf(PagingData.from(articles))
+        return stateVersion.map {
+            PagingData.from(currentArticles(query.unreadOnly, query.savedOnly))
+        }
     }
 
     override suspend fun article(

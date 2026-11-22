@@ -23,7 +23,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -42,8 +41,9 @@ internal fun ArticleSyncStatusLine(
     val pending = count?.takeIf { it > 0 }
     if (online && pending == null) return
 
-    Column(Modifier.fillMaxWidth().background(Color.Black)) {
-        HorizontalDivider(color = Color(0xFF303030))
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().background(colors.surfaceContainer)) {
+        HorizontalDivider(color = colors.outline)
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -52,7 +52,7 @@ internal fun ArticleSyncStatusLine(
             Icon(
                 imageVector = if (online) Icons.Outlined.Refresh else Icons.Outlined.CloudOff,
                 contentDescription = null,
-                tint = Color.White,
+                tint = colors.onSurface,
                 modifier = Modifier.size(16.dp),
             )
             Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
@@ -61,19 +61,19 @@ internal fun ArticleSyncStatusLine(
                         pluralStringResource(R.plurals.sync_pending_changes, it, it)
                     } ?: stringResource(R.string.cd_offline),
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
+                    color = colors.onSurface,
                 )
                 if (pending != null && !online) {
                     Text(
                         stringResource(R.string.sync_when_online),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFB8B8B8),
+                        color = colors.onSurfaceVariant,
                     )
                 }
             }
             if (pending != null && online) {
                 TextButton(onClick = onRetry) {
-                    Text(stringResource(R.string.action_retry), color = Color.White)
+                    Text(stringResource(R.string.action_retry), color = colors.onSurface)
                 }
             }
         }

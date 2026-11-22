@@ -6,6 +6,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
 import androidx.paging.LoadState
 import androidx.paging.LoadStates
 import androidx.paging.PagingData
@@ -21,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -274,6 +278,47 @@ class ArticlesTabUiTest {
     }
 
     @Test
+    fun completedRefreshHidesPullLineAndTheNextPullCanShowIt() {
+        var state by mutableStateOf(
+            ArticleTabState(
+                articles = listOf(sampleArticle("article-1", "Visible Article")),
+                selectedArticleId = null,
+                isSyncingFeeds = false,
+                isManualRefreshInProgress = true,
+            ),
+        )
+        composeRule.setContent {
+            SelfFeedTheme(darkTheme = true) {
+                ArticlesTabWithStaticPaging(state, noOpArticleActions())
+            }
+        }
+
+        val list = composeRule.onNodeWithTag("articles-list")
+        fun pullLineColor() = list.captureToImage().toPixelMap()[2, 0]
+
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertIsDisplayed()
+        composeRule.mainClock.autoAdvance = false
+        try {
+            composeRule.runOnIdle { state = state.copy(isManualRefreshInProgress = false) }
+            composeRule.mainClock.advanceTimeBy(160)
+            val afterRefresh = pullLineColor()
+            composeRule.mainClock.advanceTimeBy(800)
+            val atRest = pullLineColor()
+            assertEquals("The end of a refresh must not show a pull line", atRest, afterRefresh)
+
+            list.performTouchInput {
+                down(center)
+                moveBy(Offset(0f, height * 0.08f))
+            }
+            composeRule.mainClock.advanceTimeByFrame()
+            assertTrue("A new pull must show the line", pullLineColor() != atRest)
+            list.performTouchInput { up() }
+        } finally {
+            composeRule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
     fun articlesTab_initialFeedSyncUsesOnlyTheTopIndicatorImmediately() {
         composeRule.setContent {
             SelfFeedTheme {
@@ -416,46 +461,52 @@ class ArticlesTabUiTest {
         val initialArticles = (1..40).map { index ->
             sampleArticle("old-$index", "Old Article $index")
         }
-        var updateState: (ArticleTabState) -> Unit = {}
+        val paging = MutableStateFlow(PagingData.from(initialArticles))
+        var state by mutableStateOf(
+            ArticleTabState(
+                articles = initialArticles,
+                selectedArticleId = null,
+                isSyncingFeeds = false,
+            ),
+        )
 
         composeRule.setContent {
-            var state by remember {
-                mutableStateOf(
-                    ArticleTabState(
-                        articles = initialArticles,
-                        selectedArticleId = null,
-                        isSyncingFeeds = false,
-                    ),
-                )
-            }
-            updateState = { state = it }
-
             SelfFeedTheme {
-                ArticlesTabWithStaticPaging(
+                ArticlesTab(
                     state = state,
                     actions = noOpArticleActions(),
+                    pagedArticles = paging.collectAsLazyPagingItems(),
                 )
             }
         }
 
         composeRule.onNodeWithText("Old Article 1").assertIsDisplayed()
+        composeRule.runOnIdle { state = state.copy(isManualRefreshInProgress = true) }
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertIsDisplayed()
+        composeRule.runOnIdle { state = state.copy(isManualRefreshInProgress = false) }
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertDoesNotExist()
 
-        // A Material progress indicator intentionally animates while syncing,
-        // so waitForIdle() is not a valid synchronization primitive here.
-        // Schedule the completed refresh directly and wait for the settled
-        // non-animated state below.
-        composeRule.runOnUiThread {
-            updateState(
-                ArticleTabState(
-                    articles = listOf(sampleArticle("fresh-1", "Fresh Article")) + initialArticles,
-                    selectedArticleId = null,
-                    isSyncingFeeds = false,
-                ),
+        // Feed sync finishes before the route can submit its refreshed Paging generation.
+        val refreshedArticles =
+            listOf(sampleArticle("fresh-1", "Fresh Article")) + initialArticles.dropLast(1)
+        composeRule.runOnIdle {
+            paging.value = PagingData.from(refreshedArticles)
+        }
+
+        composeRule.onNodeWithText("Fresh Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Old Article 1").assertIsDisplayed()
+
+        composeRule.runOnIdle { state = state.copy(isManualRefreshInProgress = true) }
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertIsDisplayed()
+        composeRule.onNodeWithTag("articles-list").performScrollToIndex(10)
+        composeRule.runOnIdle { state = state.copy(isManualRefreshInProgress = false) }
+        composeRule.onNodeWithTag("articles-refresh-indicator").assertDoesNotExist()
+        composeRule.runOnIdle {
+            paging.value = PagingData.from(
+                listOf(sampleArticle("fresh-2", "Another Fresh Article")) + refreshedArticles.dropLast(1),
             )
         }
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("Old Article 1").assertIsDisplayed()
+        composeRule.onNodeWithText("Old Article 10").assertIsDisplayed()
     }
 
     private fun noOpArticleActions(): ArticleTabActions = ArticleTabActions(

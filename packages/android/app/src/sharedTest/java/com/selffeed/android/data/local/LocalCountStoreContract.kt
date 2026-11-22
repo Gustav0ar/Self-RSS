@@ -28,7 +28,7 @@ import java.util.UUID
 abstract class LocalCountStoreContract {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val name = "local-counts-${UUID.randomUUID()}"
-    private val moshi = NetworkModule.provideMoshi()
+    private val moshi = NetworkModule.provideJson()
     private lateinit var database: LocalDatabase
     private lateinit var store: LocalStore
     private fun feed(unread: Int = 10) = FeedWithCounts(

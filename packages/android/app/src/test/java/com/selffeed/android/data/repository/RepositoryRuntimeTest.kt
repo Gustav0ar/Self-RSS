@@ -33,11 +33,11 @@ import java.util.concurrent.atomic.AtomicLong
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 class RepositoryRuntimeTest {
-    private val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test")
+    private val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test")
 
     @Test fun `connectivity loss stops retrying before the next transport attempt`() = runTest {
         var online = true
-        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", isOnline = { online })
+        val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test", isOnline = { online })
         var attempts = 0
         val result = runtime.safeCall {
             runtime.withRetry {
@@ -63,7 +63,7 @@ class RepositoryRuntimeTest {
 
     @Test fun `Retry-After pauses subsequent reads for the same account without blocking another account`() = runTest {
         var now = 1_000L
-        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", nowMs = { now })
+        val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test", nowMs = { now })
         val raw = okhttp3.Response.Builder().request(okhttp3.Request.Builder().url("https://example.com").build())
             .protocol(okhttp3.Protocol.HTTP_1_1).code(429).message("Rate limited")
             .header("Retry-After", "30").build()
@@ -80,7 +80,7 @@ class RepositoryRuntimeTest {
 
     @Test fun `cache epoch invalidates values while preserving prefix invalidation`() = runTest {
         val epoch = AtomicLong()
-        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = epoch::get)
+        val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test", cacheEpoch = epoch::get)
         runtime.putCached("feeds", 60_000, "old")
         assertEquals("old", runtime.getCached<String>("feeds"))
 
@@ -97,7 +97,7 @@ class RepositoryRuntimeTest {
     @Test fun `a cache lookup cannot return a value after its epoch changes`() {
         val epoch = AtomicLong()
         var advanceEpoch = false
-        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = {
+        val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test", cacheEpoch = {
             epoch.get().also { if (advanceEpoch) epoch.incrementAndGet() }
         })
         runtime.putCached("feeds", 60_000, "old")
@@ -108,7 +108,7 @@ class RepositoryRuntimeTest {
 
     @Test fun `a superseded in-flight load cannot populate the current cache epoch`() = runTest {
         val epoch = AtomicLong()
-        val runtime = RepositoryRuntime(NetworkModule.provideMoshi(), 2, "test", cacheEpoch = epoch::get)
+        val runtime = RepositoryRuntime(NetworkModule.provideJson(), 2, "test", cacheEpoch = epoch::get)
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val oldRequest = async {

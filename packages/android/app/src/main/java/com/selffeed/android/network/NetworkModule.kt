@@ -15,13 +15,23 @@ import kotlinx.coroutines.withContext
 import com.selffeed.android.BuildConfig
 import com.selffeed.android.data.SessionStore
 import com.selffeed.android.data.ApiSession
-import com.squareup.moshi.FromJson
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.JsonReader
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.ToJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 import okhttp3.Authenticator
 import okhttp3.Cache
 import okhttp3.CertificatePinner
@@ -35,9 +45,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.brotli.BrotliInterceptor
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.io.File
 import java.io.IOException
 import javax.net.ssl.SSLPeerUnverifiedException
@@ -51,14 +62,13 @@ sealed interface SessionRefreshResult {
 
 class SessionRefreshCoordinator(
     private val sessionStore: SessionStore,
-    moshi: Moshi,
+    private val json: Json,
     private val refreshClientFactory: () -> OkHttpClient = ::createRefreshClient,
 ) {
     private val refreshes = Mutex()
-    private val responseAdapter: JsonAdapter<ApiEnvelope<RefreshData>> = moshi.adapter(
-        Types.apiEnvelopeRefreshType,
-    )
+    private val responseSerializer = ApiEnvelope.serializer(RefreshData.serializer())
     private val refreshClient: OkHttpClient by lazy(refreshClientFactory)
+    private val sessionRefreshClients by lazy { SessionBoundClientCache(refreshClient, sessionStore) }
 
     @Volatile
     private var lastRejection: Pair<ApiSession, Long>? = null
@@ -85,9 +95,7 @@ class SessionRefreshCoordinator(
                 .header("X-Self-Feed-Device-Name", androidDeviceName())
                 .header("User-Agent", androidUserAgent())
                 .build()
-            val call = refreshClient.newBuilder()
-                .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
-                .build().newCall(request)
+            val call = sessionRefreshClients.clientFor(session).newCall(request)
             try {
                 coroutineScope {
                     val response = async(Dispatchers.IO) {
@@ -103,11 +111,9 @@ class SessionRefreshCoordinator(
                                     IOException("Refresh failed with HTTP ${response.code}"),
                                 )
                                 else -> {
-                                    val body = response.body?.string()
-                                        ?: return@use SessionRefreshResult.Unavailable(IOException("Refresh response was empty"))
+                                    val body = response.body.string()
                                     currentCoroutineContext().ensureActive()
-                                    val parsed = responseAdapter.fromJson(body)
-                                        ?: return@use SessionRefreshResult.Unavailable(IOException("Refresh response was empty or invalid"))
+                                    val parsed = json.decodeFromString(responseSerializer, body)
                                     currentCoroutineContext().ensureActive()
                                     val token = parsed.data.tokens.accessToken
                                     if (!sessionStore.setAccessTokenIfCurrent(session, token)) return@use staleSession()
@@ -351,21 +357,18 @@ class TokenAuthenticator(
 
 object NetworkModule {
     /**
-     * Moshi instance with no reflective [com.squareup.moshi.kotlin.reflect
-     * .KotlinJsonAdapterFactory]. Every DTO in the project is annotated
-     * `@JsonClass(generateAdapter = true)`, and the
-     * `moshi-kotlin-codegen` KSP processor generates a static
-     * `*JsonAdapter` companion for each at compile time. The generated
-     * adapter is located reflectively by Moshi's built-in lookup; no
-     * runtime reflection is needed, which means faster cold start and
-     * fewer dependencies at runtime.
-     *
-     * The custom [FlexibleBooleanAdapter] still handles the API's mixed
-     * boolean encodings (0/1, true/false, "1"/"0", "yes"/"no").
+     * Compile-time `kotlinx.serialization` JSON codec used by Retrofit,
+     * Room offline caches, and the SSE stream. Eliminates runtime reflection
+     * and Moshi keep rules while honoring mixed boolean encodings via
+     * [FlexibleBooleanSerializer].
      */
-    fun provideMoshi(): Moshi = Moshi.Builder()
-        .add(FlexibleBooleanAdapter())
-        .build()
+    @OptIn(ExperimentalSerializationApi::class)
+    fun provideJson(): Json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        encodeDefaults = true
+        coerceInputValues = true
+    }
 
     fun provideOkHttpClient(
         context: Context,
@@ -419,6 +422,7 @@ object NetworkModule {
                 chain.proceed(requestBuilder.build())
             }
             .authenticator(authenticator)
+            .addInterceptor(BrotliInterceptor)
             .addInterceptor(logging)
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -430,7 +434,8 @@ object NetworkModule {
             .build()
     }
 
-    fun provideApi(client: OkHttpClient, moshi: Moshi, sessionStore: SessionStore): RssApi {
+    fun provideApi(client: OkHttpClient, json: Json, sessionStore: SessionStore): RssApi {
+        val sessionClients = SessionBoundClientCache(client, sessionStore)
         val retrofit = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
             .callFactory { request ->
@@ -441,12 +446,9 @@ object NetworkModule {
                     .tag(ApiSession::class.java, session)
                     .url(rewriteApiRequestUrl(request.url, session.apiBaseUrl))
                     .build()
-                client.newBuilder()
-                    .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
-                    .build()
-                    .newCall(boundRequest)
+                sessionClients.clientFor(session).newCall(boundRequest)
             }
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .addConverterFactory(json.asConverterFactory("application/json; charset=UTF8".toMediaType()))
             .build()
 
         return retrofit.create(RssApi::class.java)
@@ -459,6 +461,34 @@ object NetworkModule {
     private const val CALL_TIMEOUT_SECONDS = 30L
     private const val PING_INTERVAL_SECONDS = 30L
     private const val TAG = "NetworkModule"
+}
+
+/**
+ * Caches the derived [OkHttpClient] bound to the active [ApiSession]'s cookie jar
+ * so steady-state requests reuse one client instead of rebuilding on every call.
+ */
+private class SessionBoundClientCache(
+    private val baseClient: OkHttpClient,
+    private val sessionStore: SessionStore,
+) {
+    @Volatile
+    private var entry: Pair<ApiSession, OkHttpClient>? = null
+
+    fun clientFor(session: ApiSession): OkHttpClient {
+        entry?.let { (cachedSession, cachedClient) ->
+            if (cachedSession == session) return cachedClient
+        }
+        return synchronized(this) {
+            entry?.let { (cachedSession, cachedClient) ->
+                if (cachedSession == session) return@synchronized cachedClient
+            }
+            val created = baseClient.newBuilder()
+                .cookieJar(PersistedRefreshCookieJar(sessionStore, session))
+                .build()
+            entry = session to created
+            created
+        }
+    }
 }
 
 private fun androidDeviceName(): String {
@@ -475,38 +505,37 @@ private fun androidDeviceName(): String {
 private fun androidUserAgent(): String =
     "SelfFeed Android/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE}; ${Build.MODEL})"
 
-private object Types {
-    val apiEnvelopeRefreshType = com.squareup.moshi.Types.newParameterizedType(
-        ApiEnvelope::class.java,
-        RefreshData::class.java,
-    )
-}
+/**
+ * Tolerates the API's mixed boolean encodings (`true`/`false`, `1`/`0`,
+ * `"true"`/`"1"`/`"yes"`/`"y"`, or `null` -> `false`) while emitting standard
+ * JSON booleans on write.
+ */
+object FlexibleBooleanSerializer : KSerializer<Boolean> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("FlexibleBoolean", PrimitiveKind.BOOLEAN)
 
-class FlexibleBooleanAdapter {
-    @FromJson
-    fun fromJson(reader: JsonReader): Boolean {
-        return when (reader.peek()) {
-            JsonReader.Token.BOOLEAN -> reader.nextBoolean()
-            JsonReader.Token.NUMBER -> reader.nextInt() != 0
-            JsonReader.Token.STRING -> {
-                val s = reader.nextString().trim()
-                if (s.isEmpty()) false
-                else when (s.lowercase()) {
-                    "true", "1", "yes", "y" -> true
-                    else -> false
+    override fun deserialize(decoder: Decoder): Boolean {
+        val jsonDecoder = decoder as? JsonDecoder ?: return decoder.decodeBoolean()
+        return when (val element = jsonDecoder.decodeJsonElement()) {
+            is JsonNull -> false
+            is JsonPrimitive -> {
+                if (element.isString) {
+                    when (element.content.trim().lowercase()) {
+                        "true", "1", "yes", "y" -> true
+                        else -> false
+                    }
+                } else {
+                    element.booleanOrNull
+                        ?: element.longOrNull?.let { it != 0L }
+                        ?: element.doubleOrNull?.let { it != 0.0 }
+                        ?: false
                 }
             }
-            JsonReader.Token.NULL -> {
-                reader.nextNull<Unit>()
-                false
-            }
-            else -> {
-                reader.skipValue()
-                false
-            }
+            else -> false
         }
     }
 
-    @ToJson
-    fun toJson(value: Boolean): Boolean = value
+    override fun serialize(encoder: Encoder, value: Boolean) {
+        encoder.encodeBoolean(value)
+    }
 }

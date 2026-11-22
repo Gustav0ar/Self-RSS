@@ -75,7 +75,7 @@ class AuthenticationSessionTest {
             store.setRefreshCookie("rss_refresh_token=old-account; Path=/api/v1/auth")
         }
         val oldSession = store.currentSession()
-        val moshi = NetworkModule.provideMoshi()
+        val moshi = NetworkModule.provideJson()
         val coordinator = SessionRefreshCoordinator(store, moshi)
         val client = NetworkModule.provideOkHttpClient(context, store, coordinator)
         val api = NetworkModule.provideApi(client, moshi, store)

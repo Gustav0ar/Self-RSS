@@ -1,9 +1,12 @@
 package com.selffeed.android.ui
 
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -13,14 +16,18 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.core.graphics.ColorUtils
 import androidx.paging.PagingData
 import com.selffeed.android.network.ArticleListItem
 import com.selffeed.android.ui.articles.ArticleFlags
 import com.selffeed.android.ui.theme.SelfFeedTheme
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -91,6 +98,25 @@ class UnreadUndoFeedbackTest {
     }
 
     @Test
+    @Config(qualifiers = "+notnight")
+    fun undoActionHasReadableContrastInLightTheme() {
+        val requests = mutableListOf<Boolean>()
+        showArticles(listOf(article.copy(isRead = true))) { _, read -> requests += read }
+        swipeArticle(isRead = true)
+        composeRule.mainClock.advanceTimeUntil(3_000) { requests.isNotEmpty() }
+
+        val layout = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText("Undo").performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
+            it(layout)
+        }
+        val contrast = ColorUtils.calculateContrast(
+            layout.single().layoutInput.style.color.toArgb(),
+            lightColorScheme().surfaceContainerHigh.toArgb(),
+        )
+        assertTrue("Undo text contrast was $contrast:1", contrast >= 4.5)
+    }
+
+    @Test
     fun successiveSwipesAndUndoApplyOnceToTheSameArticle() {
         val requests = mutableListOf<Pair<String, Boolean>>()
         showArticles(listOf(article)) { id, read -> requests += id to read }
@@ -122,7 +148,7 @@ class UnreadUndoFeedbackTest {
 
     private fun showArticles(rows: List<ArticleListItem>, onToggleRead: (String, Boolean) -> Unit) {
         var state by mutableStateOf(appState())
-        val paging = flowOf(PagingData.from(rows))
+        val paging = MutableStateFlow(PagingData.from(rows))
         composeRule.setContent {
             SelfFeedTheme {
                 SelfFeedApp(

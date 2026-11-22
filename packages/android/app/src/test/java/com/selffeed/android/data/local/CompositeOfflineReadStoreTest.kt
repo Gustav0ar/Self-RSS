@@ -19,7 +19,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class CompositeOfflineReadStoreTest {
-    private val moshi = NetworkModule.provideMoshi()
+    private val moshi = NetworkModule.provideJson()
     private lateinit var localStore: LocalStore
     private lateinit var fileCacheStore: OfflineCacheStore
     private lateinit var store: CompositeOfflineReadStore

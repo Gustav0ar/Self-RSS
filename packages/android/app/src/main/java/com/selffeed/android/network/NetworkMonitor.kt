@@ -1,5 +1,6 @@
 package com.selffeed.android.network
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -115,12 +116,23 @@ class AndroidNetworkMonitor(
         val capabilities = validatedNetworks.values.toList()
         val online = capabilities.isNotEmpty()
         _online.value = online
-        _unmetered.value = capabilities.any {
-            it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
-                (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
-                    it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING))
-        }
+        _unmetered.value = capabilities.any { isUnmeteredCapabilities(it) }
         if (online) hasBeenOnlineFlag.set(true)
+    }
+
+    internal companion object {
+        @SuppressLint("InlinedApi")
+        internal fun isUnmeteredCapabilities(
+            capabilities: NetworkCapabilities,
+            sdkInt: Int = Build.VERSION.SDK_INT,
+        ): Boolean {
+            val unmetered = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) ||
+                (sdkInt >= Build.VERSION_CODES.R &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED))
+            val notRoaming = sdkInt < Build.VERSION_CODES.P ||
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+            return unmetered && notRoaming
+        }
     }
 
     private fun log(message: String) {

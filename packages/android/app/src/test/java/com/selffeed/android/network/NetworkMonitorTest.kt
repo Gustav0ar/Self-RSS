@@ -1,5 +1,9 @@
 package com.selffeed.android.network
 
+import android.net.NetworkCapabilities
+import android.os.Build
+import io.mockk.every
+import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -9,8 +13,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -63,6 +67,30 @@ class NetworkMonitorTest {
         // Flipping back to false does not clear the flag.
         flow.value = false
         assertTrue(monitor.hasBeenOnline)
+    }
+
+    @Test
+    fun `5G temporarily not metered counts as unmetered on API 30 plus when not roaming`() {
+        val fiveGUnmetered = mockk<NetworkCapabilities>()
+        every { fiveGUnmetered.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) } returns false
+        every { fiveGUnmetered.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED) } returns true
+        every { fiveGUnmetered.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING) } returns true
+
+        assertTrue(
+            AndroidNetworkMonitor.isUnmeteredCapabilities(fiveGUnmetered, sdkInt = Build.VERSION_CODES.R),
+        )
+        assertFalse(
+            AndroidNetworkMonitor.isUnmeteredCapabilities(fiveGUnmetered, sdkInt = Build.VERSION_CODES.Q),
+        )
+
+        val roamingFiveG = mockk<NetworkCapabilities>()
+        every { roamingFiveG.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) } returns false
+        every { roamingFiveG.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED) } returns true
+        every { roamingFiveG.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING) } returns false
+
+        assertFalse(
+            AndroidNetworkMonitor.isUnmeteredCapabilities(roamingFiveG, sdkInt = Build.VERSION_CODES.R),
+        )
     }
 }
 

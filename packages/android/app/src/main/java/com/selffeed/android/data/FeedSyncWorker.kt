@@ -32,9 +32,13 @@ class FeedSyncWorker @AssistedInject constructor(
 
     private suspend fun syncFeeds(): Result {
         return when (val result = repository.syncAllFeeds()) {
-            // The server owns the durable job after acceptance. Keeping a worker
-            // alive to observe completion adds wakeups without downloading content.
-            is AppResult.Success -> Result.success()
+            // The server owns the durable job after acceptance. Schedule a brief
+            // delayed offline-content pass so fresh article bodies and media are
+            // downloaded without keeping this worker alive to poll.
+            is AppResult.Success -> {
+                runCatching { OfflineContentSyncWorker.kickAfterFeedSync(applicationContext) }
+                Result.success()
+            }
             is AppResult.Error -> {
                 val cause = result.cause
                 when {

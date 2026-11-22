@@ -2,7 +2,12 @@ package com.selffeed.android.ui
 
 import android.os.Bundle
 import android.os.Parcel
-import androidx.lifecycle.AbstractSavedStateViewModelFactory
+import androidx.lifecycle.SAVED_STATE_REGISTRY_OWNER_KEY
+import androidx.lifecycle.VIEW_MODEL_STORE_OWNER_KEY
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.enableSavedStateHandles
+import androidx.lifecycle.viewmodel.MutableCreationExtras
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.SavedStateHandle
@@ -113,7 +118,7 @@ class ReadingSessionRestoreTest {
 
     @Test
     fun `fresh ViewModels restore Bundle identifiers from Room only after matching authentication`() = runTest {
-        val local = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideMoshi())
+        val local = LocalStore(ApplicationProvider.getApplicationContext(), NetworkModule.provideJson())
         val unreadDetail = detail.copy(isRead = false)
         local.writeArticleDetail(unreadDetail)
         coEvery { repository.article(detail.id, any()) } returns AppResult.Success(unreadDetail)
@@ -295,15 +300,19 @@ class ReadingSessionRestoreTest {
         override val viewModelStore = ViewModelStore()
         init {
             controller.performAttach()
+            enableSavedStateHandles()
             controller.performRestore(restored)
             registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         }
         fun <T : ViewModel> model(key: String, type: Class<T>, create: (SavedStateHandle) -> T): T {
-            val factory = object : AbstractSavedStateViewModelFactory(this, null) {
-                @Suppress("UNCHECKED_CAST")
-                override fun <V : ViewModel> create(key: String, modelClass: Class<V>, handle: SavedStateHandle): V = create(handle) as V
+            val extras = MutableCreationExtras().apply {
+                set(SAVED_STATE_REGISTRY_OWNER_KEY, this@Owner)
+                set(VIEW_MODEL_STORE_OWNER_KEY, this@Owner)
             }
-            return ViewModelProvider(this, factory)[key, type]
+            val factory = viewModelFactory {
+                addInitializer(type.kotlin) { create(createSavedStateHandle()) }
+            }
+            return ViewModelProvider.create(viewModelStore, factory, extras)[key, type.kotlin]
         }
         fun saveAndDestroy(): Bundle {
             val bundle = Bundle()

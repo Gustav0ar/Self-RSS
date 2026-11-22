@@ -26,7 +26,7 @@ class PreparedOpmlExport internal constructor(val uri: Uri, internal val file: F
 @Singleton
 class OpmlExportStore @Inject constructor(
     @ApplicationContext context: Context,
-    @ApplicationCoroutineScope private val applicationScope: CoroutineScope,
+    @param:ApplicationCoroutineScope private val applicationScope: CoroutineScope,
 ) {
     private val application = context.applicationContext
     private val files = Mutex()

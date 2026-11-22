@@ -48,7 +48,7 @@ abstract class AccountSessionBoundaryContract {
         )
         store = SessionStore(context, dataStore = preferences)
         database = Room.databaseBuilder(context, LocalDatabase::class.java, name).build()
-        local = LocalStore(database, NetworkModule.provideMoshi())
+        local = LocalStore(database, NetworkModule.provideJson())
         boundary = AccountSessionBoundary(store, local) { replacements++ }
     }
 

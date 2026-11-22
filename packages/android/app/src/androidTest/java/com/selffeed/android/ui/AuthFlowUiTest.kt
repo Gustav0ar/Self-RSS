@@ -1,11 +1,15 @@
 package com.selffeed.android.ui
 
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsActions
@@ -17,6 +21,7 @@ import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicReference
 
 class AuthFlowUiTest {
     @get:Rule
@@ -99,6 +104,43 @@ class AuthFlowUiTest {
     }
 
     @Test
+    fun passwordFieldRequestsPasswordInputWithoutAutocorrect() {
+        val imeInfo = AtomicReference<EditorInfo>()
+        composeRule.setContent {
+            InterceptPlatformTextInput(
+                interceptor = { request, nextHandler ->
+                    nextHandler.startInputMethod { info ->
+                        request.createInputConnection(info).also { imeInfo.set(info) }
+                    }
+                },
+            ) {
+                SelfFeedTheme {
+                    AuthScreen(
+                        mode = AuthMode.LOGIN,
+                        apiBaseUrl = "rss.example.test",
+                        registrationEnabled = false,
+                        errorMessage = null,
+                        onModeChange = {},
+                        onLogin = { _, _, _ -> },
+                        onRegister = { _, _, _ -> },
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Password").performScrollTo().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { imeInfo.get() != null }
+
+        val info = imeInfo.get()
+        assertEquals(
+            InputType.TYPE_TEXT_VARIATION_PASSWORD,
+            info.inputType and InputType.TYPE_MASK_VARIATION,
+        )
+        assertEquals(0, info.inputType and InputType.TYPE_TEXT_FLAG_AUTO_CORRECT)
+        assertEquals(EditorInfo.IME_ACTION_DONE, info.imeOptions and EditorInfo.IME_MASK_ACTION)
+    }
+
+    @Test
     fun passwordField_clearedAfterSubmit() {
         val capturedPasswords = mutableListOf<String>()
 
@@ -121,20 +163,17 @@ class AuthFlowUiTest {
                     onLogin = onLogin,
                     onRegister = { _, _, _ -> },
                 )
-
-                // Verify password is volatile (remember not rememberSaveable)
-                // by checking that submit callback receives the password value
             }
         }
 
-        // Enter credentials and submit
         composeRule.onNodeWithText("Email").performTextInput("user@test.com")
         composeRule.onNodeWithText("Password").performTextInput("mypassword123")
         composeRule.onNodeWithText("Password").performImeAction()
+        composeRule.onNodeWithText("Password").performImeAction()
 
-        // Verify password was captured before clearing
-        composeRule.waitUntil(timeoutMillis = 5_000) { capturedPasswords.isNotEmpty() }
-        assert(capturedPasswords.last() == "mypassword123") { "Submitted password should match input" }
+        composeRule.runOnIdle {
+            assertEquals(listOf("mypassword123", ""), capturedPasswords)
+        }
     }
 
     @Test
@@ -202,19 +241,32 @@ class AuthFlowUiTest {
     }
 
     @Test
-    fun passwordIsNotPersistedAcrossInstanceState() {
-        // This test documents the security fix: password uses `remember`
-        // instead of `rememberSaveable`, so it is volatile and NOT saved
-        // to instance state. Email remains saveable for user convenience.
-        //
-        // Implementation in AuthScreen:
-        // - `var email by rememberSaveable { mutableStateOf("") }` - kept saveable
-        // - `var password by remember { mutableStateOf("") }` - changed to volatile
-        // - `password = ""` is called after onLogin/onRegister
-        //
-        // The key security improvement: if the activity is recreated (e.g., after
-        // configuration change or system-initiated save), the password field
-        // will be empty rather than restored from saved instance state.
+    fun instanceStateRestoresServerAndEmailWithoutPassword() {
+        val restoration = StateRestorationTester(composeRule)
+        var submitted: Triple<String, String, String>? = null
+        restoration.setContent {
+            SelfFeedTheme {
+                AuthScreen(
+                    mode = AuthMode.LOGIN,
+                    apiBaseUrl = "rss.example.test",
+                    registrationEnabled = true,
+                    errorMessage = null,
+                    onModeChange = {},
+                    onLogin = { email, password, server -> submitted = Triple(email, password, server) },
+                    onRegister = { _, _, _ -> },
+                )
+            }
+        }
+        composeRule.onNodeWithText("Server").performTextInput("custom.example.test")
+        composeRule.onNodeWithText("Email").performTextInput("user@test.com")
+        composeRule.onNodeWithText("Password").performTextInput("mypassword123")
+
+        restoration.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(Triple("user@test.com", "", "custom.example.test"), submitted)
+        }
     }
 
     @Test

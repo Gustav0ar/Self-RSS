@@ -73,4 +73,53 @@ class ReaderTextContentTest {
             blocks,
         )
     }
+
+    @Test
+    fun htmlTextModePreservesSafeInlineFormattingAndResolvesLinks() {
+        val blocks = readerTextBlocks(
+            html = """
+                <p>Read <strong style="color:red">this</strong> <a href="/guide?a=1&amp;b=2" onclick="evil()">guide</a> and <code>run()</code>.</p>
+                <p>Ignore <a href="javascript:alert(1)">unsafe links</a> cleanly.</p>
+            """.trimIndent(),
+            text = null,
+            baseUrl = "https://example.com/blog/post",
+        )
+
+        assertEquals(2, blocks.size)
+        val first = blocks[0] as ReaderTextBlock.Paragraph
+        assertEquals("Read this guide and run().", first.text)
+        assertEquals(
+            """Read <strong>this</strong> <a href="https://example.com/guide?a=1&amp;b=2">guide</a> and <tt>run()</tt>.""",
+            first.inlineHtml,
+        )
+
+        val second = blocks[1] as ReaderTextBlock.Paragraph
+        assertEquals("Ignore unsafe links cleanly.", second.text)
+        assertEquals(null, second.inlineHtml)
+    }
+
+    @Test
+    fun htmlTextModeKeepsBulletsAndHeadingsWithNestedParagraphsAndStripsComments() {
+        val blocks = readerTextBlocks(
+            html = """
+                <!-- hidden publisher note -->
+                <h2><div>Nested Heading</div></h2>
+                <ul>
+                    <li><p>Nested <strong>bullet</strong> item</p></li>
+                </ul>
+            """.trimIndent(),
+            text = null,
+        )
+
+        assertEquals(
+            listOf(
+                ReaderTextBlock.Heading("Nested Heading"),
+                ReaderTextBlock.Bullet(
+                    text = "Nested bullet item",
+                    inlineHtml = "Nested <strong>bullet</strong> item",
+                ),
+            ),
+            blocks,
+        )
+    }
 }

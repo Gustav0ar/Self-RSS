@@ -1,8 +1,12 @@
+@file:UseSerializers(FlexibleBooleanSerializer::class)
+
 package com.selffeed.android.network
 
-import com.squareup.moshi.JsonClass
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.UseSerializers
+import kotlinx.serialization.json.JsonElement
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleStateSnapshot(
     val id: String,
     val isRead: Boolean,
@@ -11,52 +15,52 @@ data class ArticleStateSnapshot(
     val savedRevision: Int,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleStateLookupResponse(
     val states: List<ArticleStateSnapshot>,
     val missingIds: List<String>,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ApiEnvelope<T>(
     val data: T,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ApiListResponse<T>(
     val data: List<T>,
     val cursor: String?,
     val hasMore: Boolean,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ApiErrorEnvelope(
     val error: ApiError,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ApiError(
     val code: String,
     val message: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AuthResponse(
     val user: User,
     val tokens: AccessTokenOnly,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AccessTokenOnly(
     val accessToken: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class RefreshData(
     val tokens: AccessTokenOnly,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AuthSession(
     val id: String,
     val deviceName: String,
@@ -68,17 +72,17 @@ data class AuthSession(
     val current: Boolean,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AuthSessionsResponse(
     val sessions: List<AuthSession>,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class RegistrationStatusResponse(
     val registrationEnabled: Boolean,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class User(
     val id: String,
     val email: String,
@@ -88,22 +92,22 @@ data class User(
     val updatedAt: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class CategoryTreeResponse(
     val categories: List<CategoryWithCounts>,
     val totalUnread: Int,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class CategoryOrderUpdate(val id: String, val sortOrder: Int)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ReorderCategoriesRequest(val updates: List<CategoryOrderUpdate>)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ReorderCategoriesResponse(val updatedCount: Int)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class CategoryWithCounts(
     val id: String,
     val userId: String? = null,
@@ -118,7 +122,7 @@ data class CategoryWithCounts(
     val children: List<CategoryWithCounts>? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedWithCounts(
     val id: String,
     val userId: String? = null,
@@ -150,7 +154,7 @@ data class FeedWithCounts(
     val unreadCount: Int,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedDiscoveryOption(
     val id: String,
     val requestId: String,
@@ -160,13 +164,13 @@ data class FeedDiscoveryOption(
     val expiresAt: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedDiscovery(
     val required: Boolean,
     val candidates: List<FeedDiscoveryOption> = emptyList(),
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedDiscoveryCandidate(
     val id: String,
     val requestId: String,
@@ -178,7 +182,7 @@ data class FeedDiscoveryCandidate(
     val expiresAt: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleListItem(
     val id: String,
     val feedId: String,
@@ -198,7 +202,7 @@ data class ArticleListItem(
     val contentVersion: Int = 1,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleMedia(
     val id: String,
     val articleId: String,
@@ -211,7 +215,7 @@ data class ArticleMedia(
     val position: Int,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ArticleDetail(
     val id: String,
     val feedId: String,
@@ -324,13 +328,13 @@ data class RealtimeConnectedEvent(
     override val clientId: String? = null,
 ) : ReadStateSyncEvent
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ReadStateScope(
     val feedId: String? = null,
     val categoryId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ReadStateEventPayload(
     val type: String,
     val eventId: String? = null,
@@ -438,7 +442,7 @@ data class ReadStateEventPayload(
     }
 }
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class UserPreferences(
     val userId: String? = null,
     val theme: String,
@@ -454,7 +458,7 @@ data class UserPreferences(
     val updatedAt: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class StatsResponse(
     val totalUnread: Int,
     val totalRead: Int,
@@ -464,7 +468,7 @@ data class StatsResponse(
     val dailyMetrics: List<DailyMetric> = emptyList(),
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class SyncRun(
     val id: String,
     val feedId: String,
@@ -477,14 +481,14 @@ data class SyncRun(
     val errorMessage: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedSyncHistoryResponse(
     val runs: List<SyncRun>,
     val cursor: String? = null,
     val hasMore: Boolean = false,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class DailyMetric(
     val date: String,
     val articlesReadCount: Int,
@@ -496,57 +500,57 @@ data class DailyMetric(
     val feedFailuresCount: Int = 0,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class ProductAnalyticsEvent(
     val id: String,
     val type: String,
     val occurredOn: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class RecordProductAnalyticsEventsRequest(
     val events: List<ProductAnalyticsEvent>,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class RecordProductAnalyticsEventsResponse(
     val accepted: Int,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AppSettingsResponse(
     val registrationLocked: Boolean,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AdminUsersResponse(
     val users: List<User>,
     val cursor: String? = null,
     val hasMore: Boolean = false,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AdminCreateUserRequest(
     val email: String,
     val password: String,
     val role: String,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AdminUpdateUserRequest(
     val role: String? = null,
     val isActive: Boolean? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class AdminResetPasswordRequest(val password: String)
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class SuccessResponse(
     val success: Boolean,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class MarkReadResponse(
     val success: Boolean,
     val applied: Boolean = true,
@@ -557,13 +561,13 @@ data class MarkReadResponse(
     val revision: Int = 0,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class MarkAllReadResponse(
     val markedCount: Int,
     val feedIds: List<String> = emptyList(),
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class SyncResponse(
     val accepted: Boolean? = null,
     val alreadyQueued: Boolean? = null,
@@ -574,7 +578,7 @@ data class SyncResponse(
     // Legacy fixtures used a string while queued refresh endpoints return an
     // object. Keep this tolerant; requestId plus the status endpoint are the
     // durable source of truth.
-    val status: Any? = null,
+    val status: JsonElement? = null,
     val totalFeeds: Int? = null,
     val syncedFeeds: Int? = null,
     val failedFeeds: Int? = null,
@@ -582,13 +586,13 @@ data class SyncResponse(
     val newArticles: Int? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedSyncScope(
     val feedId: String? = null,
     val categoryId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedSyncAllStatus(
     val requestId: String? = null,
     val status: String? = null,
@@ -614,7 +618,7 @@ data class FeedSyncAllStatus(
     val items: List<FeedSyncItemStatus> = emptyList(),
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class FeedSyncItemStatus(
     val feedId: String? = null,
     val sourceId: String? = null,
@@ -628,7 +632,7 @@ data class FeedSyncItemStatus(
     val lastFetchAt: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class DiscoverySelectionResponse(
     val candidateId: String,
     val feedId: String,
@@ -636,14 +640,14 @@ data class DiscoverySelectionResponse(
     val jobId: String? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class EnrichArticleResponse(
     val success: Boolean,
     val reason: String? = null,
     val queued: Boolean? = null,
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class OpmlImportSummary(
     val createdCategories: Int,
     val createdFeeds: Int,
@@ -652,7 +656,7 @@ data class OpmlImportSummary(
     val warnings: List<OpmlImportWarning> = emptyList(),
 )
 
-@JsonClass(generateAdapter = true)
+@Serializable
 data class OpmlImportWarning(
     val code: String,
     val message: String,

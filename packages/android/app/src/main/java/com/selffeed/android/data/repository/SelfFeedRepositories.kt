@@ -176,6 +176,7 @@ interface ArticleRepository {
     suspend fun updateCachedSavedState(articleId: String, saved: Boolean, revision: Int? = null)
     suspend fun markCachedArticlesReadByFeeds(feedIds: Set<String>): BulkReadReconciliation
     suspend fun recordArticleCompletion(articleId: String) = Unit
+    fun scheduleOfflineContentSync() = Unit
 }
 
 interface SearchRepository {

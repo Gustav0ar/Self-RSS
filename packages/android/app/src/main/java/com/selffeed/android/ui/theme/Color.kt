@@ -10,9 +10,12 @@ val BrandTertiary = Color(0xFF8B5CF6)
 
 val DarkBackground = Color(0xFF000000)
 val DarkSurface = Color(0xFF000000)
+val DarkSurfaceContainerLow = Color(0xFF0A0A0A)
 val DarkSurfaceElevated = Color(0xFF121212)
+val DarkSurfaceContainerHigh = Color(0xFF181818)
+val DarkSurfaceContainerHighest = Color(0xFF202020)
 val DarkOutline = Color(0xFF2A2A2A)
-val DarkOnSurface = Color(0xFFEDEDED)
+val DarkOnSurface = Color.White
 val DarkOnSurfaceVariant = Color(0xFFA3A3A3)
 
 val LightBackground = Color(0xFFF4F7FF)

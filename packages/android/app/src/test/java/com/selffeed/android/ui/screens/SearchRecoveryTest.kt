@@ -1,13 +1,17 @@
 package com.selffeed.android.ui.screens
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.selffeed.android.data.AppResult
@@ -85,7 +89,44 @@ class SearchRecoveryTest {
         coVerify(exactly = 2) { repository.search("Android", null, "next") }
     }
 
-    private fun showSearch(viewModel: SearchViewModel) {
+    @Test
+    fun clearButtonResetsQueryAndHidesItself() {
+        val repository = mockk<SearchRepository>()
+        coEvery { repository.search("Android", null, null) } returns AppResult.Success(
+            ApiListResponse(emptyList(), null, false),
+        )
+        val viewModel = SearchViewModel(repository)
+        showSearch(viewModel)
+
+        composeRule.onNodeWithContentDescription("Clear search").assertIsDisplayed().performClick()
+
+        composeRule.runOnIdle {
+            org.junit.Assert.assertEquals("", viewModel.state.value.query)
+        }
+        composeRule.onNodeWithContentDescription("Clear search").assertDoesNotExist()
+    }
+
+    @Test
+    fun delayedQueryAcknowledgementPreservesNewerInput() {
+        val repository = mockk<SearchRepository>()
+        coEvery { repository.search(any(), null, null) } returns AppResult.Success(
+            ApiListResponse(emptyList(), null, false),
+        )
+        val viewModel = SearchViewModel(repository)
+        val acknowledged = mutableStateOf("Android")
+        showSearch(viewModel) { acknowledged.value }
+
+        val field = composeRule.onNode(hasSetTextAction())
+        field.performTextReplacement("Kot")
+        composeRule.runOnIdle { org.junit.Assert.assertEquals("Kot", viewModel.state.value.query) }
+        field.performTextReplacement("Kotlin")
+        composeRule.runOnIdle { acknowledged.value = "Kot" }
+
+        composeRule.onNodeWithText("Kotlin").assertIsDisplayed()
+        composeRule.runOnIdle { org.junit.Assert.assertEquals("Kotlin", viewModel.state.value.query) }
+    }
+
+    private fun showSearch(viewModel: SearchViewModel, displayedQuery: (() -> String)? = null) {
         composeRule.runOnUiThread {
             viewModel.setQuery("Android")
             viewModel.search(debounceMs = 0L)
@@ -95,7 +136,7 @@ class SearchRecoveryTest {
             SelfFeedTheme {
                 SearchTab(
                     state = SearchTabState(
-                        query = state.query,
+                        query = displayedQuery?.invoke() ?: state.query,
                         results = state.results,
                         selectedArticleId = null,
                         hasMoreResults = state.hasMore,

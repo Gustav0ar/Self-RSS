@@ -3,6 +3,7 @@ package com.selffeed.android.data.local
 import android.content.Context
 import androidx.paging.PagingSource
 import androidx.core.text.HtmlCompat
+import androidx.core.text.parseAsHtml
 import androidx.room.Room
 import androidx.room.withTransaction
 import com.selffeed.android.data.repository.BulkReadReconciliation
@@ -21,13 +22,12 @@ import com.selffeed.android.network.toArticleListItem
 import com.selffeed.android.network.CategoryWithCounts
 import com.selffeed.android.network.FeedWithCounts
 import com.selffeed.android.network.UserPreferences
-import com.squareup.moshi.JsonAdapter
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.Types
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.Flow
@@ -51,26 +51,38 @@ import java.util.UUID
  */
 class LocalStore internal constructor(
     private val database: LocalDatabase,
-    moshi: Moshi,
+    private val json: Json,
     private val processingDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : OfflineReadStore {
-    constructor(context: Context, moshi: Moshi, processingDispatcher: CoroutineDispatcher = Dispatchers.Default) : this(
+    constructor(context: Context, json: Json, processingDispatcher: CoroutineDispatcher = Dispatchers.Default) : this(
         Room.databaseBuilder(context.applicationContext, LocalDatabase::class.java, DB_NAME)
             .addMigrations(*LOCAL_DATABASE_MIGRATIONS)
             .build(),
-        moshi,
+        json,
         processingDispatcher,
     )
     private val dao = database.localStoreDao()
-    private val counts = LocalCountStore(dao, moshi)
+    private val counts = LocalCountStore(dao, json)
 
-    private val categoryChildrenAdapter: JsonAdapter<List<CategoryWithCounts>> = moshi.adapter(
-        Types.newParameterizedType(List::class.java, CategoryWithCounts::class.java),
-    )
-    private val articleDetailAdapter: JsonAdapter<ArticleDetail> =
-        moshi.adapter(ArticleDetail::class.java)
-    private val preferencesAdapter: JsonAdapter<UserPreferences> =
-        moshi.adapter(UserPreferences::class.java)
+    private val categoryChildrenSerializer = ListSerializer(CategoryWithCounts.serializer())
+
+    private fun encodeArticleDetail(detail: ArticleDetail): String =
+        json.encodeToString(ArticleDetail.serializer(), detail)
+
+    private fun decodeArticleDetail(raw: String): ArticleDetail? =
+        runCatching { json.decodeFromString(ArticleDetail.serializer(), raw) }.getOrNull()
+
+    private fun encodePreferences(preferences: UserPreferences): String =
+        json.encodeToString(UserPreferences.serializer(), preferences)
+
+    private fun decodePreferences(raw: String): UserPreferences? =
+        runCatching { json.decodeFromString(UserPreferences.serializer(), raw) }.getOrNull()
+
+    private fun encodeCategoryChildren(children: List<CategoryWithCounts>): String =
+        json.encodeToString(categoryChildrenSerializer, children)
+
+    private fun decodeCategoryChildren(raw: String): List<CategoryWithCounts>? =
+        runCatching { json.decodeFromString(categoryChildrenSerializer, raw) }.getOrNull()
 
     // A freshness hint, not an event log. A slow observer must not hold a database/account commit open.
     private val _invalidations = MutableSharedFlow<String>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -239,7 +251,7 @@ class LocalStore internal constructor(
                 }
             }
         }.also {
-            if (removedSave) dao.pruneOrphanArticles()
+            if (removedSave) pruneOrphanArticlesAndSearch()
             if (createdState || removedSave) pruneArticleStateHistory()
         }
     }
@@ -378,8 +390,13 @@ class LocalStore internal constructor(
     fun articlePagingSource(queryKey: String, ownerId: String?): PagingSource<Int, ArticleListItem> =
         AnchoredArticlePagingSource(dao.articlePagingSource(queryKey, ownerId))
 
-    fun savedArticlePagingSource(ownerId: String?, unreadOnly: Boolean = false, oldest: Boolean = false): PagingSource<Int, ArticleListItem> =
-        AnchoredArticlePagingSource(dao.savedArticlePagingSource(ownerId, unreadOnly, oldest))
+    fun savedArticlePagingSource(
+        ownerId: String?,
+        unreadOnly: Boolean = false,
+        oldest: Boolean = false,
+        queryKey: String? = null,
+    ): PagingSource<Int, ArticleListItem> =
+        AnchoredArticlePagingSource(dao.savedArticlePagingSource(ownerId, unreadOnly, oldest, queryKey))
 
     /** Build an offline view from known metadata without claiming a fresh server snapshot. */
     suspend fun writeOfflineArticleQuery(query: ArticlePageQuery, feedIds: List<String>) = database.withTransaction {
@@ -410,13 +427,13 @@ class LocalStore internal constructor(
             dao.upsertArticleStateRevision(state.copy(confirmedSavedState = null))
             dao.updateArticleSavedState(articleId, false)
             dao.readArticleDetail(articleId)?.let { entity ->
-                runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()?.let { detail ->
+                decodeArticleDetail(entity.payloadJson)?.let { detail ->
                     dao.upsertArticleDetail(
-                        entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = false))),
+                        entity.copy(payloadJson = encodeArticleDetail(detail.copy(isSaved = false))),
                     )
                 }
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             true
         }
@@ -439,9 +456,9 @@ class LocalStore internal constructor(
                 dao.clearArticleRemoteKey(queryKey)
             }
             if (payload.data.isNotEmpty()) {
-                dao.upsertArticles(
-                    effective.map { it.toEntity() },
-                )
+                val entities = effective.map { it.toEntity() }
+                dao.upsertArticles(entities)
+                indexArticleMetadata(entities)
                 val startPosition = dao.maxArticleQueryPosition(queryKey) + 1
                 dao.upsertArticleQueryEntries(
                     payload.data.mapIndexed { index, article ->
@@ -463,7 +480,7 @@ class LocalStore internal constructor(
             )
             dao.pruneArticleRemoteKeys(MAX_CACHED_ARTICLE_QUERIES)
             dao.pruneArticleQueryEntries()
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             effective
         }
@@ -474,6 +491,25 @@ class LocalStore internal constructor(
     /** Accept server snapshots without adding search results to a paged query. */
     suspend fun reconcileArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
         database.withTransaction { mergeArticleSnapshots(articles).also { pruneArticleStateHistory() } }
+
+    /**
+     * Persists article list metadata during background offline sync so Room's
+     * offline query builder and detail prefetcher see all synced feeds without
+     * disrupting active Paging query windows.
+     */
+    suspend fun upsertOfflineArticles(articles: List<ArticleListItem>): List<ArticleListItem> {
+        if (articles.isEmpty()) return emptyList()
+        val effective = database.withTransaction {
+            val merged = mergeArticleSnapshots(articles)
+            val entities = merged.map { it.toEntity() }
+            dao.upsertArticles(entities)
+            indexArticleMetadata(entities)
+            pruneArticleStateHistory()
+            merged
+        }
+        notifyInvalidation(TABLE_ARTICLES)
+        return effective
+    }
 
     private suspend fun mergeArticleSnapshots(articles: List<ArticleListItem>): List<ArticleListItem> =
         articles.map { article ->
@@ -530,7 +566,7 @@ class LocalStore internal constructor(
     }
 
     private fun decodeDetail(entity: ArticleDetailEntity): ArticleDetail? =
-        runCatching { articleDetailAdapter.fromJson(entity.payloadJson) }.getOrNull()
+        decodeArticleDetail(entity.payloadJson)
 
     private suspend fun mergeReadState(articleId: String, read: Boolean, revision: Int?): Boolean? {
         val existing = stateRecord(articleId)
@@ -546,7 +582,7 @@ class LocalStore internal constructor(
             dao.updateArticleReadState(articleId, visible)
             dao.readArticleDetail(articleId)?.let { entity ->
                 decodeDetail(entity)?.let { detail ->
-                    dao.upsertArticleDetail(entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = visible, readRevision = confirmed.revision))))
+                    dao.upsertArticleDetail(entity.copy(payloadJson = encodeArticleDetail(detail.copy(isRead = visible, readRevision = confirmed.revision))))
                 }
             }
         }
@@ -568,7 +604,7 @@ class LocalStore internal constructor(
             dao.updateArticleSavedState(articleId, visible)
             dao.readArticleDetail(articleId)?.let { entity ->
                 decodeDetail(entity)?.let { detail ->
-                    dao.upsertArticleDetail(entity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = visible, savedRevision = confirmed.revision))))
+                    dao.upsertArticleDetail(entity.copy(payloadJson = encodeArticleDetail(detail.copy(isSaved = visible, savedRevision = confirmed.revision))))
                 }
             }
         }
@@ -609,7 +645,7 @@ class LocalStore internal constructor(
         val revision = state.readRevision
         val detailEntity = dao.readArticleDetail(articleId)
         val detail = detailEntity?.let {
-            runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
+            decodeArticleDetail(it.payloadJson)
         }
         val queued = PendingReadStateMutationEntity(
             articleId = articleId,
@@ -625,7 +661,7 @@ class LocalStore internal constructor(
         dao.updateArticleReadState(articleId, read)
         if (detailEntity != null && detail != null) {
             dao.upsertArticleDetail(
-                detailEntity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isRead = read))),
+                detailEntity.copy(payloadJson = encodeArticleDetail(detail.copy(isRead = read))),
             )
         }
         dao.upsertPendingReadStateMutation(queued)
@@ -648,7 +684,7 @@ class LocalStore internal constructor(
             val revision = state.savedRevision
             val detailEntity = dao.readArticleDetail(articleId)
             val detail = detailEntity?.let {
-                runCatching { articleDetailAdapter.fromJson(it.payloadJson) }.getOrNull()
+                decodeArticleDetail(it.payloadJson)
             }
             val article = dao.readArticle(articleId)
             val previousState = state.confirmedSavedState
@@ -658,6 +694,7 @@ class LocalStore internal constructor(
                 if (metadata != null) {
                     val row = projectArticleSnapshot(metadata).toEntity().copy(isSaved = saved)
                     dao.upsertArticles(listOf(row))
+                    indexArticleMetadata(listOf(row))
                 }
             }
             queued = PendingSavedStateMutationEntity(
@@ -671,7 +708,7 @@ class LocalStore internal constructor(
             dao.updateArticleSavedState(articleId, saved)
             if (detailEntity != null && detail != null) {
                 dao.upsertArticleDetail(
-                    detailEntity.copy(payloadJson = articleDetailAdapter.toJson(detail.copy(isSaved = saved))),
+                    detailEntity.copy(payloadJson = encodeArticleDetail(detail.copy(isSaved = saved))),
                 )
             }
             dao.upsertPendingSavedStateMutation(queued)
@@ -698,7 +735,7 @@ class LocalStore internal constructor(
             val existing = dao.readArticleStateRevision(articleId)
             mergeSavedState(articleId, saved, revision).also { visible ->
                 val removedSave = visible == false && existing?.confirmedSavedState != false
-                if (removedSave) dao.pruneOrphanArticles()
+                if (removedSave) pruneOrphanArticlesAndSearch()
                 if (existing == null || removedSave) pruneArticleStateHistory()
             }
         }
@@ -765,7 +802,7 @@ class LocalStore internal constructor(
             dao.readPendingReadStateMutation(articleId)?.let {
                 dao.deletePendingReadStateMutation(articleId, it.mutationId)
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
     }
@@ -789,7 +826,7 @@ class LocalStore internal constructor(
             val removed = dao.deletePendingReadStateMutation(mutation.articleId, mutation.mutationId) > 0
             val effective = mergeReadState(mutation.articleId, read, revision)
             counts.recordLocalReadChange(pending?.countScopeJson, before, effective)
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             ArticleStateMutationResult(removed, effective)
         }
@@ -806,7 +843,7 @@ class LocalStore internal constructor(
             stateRecord(mutation.articleId)
             val removed = dao.deletePendingSavedStateMutation(mutation.articleId, mutation.mutationId) > 0
             val effective = mergeSavedState(mutation.articleId, saved, revision)
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             ArticleStateMutationResult(removed, effective)
         }
@@ -858,7 +895,7 @@ class LocalStore internal constructor(
                 dao.deleteAcknowledgedArticleReadOverride(mutation.articleId)
                 counts.recordLocalReadChange(pending?.countScopeJson, mutation.read, state.confirmedReadState)
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             if (removed) RejectedArticleMutation(state.lastReadMutationId ?: mutation.mutationId, state.confirmedReadState) else null
         }
@@ -879,7 +916,7 @@ class LocalStore internal constructor(
                     mergeSavedState(mutation.articleId, confirmed, state.savedRevision)
                 }
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
             if (removed) RejectedArticleMutation(state.lastSavedMutationId ?: mutation.mutationId, state.confirmedSavedState) else null
         }
@@ -915,15 +952,16 @@ class LocalStore internal constructor(
                 ArticleDetailEntity(
                     id = stored.id,
                     feedId = stored.feedId,
-                    payloadJson = articleDetailAdapter.toJson(stored),
+                    payloadJson = encodeArticleDetail(stored),
                     writtenAt = System.currentTimeMillis(),
                 ),
             )
+            indexArticleDetail(stored)
             for (expired in dao.readExpiredArticleDetails(System.currentTimeMillis() - MAX_ARTICLE_DETAIL_AGE_MS)) {
-                val cached = runCatching { articleDetailAdapter.fromJson(expired.payloadJson) }.getOrNull()
+                val cached = decodeArticleDetail(expired.payloadJson)
                 if (cached?.isSaved != true) dao.clearArticleDetail(expired.id)
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
@@ -955,7 +993,7 @@ class LocalStore internal constructor(
         val html = contentHtml?.takeIf(String::isNotBlank) ?: return false
         var excludedStart = 0
         var excludedDepth = 0
-        val text = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY, null) { opening, tag, output, _ ->
+        val text = html.parseAsHtml(HtmlCompat.FROM_HTML_MODE_LEGACY, null) { opening, tag, output, _ ->
             if (tag in NON_TEXT_HTML_TAGS) {
                 if (opening) {
                     if (excludedDepth++ == 0) excludedStart = output.length
@@ -972,9 +1010,35 @@ class LocalStore internal constructor(
 
     suspend fun savedArticleIdsWithoutText(): List<String> = withContext(processingDispatcher) {
         dao.readSavedArticleContent().mapNotNull { row ->
-            val detail = row.payloadJson?.let { runCatching { articleDetailAdapter.fromJson(it) }.getOrNull() }
+            val detail = row.payloadJson?.let(::decodeArticleDetail)
             row.id.takeUnless { detail?.hasReadableText() == true || detail?.contentStatus == "failed" }
         }
+    }
+
+    /**
+     * Returns prioritized article IDs (saved without text first, then unread
+     * and recent articles missing cached bodies) up to [limit].
+     */
+    suspend fun articleIdsNeedingOfflineDetails(limit: Int): List<String> = withContext(processingDispatcher) {
+        if (limit <= 0) return@withContext emptyList()
+        val prioritized = LinkedHashSet<String>()
+        for (id in savedArticleIdsWithoutText()) {
+            if (prioritized.size >= limit) break
+            prioritized.add(id)
+        }
+        if (prioritized.size < limit) {
+            for (id in dao.readArticleIdsMissingDetails(limit)) {
+                if (prioritized.size >= limit) break
+                prioritized.add(id)
+            }
+        }
+        prioritized.toList()
+    }
+
+    /** Returns recently cached details so their inline media can be verified/cached offline. */
+    suspend fun recentArticleDetailsForMediaCache(limit: Int): List<ArticleDetail> = withContext(processingDispatcher) {
+        if (limit <= 0) return@withContext emptyList()
+        dao.readRecentArticleDetails(limit).mapNotNull(::decodeDetail)
     }
 
     suspend fun isArticleDetailFresh(articleId: String, maxAgeMs: Long): Boolean =
@@ -993,7 +1057,7 @@ class LocalStore internal constructor(
             if (parsed?.isSaved == true || dao.isLegacyOfflineArticle(detail.id)) return parsed
             database.withTransaction {
                 dao.clearArticleDetail(detail.id)
-                dao.pruneOrphanArticles()
+                pruneOrphanArticlesAndSearch()
                 pruneArticleStateHistory()
             }
             return null
@@ -1004,7 +1068,7 @@ class LocalStore internal constructor(
     override suspend fun clearArticleDetail(articleId: String) {
         database.withTransaction {
             dao.clearArticleDetail(articleId)
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
@@ -1013,35 +1077,101 @@ class LocalStore internal constructor(
     override suspend fun clearArticleDetails() {
         database.withTransaction {
             dao.clearArticleDetails()
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLE_DETAILS)
     }
 
     suspend fun writePreferences(preferences: UserPreferences) {
-        val payload = withContext(processingDispatcher) { preferencesAdapter.toJson(preferences) }
+        val payload = withContext(processingDispatcher) { encodePreferences(preferences) }
         dao.upsertPreferences(
             PreferencesEntity(payloadJson = payload, writtenAt = System.currentTimeMillis()),
         )
     }
 
     suspend fun readPreferences(): UserPreferences? = withContext(processingDispatcher) {
-        dao.readPreferences()?.let { entity ->
-            runCatching { preferencesAdapter.fromJson(entity.payloadJson) }.getOrNull()
-        }
+        dao.readPreferences()?.let { entity -> decodePreferences(entity.payloadJson) }
     }
 
     suspend fun searchArticles(query: String, categoryIds: Set<String>?, limit: Int = 20): List<ArticleListItem> {
         val term = query.trim()
-        if (categoryIds == null) return dao.searchArticles(term, emptyList(), true, limit).map { it.toModel() }
+        if (term.isEmpty()) return emptyList()
+        val ftsQuery = buildFtsMatchQuery(term)
+        suspend fun runQuery(batch: List<String>, allCategories: Boolean): List<ArticleEntity> =
+            if (ftsQuery != null) {
+                dao.searchArticlesFts(ftsQuery, batch, allCategories, limit)
+            } else {
+                dao.searchArticles(term, batch, allCategories, limit)
+            }
+
+        if (categoryIds == null) return runQuery(emptyList(), true).map { it.toModel() }
         // Room expands IN lists into bind parameters. Bound each query on older SQLite versions.
         val batches = categoryIds.chunked(900)
-        val matches = batches.flatMap { dao.searchArticles(term, it, false, limit) }
+        val matches = batches.flatMap { runQuery(it, false) }
         val ordered = if (batches.size <= 1) matches else matches.sortedWith(
             compareByDescending<ArticleEntity> { it.displayedAt ?: it.publishedAt }.thenByDescending { it.id },
         )
         return ordered.take(limit).map { it.toModel() }
+    }
+
+    private suspend fun pruneOrphanArticlesAndSearch() {
+        dao.pruneOrphanArticles()
+        dao.pruneOrphanArticleSearchFts()
+    }
+
+    private suspend fun indexArticleMetadata(articles: List<ArticleEntity>) {
+        if (articles.isEmpty()) return
+        for (batch in articles.chunked(500)) {
+            val ids = batch.map { it.id }
+            val existingBodies = dao.readArticleSearchBodies(ids)
+                .associate { it.articleId to it.contentText }
+            dao.deleteArticleSearchFtsByIds(ids)
+            dao.insertArticleSearchFts(
+                batch.map { article ->
+                    ArticleSearchFtsEntity(
+                        articleId = article.id,
+                        title = article.title,
+                        excerpt = article.excerpt.orEmpty(),
+                        contentText = existingBodies[article.id].orEmpty(),
+                    )
+                },
+            )
+        }
+    }
+
+    private suspend fun indexArticleDetail(detail: ArticleDetail) {
+        val body = detail.contentText?.takeIf(String::isNotBlank)
+            ?: detail.contentHtml?.let(::stripHtmlForSearch).orEmpty()
+        val boundedBody = if (body.length > MAX_FTS_BODY_CHARS) body.substring(0, MAX_FTS_BODY_CHARS) else body
+        dao.deleteArticleSearchFtsByIds(listOf(detail.id))
+        dao.insertArticleSearchFts(
+            listOf(
+                ArticleSearchFtsEntity(
+                    articleId = detail.id,
+                    title = detail.title,
+                    excerpt = detail.excerpt.orEmpty(),
+                    contentText = boundedBody,
+                ),
+            ),
+        )
+    }
+
+    private fun stripHtmlForSearch(html: String): String =
+        HTML_TAG_REGEX.replace(html, " ").replace(WHITESPACE_REGEX, " ").trim()
+
+    private fun buildFtsMatchQuery(raw: String): String? {
+        // Queries containing literal symbols like "50%" or "C++" cannot be
+        // represented accurately by unicode61 token prefixes; fall back to
+        // exact substring matching across title, excerpt, and cached body.
+        if (FTS_NON_WORD_SYMBOL_REGEX.containsMatchIn(raw)) return null
+        val tokens = FTS_TOKEN_REGEX.findAll(raw)
+            .map { it.value }
+            .filter(String::isNotBlank)
+            .take(12)
+            .toList()
+        if (tokens.isEmpty()) return null
+        return tokens.joinToString(" ") { "$it*" }
     }
 
     override suspend fun clearAll() {
@@ -1088,6 +1218,7 @@ class LocalStore internal constructor(
         dao.clearCategories()
         dao.clearFeeds()
         dao.clearArticles()
+        dao.clearArticleSearchFts()
         dao.clearArticleQueryEntries()
         dao.clearArticleRemoteKeys()
         dao.clearPendingReadStateMutations()
@@ -1109,7 +1240,7 @@ class LocalStore internal constructor(
             articleStateEpoch.incrementAndGet()
             dao.clearArticleQueryEntries()
             dao.clearArticleRemoteKeys()
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
         notifyInvalidation(TABLE_ARTICLES)
@@ -1128,6 +1259,7 @@ class LocalStore internal constructor(
                 TABLE_FEEDS -> dao.clearFeeds()
                 TABLE_ARTICLES -> {
                     dao.clearArticles()
+                    dao.clearArticleSearchFts()
                     dao.clearArticleQueryEntries()
                     dao.clearArticleRemoteKeys()
                 }
@@ -1136,7 +1268,7 @@ class LocalStore internal constructor(
                 TABLE_ARTICLE_READ_OVERRIDES -> dao.clearArticleReadOverrides()
                 else -> return@withTransaction
             }
-            dao.pruneOrphanArticles()
+            pruneOrphanArticlesAndSearch()
             pruneArticleStateHistory()
         }
         notifyInvalidation(table)
@@ -1160,7 +1292,7 @@ class LocalStore internal constructor(
             updatedAt = updatedAt,
             feedCount = feedCount,
             unreadCount = unreadCount,
-            childrenJson = children?.let(categoryChildrenAdapter::toJson),
+            childrenJson = children?.let(::encodeCategoryChildren),
             cacheOrder = cacheOrder,
         )
 
@@ -1176,7 +1308,7 @@ class LocalStore internal constructor(
             updatedAt = updatedAt,
             feedCount = feedCount,
             unreadCount = unreadCount,
-            children = childrenJson?.let { runCatching { categoryChildrenAdapter.fromJson(it) }.getOrNull() },
+            children = childrenJson?.let(::decodeCategoryChildren),
         )
 
     private fun FeedWithCounts.toEntity(cacheOrder: Int): FeedEntity =
@@ -1264,6 +1396,11 @@ class LocalStore internal constructor(
         )
 
     companion object {
+        private const val MAX_FTS_BODY_CHARS = 65_536
+        private val FTS_TOKEN_REGEX = Regex("[\\p{L}\\p{N}]+")
+        private val FTS_NON_WORD_SYMBOL_REGEX = Regex("[^\\p{L}\\p{N}\\s'\\-]")
+        private val HTML_TAG_REGEX = Regex("<[^>]+>")
+        private val WHITESPACE_REGEX = Regex("\\s+")
         private val NON_TEXT_HTML_TAGS = setOf("iframe", "video", "audio", "embed", "object", "svg", "script", "style", "noscript")
         private const val DB_NAME = "selffeed.db"
         const val TABLE_CATEGORIES = LocalTables.CATEGORIES
