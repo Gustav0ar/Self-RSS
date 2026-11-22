@@ -176,9 +176,11 @@ fun ArticleReaderPane(
             override fun onLowMemory() { retainAdjacentRenderers = false }
             override fun onTrimMemory(level: Int) {
                 // Keep adjacent WebViews across brief background switches
-                // (TRIM_MEMORY_UI_HIDDEN), releasing them under background
-                // memory pressure (TRIM_MEMORY_BACKGROUND and above).
-                if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+                // (TRIM_MEMORY_UI_HIDDEN), releasing them under memory pressure
+                // (RUNNING_LOW / RUNNING_CRITICAL and TRIM_MEMORY_BACKGROUND+).
+                if (level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN &&
+                    level >= TRIM_MEMORY_PRESSURE_FLOOR
+                ) {
                     retainAdjacentRenderers = false
                 }
             }
@@ -1030,6 +1032,7 @@ internal fun estimateReadingMinutes(html: String?, text: String?): Int? {
     return ((words + WORDS_PER_MINUTE - 1) / WORDS_PER_MINUTE).coerceAtLeast(1)
 }
 
+private const val TRIM_MEMORY_PRESSURE_FLOOR = 10 // ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 private const val WORDS_PER_MINUTE = 220
 private const val MIN_WORDS_FOR_READING_TIME = 40
 private val READING_TIME_HTML_TAG_REGEX = Regex("<[^>]+>")

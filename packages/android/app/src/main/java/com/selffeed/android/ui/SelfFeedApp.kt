@@ -9,13 +9,11 @@ import com.selffeed.android.data.CategoryMoveDirection
 import com.selffeed.android.data.ArticlePageQuery
 import com.selffeed.android.data.remoteKey
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.CapturedAnimatedVisibility
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -1469,11 +1467,7 @@ internal fun AuthScreen(
                         ),
                     )
                 }
-                CapturedAnimatedVisibility(
-                    visible = resolvedErrorMessage.isNotBlank(),
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically(),
-                ) {
+                AnimatedVisibility(visible = resolvedErrorMessage.isNotBlank()) {
                     Text(
                         text = resolvedErrorMessage,
                         color = MaterialTheme.colorScheme.error,
