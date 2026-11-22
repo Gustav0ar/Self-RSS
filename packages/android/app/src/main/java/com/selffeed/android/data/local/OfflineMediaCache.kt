@@ -139,6 +139,13 @@ class OfflineMediaCache(
 
         var downloadedBytes = 0L
         try {
+            // Re-check disk after claiming the in-flight slot in case a previous
+            // caller finished and removed its entry before putIfAbsent ran.
+            if (existing.isFile && metaFile(key).isFile) {
+                existing.setLastModified(System.currentTimeMillis())
+                mine.complete(true)
+                return@withContext 0L
+            }
             downloadedBytes = downloadToCache(normalized, key, maxAssetBytes)
             if (downloadedBytes > 0L) {
                 recentFailures.remove(normalized)

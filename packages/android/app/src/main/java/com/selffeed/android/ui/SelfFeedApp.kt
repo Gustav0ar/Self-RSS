@@ -1328,7 +1328,7 @@ internal fun AuthScreen(
                     ),
                 ),
             )
-            .padding(24.dp),
+            .padding(20.dp),
         contentAlignment = Alignment.Center,
     ) {
         Card(
@@ -1343,8 +1343,8 @@ internal fun AuthScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Box(
                     modifier = Modifier
@@ -1456,6 +1456,13 @@ internal fun AuthScreen(
                     ),
                     onKeyboardAction = { submit() },
                 )
+                AnimatedVisibility(visible = resolvedErrorMessage.isNotBlank()) {
+                    Text(
+                        text = resolvedErrorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Button(
                     onClick = submit,
                     modifier = Modifier.fillMaxWidth(),
@@ -1465,13 +1472,6 @@ internal fun AuthScreen(
                         stringResource(
                             if (mode == AuthMode.LOGIN) R.string.auth_continue else R.string.auth_create_account,
                         ),
-                    )
-                }
-                AnimatedVisibility(visible = resolvedErrorMessage.isNotBlank()) {
-                    Text(
-                        text = resolvedErrorMessage,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
