@@ -427,11 +427,7 @@ internal fun buildReaderHtmlDocument(
 
                 function postHeight() {
                     const height = measureContentHeight();
-                    if (height <= 50) return;
-
-                    if (window.SelfFeedHeightBridge && typeof window.SelfFeedHeightBridge.postMessage === 'function') {
-                        window.SelfFeedHeightBridge.postMessage(String(height));
-                    } else if (window.Android && typeof window.Android.updateHeight === 'function') {
+                    if (height > 50 && window.Android && typeof window.Android.updateHeight === 'function') {
                         window.Android.updateHeight(height);
                     }
                 }
@@ -629,9 +625,7 @@ internal fun buildReaderHtmlDocument(
                     if (width < 48 || height < 48) return;
                     const src = target.currentSrc || target.getAttribute('src') || '';
                     if (!/^https?:\/\//i.test(src)) return;
-                    if (window.SelfFeedImageBridge && window.SelfFeedImageBridge.postMessage) {
-                        window.SelfFeedImageBridge.postMessage(src);
-                    } else if (window.Android && window.Android.openImage) {
+                    if (window.Android && typeof window.Android.openImage === 'function') {
                         window.Android.openImage(src);
                     }
                 }

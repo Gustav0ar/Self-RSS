@@ -144,8 +144,8 @@ class ReaderHtmlDocumentTest {
 
         assertTrue(document.contains("font-family: Georgia"))
         assertTrue(document.contains("font-size: 24px"))
-        assertTrue(document.contains("SelfFeedHeightBridge.postMessage(String(height))"))
-        assertTrue(document.contains("SelfFeedImageBridge"))
+        assertTrue(document.contains("window.Android.updateHeight(height)"))
+        assertTrue(document.contains("window.Android.openImage(src)"))
         assertTrue(document.contains("removeEventListener('click', handleImageTap)"))
     }
 
@@ -156,8 +156,8 @@ class ReaderHtmlDocumentTest {
             colors = ReaderHtmlColors("#000000", "#FFFFFF", "#121212", "#A3A3A3", "#7C8CFF"),
         )
         val script = document.substringAfter("<script>").substringBeforeLast("</script>")
-        assertTrue("Script must report height via SelfFeedHeightBridge", script.contains("window.SelfFeedHeightBridge"))
-        assertTrue("Script must keep legacy Android bridge fallback", script.contains("window.Android.updateHeight(height)"))
+        assertTrue("Script must report height via Android bridge", script.contains("window.Android.updateHeight(height)"))
+        assertTrue("Script must report image taps via Android bridge", script.contains("window.Android.openImage(src)"))
 
         // Guard against duplicate top-level const/let declarations that abort the script with SyntaxError.
         val topLevelDecls = mutableListOf<String>()

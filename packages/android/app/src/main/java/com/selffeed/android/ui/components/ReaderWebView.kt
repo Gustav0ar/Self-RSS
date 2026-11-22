@@ -23,7 +23,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.selffeed.android.data.local.OfflineMediaCache
 import com.selffeed.android.ui.utils.isTrustedEmbedUrl
@@ -43,7 +42,6 @@ internal class ReaderWebView(
     private var active = false
     private var lifecycleApplied = false
     private var fullscreen: ReaderFullscreenMedia? = null
-    private val usesWebMessageListener: Boolean
     @Volatile var released = false
         private set
     var onHeight: (Int) -> Unit = {}
@@ -66,7 +64,6 @@ internal class ReaderWebView(
         }
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = true
-        usesWebMessageListener = installWebMessageHeightBridge()
         webViewClient = ReaderWebViewClient()
         webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -90,34 +87,10 @@ internal class ReaderWebView(
         }
     }
 
-    private fun installWebMessageHeightBridge(): Boolean = runCatching {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            return@runCatching false
-        }
-        WebViewCompat.addWebMessageListener(
-            this,
-            WEB_MESSAGE_BRIDGE_NAME,
-            setOf("*"),
-        ) { _, message, _, isMainFrame, _ ->
-            if (released || !isMainFrame || documentKey == null) return@addWebMessageListener
-            val height = message.data?.toFloatOrNull() ?: return@addWebMessageListener
-            if (height.isFinite()) {
-                height.toInt().coerceIn(0, 50_000).takeIf { it > 0 }?.let(onHeight)
-            }
-        }
-        WebViewCompat.addWebMessageListener(
-            this,
-            WEB_MESSAGE_IMAGE_BRIDGE_NAME,
-            setOf("*"),
-        ) { _, message, _, isMainFrame, _ ->
-            if (released || !active || !isMainFrame || documentKey == null) return@addWebMessageListener
-            val url = message.data?.trim()?.takeIf(::isHttpUrl) ?: return@addWebMessageListener
-            onImageTap(url)
-        }
-        true
-    }.getOrDefault(false)
-
-    private fun installLegacyHeightBridge(token: String) {
+    // Use token-validated JavascriptInterface rather than WebViewCompat.addWebMessageListener
+    // to avoid a Chromium 124 (Android 15) native use-after-free when a WebView is destroyed
+    // while its sandboxed renderer is still initializing.
+    private fun installDocumentBridge(token: String) {
         addJavascriptInterface(object {
             @JavascriptInterface
             fun updateHeight(height: Float) {
@@ -154,10 +127,8 @@ internal class ReaderWebView(
         setBackgroundColor(backgroundColor)
         applyAlgorithmicDarkening(ColorUtils.calculateLuminance(backgroundColor) < 0.5)
         callbacks.removeCallbacksAndMessages(null)
-        if (!usesWebMessageListener) {
-            removeJavascriptInterface("Android")
-            installLegacyHeightBridge(documentToken)
-        }
+        removeJavascriptInterface("Android")
+        installDocumentBridge(documentToken)
         loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", baseUrl)
     }
 
@@ -199,16 +170,7 @@ internal class ReaderWebView(
         runCatching { evaluateJavascript("window.SelfFeedApp && window.SelfFeedApp.cleanup();", null) }
         runCatching { onPause() }
         runCatching { stopLoading() }
-        if (usesWebMessageListener) {
-            runCatching {
-                if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-                    WebViewCompat.removeWebMessageListener(this, WEB_MESSAGE_BRIDGE_NAME)
-                    WebViewCompat.removeWebMessageListener(this, WEB_MESSAGE_IMAGE_BRIDGE_NAME)
-                }
-            }
-        } else {
-            runCatching { removeJavascriptInterface("Android") }
-        }
+        runCatching { removeJavascriptInterface("Android") }
         runCatching { webChromeClient = null }
         runCatching { webViewClient = DetachedWebViewClient }
         runCatching { loadUrl("about:blank") }
@@ -290,9 +252,6 @@ internal class ReaderWebView(
     }
 
     private companion object {
-        const val WEB_MESSAGE_BRIDGE_NAME = "SelfFeedHeightBridge"
-        const val WEB_MESSAGE_IMAGE_BRIDGE_NAME = "SelfFeedImageBridge"
-
         fun isHttpUrl(url: String): Boolean =
             url.startsWith("https://", ignoreCase = true) || url.startsWith("http://", ignoreCase = true)
     }
