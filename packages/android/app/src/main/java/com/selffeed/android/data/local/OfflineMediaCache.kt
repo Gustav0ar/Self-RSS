@@ -17,7 +17,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -267,25 +266,6 @@ class OfflineMediaCache(
                 stream,
             )
         }.getOrNull()
-    }
-
-    /**
-     * Serves from disk if cached; otherwise downloads synchronously on Chromium's
-     * background IO thread, stores it atomically, and serves from disk so live
-     * reads also populate the offline cache immediately.
-     */
-    fun fetchAndOpenResponse(
-        url: String,
-        maxAssetBytes: Long = defaultMaxAssetBytes,
-    ): WebResourceResponse? {
-        openCachedResponse(url)?.let { return it }
-        val normalized = normalizeCacheableUrl(url) ?: return null
-        runCatching {
-            runBlocking(Dispatchers.IO) {
-                prefetch(normalized, maxAssetBytes = maxAssetBytes)
-            }
-        }
-        return openCachedResponse(normalized)
     }
 
     /** Returns the cached local payload file when present so offline image viewers avoid network I/O. */

@@ -80,7 +80,7 @@ class OfflineContentSyncWorker @AssistedInject constructor(
         fun kickAfterFeedSync(context: Context): androidx.work.Operation =
             enqueue(
                 context = context,
-                policy = ExistingWorkPolicy.REPLACE,
+                policy = ExistingWorkPolicy.KEEP,
                 initialDelaySeconds = POST_FEED_SYNC_DELAY_SECONDS,
                 requireBatteryNotLow = true,
             )

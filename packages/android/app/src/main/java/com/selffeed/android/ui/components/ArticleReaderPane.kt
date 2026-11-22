@@ -223,18 +223,46 @@ fun ArticleReaderPane(
     val pagerState = rememberPagerState(initialPage = selectedArticleIndex) {
         readerArticles.size
     }
+    val readerArticleIds = remember(readerArticles) { readerArticles.map { it.id } }
+    val latestReaderArticles by rememberUpdatedState(readerArticles)
     val latestSelectedArticleId by rememberUpdatedState(selectedArticle.id)
     val latestOnArticleSelected by rememberUpdatedState(onArticleSelected)
     val latestOnVisibleArticleChanged by rememberUpdatedState(onVisibleArticleChanged)
+    // Track article IDs emitted by pager swipes so their async state echoes
+    // (or concurrent list/metadata refreshes while an article is loading) do not
+    // call scrollToPage() and snap the user back to the loading page mid-swipe.
+    val pendingPagerSelections = remember(pagerState) { ArrayDeque<String>() }
+    var lastPagerSelectedId by remember(pagerState) { mutableStateOf<String?>(null) }
+    var lastSyncedSelectedId by remember(pagerState) { mutableStateOf(selectedArticle.id) }
 
-    LaunchedEffect(selectedArticle.id, readerArticles) {
-        val targetPage = readerArticles.indexOfFirst { it.id == selectedArticle.id }
-        if (targetPage != -1 && targetPage != pagerState.currentPage) {
-            pagerState.scrollToPage(targetPage)
+    LaunchedEffect(selectedArticle.id, readerArticleIds) {
+        val selectedIdChanged = selectedArticle.id != lastSyncedSelectedId
+        lastSyncedSelectedId = selectedArticle.id
+
+        if (selectedIdChanged) {
+            val echoIndex = pendingPagerSelections.indexOf(selectedArticle.id)
+            if (echoIndex >= 0) {
+                repeat(echoIndex + 1) { pendingPagerSelections.removeFirst() }
+                return@LaunchedEffect
+            }
+            pendingPagerSelections.clear()
+        } else if (
+            pagerState.isScrollInProgress ||
+            pendingPagerSelections.isNotEmpty() ||
+            (lastPagerSelectedId != null && lastPagerSelectedId != selectedArticle.id)
+        ) {
+            // Never interrupt an active drag/fling or snap back when only the list changed.
+            return@LaunchedEffect
         }
+
+        val targetPage = readerArticleIds.indexOf(selectedArticle.id)
+        if (targetPage == -1 || targetPage == pagerState.currentPage) return@LaunchedEffect
+
+        pagerState.scrollToPage(targetPage)
+        lastPagerSelectedId = selectedArticle.id
     }
 
-    LaunchedEffect(pagerState, readerArticles) {
+    LaunchedEffect(pagerState) {
         // Guard against the article list shrinking while the user is mid-swipe
         // (e.g. SSE event marks-read + hideRead removes the current article
         // from the list). Without this bounds check the previous code threw
@@ -242,22 +270,29 @@ fun ArticleReaderPane(
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
             .collect { settledPage ->
-                if (readerArticles.isEmpty()) return@collect
-                val page = settledPage.coerceIn(0, readerArticles.lastIndex)
-                val articleId = readerArticles[page].id
-                if (articleId != latestSelectedArticleId) {
+                val currentArticles = latestReaderArticles
+                if (currentArticles.isEmpty()) return@collect
+                val page = settledPage.coerceIn(0, currentArticles.lastIndex)
+                val articleId = currentArticles[page].id
+                if (articleId != latestSelectedArticleId ||
+                    (lastPagerSelectedId != null && articleId != lastPagerSelectedId)
+                ) {
+                    if (pendingPagerSelections.size >= 8) pendingPagerSelections.removeFirst()
+                    pendingPagerSelections.addLast(articleId)
+                    lastPagerSelectedId = articleId
                     latestOnArticleSelected(articleId)
                 }
             }
     }
 
-    LaunchedEffect(pagerState, readerArticles) {
+    LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
             .collect { currentPage ->
-                if (readerArticles.isEmpty()) return@collect
-                val page = currentPage.coerceIn(0, readerArticles.lastIndex)
-                latestOnVisibleArticleChanged(readerArticles[page].id)
+                val currentArticles = latestReaderArticles
+                if (currentArticles.isEmpty()) return@collect
+                val page = currentPage.coerceIn(0, currentArticles.lastIndex)
+                latestOnVisibleArticleChanged(currentArticles[page].id)
             }
     }
 

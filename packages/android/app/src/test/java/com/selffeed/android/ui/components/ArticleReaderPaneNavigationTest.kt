@@ -422,6 +422,121 @@ class ArticleReaderPaneNavigationTest {
         composeRule.onNodeWithText("Rich").assertIsDisplayed().assertIsSelected()
     }
 
+    @Test
+    fun swipingBackWhileNextArticleIsStillLoadingReturnsToPreviousArticle() {
+        val initialArticles = listOf(
+            sampleArticle("article-1", "First Article"),
+            sampleArticle("article-2", "Second Article"),
+            sampleArticle("article-3", "Third Article"),
+        )
+        val firstDetail = sampleDetail(
+            id = "article-1",
+            title = "First Article",
+            isRead = false,
+            contentText = "Body for First Article",
+        )
+        val pendingSecond = sampleDetail(
+            id = "article-2",
+            title = "Second Article",
+            isRead = false,
+            contentHtml = null,
+            contentText = null,
+        )
+        val loadedSecond = pendingSecond.copy(
+            contentText = "Loaded body for Second Article",
+            contentVersion = 2,
+            fetchedAt = "2026-11-22T00:00:00Z",
+        )
+
+        var articles by mutableStateOf(initialArticles)
+        var selectedArticle by mutableStateOf(firstDetail)
+        val selectedEvents = mutableListOf<String>()
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = articles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = mapOf("article-1" to firstDetail),
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id ->
+                        selectedEvents += id
+                        // Simulate delayed/asynchronous selection when swiping to article-2
+                        // (still loading), and immediate selection when returning to article-1.
+                        if (id == "article-1") {
+                            selectedArticle = firstDetail
+                        }
+                    },
+                    preferHtml = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("First Article").assertIsDisplayed()
+
+        // Swipe to the next article (still loading; selectedArticle echo arrives late).
+        composeRule.onRoot().performTouchInput { swipeLeft() }
+        composeRule.waitUntil(timeoutMillis = 5_000) { selectedEvents == listOf("article-2") }
+
+        // Swipe back to the previous article before article-2's selection/metadata updates arrive.
+        composeRule.onRoot().performTouchInput { swipeRight() }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            selectedEvents == listOf("article-2", "article-1")
+        }
+
+        // Now deliver a late echo of article-2's selection + read-state list refresh.
+        // The pager must stay on article-1 instead of snapping back to article-2.
+        composeRule.runOnUiThread {
+            articles = initialArticles.map { item ->
+                if (item.id == "article-2") item.copy(isRead = true) else item
+            }
+            selectedArticle = loadedSecond
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("First Article").assertIsDisplayed()
+        composeRule.onNodeWithText("Body for First Article").assertIsDisplayed()
+    }
+
+    @Test
+    fun externalSelectionChangeStillScrollsPagerToTargetArticle() {
+        val articles = listOf(
+            sampleArticle("article-1", "First Article"),
+            sampleArticle("article-2", "Second Article"),
+            sampleArticle("article-3", "Third Article"),
+        )
+        val details = articles.associate { article ->
+            article.id to sampleDetail(
+                id = article.id,
+                title = article.title,
+                isRead = false,
+                contentText = "Body for ${article.title}",
+            )
+        }
+        var selectedArticle by mutableStateOf(details.getValue("article-1"))
+
+        composeRule.setContent {
+            SelfFeedTheme {
+                ArticleReaderPane(
+                    articles = articles,
+                    selectedArticle = selectedArticle,
+                    prefetchedArticles = details,
+                    onOpenOriginal = {},
+                    onBackToList = {},
+                    onArticleSelected = { id -> selectedArticle = details.getValue(id) },
+                    preferHtml = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("First Article").assertIsDisplayed()
+        composeRule.runOnUiThread { selectedArticle = details.getValue("article-3") }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onNodeWithText("Body for Third Article").isDisplayed()
+        }
+        composeRule.onNodeWithText("Third Article").assertIsDisplayed()
+    }
+
     private fun sampleArticle(id: String, title: String, feedTitle: String = "Test Feed"): ArticleListItem =
         ArticleListItem(
             id = id,

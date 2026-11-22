@@ -1,6 +1,6 @@
 package com.selffeed.android.ui.screens
 
-import androidx.compose.animation.CapturedAnimatedVisibility
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -226,7 +226,7 @@ fun ArticlesTab(
                     )
                 }
             }
-            CapturedAnimatedVisibility(
+            AnimatedVisibility(
                 visible = isRefreshing,
                 modifier = Modifier.align(Alignment.TopCenter),
                 enter = slideInVertically(tween(150, easing = ReadingMotionEasing)) { -it / 2 } +
