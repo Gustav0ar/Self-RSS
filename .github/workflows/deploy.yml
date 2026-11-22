@@ -56,7 +56,8 @@ jobs:
               return;
             }
 
-            for (let attempt = 1; attempt <= 60; attempt += 1) {
+            const maxAttempts = 210;
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner,
                 repo,
@@ -98,7 +99,7 @@ jobs:
                 return;
               }
 
-              if (attempt === 60) {
+              if (attempt === maxAttempts) {
                 core.setFailed(`Timed out waiting for required workflows on ${headSha}: ${waiting.join(', ')}`);
                 return;
               }
