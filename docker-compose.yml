@@ -18,7 +18,13 @@ services:
         "redis-server",
         "--requirepass",
         "${REDIS_PASSWORD:?Redis password is required}",
+        "--maxmemory",
+        "192mb",
+        "--maxmemory-policy",
+        "volatile-lru",
       ]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Redis password is required}
     volumes:
       - redisdata:/data
     restart: unless-stopped
@@ -31,7 +37,7 @@ services:
           cpus: "0.1"
           memory: 64M
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

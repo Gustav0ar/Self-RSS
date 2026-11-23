@@ -21,7 +21,7 @@ import {
 	replaceArticleEnrichedContent,
 } from './article-enrichment.persistence.js';
 import { type ArticleScope, type SearchRow, scopeConditions } from './article-query.helpers.js';
-import { findArticleDetailForUser, findArticleStatesForUser } from './article-read.persistence.js';
+import * as articleRead from './article-read.persistence.js';
 import { searchArticles, searchArticlesByScope } from './article-search.js';
 import {
 	type ArticleStateMutationResult,
@@ -198,7 +198,7 @@ export class ArticleRepository {
 	}
 
 	findStatesForUser(userId: string, articleIds: string[]) {
-		return findArticleStatesForUser(this.db, userId, articleIds);
+		return articleRead.findArticleStatesForUser(this.db, userId, articleIds);
 	}
 
 	async countByFeeds(feedIds: string[]): Promise<number> {
@@ -247,7 +247,10 @@ export class ArticleRepository {
 	}
 
 	findDetailForUser(userId: string, articleId: string) {
-		return findArticleDetailForUser(this.db, userId, articleId);
+		return articleRead.findArticleDetailForUser(this.db, userId, articleId);
+	}
+	findDetailsForUser(userId: string, articleIds: string[]) {
+		return articleRead.findArticleDetailsForUser(this.db, userId, articleIds);
 	}
 
 	async findRefForUser(userId: string, articleId: string) {

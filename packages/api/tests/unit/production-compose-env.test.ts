@@ -69,4 +69,11 @@ describe('production compose environment contract', () => {
 			`CONTAINER_HEALTH_ATTEMPTS="\${CONTAINER_HEALTH_ATTEMPTS:-180}"`,
 		);
 	});
+
+	it('bounds Redis memory eviction and keeps password out of redis-cli arguments', () => {
+		expect(compose).toContain('"--maxmemory"');
+		expect(compose).toContain('"volatile-lru"');
+		expect(compose).toContain('REDISCLI_AUTH:');
+		expect(compose).not.toContain('redis-cli", "-a"');
+	});
 });

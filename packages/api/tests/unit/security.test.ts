@@ -56,11 +56,11 @@ describe('Security headers', () => {
 		expect(csp).toContain('https://streamable.com');
 	});
 
-	it('keeps nginx CSP aligned for remote RSS media playback', () => {
+	it('keeps nginx CSP aligned for remote RSS media playback without duplicating API headers', () => {
 		const nginx = readFileSync(resolve(testDir, '../../../..', 'nginx.conf'), 'utf8');
 		const cspHeaders = nginx.match(/add_header Content-Security-Policy "[^"]+"/g) ?? [];
 
-		expect(cspHeaders).toHaveLength(2);
+		expect(cspHeaders).toHaveLength(3);
 		for (const header of cspHeaders) {
 			expect(header).toContain("media-src 'self' https:");
 			expect(header).toContain('connect-src $self_feed_connect_sources');
@@ -70,6 +70,24 @@ describe('Security headers', () => {
 		expect(nginx).toMatch(
 			/map \$uri \$self_feed_connect_sources \{\s+default "'self'";\s+\/sw\.js "'self' https:";\s+\}/,
 		);
+		expect(nginx).toContain('gzip_static on;');
+		expect(nginx).toMatch(
+			/location \/api\/v1\/events\/ \{[\s\S]*proxy_buffering off;[\s\S]*gzip off;[\s\S]*proxy_read_timeout 1h;/,
+		);
+		// Server block should not set add_header before location /api/ (which would duplicate Hono headers).
+		const beforeFirstLocation = nginx.slice(0, nginx.indexOf('location '));
+		expect(beforeFirstLocation).not.toContain('add_header ');
+	});
+
+	it('enforces a tighter default JSON body limit while allowing larger OPML uploads', async () => {
+		const app = buildApp();
+		const oversizedJson = 'a'.repeat(1_100_000);
+		const res = await app.request('/api/v1/auth/login', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: oversizedJson,
+		});
+		expect(res.status).toBe(413);
 	});
 
 	it('keeps legitimate first-party API traffic out of generic CrowdSec probing heuristics', () => {

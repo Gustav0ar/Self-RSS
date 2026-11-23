@@ -55,9 +55,27 @@ function offlineShellPlugin(): Plugin {
 
 export function createServiceWorkerSource(version: string, shellUrls: string[]) {
 	return `const CACHE_NAME = 'self-feed-shell-${version}';
-const MEDIA_CACHE_NAME = 'self-feed-article-media-v1';
-const MAX_MEDIA_ENTRIES = 200;
+const MEDIA_CACHE_NAME = 'self-feed-article-media-v2';
+const OPAQUE_MEDIA_CACHE_NAME = 'self-feed-article-media-opaque-v2';
+const MAX_MEDIA_ENTRIES = 120;
+const MAX_OPAQUE_MEDIA_ENTRIES = 30;
+const MAX_MEDIA_BYTES = 2 * 1024 * 1024;
 const SHELL_URLS = ${JSON.stringify(shellUrls)};
+
+async function pruneCache(cache, maxEntries) {
+	const keys = await cache.keys();
+	if (keys.length <= maxEntries) return;
+	await Promise.all(keys.slice(0, keys.length - maxEntries).map((key) => cache.delete(key)));
+}
+
+async function touchMediaCache(cache, request, response) {
+	try {
+		await cache.delete(request);
+		await cache.put(request, response);
+	} catch {
+		// Best-effort LRU bump; never disturb reads.
+	}
+}
 
 self.addEventListener('install', (event) => {
 	event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)));
@@ -67,8 +85,10 @@ self.addEventListener('activate', (event) => {
 	event.waitUntil(
 		Promise.all([
 			caches.keys().then((keys) => Promise.all(
-				keys.filter((key) => key.startsWith('self-feed-shell-') && key !== CACHE_NAME)
-					.map((key) => caches.delete(key)),
+				keys.filter((key) =>
+					(key.startsWith('self-feed-shell-') && key !== CACHE_NAME) ||
+					key === 'self-feed-article-media-v1'
+				).map((key) => caches.delete(key)),
 			)),
 			'navigationPreload' in self.registration
 				? self.registration.navigationPreload.enable().catch(() => undefined)
@@ -85,21 +105,37 @@ self.addEventListener('fetch', (event) => {
 	if (request.destination === 'image' && url.origin !== self.location.origin) {
 		event.respondWith(
 			(async () => {
-				const cache = await caches.open(MEDIA_CACHE_NAME);
-				const cached = await cache.match(request);
-				if (cached) return cached;
+				const [mediaCache, opaqueCache] = await Promise.all([
+					caches.open(MEDIA_CACHE_NAME),
+					caches.open(OPAQUE_MEDIA_CACHE_NAME),
+				]);
+				const cachedCors = await mediaCache.match(request);
+				if (cachedCors) {
+					event.waitUntil(touchMediaCache(mediaCache, request, cachedCors.clone()));
+					return cachedCors;
+				}
+				const cachedOpaque = await opaqueCache.match(request);
+				if (cachedOpaque) {
+					event.waitUntil(touchMediaCache(opaqueCache, request, cachedOpaque.clone()));
+					return cachedOpaque;
+				}
 				const response = await fetch(request);
-				if (response.ok || response.type === 'opaque') {
+				if (response.type === 'opaque') {
 					try {
-						await cache.put(request, response.clone());
-						const keys = await cache.keys();
-						await Promise.all(
-							keys
-								.slice(0, Math.max(0, keys.length - MAX_MEDIA_ENTRIES))
-								.map((key) => cache.delete(key)),
-						);
+						await opaqueCache.put(request, response.clone());
+						await pruneCache(opaqueCache, MAX_OPAQUE_MEDIA_ENTRIES);
 					} catch {
 						// Storage pressure must never turn a successful image response into a failure.
+					}
+				} else if (response.ok) {
+					const contentLength = Number(response.headers.get('content-length') ?? '0');
+					if (!Number.isFinite(contentLength) || contentLength <= MAX_MEDIA_BYTES) {
+						try {
+							await mediaCache.put(request, response.clone());
+							await pruneCache(mediaCache, MAX_MEDIA_ENTRIES);
+						} catch {
+							// Storage pressure must never turn a successful image response into a failure.
+						}
 					}
 				}
 				return response;

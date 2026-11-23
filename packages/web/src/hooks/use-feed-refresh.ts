@@ -69,6 +69,7 @@ export function useFeedRefresh(categoryId?: string) {
 	} = useSyncAllFeedsStatus(trackedRequestId, isRealtimeConnected, untimedStatusActiveSince);
 	const [, setRefreshClock] = useState(0);
 	const wasRefreshing = useRef(false);
+	const lastAutoSyncAttemptRef = useRef(new Map<string, number>());
 
 	useEffect(() => {
 		setTrackedRequestId(readLastFeedRefreshRequestId(accountKey));
@@ -224,6 +225,11 @@ export function useFeedRefresh(categoryId?: string) {
 						!shouldAutoSyncSelectedFeed(selectedFeed))
 				)
 					return false;
+				if (!options.force) {
+					const now = Date.now();
+					if (now - (lastAutoSyncAttemptRef.current.get(feedId) ?? 0) < 120_000) return false;
+					lastAutoSyncAttemptRef.current.set(feedId, now);
+				}
 			}
 			setFeedSyncError(null);
 			setLocalRefreshQueuedAt(Date.now());

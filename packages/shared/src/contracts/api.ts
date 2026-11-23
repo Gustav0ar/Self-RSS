@@ -182,6 +182,12 @@ export interface ArticleStateLookupResponse {
 	missingIds: string[];
 }
 
+export interface ArticleDetailBatchResponse {
+	articles: ArticleDetail[];
+	/** Missing and unowned IDs are indistinguishable. */
+	missingIds: string[];
+}
+
 export interface MarkAllReadResponse {
 	markedCount: number;
 	feedIds: string[];

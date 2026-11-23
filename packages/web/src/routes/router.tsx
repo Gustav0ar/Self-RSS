@@ -1,11 +1,24 @@
 import { createRootRoute, createRoute, createRouter, useRouter } from '@tanstack/react-router';
-import { useEffect } from 'react';
-import { AdminPanel } from '@/components/admin/admin-panel';
+import { lazy, Suspense, useCallback, useEffect } from 'react';
 import { FeedView } from '@/components/articles/feed-view';
 import { RootLayout } from '@/components/layout/root-layout';
-import { StatsPanel } from '@/components/stats/stats-panel';
 import { useAppState } from '@/providers/app-state';
 import { buildArticleRouteSearch, validateArticleRouteSearch } from './article-route-search';
+
+const LazyAdminPanel = lazy(() =>
+	import('@/components/admin/admin-panel').then((module) => ({ default: module.AdminPanel })),
+);
+const LazyStatsPanel = lazy(() =>
+	import('@/components/stats/stats-panel').then((module) => ({ default: module.StatsPanel })),
+);
+
+function RouteLoadingFallback() {
+	return (
+		<div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+			Loading...
+		</div>
+	);
+}
 
 function RoutedFeedView({
 	articleId,
@@ -29,6 +42,26 @@ function RoutedFeedView({
 		applySelection({ feedId, categoryId, articleId });
 	}, [applySelection, articleId, categoryId, feedId]);
 
+	const handleSelectArticle = useCallback(
+		(nextArticleId: string | null) => {
+			// `null` is the "clear the active article" signal — drop
+			// the user back to the list view at the current scope.
+			if (nextArticleId == null) {
+				void router.navigate({
+					to: '/',
+					search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
+				});
+				return;
+			}
+			void router.navigate({
+				to: '/articles/$articleId',
+				params: { articleId: nextArticleId },
+				search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
+			});
+		},
+		[router, feedId, categoryId, savedOnly, q, searchScope],
+	);
+
 	return (
 		<FeedView
 			feedId={feedId}
@@ -38,22 +71,7 @@ function RoutedFeedView({
 			searchScope={searchScope}
 			selectedArticleId={articleId}
 			fromDeepLink={articleId != null}
-			onSelectArticle={(nextArticleId) => {
-				// `null` is the "clear the active article" signal — drop
-				// the user back to the list view at the current scope.
-				if (nextArticleId == null) {
-					void router.navigate({
-						to: '/',
-						search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
-					});
-					return;
-				}
-				void router.navigate({
-					to: '/articles/$articleId',
-					params: { articleId: nextArticleId },
-					search: buildArticleRouteSearch({ feedId, categoryId, savedOnly, q, searchScope }),
-				});
-			}}
+			onSelectArticle={handleSelectArticle}
 		/>
 	);
 }
@@ -107,7 +125,9 @@ const statsRoute = createRoute({
 	component: function Stats() {
 		return (
 			<div className="motion-enter h-full overflow-auto p-4 sm:p-6">
-				<StatsPanel />
+				<Suspense fallback={<RouteLoadingFallback />}>
+					<LazyStatsPanel />
+				</Suspense>
 			</div>
 		);
 	},
@@ -116,12 +136,21 @@ const statsRoute = createRoute({
 const adminRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/admin',
-	component: AdminPanel,
+	component: function Admin() {
+		return (
+			<Suspense fallback={<RouteLoadingFallback />}>
+				<LazyAdminPanel />
+			</Suspense>
+		);
+	},
 });
 
 const routeTree = rootRoute.addChildren([indexRoute, articleRoute, statsRoute, adminRoute]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({
+	routeTree,
+	defaultPreload: 'intent',
+});
 
 declare module '@tanstack/react-router' {
 	interface Register {

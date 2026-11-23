@@ -5,6 +5,7 @@ import {
 } from '@self-feed/shared';
 import { Hono } from 'hono';
 import type { CategoryService } from '../services/category.service.js';
+import { jsonWithEtag } from '../utils/etag.js';
 import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.js';
 import { parseBody, parseUuidParam } from '../utils/validation.js';
 
@@ -15,7 +16,7 @@ export function createCategoryRoutes(categoryService: CategoryService, rateLimit
 		await enforceRateLimit(c, rateLimiter, 'categories-read', RATE_LIMITS.categoriesRead);
 		const userId = c.get('userId');
 		const result = await categoryService.getTree(userId);
-		return c.json({ data: result });
+		return jsonWithEtag(c, { data: result });
 	});
 
 	routes.post('/', async (c) => {

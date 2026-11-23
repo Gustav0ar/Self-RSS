@@ -22,8 +22,14 @@ export function getDb(databaseUrl?: string) {
 
 	sqliteClient = new BunDatabase(normalizedPath);
 	sqliteClient.exec('PRAGMA journal_mode = WAL;');
+	sqliteClient.exec('PRAGMA synchronous = NORMAL;');
 	sqliteClient.exec('PRAGMA foreign_keys = ON;');
 	sqliteClient.exec('PRAGMA busy_timeout = 5000;');
+	sqliteClient.exec('PRAGMA cache_size = -32000;');
+	sqliteClient.exec('PRAGMA temp_store = MEMORY;');
+	if (normalizedPath !== ':memory:') {
+		sqliteClient.exec('PRAGMA mmap_size = 268435456;');
+	}
 
 	dbInstance = drizzle(sqliteClient, { schema });
 	return dbInstance;
