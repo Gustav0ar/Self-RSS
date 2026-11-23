@@ -34,6 +34,21 @@ describe('feed discovery parser', () => {
 		expect(discoverFeedsFromHtml('<not even closed', 'not a URL')).toEqual([]);
 	});
 
+	it('ignores feed links inside HTML comments, scripts, and styles', () => {
+		const candidates = discoverFeedsFromHtml(
+			`<html><head>
+			<!-- <link rel="alternate" type="application/rss+xml" href="/commented.xml"> -->
+			<script>const x = '<link rel="alternate" type="application/rss+xml" href="/in-script.xml">';</script>
+			<style>/* <link rel="alternate" type="application/rss+xml" href="/in-style.xml"> */</style>
+			<link rel="alternate" type="application/rss+xml" href="/real.xml" title="Real &amp; Live">
+			</head></html>`,
+			'https://example.com/',
+		);
+		expect(candidates).toEqual([
+			{ url: 'https://example.com/real.xml', title: 'Real & Live', type: 'rss' },
+		]);
+	});
+
 	it('returns conservative fallback paths as queued candidates without probing', () => {
 		const candidates = buildFallbackDiscoveryCandidates('https://Example.COM/articles/one', 2);
 		expect(candidates).toEqual([

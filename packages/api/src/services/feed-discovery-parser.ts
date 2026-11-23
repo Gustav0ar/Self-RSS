@@ -13,7 +13,6 @@ const FEED_TYPES = new Map<string, FeedDiscoveryCandidate['type']>([
 	['application/json', 'json-feed'],
 ]);
 const FALLBACK_PATHS = ['/feed', '/feed/', '/rss', '/rss.xml', '/atom.xml', '/feed.xml'];
-const TAG_PATTERN = /<(base|link)\b((?:"[^"]*"|'[^']*'|[^>"'])*)>/gi;
 const ATTR_PATTERN =
 	/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
@@ -65,9 +64,31 @@ function safeCandidate(raw: string, base: string) {
 	}
 }
 
+/** Find the closing `>` of an HTML start tag while respecting single/double quoted attributes. */
+function findTagEnd(html: string, start: number): number {
+	let quote: string | null = null;
+	for (let index = start; index < html.length; index++) {
+		const ch = html[index];
+		if (quote) {
+			if (ch === quote) quote = null;
+			continue;
+		}
+		if (ch === '"' || ch === "'") {
+			quote = ch;
+		} else if (ch === '>') {
+			return index;
+		}
+	}
+	return -1;
+}
+
+function isTagNameBoundary(ch: string | undefined): boolean {
+	return ch === undefined || ch === '>' || ch === '/' || /\s/.test(ch);
+}
+
 /**
- * Extract feed discovery `<link rel="alternate">` candidates from HTML without
- * constructing a full DOM tree, honoring the first valid `<base href>`.
+ * Extract feed discovery `<link rel="alternate">` candidates from HTML using a
+ * single-pass linear scanner without constructing a full DOM tree.
  */
 export function discoverFeedsFromHtml(
 	html: string,
@@ -84,20 +105,53 @@ export function discoverFeedsFromHtml(
 		return [];
 	}
 
-	// Strip HTML comments and script/style blocks so commented-out links are ignored.
-	const cleaned = html
-		.replace(/<!--[\s\S]*?-->/g, '')
-		.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
-
+	const lower = html.toLowerCase();
 	let baseUri = pageBase;
 	let hasBase = false;
 	const candidates = new Map<string, FeedDiscoveryCandidate>();
 
-	TAG_PATTERN.lastIndex = 0;
-	for (const match of cleaned.matchAll(TAG_PATTERN)) {
-		const tagName = match[1]?.toLowerCase();
-		const rawAttrs = match[2] ?? '';
-		if (tagName === 'base') {
+	let cursor = 0;
+	while (cursor < html.length && candidates.size < limit) {
+		const lt = html.indexOf('<', cursor);
+		if (lt === -1) break;
+
+		if (html.startsWith('<!--', lt)) {
+			const commentEnd = html.indexOf('-->', lt + 4);
+			if (commentEnd === -1) break;
+			cursor = commentEnd + 3;
+			continue;
+		}
+
+		// Skip raw-text <script> and <style> blocks so embedded markup strings are ignored.
+		if (
+			(lower.startsWith('<script', lt) && isTagNameBoundary(html[lt + 7])) ||
+			(lower.startsWith('<style', lt) && isTagNameBoundary(html[lt + 6]))
+		) {
+			const rawTag = lower.startsWith('<script', lt) ? 'script' : 'style';
+			const openEnd = findTagEnd(html, lt + 1 + rawTag.length);
+			if (openEnd === -1) break;
+			const closeTag = `</${rawTag}`;
+			const closeStart = lower.indexOf(closeTag, openEnd + 1);
+			if (closeStart === -1) break;
+			const closeEnd = html.indexOf('>', closeStart + closeTag.length);
+			if (closeEnd === -1) break;
+			cursor = closeEnd + 1;
+			continue;
+		}
+
+		const isBase = lower.startsWith('<base', lt) && /\s/.test(html[lt + 5] ?? '');
+		const isLink = lower.startsWith('<link', lt) && /\s/.test(html[lt + 5] ?? '');
+		if (!isBase && !isLink) {
+			cursor = lt + 1;
+			continue;
+		}
+
+		const tagEnd = findTagEnd(html, lt + 5);
+		if (tagEnd === -1) break;
+		const rawAttrs = html.slice(lt + 5, tagEnd);
+		cursor = tagEnd + 1;
+
+		if (isBase) {
 			if (!hasBase) {
 				const href = parseTagAttributes(rawAttrs).get('href');
 				if (href) {
@@ -112,7 +166,6 @@ export function discoverFeedsFromHtml(
 			continue;
 		}
 
-		if (candidates.size >= limit) break;
 		const attrs = parseTagAttributes(rawAttrs);
 		const rel = (attrs.get('rel') ?? '').toLowerCase().split(/\s+/);
 		if (!rel.includes('alternate')) continue;
