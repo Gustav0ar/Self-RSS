@@ -49,6 +49,8 @@ const errors = compareAndroidOpenApiContract(openApi, retrofitSource, modelsSour
 		// Android remains on the backward-compatible read-state stream until it
 		// adopts the web-only feed progress and health event handling.
 		operationKey('GET', '/events/stream'),
+		// Android offline sync fetches per-article details until it adopts batch detail lookup.
+		operationKey('POST', '/articles/details'),
 	]),
 	schemaMappings: {
 		User: 'User',

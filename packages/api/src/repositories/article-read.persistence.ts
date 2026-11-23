@@ -96,3 +96,81 @@ export async function findArticleDetailForUser(db: Database, userId: string, art
 
 	return { ...article, media };
 }
+
+/** Load a bounded batch of full article details and their media in two queries. */
+export async function findArticleDetailsForUser(
+	db: Database,
+	userId: string,
+	articleIds: string[],
+) {
+	if (articleIds.length === 0) return [];
+
+	const rows = await db
+		.select({
+			id: articles.id,
+			feedId: articles.feedId,
+			guid: articles.guid,
+			canonicalUrl: articles.canonicalUrl,
+			title: articles.title,
+			author: articles.author,
+			excerpt: articles.excerpt,
+			contentHtml: articles.contentHtml,
+			contentText: articles.contentText,
+			heroImageUrl: articles.heroImageUrl,
+			publishedAt: articles.publishedAt,
+			fetchedAt: articles.fetchedAt,
+			hash: articles.hash,
+			contentStatus: articles.contentStatus,
+			contentVersion: articles.contentVersion,
+			enrichmentQueuedAt: articles.enrichmentQueuedAt,
+			enrichmentAttemptedAt: articles.enrichmentAttemptedAt,
+			enrichedAt: articles.enrichedAt,
+			enrichmentError: articles.enrichmentError,
+			feedTitle: feeds.title,
+			feedFaviconUrl: feeds.faviconUrl,
+			feedSiteUrl: feeds.siteUrl,
+			isRead: sql<boolean>`${articleReads.userId} IS NOT NULL`,
+			isSaved: sql<boolean>`${articleSaves.userId} IS NOT NULL`,
+			readRevision: sql<number>`coalesce(${articleUserStates.readRevision}, 0)`,
+			savedRevision: sql<number>`coalesce(${articleUserStates.savedRevision}, 0)`,
+		})
+		.from(articles)
+		.innerJoin(feeds, and(eq(articles.feedId, feeds.id), eq(feeds.userId, userId)))
+		.leftJoin(
+			articleReads,
+			and(eq(articleReads.articleId, articles.id), eq(articleReads.userId, userId)),
+		)
+		.leftJoin(
+			articleSaves,
+			and(eq(articleSaves.articleId, articles.id), eq(articleSaves.userId, userId)),
+		)
+		.leftJoin(
+			articleUserStates,
+			and(eq(articleUserStates.articleId, articles.id), eq(articleUserStates.userId, userId)),
+		)
+		.where(inArray(articles.id, articleIds));
+
+	if (rows.length === 0) return [];
+
+	const foundIds = rows.map((row) => row.id);
+	const allMedia = await db
+		.select()
+		.from(articleMedia)
+		.where(inArray(articleMedia.articleId, foundIds))
+		.orderBy(asc(articleMedia.position));
+
+	const mediaByArticleId = new Map<string, typeof allMedia>();
+	for (const item of allMedia) {
+		const list = mediaByArticleId.get(item.articleId);
+		if (list) {
+			list.push(item);
+		} else {
+			mediaByArticleId.set(item.articleId, [item]);
+		}
+	}
+
+	return rows.map((row) => ({
+		...row,
+		media: mediaByArticleId.get(row.id) ?? [],
+	}));
+}

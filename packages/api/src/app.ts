@@ -49,22 +49,36 @@ export function createApp(deps?: AppDeps, tokenUtils?: TokenUtils, options: AppO
 	app.use('*', requestLogger);
 	app.use('*', httpMetricsMiddleware(deps?.services.metrics));
 	app.use('*', securityHeaders);
-	app.use(
-		'*',
-		bodyLimit({
-			maxSize: 6 * 1024 * 1024, // 6MB
-			onError: (c) => {
-				return c.json(
-					{
-						error: {
-							code: 'PAYLOAD_TOO_LARGE',
-							message: 'Payload too large. Maximum allowed size is 6MB.',
-						},
+	const defaultBodyLimit = bodyLimit({
+		maxSize: 1 * 1024 * 1024, // 1MB
+		onError: (c) => {
+			return c.json(
+				{
+					error: {
+						code: 'PAYLOAD_TOO_LARGE',
+						message: 'Payload too large. Maximum allowed size is 1MB.',
 					},
-					413,
-				);
-			},
-		}),
+				},
+				413,
+			);
+		},
+	});
+	const opmlBodyLimit = bodyLimit({
+		maxSize: 6 * 1024 * 1024, // 6MB
+		onError: (c) => {
+			return c.json(
+				{
+					error: {
+						code: 'PAYLOAD_TOO_LARGE',
+						message: 'Payload too large. Maximum allowed size is 6MB.',
+					},
+				},
+				413,
+			);
+		},
+	});
+	app.use('*', (c, next) =>
+		c.req.path === '/api/v1/feeds/import/opml' ? opmlBodyLimit(c, next) : defaultBodyLimit(c, next),
 	);
 	app.use(
 		'*',

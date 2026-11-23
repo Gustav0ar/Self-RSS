@@ -1,4 +1,4 @@
-import { ARTICLE_STATE_LOOKUP_LIMIT } from '@self-feed/shared';
+import { ARTICLE_DETAIL_BATCH_LIMIT, ARTICLE_STATE_LOOKUP_LIMIT } from '@self-feed/shared';
 import { apiDataRef, bearerSecurity, json } from './helpers';
 
 export const articleStateSchemas = {
@@ -23,6 +23,18 @@ export const articleStateSchemas = {
 				items: { type: 'string', format: 'uuid' },
 				description:
 					'Missing and unowned IDs are indistinguishable. Absence does not imply a false state.',
+			},
+		},
+	},
+	ArticleDetailBatchResponse: {
+		type: 'object',
+		required: ['articles', 'missingIds'],
+		properties: {
+			articles: { type: 'array', items: { $ref: '#/components/schemas/ArticleDetail' } },
+			missingIds: {
+				type: 'array',
+				items: { type: 'string', format: 'uuid' },
+				description: 'Missing and unowned IDs are indistinguishable.',
 			},
 		},
 	},
@@ -103,6 +115,37 @@ export const articleStatePaths = {
 			responses: {
 				'200': {
 					...json(apiDataRef('#/components/schemas/ArticleStateLookupResponse')),
+					headers: { 'Cache-Control': { schema: { type: 'string', const: 'no-store' } } },
+				},
+				'400': json({ $ref: '#/components/schemas/ApiError' }),
+				'401': json({ $ref: '#/components/schemas/ApiError' }),
+				'429': json({ $ref: '#/components/schemas/ApiError' }),
+			},
+		},
+	},
+	'/articles/details': {
+		post: {
+			tags: ['Articles'],
+			security: bearerSecurity,
+			summary: 'Read a bounded batch of full article details for owned articles',
+			requestBody: {
+				required: true,
+				...json({
+					type: 'object',
+					required: ['articleIds'],
+					properties: {
+						articleIds: {
+							type: 'array',
+							minItems: 1,
+							maxItems: ARTICLE_DETAIL_BATCH_LIMIT,
+							items: { type: 'string', format: 'uuid' },
+						},
+					},
+				}),
+			},
+			responses: {
+				'200': {
+					...json(apiDataRef('#/components/schemas/ArticleDetailBatchResponse')),
 					headers: { 'Cache-Control': { schema: { type: 'string', const: 'no-store' } } },
 				},
 				'400': json({ $ref: '#/components/schemas/ApiError' }),

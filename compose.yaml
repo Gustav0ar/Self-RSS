@@ -2,6 +2,7 @@ services:
   redis:
     image: docker.io/redis:8.8-alpine
     container_name: rss-redis
+    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "volatile-lru"]
     ports:
       - "6379:6379"
     volumes:
@@ -75,6 +76,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const res = await fetch('http://api:3000/ready'); if (!res.ok) process.exit(1);",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
   web:
     build:

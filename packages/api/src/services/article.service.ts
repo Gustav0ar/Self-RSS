@@ -231,6 +231,97 @@ export class ArticleService {
 		return response;
 	}
 
+	/** Read a bounded batch of full article details with Redis reuse and SQLite state authority. */
+	async getArticlesByIds(
+		userId: string,
+		articleIds: string[],
+	): Promise<{ articles: ArticleDetailResponse[]; missingIds: string[] }> {
+		const ids = [...new Set(articleIds)];
+		if (ids.length === 0) return { articles: [], missingIds: [] };
+
+		const cacheKeys = ids.map((id) => CacheKeys.articleDetail(userId, id));
+		const cachedRaw =
+			typeof this.redis.mget === 'function'
+				? await this.redis.mget(...cacheKeys).catch(() => ids.map(() => null))
+				: await Promise.all(cacheKeys.map((key) => this.redis.get(key).catch(() => null)));
+
+		const cachedById = new Map<string, CachedArticleDetail>();
+		const corruptKeys: string[] = [];
+		const missedIds: string[] = [];
+
+		ids.forEach((id, index) => {
+			const raw = cachedRaw[index];
+			if (!raw) {
+				missedIds.push(id);
+				return;
+			}
+			try {
+				cachedById.set(id, JSON.parse(raw) as CachedArticleDetail);
+			} catch {
+				corruptKeys.push(cacheKeys[index]!);
+				missedIds.push(id);
+			}
+		});
+
+		if (corruptKeys.length > 0) {
+			void this.redis.del(...corruptKeys).catch(() => undefined);
+		}
+
+		const resolvedById = new Map<string, ArticleDetailResponse>();
+
+		if (cachedById.size > 0) {
+			const states = await this.articleRepo.findStatesForUser(userId, [...cachedById.keys()]);
+			for (const state of states) {
+				const cached = cachedById.get(state.id);
+				if (!cached) continue;
+				this.cacheMetrics?.recordCacheHit('article_detail');
+				resolvedById.set(state.id, { ...cached, ...state });
+			}
+		}
+
+		if (missedIds.length > 0) {
+			for (const _id of missedIds) {
+				this.cacheMetrics?.recordCacheMiss('article_detail');
+			}
+			const rows = await this.articleRepo.findDetailsForUser(userId, missedIds);
+			for (const article of rows) {
+				const response: ArticleDetailResponse = {
+					...article,
+					isRead: Boolean(article.isRead),
+					isSaved: Boolean(article.isSaved),
+					publishedAt: article.publishedAt?.toISOString() ?? null,
+					fetchedAt: article.fetchedAt.toISOString(),
+					enrichmentQueuedAt: article.enrichmentQueuedAt?.toISOString() ?? null,
+					enrichmentAttemptedAt: article.enrichmentAttemptedAt?.toISOString() ?? null,
+					enrichedAt: article.enrichedAt?.toISOString() ?? null,
+					isEnriched: article.contentStatus === 'full_ready',
+				};
+				resolvedById.set(article.id, response);
+				const { readRevision: _read, savedRevision: _saved, ...cachePayload } = response;
+				this.redis
+					.setex(
+						CacheKeys.articleDetail(userId, article.id),
+						CacheTTL.articleDetail,
+						JSON.stringify(cachePayload),
+					)
+					.catch(() => undefined);
+			}
+		}
+
+		const articles: ArticleDetailResponse[] = [];
+		const missingIds: string[] = [];
+		for (const id of ids) {
+			const detail = resolvedById.get(id);
+			if (detail) {
+				articles.push(detail);
+			} else {
+				missingIds.push(id);
+			}
+		}
+
+		return { articles, missingIds };
+	}
+
 	async markRead(
 		userId: string,
 		articleId: string,

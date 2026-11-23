@@ -1,4 +1,5 @@
 import {
+	articleDetailBatchSchema,
 	articleDetailQuerySchema,
 	articleQuerySchema,
 	articleStateLookupSchema,
@@ -39,6 +40,13 @@ export function createArticleRoutes(articleService: ArticleService, rateLimiter:
 		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
 		const { articleIds } = await parseBody(c, articleStateLookupSchema);
 		const result = await articleService.getArticleStates(c.get('userId'), articleIds);
+		return c.json({ data: result }, 200, { 'Cache-Control': 'no-store' });
+	});
+
+	routes.post('/details', async (c) => {
+		await enforceRateLimit(c, rateLimiter, 'articles-read', RATE_LIMITS.articlesRead);
+		const { articleIds } = await parseBody(c, articleDetailBatchSchema);
+		const result = await articleService.getArticlesByIds(c.get('userId'), articleIds);
 		return c.json({ data: result }, 200, { 'Cache-Control': 'no-store' });
 	});
 

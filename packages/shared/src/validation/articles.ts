@@ -49,6 +49,12 @@ export const articleStateLookupSchema = z.object({
 	articleIds: z.array(z.string().uuid()).min(1).max(ARTICLE_STATE_LOOKUP_LIMIT),
 });
 
+export const ARTICLE_DETAIL_BATCH_LIMIT = 20;
+
+export const articleDetailBatchSchema = z.object({
+	articleIds: z.array(z.string().uuid()).min(1).max(ARTICLE_DETAIL_BATCH_LIMIT),
+});
+
 const readStateEventMetadataSchema = z.object({
 	eventId: z.string().min(1),
 	clientId: z.string().min(1).nullable(),

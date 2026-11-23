@@ -1,14 +1,27 @@
 import { useRouter } from '@tanstack/react-router';
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, RefreshCw, Sparkles } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useEffect, useMemo, useRef } from 'react';
-import { useArticle, useMarkRead, usePreferences, useSetArticleSaved } from '@/hooks/queries';
+import type { MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+	useArticle,
+	useMarkRead,
+	usePreferences,
+	useSetArticleSaved,
+	useUpdatePreferences,
+} from '@/hooks/queries';
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { trackArticleCompletion } from '@/lib/product-analytics';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
 import { OfflineTextStatus } from './offline-text-status';
 import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
+import {
+	estimateReadingMinutes,
+	MetadataLine,
+	QueueButton,
+	ReaderImageLightbox,
+	ReaderSkeleton,
+} from './reader-chrome';
 import {
 	useReaderScrollProgress,
 	useSelectedArticleEnrichment,
@@ -39,10 +52,18 @@ export interface ReaderArticleSummary {
 export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
 	const { data: article, isLoading, isError, isFetching, refetch } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
+	const updatePreferences = useUpdatePreferences();
 	const markRead = useMarkRead();
 	const setArticleSaved = useSetArticleSaved();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
+	const [lightboxImage, setLightboxImage] = useState<{
+		articleId: string | null;
+		src: string;
+		alt: string;
+	} | null>(null);
+	const activeLightboxImage =
+		lightboxImage && lightboxImage.articleId === articleId ? lightboxImage : null;
 	const readerArticleId = article?.id === articleId ? articleId : null;
 	const { scrollerRef, scrollProgressRef } = useReaderScrollProgress(
 		readerArticleId,
@@ -56,7 +77,31 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		const html = article?.contentHtml ?? '';
 		return sanitizeArticleHtml(html, article?.title);
 	}, [article?.contentHtml, article?.title]);
+	const readingMinutes = useMemo(
+		() => estimateReadingMinutes(article?.contentText, readerHtml),
+		[article?.contentText, readerHtml],
+	);
 	const mediaToRender = useMemo(() => getReaderPanelMedia(article?.media ?? []), [article?.media]);
+
+	const handleCloseLightbox = useCallback(() => setLightboxImage(null), []);
+	const handleContentClick = useCallback(
+		(event: MouseEvent<HTMLDivElement>) => {
+			const target = event.target;
+			if (target instanceof HTMLImageElement && target.src) {
+				event.preventDefault();
+				setLightboxImage({
+					articleId,
+					src: target.currentSrc || target.src,
+					alt: target.alt || '',
+				});
+			}
+		},
+		[articleId],
+	);
+	const handleUpdateTypography = useCallback(
+		(patch: { fontFamily?: string; textSize?: number }) => updatePreferences.mutate(patch),
+		[updatePreferences],
+	);
 	// The following `useMemo` calls must run unconditionally (before
 	// the loading / not-found early returns) to satisfy the rules of
 	// hooks. They default to safe values when `article` is null.
@@ -189,29 +234,31 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		return (
 			<div className="flex h-full flex-col">
 				{mobileBar}
-				<div className="flex flex-1 items-center justify-center px-6 py-10">
-					{isLoading ? (
-						<p className="text-sm text-muted-foreground">Loading article...</p>
-					) : isError ? (
-						<div className="text-center">
-							<p className="text-sm font-medium text-foreground">Could not load this article</p>
-							<p className="mt-1 text-xs text-muted-foreground">
-								Check your connection and try again.
-							</p>
-							<button
-								type="button"
-								onClick={() => void refetch()}
-								disabled={isFetching}
-								className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
-							>
-								<RefreshCw className="h-4 w-4" />
-								Retry
-							</button>
-						</div>
-					) : (
-						<p className="text-sm text-muted-foreground">Article not found</p>
-					)}
-				</div>
+				{isLoading ? (
+					<ReaderSkeleton />
+				) : (
+					<div className="flex flex-1 items-center justify-center px-6 py-10">
+						{isError ? (
+							<div className="text-center">
+								<p className="text-sm font-medium text-foreground">Could not load this article</p>
+								<p className="mt-1 text-xs text-muted-foreground">
+									Check your connection and try again.
+								</p>
+								<button
+									type="button"
+									onClick={() => void refetch()}
+									disabled={isFetching}
+									className="mt-4 inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-60"
+								>
+									<RefreshCw className="h-4 w-4" />
+									Retry
+								</button>
+							</div>
+						) : (
+							<p className="text-sm text-muted-foreground">Article not found</p>
+						)}
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -258,6 +305,12 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 									<span>{publishedAt}</span>
 								</>
 							) : null}
+							{readingMinutes ? (
+								<>
+									<span>·</span>
+									<span>{readingMinutes} min read</span>
+								</>
+							) : null}
 							<div className="surface-muted inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]">
 								<Sparkles className="h-3 w-3 text-primary" />
 								Reader mode
@@ -288,12 +341,20 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							saveDisabled={setArticleSaved.isPending}
 							onToggleRead={toggleRead}
 							onToggleSaved={toggleSaved}
+							typography={{
+								fontFamily: prefs?.fontFamily ?? 'Inter',
+								textSize: prefs?.textSize ?? 16,
+								onUpdateTypography: handleUpdateTypography,
+							}}
 						/>
 						<OfflineTextStatus articleId={article.id} />
 					</header>
 
 					{hasContent ? (
+						// biome-ignore lint/a11y/noStaticElementInteractions: Delegated click-to-zoom for sanitized article images
+						// biome-ignore lint/a11y/useKeyWithClickEvents: Delegated image click handler
 						<div
+							onClick={handleContentClick}
 							className="reader-content motion-enter mt-5 max-w-[82ch] border-t border-border/70 pt-5"
 							// biome-ignore lint/security/noDangerouslySetInnerHtml: Sanitized content from API
 							dangerouslySetInnerHTML={{ __html: readerHtml }}
@@ -310,14 +371,27 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 				<aside className="hidden min-w-0 2xl:block">
 					<div className="sticky top-4 space-y-3">
 						{article.heroImageUrl ? (
-							<img
-								src={article.heroImageUrl}
-								alt=""
-								className="aspect-video w-full rounded-xl object-cover"
-								loading="lazy"
-								decoding="async"
-								referrerPolicy="no-referrer"
-							/>
+							<button
+								type="button"
+								onClick={() =>
+									setLightboxImage({
+										articleId,
+										src: article.heroImageUrl!,
+										alt: article.title,
+									})
+								}
+								aria-label="Inspect hero image"
+								className="block w-full cursor-zoom-in overflow-hidden rounded-xl"
+							>
+								<img
+									src={article.heroImageUrl}
+									alt=""
+									className="aspect-video w-full object-cover"
+									loading="lazy"
+									decoding="async"
+									referrerPolicy="no-referrer"
+								/>
+							</button>
 						) : null}
 
 						<div className="surface-card surface-compact rounded-xl p-4">
@@ -328,6 +402,9 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 								<MetadataLine label="Source" value={article.feedTitle} />
 								{article.author ? <MetadataLine label="Author" value={article.author} /> : null}
 								{publishedAt ? <MetadataLine label="Published" value={publishedAt} /> : null}
+								{readingMinutes ? (
+									<MetadataLine label="Reading time" value={`${readingMinutes} min read`} />
+								) : null}
 							</div>
 							<ReaderCompactActions
 								canonicalUrl={article.canonicalUrl}
@@ -388,54 +465,9 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 					</div>
 				</aside>
 			</article>
+			{activeLightboxImage ? (
+				<ReaderImageLightbox image={activeLightboxImage} onClose={handleCloseLightbox} />
+			) : null}
 		</div>
-	);
-}
-
-function MetadataLine({ label, value }: { label: string; value: string }) {
-	return (
-		<div className="grid gap-1">
-			<span className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
-			<span className="break-words text-foreground">{value}</span>
-		</div>
-	);
-}
-
-function QueueButton({
-	article,
-	icon,
-	label,
-	onSelectArticle,
-}: {
-	article: ReaderArticleSummary | null;
-	icon: ReactNode;
-	label: string;
-	onSelectArticle: (id: string) => void;
-}) {
-	if (!article) {
-		return (
-			<span className="flex min-h-14 items-center gap-2 rounded-lg border border-border/70 px-2.5 py-2 text-xs text-muted-foreground/70">
-				{icon}
-				{label}
-			</span>
-		);
-	}
-
-	return (
-		<button
-			type="button"
-			onClick={() => onSelectArticle(article.id)}
-			className="flex min-h-14 items-start gap-2 rounded-lg border border-border/70 px-2.5 py-2 text-left text-xs hover:bg-accent"
-		>
-			<span className="mt-0.5 text-muted-foreground">{icon}</span>
-			<span className="min-w-0">
-				<span className="block text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-					{label}
-				</span>
-				<span className="mt-0.5 line-clamp-2 font-medium leading-5 text-foreground">
-					{article.title}
-				</span>
-			</span>
-		</button>
 	);
 }

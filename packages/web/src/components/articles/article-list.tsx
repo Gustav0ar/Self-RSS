@@ -301,7 +301,7 @@ function ArticleRowImpl({
 		<div
 			style={style}
 			className={cn(
-				'motion-enter surface-card surface-compact relative flex w-full overflow-hidden rounded-xl border text-left hover:bg-accent/45',
+				'surface-card surface-compact relative flex w-full overflow-hidden rounded-xl border text-left hover:bg-accent/45',
 				density === 'compact' ? 'gap-2 px-2.5 py-2' : 'gap-2.5 px-3 py-2.5',
 				isSelected && 'border-l-4 !border-primary/60 !border-l-primary !bg-primary/12 shadow-sm',
 				!isSelected && !article.isRead && 'border-primary/12 bg-card/95',

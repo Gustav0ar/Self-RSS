@@ -2,6 +2,7 @@ import type {
 	ApiListResponse,
 	ApiResponse,
 	ArticleDetail,
+	ArticleDetailBatchResponse,
 	ArticleListItem,
 } from '@self-feed/shared';
 import {
@@ -48,6 +49,38 @@ function fetchArticle(articleId: string, signal?: AbortSignal) {
 		`/articles/detail?id=${encodeURIComponent(articleId)}`,
 		{ signal },
 	).then((r) => r.data);
+}
+
+async function fetchArticleDetailsBatch(
+	articleIds: readonly string[],
+	signal?: AbortSignal,
+): Promise<ArticleDetail[]> {
+	if (articleIds.length === 0) return [];
+	if (articleIds.length === 1) {
+		const single = await fetchArticle(articleIds[0]!, signal);
+		return [single];
+	}
+	try {
+		const response = await apiFetch<ApiResponse<ArticleDetailBatchResponse>>('/articles/details', {
+			method: 'POST',
+			body: JSON.stringify({ articleIds }),
+			signal,
+		});
+		return response.data.articles;
+	} catch (error) {
+		// Fall back cleanly if talking to an older backend during a rolling deploy.
+		if (error instanceof ApiClientError && (error.status === 404 || error.status === 405)) {
+			const settled = await Promise.allSettled(articleIds.map((id) => fetchArticle(id, signal)));
+			return settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+		}
+		throw error;
+	}
+}
+
+function isArticleFreshInCache(qc: QueryClient, articleId: string, staleTime: number): boolean {
+	const state = qc.getQueryState<ArticleDetail>(articleQueryKey(articleId));
+	if (!state?.data) return false;
+	return Date.now() - state.dataUpdatedAt < staleTime;
 }
 
 function enrichArticle(articleId: string) {
@@ -264,36 +297,36 @@ export function useWarmNextArticles() {
 
 	return useCallback(
 		(articleIds: readonly string[]) => {
-			const idsToWarm = Array.from(new Set(articleIds.filter(Boolean))).slice(
-				0,
-				ARTICLE_LIMITS.WARM_LIMIT,
-			);
+			const idsToWarm = Array.from(new Set(articleIds.filter(Boolean)))
+				.slice(0, ARTICLE_LIMITS.WARM_LIMIT)
+				.filter(
+					(id) =>
+						!warmingArticleIds.current.has(id) &&
+						!isArticleFreshInCache(qc, id, ARTICLE_LIMITS.DETAIL_WARM_STALE_MS),
+				);
 
-			for (const articleId of idsToWarm) {
-				if (warmingArticleIds.current.has(articleId)) {
-					continue;
-				}
+			if (idsToWarm.length === 0) return;
 
-				warmingArticleIds.current.add(articleId);
-				void (async () => {
-					const queryKey = articleQueryKey(articleId);
-					try {
-						const detail = await qc.fetchQuery({
-							queryKey,
-							queryFn: ({ signal }) => fetchArticle(articleId, signal),
-							staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
-						});
-						preloadImages([
+			for (const id of idsToWarm) warmingArticleIds.current.add(id);
+
+			void (async () => {
+				try {
+					const details = await fetchArticleDetailsBatch(idsToWarm);
+					for (const detail of details) {
+						qc.setQueryData(articleQueryKey(detail.id), detail);
+					}
+					preloadImages(
+						details.flatMap((detail) => [
 							detail.heroImageUrl,
 							...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
-						]);
-					} catch {
-						// Background warming should never surface as reader UI noise.
-					} finally {
-						warmingArticleIds.current.delete(articleId);
-					}
-				})();
-			}
+						]),
+					);
+				} catch {
+					// Background warming should never surface as reader UI noise.
+				} finally {
+					for (const id of idsToWarm) warmingArticleIds.current.delete(id);
+				}
+			})();
 		},
 		[qc],
 	);
@@ -316,31 +349,42 @@ export function useWarmVisibleArticles() {
 			lastCandidateKey.current = candidateKey;
 			preloadImages(unique.map((article) => article.heroImageUrl));
 
-			void Promise.all(
-				unique.map((article) =>
-					qc.fetchQuery({
-						queryKey: articleQueryKey(article.id),
-						queryFn: ({ signal }) => fetchArticle(article.id, signal),
-						staleTime: ARTICLE_LIMITS.DETAIL_WARM_STALE_MS,
-					}),
-				),
-			)
-				.then((details) => {
-					preloadImages(
-						details.flatMap((detail) => [
-							detail.heroImageUrl,
-							...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
-						]),
-					);
-					for (const detail of details) {
-						if (
-							detail.contentStatus === 'enrichment_pending' &&
-							!enrichmentRequestedArticleIds.current.has(detail.id)
-						) {
-							enrichmentRequestedArticleIds.current.add(detail.id);
-							void enrichArticle(detail.id).catch(() => undefined);
-						}
+			const uncachedIds = unique
+				.map((article) => article.id)
+				.filter((id) => !isArticleFreshInCache(qc, id, ARTICLE_LIMITS.DETAIL_WARM_STALE_MS));
+			const cachedDetails = unique
+				.map((article) => qc.getQueryData<ArticleDetail>(articleQueryKey(article.id)))
+				.filter((detail): detail is ArticleDetail => detail != null);
+
+			const handleDetails = (details: ArticleDetail[]) => {
+				preloadImages(
+					details.flatMap((detail) => [
+						detail.heroImageUrl,
+						...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
+					]),
+				);
+				for (const detail of details) {
+					if (
+						detail.contentStatus === 'enrichment_pending' &&
+						!enrichmentRequestedArticleIds.current.has(detail.id)
+					) {
+						enrichmentRequestedArticleIds.current.add(detail.id);
+						void enrichArticle(detail.id).catch(() => undefined);
 					}
+				}
+			};
+
+			if (uncachedIds.length === 0) {
+				handleDetails(cachedDetails);
+				return;
+			}
+
+			void fetchArticleDetailsBatch(uncachedIds)
+				.then((fetched) => {
+					for (const detail of fetched) {
+						qc.setQueryData(articleQueryKey(detail.id), detail);
+					}
+					handleDetails([...cachedDetails, ...fetched]);
 				})
 				.catch(() => undefined);
 		},

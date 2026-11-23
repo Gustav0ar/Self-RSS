@@ -72,6 +72,29 @@
 					}
 				}
 			},
+			"ArticleDetailBatchResponse": {
+				"type": "object",
+				"required": [
+					"articles",
+					"missingIds"
+				],
+				"properties": {
+					"articles": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ArticleDetail"
+						}
+					},
+					"missingIds": {
+						"type": "array",
+						"items": {
+							"type": "string",
+							"format": "uuid"
+						},
+						"description": "Missing and unowned IDs are indistinguishable."
+					}
+				}
+			},
 			"ArticleStateMutation": {
 				"type": "object",
 				"required": [
@@ -2109,6 +2132,97 @@
 									"properties": {
 										"data": {
 											"$ref": "#/components/schemas/ArticleStateLookupResponse"
+										}
+									}
+								}
+							}
+						},
+						"headers": {
+							"Cache-Control": {
+								"schema": {
+									"type": "string",
+									"const": "no-store"
+								}
+							}
+						}
+					},
+					"400": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiError"
+								}
+							}
+						}
+					},
+					"401": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiError"
+								}
+							}
+						}
+					},
+					"429": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ApiError"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/articles/details": {
+			"post": {
+				"tags": [
+					"Articles"
+				],
+				"security": [
+					{
+						"bearerAuth": []
+					}
+				],
+				"summary": "Read a bounded batch of full article details for owned articles",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": [
+									"articleIds"
+								],
+								"properties": {
+									"articleIds": {
+										"type": "array",
+										"minItems": 1,
+										"maxItems": 20,
+										"items": {
+											"type": "string",
+											"format": "uuid"
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": [
+										"data"
+									],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/ArticleDetailBatchResponse"
 										}
 									}
 								}

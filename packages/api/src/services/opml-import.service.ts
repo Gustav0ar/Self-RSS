@@ -307,9 +307,9 @@ export class OpmlImportService {
 	}
 
 	parse(content: string): ParsedOpmlFeed[] {
-		let document: Document;
+		let dom: JSDOM;
 		try {
-			document = new JSDOM(content, { contentType: 'text/xml' }).window.document;
+			dom = new JSDOM(content, { contentType: 'text/xml' });
 		} catch (error) {
 			throw AppError.badRequest(
 				'Invalid OPML file',
@@ -317,29 +317,34 @@ export class OpmlImportService {
 			);
 		}
 
-		const parserErrors = document.getElementsByTagName('parsererror');
-		if (parserErrors.length > 0) {
-			throw AppError.badRequest('Invalid OPML file');
-		}
-
-		const body = document.querySelector('body');
-		if (!body) {
-			throw AppError.badRequest('Invalid OPML file');
-		}
-
-		const entries: ParsedOpmlFeed[] = [];
-		for (const node of Array.from(body.children)) {
-			if (node.tagName.toLowerCase() !== 'outline') {
-				continue;
+		try {
+			const document = dom.window.document;
+			const parserErrors = document.getElementsByTagName('parsererror');
+			if (parserErrors.length > 0) {
+				throw AppError.badRequest('Invalid OPML file');
 			}
-			entries.push(...this.readOutline(node, []));
-		}
 
-		if (entries.length === 0) {
-			throw AppError.badRequest('OPML file does not contain any feed entries');
-		}
+			const body = document.querySelector('body');
+			if (!body) {
+				throw AppError.badRequest('Invalid OPML file');
+			}
 
-		return entries;
+			const entries: ParsedOpmlFeed[] = [];
+			for (const node of Array.from(body.children)) {
+				if (node.tagName.toLowerCase() !== 'outline') {
+					continue;
+				}
+				entries.push(...this.readOutline(node, []));
+			}
+
+			if (entries.length === 0) {
+				throw AppError.badRequest('OPML file does not contain any feed entries');
+			}
+
+			return entries;
+		} finally {
+			dom.window.close();
+		}
 	}
 
 	private readOutline(node: Element, parentPath: string[]): ParsedOpmlFeed[] {

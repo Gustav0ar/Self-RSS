@@ -45,6 +45,7 @@ const articleWithEmbeddedHtml = {
 
 const markReadMutate = vi.fn();
 const enrichMutate = vi.fn();
+const updatePrefsMutate = vi.fn();
 let autoMarkReadMode = 'on_navigate';
 let currentArticle: typeof articleWithEmbeddedHtml | undefined = articleWithEmbeddedHtml;
 let articleIsLoading = false;
@@ -68,7 +69,8 @@ vi.mock('../../src/hooks/queries', () => ({
 	}),
 	useMarkRead: () => ({ mutate: markReadMutate }),
 	useEnrichArticle: () => ({ mutate: enrichMutate, isPending: false }),
-	usePreferences: () => ({ data: { autoMarkReadMode } }),
+	usePreferences: () => ({ data: { autoMarkReadMode, fontFamily: 'Inter', textSize: 16 } }),
+	useUpdatePreferences: () => ({ mutate: updatePrefsMutate, isPending: false }),
 	useSetArticleSaved: () => ({ mutate: setSavedMutate, isPending: false }),
 }));
 
@@ -409,5 +411,31 @@ describe('ReaderPane', () => {
 		expect(twitterIframe.style.height).toBe('420px');
 		expect(outsideIframe.style.height).toBe('');
 		outsideIframe.remove();
+	});
+
+	it('displays reading time, opens image lightbox on click, and updates typography inline', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			contentText: Array.from({ length: 440 }, () => 'word').join(' '),
+		};
+
+		const { getAllByText, getByRole, queryByRole } = render(<ReaderPane articleId="article-1" />);
+
+		expect(getAllByText('2 min read').length).toBeGreaterThanOrEqual(1);
+
+		const inlineImage = document.querySelector<HTMLImageElement>('.reader-content img');
+		expect(inlineImage).toBeTruthy();
+		fireEvent.click(inlineImage!);
+		expect(getByRole('dialog', { name: 'Inline image' })).toBeTruthy();
+		fireEvent.keyDown(window, { key: 'Escape' });
+		expect(queryByRole('dialog', { name: 'Inline image' })).toBeNull();
+
+		fireEvent.click(getByRole('button', { name: 'Reader typography' }));
+		fireEvent.click(getByRole('button', { name: 'Increase text size' }));
+		expect(updatePrefsMutate).toHaveBeenCalledWith({ textSize: 17 });
+		fireEvent.change(getByRole('combobox', { name: 'Reader font family' }), {
+			target: { value: 'Georgia' },
+		});
+		expect(updatePrefsMutate).toHaveBeenCalledWith({ fontFamily: 'Georgia' });
 	});
 });

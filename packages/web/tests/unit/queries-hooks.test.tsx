@@ -540,7 +540,7 @@ describe('useSyncAllFeeds', () => {
 });
 
 describe('useWarmVisibleArticles', () => {
-	it('warms only four visible details, preloads images, and queues pending enrichment once', async () => {
+	it('warms only four visible details in a batch, preloads images, and queues pending enrichment once', async () => {
 		const loadedImages: string[] = [];
 		class FakeImage {
 			decoding = '';
@@ -549,8 +549,22 @@ describe('useWarmVisibleArticles', () => {
 			}
 		}
 		vi.stubGlobal('Image', FakeImage);
-		apiFetchMock.mockImplementation(async (path: string) => {
+		apiFetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
 			if (path.endsWith('/enrich')) return { data: { success: true } };
+			if (path === '/articles/details') {
+				const { articleIds } = JSON.parse(String(init?.body ?? '{}')) as { articleIds: string[] };
+				return {
+					data: {
+						articles: articleIds.map((id) => ({
+							id,
+							heroImageUrl: `detail-${id}.jpg`,
+							media: [{ type: 'image', url: `media-${id}.jpg` }],
+							contentStatus: id === 'article-1' ? 'enrichment_pending' : 'feed_ready',
+						})),
+						missingIds: [],
+					},
+				};
+			}
 			const id = new URLSearchParams(path.split('?')[1]).get('id');
 			return {
 				data: {
@@ -577,6 +591,11 @@ describe('useWarmVisibleArticles', () => {
 		await waitFor(() => {
 			expect(apiFetchMock).toHaveBeenCalledWith('/articles/article-1/enrich', { method: 'POST' });
 		});
+		expect(apiFetchMock).toHaveBeenCalledWith('/articles/details', {
+			method: 'POST',
+			body: JSON.stringify({ articleIds: ['article-1', 'article-2', 'article-3', 'article-4'] }),
+			signal: undefined,
+		});
 		expect(apiFetchMock).not.toHaveBeenCalledWith(
 			'/articles/detail?id=article-5',
 			expect.anything(),
@@ -593,7 +612,7 @@ describe('useWarmVisibleArticles', () => {
 		act(() => result.current(candidates.slice(1)));
 		await waitFor(() => {
 			expect(apiFetchMock).toHaveBeenCalledWith('/articles/detail?id=article-5', {
-				signal: expect.any(AbortSignal),
+				signal: undefined,
 			});
 		});
 		act(() => result.current(candidates));

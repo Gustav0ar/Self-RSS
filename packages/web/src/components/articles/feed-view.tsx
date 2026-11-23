@@ -1,6 +1,6 @@
 import type { SortOrder } from '@self-feed/shared';
 import { Filter, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleList } from '@/components/articles/article-list';
 import { ExternalShortcutStatus } from '@/components/articles/external-shortcut-status';
 import { FeedHealthBanner } from '@/components/articles/feed-health-banner';
@@ -183,10 +183,7 @@ export function FeedView({
 	);
 
 	useEffect(() => {
-		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) {
-			return;
-		}
-
+		if (!feedId || isLoading || isRefreshingCurrentSelection || feedSyncError) return;
 		void refreshFeed(feedId);
 	}, [feedId, feedSyncError, isLoading, isRefreshingCurrentSelection, refreshFeed]);
 
@@ -228,28 +225,29 @@ export function FeedView({
 		}
 	}, [fetchedArticles, retainReadArticle, selectedArticleId, unreadOnly]);
 
-	const handleSelectArticle = useCallback(
-		(id: string) => {
-			if (autoMarkReadMode === 'on_navigate' && selectedArticleId !== id) {
-				const nextArticleIndex = readingQueue.findIndex((article) => article.id === id);
-				const nextArticle = nextArticleIndex >= 0 ? readingQueue[nextArticleIndex] : null;
-				if (nextArticle && !nextArticle.isRead) {
-					retainReadArticle(nextArticle, nextArticleIndex);
-					markReadMutate({ articleId: nextArticle.id, read: true });
-				}
-			}
+	const selectionCtx = {
+		autoMarkReadMode,
+		selectedArticleId,
+		readingQueue,
+		retainReadArticle,
+		markReadMutate,
+		onSelectArticle,
+	};
+	const selectionRef = useRef(selectionCtx);
+	selectionRef.current = selectionCtx;
 
-			onSelectArticle(id);
-		},
-		[
-			autoMarkReadMode,
-			selectedArticleId,
-			readingQueue,
-			retainReadArticle,
-			markReadMutate,
-			onSelectArticle,
-		],
-	);
+	const handleSelectArticle = useCallback((id: string) => {
+		const ctx = selectionRef.current;
+		if (ctx.autoMarkReadMode === 'on_navigate' && ctx.selectedArticleId !== id) {
+			const idx = ctx.readingQueue.findIndex((article) => article.id === id);
+			const nextArticle = idx >= 0 ? ctx.readingQueue[idx] : null;
+			if (nextArticle && !nextArticle.isRead) {
+				ctx.retainReadArticle(nextArticle, idx);
+				ctx.markReadMutate({ articleId: nextArticle.id, read: true });
+			}
+		}
+		ctx.onSelectArticle(id);
+	}, []);
 
 	useKeyboardNav({
 		articleIds,

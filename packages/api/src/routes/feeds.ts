@@ -6,6 +6,7 @@ import type { FeedService } from '../services/feed.service.js';
 import type { FeedSyncService } from '../services/feed-sync.service.js';
 import type { OpmlExportService } from '../services/opml-export.service.js';
 import type { OpmlImportService } from '../services/opml-import.service.js';
+import { jsonWithEtag } from '../utils/etag.js';
 import { enforceRateLimit, RATE_LIMITS, type RateLimiter } from '../utils/index.js';
 import { createLogger } from '../utils/logger.js';
 import { parseBody, parseUuidParam } from '../utils/validation.js';
@@ -33,7 +34,7 @@ export function createFeedRoutes(
 		const feeds = categoryId
 			? await feedService.getByCategory(userId, categoryId)
 			: await feedService.getAll(userId);
-		return c.json({ data: feeds });
+		return jsonWithEtag(c, { data: feeds });
 	});
 
 	routes.post('/', async (c) => {
