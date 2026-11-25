@@ -16,7 +16,7 @@ export function ModalShell({ title, onClose, children, footer }: ModalShellProps
 		<Dialog
 			onClose={onClose}
 			ariaLabelledBy={titleId}
-			className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+			className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6"
 			panelClassName="surface-card motion-scale w-full max-w-lg rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 		>
 			<div className="mb-5 flex items-start justify-between gap-4">

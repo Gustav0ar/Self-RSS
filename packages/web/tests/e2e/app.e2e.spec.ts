@@ -13,7 +13,7 @@ async function sidebarAction(page: Page, name: string, action: 'Edit' | 'Delete'
 
 function unreadBadgeName(name: string) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`^${escaped}(?: \\d+)?$`);
+	return new RegExp(`^${escaped}(?: \\d+ feeds?)?(?: \\d+)?$`);
 }
 
 function articleTitleName(title: string) {
@@ -217,14 +217,12 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByRole('button', { name: 'Add Category' }).click();
 	await page.getByLabel('Name').fill(categoryName);
 	await page.getByRole('button', { name: 'Add category' }).last().click();
-	await expect(page.getByRole('button', { name: new RegExp(`^${categoryName}$`) })).toBeVisible();
+	await expect(page.getByRole('button', { name: unreadBadgeName(categoryName) })).toBeVisible();
 
 	await sidebarAction(page, categoryName, 'Edit');
 	await page.getByLabel('Name').fill(renamedCategory);
 	await page.getByRole('button', { name: 'Save changes' }).click();
-	await expect(
-		page.getByRole('button', { name: new RegExp(`^${renamedCategory}$`) }),
-	).toBeVisible();
+	await expect(page.getByRole('button', { name: unreadBadgeName(renamedCategory) })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(`${appOrigin}/test-feeds/devtools.xml`);
@@ -240,12 +238,12 @@ test('reader can manage categories and feeds from the sidebar', async ({ page })
 	await page.getByRole('button', { name: 'Add Category' }).click();
 	await page.getByLabel('Name').fill(emptyCategory);
 	await page.getByRole('button', { name: 'Add category' }).last().click();
-	await expect(page.getByRole('button', { name: new RegExp(`^${emptyCategory}$`) })).toBeVisible();
+	await expect(page.getByRole('button', { name: unreadBadgeName(emptyCategory) })).toBeVisible();
 
 	await sidebarAction(page, emptyCategory, 'Delete');
 	await page.getByRole('button', { name: 'Delete' }).last().click();
 	await expect(page.getByRole('heading', { name: 'Delete category' })).toHaveCount(0);
-	await expect(page.getByRole('button', { name: new RegExp(`^${emptyCategory}$`) })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: unreadBadgeName(emptyCategory) })).toHaveCount(0);
 
 	await sidebarAction(page, 'DevTools Digest', 'Edit');
 	await expect(page.getByLabel('Feed URL')).toHaveValue(`${appOrigin}/test-feeds/devtools.xml`);
@@ -446,7 +444,7 @@ test('reader can add and read a feed through the authenticated fallback relay', 
 	await page.getByRole('button', { name: 'Add Category' }).click();
 	await page.getByLabel('Name').fill(categoryName);
 	await page.getByRole('button', { name: 'Add category' }).last().click();
-	await expect(page.getByRole('button', { name: new RegExp(`^${categoryName}$`) })).toBeVisible();
+	await expect(page.getByRole('button', { name: unreadBadgeName(categoryName) })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Add Feed' }).click();
 	await page.getByLabel('Feed URL').fill(blockedFeedUrl!);

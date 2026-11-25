@@ -21,6 +21,7 @@ import {
 	mergeQuerySnapshots,
 	PERSISTED_QUERY_ROOTS,
 	type PersistedQueryCache,
+	selectableQueries,
 	shouldPersistQuery,
 } from './offline-query-cache';
 import { type OfflineSnapshot, readOfflineRecords } from './offline-snapshot';
@@ -139,7 +140,8 @@ function migrateLegacyQueryCache(store: IDBObjectStore) {
 						ownerId: user.id,
 						namespace: namespace(),
 						persistedAt: Math.max(legacy.persistedAt, current?.persistedAt ?? 0),
-						state: { mutations: [], queries: [...queries.values()] },
+						bounded: true,
+						state: boundedState({ mutations: [], queries: [...queries.values()] }),
 					} satisfies PersistedQueryCache,
 					cacheKey(user.id),
 				);
@@ -289,7 +291,7 @@ export async function readOfflineSnapshot(
 				? cachedArticles
 				: cachedArticleIds(
 						isPersistedQueryCache(cache, userId, namespace(), SCHEMA_VERSION)
-							? boundedState(cache.state).queries
+							? selectableQueries(cache)
 							: [],
 					),
 	};
@@ -313,6 +315,7 @@ export async function persistQueryClient(queryClient: QueryClient, userId: strin
 				ownerId: userId,
 				namespace: namespace(),
 				persistedAt: Date.now(),
+				bounded: true,
 				state: mergeQuerySnapshots(
 					isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION) ? cached : null,
 					current,
@@ -333,13 +336,13 @@ export async function restoreQueryClient(
 	const cached = await readValue<unknown>(cacheKey(userId));
 	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION))
 		return false;
-	const state = boundedState(cached.state);
+	const state = { mutations: [], queries: selectableQueries(cached) };
 	if (state.queries.length === 0) {
 		await updateValue(
 			cacheKey(userId),
 			(current) =>
 				isPersistedQueryCache(current, userId, namespace(), SCHEMA_VERSION) &&
-				boundedState(current.state).queries.length === 0
+				selectableQueries(current).length === 0
 					? null
 					: current,
 			'relaxed',
@@ -358,7 +361,7 @@ export async function restoreOfflineArticle(queryClient: QueryClient, articleId:
 	const { signal } = activeSession;
 	const cached = await readValue<unknown>(cacheKey(userId));
 	if (signal.aborted || !isPersistedQueryCache(cached, userId, namespace(), SCHEMA_VERSION)) return;
-	const queries = boundedState(cached.state).queries.filter(
+	const queries = selectableQueries(cached).filter(
 		(query) => query.queryKey[0] === 'article' && query.queryKey[1] === articleId,
 	);
 	hydrate(queryClient, { mutations: [], queries });

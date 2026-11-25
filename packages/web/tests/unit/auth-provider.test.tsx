@@ -122,6 +122,14 @@ function renderWithQuery(node: ReactNode, queryClient = new QueryClient()) {
 	};
 }
 
+function ReconnectedReader() {
+	const { username } = useAuth();
+	useLayoutEffect(() => {
+		if (username === 'old@example.com') window.dispatchEvent(new Event('online'));
+	}, [username]);
+	return <AuthActionsProbe />;
+}
+
 describe('AuthProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -397,13 +405,6 @@ describe('AuthProvider', () => {
 	});
 
 	it('retains the original account’s edits when reconnect verifies a different account', async () => {
-		function ReconnectedReader() {
-			const { username } = useAuth();
-			useLayoutEffect(() => {
-				if (username === 'old@example.com') window.dispatchEvent(new Event('online'));
-			}, [username]);
-			return <AuthActionsProbe />;
-		}
 		getAccessTokenMock.mockReturnValue('current-token');
 		apiFetchMock
 			.mockResolvedValueOnce({ data: user('old@example.com', 'old') })
@@ -435,40 +436,40 @@ describe('AuthProvider', () => {
 		expect(clearOfflineStateMock).not.toHaveBeenCalled();
 	});
 
-	it.each([
-		'verify',
-		'restore',
-	])('honors another tab signing out during bootstrap (%s)', async (stage) => {
-		getAccessTokenMock.mockReturnValue('current-token');
-		const verify = Promise.withResolvers<{ data: ReturnType<typeof user> }>();
-		const restore = Promise.withResolvers<boolean>();
-		apiFetchMock.mockReturnValue(verify.promise);
-		restoreQueryClientMock.mockReturnValue(restore.promise);
-		renderWithQuery(
-			<AuthProvider>
-				<AuthActionsProbe />
-			</AuthProvider>,
-		);
-		await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith('/auth/me'));
-		const reader = { data: user('current@example.com') };
-		if (stage === 'restore') {
-			verify.resolve(reader);
-			await waitFor(() => expect(restoreQueryClientMock).toHaveBeenCalled());
-		}
-		fireEvent(
-			window,
-			new StorageEvent('storage', {
-				key: 'self-feed-auth-event',
-				newValue: JSON.stringify({ type: 'signed-out', userId: 'user-1', nonce: 'other-tab' }),
-			}),
-		);
-		await act(async () => {
-			verify.resolve(reader);
-			restore.resolve(true);
-		});
-		expect(await screen.findByText('logged-out')).toBeTruthy();
-		expect(saveOfflineUserMock).not.toHaveBeenCalled();
-	});
+	it.each(['verify', 'restore'])(
+		'honors another tab signing out during bootstrap (%s)',
+		async (stage) => {
+			getAccessTokenMock.mockReturnValue('current-token');
+			const verify = Promise.withResolvers<{ data: ReturnType<typeof user> }>();
+			const restore = Promise.withResolvers<boolean>();
+			apiFetchMock.mockReturnValue(verify.promise);
+			restoreQueryClientMock.mockReturnValue(restore.promise);
+			renderWithQuery(
+				<AuthProvider>
+					<AuthActionsProbe />
+				</AuthProvider>,
+			);
+			await waitFor(() => expect(apiFetchMock).toHaveBeenCalledWith('/auth/me'));
+			const reader = { data: user('current@example.com') };
+			if (stage === 'restore') {
+				verify.resolve(reader);
+				await waitFor(() => expect(restoreQueryClientMock).toHaveBeenCalled());
+			}
+			fireEvent(
+				window,
+				new StorageEvent('storage', {
+					key: 'self-feed-auth-event',
+					newValue: JSON.stringify({ type: 'signed-out', userId: 'user-1', nonce: 'other-tab' }),
+				}),
+			);
+			await act(async () => {
+				verify.resolve(reader);
+				restore.resolve(true);
+			});
+			expect(await screen.findByText('logged-out')).toBeTruthy();
+			expect(saveOfflineUserMock).not.toHaveBeenCalled();
+		},
+	);
 
 	it('clears the session when another tab signs out the same account', async () => {
 		getAccessTokenMock.mockReturnValue('current-token');

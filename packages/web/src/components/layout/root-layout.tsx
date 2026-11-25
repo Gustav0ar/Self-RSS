@@ -1,8 +1,9 @@
 import { Outlet, useRouter, useRouterState } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { KeyboardHelp } from '@/components/help/keyboard-help';
+import { isTopmostDialog } from '@/components/ui/dialog';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import {
@@ -32,6 +33,7 @@ export function RootLayout() {
 	const { isAuthenticated, isLoading, isOffline, user } = useAuth();
 	const { selectedFeedId, selectedCategoryId } = useAppState();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 	const searchQuery = routeSearch.q ?? '';
 	const searchScope = routeSearch.searchScope ?? 'all';
 	const savedOnly = routeSearch.savedOnly ?? false;
@@ -159,7 +161,7 @@ export function RootLayout() {
 			</div>
 
 			{sidebarOpen ? (
-				<MobileSidebarDrawer onClose={() => setSidebarOpen(false)}>
+				<MobileSidebarDrawer onClose={closeSidebar}>
 					<Sidebar
 						variant="drawer"
 						selectedFeedId={selectedFeedId}
@@ -203,6 +205,12 @@ interface MobileSidebarDrawerProps {
 
 function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 	const drawerRef = useRef<HTMLDivElement | null>(null);
+	const onCloseRef = useRef(onClose);
+
+	useEffect(() => {
+		onCloseRef.current = onClose;
+	}, [onClose]);
+
 	useEffect(() => {
 		const previouslyFocused =
 			document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -210,9 +218,12 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 		const focusableSelector =
 			'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 		function handleKey(event: KeyboardEvent) {
+			if (!isTopmostDialog(drawerRef.current)) {
+				return;
+			}
 			if (event.key === 'Escape') {
 				event.preventDefault();
-				onClose();
+				onCloseRef.current();
 				return;
 			}
 			if (event.key !== 'Tab') {
@@ -248,7 +259,7 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 			document.body.style.overflow = previousOverflow;
 			previouslyFocused?.focus();
 		};
-	}, [onClose]);
+	}, []);
 
 	return (
 		<div

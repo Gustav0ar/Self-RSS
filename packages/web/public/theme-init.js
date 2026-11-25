@@ -1,5 +1,10 @@
 (() => {
-	const stored = localStorage.getItem('rss-theme');
+	let stored = null;
+	try {
+		stored = localStorage.getItem('rss-theme');
+	} catch {
+		// Restricted storage contexts fall back to system color scheme.
+	}
 	const theme = stored === 'dark' || stored === 'amoled' || stored === 'light' ? stored : null;
 	if (
 		theme === 'dark' ||

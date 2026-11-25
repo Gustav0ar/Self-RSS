@@ -139,6 +139,18 @@ describe('sanitizeArticleHtml', () => {
 		expect(result).toContain('sandbox="allow-scripts allow-same-origin allow-presentation"');
 	});
 
+	it('preserves youtube-nocookie embeds and canonicalizes video.wordpress.com embeds', () => {
+		const youtubeNocookie = sanitizeArticleHtml(
+			'<iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>',
+		);
+		expect(youtubeNocookie).toContain('src="https://www.youtube-nocookie.com/embed/abc123"');
+
+		const wpVideo = sanitizeArticleHtml(
+			'<iframe src="https://video.wordpress.com/embed/AbC123"></iframe>',
+		);
+		expect(wpVideo).toContain('src="https://videopress.com/embed/AbC123"');
+	});
+
 	it('adds rel and target to external anchor links', () => {
 		const result = sanitizeArticleHtml('<a href="https://example.com/post">read</a>');
 		expect(result).toContain('target="_blank"');

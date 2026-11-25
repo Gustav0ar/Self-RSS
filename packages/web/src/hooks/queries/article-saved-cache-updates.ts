@@ -45,11 +45,12 @@ export function findCachedArticleListItem(
 			contentVersion: detail.contentVersion,
 		};
 	}
-	for (const root of ['articles', 'search'] as const) {
-		for (const [, value] of qc.getQueriesData({ queryKey: [root] })) {
-			const article = articleListItemFromValue(value, articleId);
-			if (article) return article;
-		}
+	const listQueries = (['articles', 'search'] as const)
+		.flatMap((root) => qc.getQueryCache().findAll({ queryKey: [root] }))
+		.sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt);
+	for (const query of listQueries) {
+		const article = articleListItemFromValue(query.state.data, articleId);
+		if (article) return article;
 	}
 	return null;
 }

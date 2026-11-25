@@ -84,29 +84,51 @@ export function useReadStateSync(enabled: boolean) {
 		const clientId = getClientId();
 		const handleConnected = createRealtimeConnectedHandler(qc);
 
+		const clearReconnectTimer = () => {
+			if (reconnectTimer) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+		};
+
 		const connect = () => {
-			if (stopped) {
+			if (stopped || controller) {
+				return;
+			}
+			if (typeof navigator !== 'undefined' && !navigator.onLine) {
+				qc.setQueryData(['realtime', 'connected'], false);
 				return;
 			}
 
-			controller = new AbortController();
+			clearReconnectTimer();
+			const activeController = new AbortController();
+			controller = activeController;
+			const isCurrent = () => !stopped && controller === activeController;
 			void streamRealtimeEvents({
-				signal: controller.signal,
+				signal: activeController.signal,
 				onConnected: () => {
+					if (!isCurrent()) return;
 					reconnectAttempt = 0;
 					handleConnected();
 				},
 				onEvent: (event) => {
+					if (!isCurrent()) return;
 					reconnectAttempt = 0;
 					void reconcileRealtimeEvent(qc, event, { clientId });
 				},
 			})
 				.catch(() => {
+					if (!isCurrent()) return;
 					qc.setQueryData(['realtime', 'connected'], false);
-					// Reconnect below unless this was an intentional shutdown.
+					// Reconnect below unless this was an intentional shutdown or superseded stream.
 				})
 				.finally(() => {
-					if (stopped) {
+					if (controller !== activeController) {
+						return;
+					}
+					controller = null;
+					qc.setQueryData(['realtime', 'connected'], false);
+					if (stopped || (typeof navigator !== 'undefined' && !navigator.onLine)) {
 						return;
 					}
 					const delay = getReadStateReconnectDelay(reconnectAttempt);
@@ -115,15 +137,30 @@ export function useReadStateSync(enabled: boolean) {
 				});
 		};
 
+		const handleOnline = () => {
+			if (stopped) return;
+			reconnectAttempt = 0;
+			connect();
+		};
+		const handleOffline = () => {
+			clearReconnectTimer();
+			controller?.abort();
+			controller = null;
+			qc.setQueryData(['realtime', 'connected'], false);
+		};
+
+		window.addEventListener('online', handleOnline);
+		window.addEventListener('offline', handleOffline);
 		connect();
 
 		return () => {
 			stopped = true;
+			window.removeEventListener('online', handleOnline);
+			window.removeEventListener('offline', handleOffline);
 			qc.setQueryData(['realtime', 'connected'], false);
-			if (reconnectTimer) {
-				clearTimeout(reconnectTimer);
-			}
+			clearReconnectTimer();
 			controller?.abort();
+			controller = null;
 		};
 	}, [enabled, qc]);
 }

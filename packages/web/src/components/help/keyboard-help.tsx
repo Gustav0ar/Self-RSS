@@ -15,6 +15,7 @@ const SHORTCUTS: ShortcutRow[] = [
 	{ keys: ['j'], label: 'Next article', hint: 'ArrowDown also works' },
 	{ keys: ['k'], label: 'Previous article', hint: 'ArrowUp also works' },
 	{ keys: ['m'], label: 'Toggle read / unread' },
+	{ keys: ['s'], label: 'Save / unsave article' },
 	{ keys: ['v'], label: 'Open original article' },
 	{ keys: ['r'], label: 'Refresh feeds' },
 	{ keys: ['Enter'], label: 'Focus the selected article' },
@@ -46,7 +47,7 @@ export function KeyboardHelp() {
 		<Dialog
 			onClose={() => setOpen(false)}
 			ariaLabel="Keyboard shortcuts"
-			className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+			className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/60 px-4 py-6"
 			panelClassName="surface-card motion-scale w-full max-w-lg rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 		>
 			<div className="mb-5 flex items-start justify-between gap-4">

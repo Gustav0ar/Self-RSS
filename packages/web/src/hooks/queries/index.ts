@@ -25,6 +25,7 @@ export {
 	useWarmNextArticles,
 	useWarmVisibleArticles,
 } from './article-hooks';
+export { findCachedArticleListItem } from './article-saved-cache-updates';
 // Re-export cache utilities
 export {
 	type ArticleQueryParams,

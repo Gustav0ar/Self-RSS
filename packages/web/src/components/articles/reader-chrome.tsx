@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 const WORDS_PER_MINUTE = 220;
 
@@ -48,7 +48,7 @@ export function ReaderSkeleton() {
 	);
 }
 
-/** Full-screen click-to-zoom lightbox for reader images with Escape and backdrop dismissal. */
+/** Full-screen click-to-zoom lightbox for reader images with Escape, focus trap, and backdrop dismissal. */
 export function ReaderImageLightbox({
 	image,
 	onClose,
@@ -56,13 +56,33 @@ export function ReaderImageLightbox({
 	image: { src: string; alt: string };
 	onClose: () => void;
 }) {
+	const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+	const onCloseRef = useRef(onClose);
+	onCloseRef.current = onClose;
+
 	useEffect(() => {
+		const previouslyFocused =
+			document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		closeButtonRef.current?.focus();
+
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') onClose();
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				onCloseRef.current();
+			} else if (event.key === 'Tab') {
+				event.preventDefault();
+				closeButtonRef.current?.focus();
+			}
 		};
 		window.addEventListener('keydown', onKeyDown);
-		return () => window.removeEventListener('keydown', onKeyDown);
-	}, [onClose]);
+		return () => {
+			window.removeEventListener('keydown', onKeyDown);
+			document.body.style.overflow = previousOverflow;
+			previouslyFocused?.focus();
+		};
+	}, []);
 
 	return (
 		<div
@@ -73,11 +93,13 @@ export function ReaderImageLightbox({
 		>
 			<button
 				type="button"
+				tabIndex={-1}
 				onClick={onClose}
 				aria-label="Dismiss image preview"
 				className="absolute inset-0 cursor-default"
 			/>
 			<button
+				ref={closeButtonRef}
 				type="button"
 				onClick={onClose}
 				aria-label="Close image preview"

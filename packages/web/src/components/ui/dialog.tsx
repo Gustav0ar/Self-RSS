@@ -4,6 +4,13 @@ import { cn } from '@/lib/utils';
 const focusableSelector =
 	'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/** Return true when `element` is the last mounted modal dialog in DOM order. */
+export function isTopmostDialog(element: HTMLElement | null): boolean {
+	if (!element) return false;
+	const dialogs = document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]');
+	return dialogs.length > 0 && dialogs[dialogs.length - 1] === element;
+}
+
 interface DialogProps {
 	children: ReactNode;
 	onClose: () => void;
@@ -46,6 +53,9 @@ export function Dialog({
 		}
 
 		function handleKey(event: KeyboardEvent) {
+			if (!isTopmostDialog(dialogRef.current)) {
+				return;
+			}
 			if (event.key === 'Escape') {
 				event.preventDefault();
 				onCloseRef.current();

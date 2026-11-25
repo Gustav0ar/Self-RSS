@@ -3,8 +3,10 @@ import {
 	type Dispatch,
 	type ReactNode,
 	type SetStateAction,
+	useCallback,
 	useContext,
 	useMemo,
+	useRef,
 	useState,
 } from 'react';
 
@@ -47,9 +49,11 @@ function AppStateStore({ children }: { children: ReactNode }) {
 	const [selectedArticleId, setSelectedArticleId] = useState<string | null>(null);
 	const [syncingFeedId, setSyncingFeedId] = useState<string | null>(null);
 	const [feedSyncError, setFeedSyncError] = useState<string | null>(null);
+	const scopeRef = useRef<{ feedId?: string; categoryId?: string }>({});
+	scopeRef.current = { feedId: selectedFeedId, categoryId: selectedCategoryId };
 
-	const value = useMemo<AppStateValue>(() => {
-		function applySelection({
+	const applySelection = useCallback(
+		({
 			feedId,
 			categoryId,
 			articleId,
@@ -57,10 +61,12 @@ function AppStateStore({ children }: { children: ReactNode }) {
 			feedId?: string;
 			categoryId?: string;
 			articleId: string | null;
-		}) {
+		}) => {
 			const nextFeedId = feedId;
 			const nextCategoryId = feedId ? undefined : categoryId;
-			const contextChanged = selectedFeedId !== nextFeedId || selectedCategoryId !== nextCategoryId;
+			const contextChanged =
+				scopeRef.current.feedId !== nextFeedId || scopeRef.current.categoryId !== nextCategoryId;
+			scopeRef.current = { feedId: nextFeedId, categoryId: nextCategoryId };
 
 			setSelectedFeedId(nextFeedId);
 			setSelectedCategoryId(nextCategoryId);
@@ -72,9 +78,32 @@ function AppStateStore({ children }: { children: ReactNode }) {
 					setSyncingFeedId(null);
 				}
 			}
-		}
+		},
+		[],
+	);
 
-		return {
+	const selectAllFeeds = useCallback(() => {
+		applySelection({ articleId: null });
+		setSyncingFeedId(null);
+	}, [applySelection]);
+
+	const selectFeed = useCallback(
+		(feedId: string) => {
+			applySelection({ feedId, articleId: null });
+		},
+		[applySelection],
+	);
+
+	const selectCategory = useCallback(
+		(categoryId: string) => {
+			applySelection({ categoryId, articleId: null });
+			setSyncingFeedId(null);
+		},
+		[applySelection],
+	);
+
+	const value = useMemo<AppStateValue>(
+		() => ({
 			selectedFeedId,
 			selectedCategoryId,
 			selectedArticleId,
@@ -86,19 +115,22 @@ function AppStateStore({ children }: { children: ReactNode }) {
 			setSyncingFeedId,
 			setFeedSyncError,
 			applySelection,
-			selectAllFeeds() {
-				applySelection({ articleId: null });
-				setSyncingFeedId(null);
-			},
-			selectFeed(feedId: string) {
-				applySelection({ feedId, articleId: null });
-			},
-			selectCategory(categoryId: string) {
-				applySelection({ categoryId, articleId: null });
-				setSyncingFeedId(null);
-			},
-		};
-	}, [feedSyncError, selectedArticleId, selectedCategoryId, selectedFeedId, syncingFeedId]);
+			selectAllFeeds,
+			selectFeed,
+			selectCategory,
+		}),
+		[
+			applySelection,
+			feedSyncError,
+			selectAllFeeds,
+			selectCategory,
+			selectFeed,
+			selectedArticleId,
+			selectedCategoryId,
+			selectedFeedId,
+			syncingFeedId,
+		],
+	);
 
 	return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }

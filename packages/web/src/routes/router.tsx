@@ -1,4 +1,10 @@
-import { createRootRoute, createRoute, createRouter, useRouter } from '@tanstack/react-router';
+import {
+	createRootRoute,
+	createRoute,
+	createRouter,
+	Link,
+	useRouter,
+} from '@tanstack/react-router';
 import { lazy, Suspense, useCallback, useEffect } from 'react';
 import { FeedView } from '@/components/articles/feed-view';
 import { RootLayout } from '@/components/layout/root-layout';
@@ -119,12 +125,27 @@ const articleRoute = createRoute({
 	},
 });
 
+function RouteNotFound() {
+	return (
+		<div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+			<h1 className="text-lg font-semibold text-foreground">Page not found</h1>
+			<p className="text-sm text-muted-foreground">The page you requested does not exist.</p>
+			<Link
+				to="/"
+				className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent"
+			>
+				Back to feeds
+			</Link>
+		</div>
+	);
+}
+
 const statsRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/stats',
 	component: function Stats() {
 		return (
-			<div className="motion-enter h-full overflow-auto p-4 sm:p-6">
+			<div className="motion-enter h-full overflow-auto">
 				<Suspense fallback={<RouteLoadingFallback />}>
 					<LazyStatsPanel />
 				</Suspense>
@@ -150,6 +171,7 @@ const routeTree = rootRoute.addChildren([indexRoute, articleRoute, statsRoute, a
 export const router = createRouter({
 	routeTree,
 	defaultPreload: 'intent',
+	defaultNotFoundComponent: RouteNotFound,
 });
 
 declare module '@tanstack/react-router' {

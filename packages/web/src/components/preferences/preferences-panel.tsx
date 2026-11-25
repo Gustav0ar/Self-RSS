@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
 
-export function PreferencesPanel() {
+export function PreferencesPanel({ initialOpen = false }: { initialOpen?: boolean } = {}) {
 	const {
 		data: prefs,
 		error: preferencesError,
@@ -27,15 +27,6 @@ export function PreferencesPanel() {
 		isLoading,
 		refetch: refetchPreferences,
 	} = usePreferences();
-	const {
-		data: sessions,
-		error: sessionsError,
-		isError: sessionsFailed,
-		isFetching: sessionsFetching,
-		isLoading: sessionsLoading,
-		refetch: refetchSessions,
-	} = useAuthSessions();
-	const sessionList = sessions ?? [];
 	const revokeSession = useRevokeAuthSession();
 	const updatePreferences = useUpdatePreferences();
 	const { setTheme } = useTheme();
@@ -49,7 +40,16 @@ export function PreferencesPanel() {
 		retrySave,
 		revertChanges,
 		savePhase,
-	} = usePreferenceSaveQueue(prefs, setTheme, updatePreferences);
+	} = usePreferenceSaveQueue(prefs, setTheme, updatePreferences, initialOpen);
+	const {
+		data: sessions,
+		error: sessionsError,
+		isError: sessionsFailed,
+		isFetching: sessionsFetching,
+		isLoading: sessionsLoading,
+		refetch: refetchSessions,
+	} = useAuthSessions(isOpen);
+	const sessionList = sessions ?? [];
 	const titleId = useId();
 
 	const fontOptions = useMemo(() => {
@@ -81,7 +81,7 @@ export function PreferencesPanel() {
 			<Dialog
 				onClose={closePanel}
 				ariaLabel="Preferences"
-				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-4 py-6"
 				panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 			>
 				<div className="p-4 text-sm text-muted-foreground">Loading...</div>
@@ -95,7 +95,7 @@ export function PreferencesPanel() {
 			<Dialog
 				onClose={closePanel}
 				ariaLabel="Preferences"
-				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-4 py-6"
 				panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 			>
 				<QueryFailure
@@ -114,7 +114,7 @@ export function PreferencesPanel() {
 			<Dialog
 				onClose={closePanel}
 				ariaLabel="Preferences"
-				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+				className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-4 py-6"
 				panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 			>
 				<div className="p-4 text-sm text-muted-foreground">Loading...</div>
@@ -138,7 +138,7 @@ export function PreferencesPanel() {
 		<Dialog
 			onClose={closePanel}
 			ariaLabelledBy={titleId}
-			className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-md"
+			className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-4 py-6"
 			panelClassName="surface-card motion-scale mx-auto w-full max-w-2xl rounded-[1.75rem] p-6 shadow-2xl sm:p-7"
 		>
 			<div className="mb-6 flex items-start justify-between gap-4">

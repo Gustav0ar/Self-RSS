@@ -8,6 +8,13 @@ function ThrowError({ message }: { message?: string }): ReactNode {
 	throw new Error(message ?? 'Test error');
 }
 
+function ConditionalThrow({ shouldThrow }: { shouldThrow: () => boolean }) {
+	if (shouldThrow()) {
+		throw new Error('Initial error');
+	}
+	return <div data-testid="success">Success on retry</div>;
+}
+
 describe('ErrorBoundary', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -70,16 +77,9 @@ describe('ErrorBoundary', () => {
 		it('resets error state and re-renders children when Try Again is clicked', () => {
 			let shouldThrow = true;
 
-			function ConditionalThrow() {
-				if (shouldThrow) {
-					throw new Error('Initial error');
-				}
-				return <div data-testid="success">Success on retry</div>;
-			}
-
 			const { rerender: _rerender } = render(
 				<ErrorBoundary>
-					<ConditionalThrow />
+					<ConditionalThrow shouldThrow={() => shouldThrow} />
 				</ErrorBoundary>,
 			);
 

@@ -203,6 +203,22 @@ describe('RootLayout routing', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Close menu' }));
 		expect(document.body.style.overflow).toBe('clip');
 	});
+
+	it('keeps drawer focus intact when RootLayout rerenders while the drawer is open', () => {
+		const { rerender } = renderLayout();
+		fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+		const drawerFeedButton = screen.getAllByRole('button', { name: 'Feed 2' })[1]!;
+		drawerFeedButton.focus();
+		expect(document.activeElement).toBe(drawerFeedButton);
+
+		rerender(
+			<QueryClientProvider client={new QueryClient()}>
+				<RootLayout />
+			</QueryClientProvider>,
+		);
+
+		expect(document.activeElement).toBe(drawerFeedButton);
+	});
 });
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

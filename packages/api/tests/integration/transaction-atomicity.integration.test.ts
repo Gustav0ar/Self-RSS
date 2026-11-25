@@ -87,46 +87,46 @@ function seedArticleGraph(sqlite: Database) {
 }
 
 describe('Bun SQLite repository transaction atomicity', () => {
-	it.each([
-		'read',
-		'saved',
-	] as const)('commits the %s revision when a worker writes concurrently', async (kind) => {
-		const { sqlite, databasePath } = await setupDatabase();
-		sqlite.exec('PRAGMA journal_mode = WAL');
-		seedArticleGraph(sqlite);
-		const worker = new Database(databasePath);
-		databases.push(worker);
-		worker.exec('PRAGMA busy_timeout = 0');
-		const update = "UPDATE articles SET title = 'Worker update' WHERE id = 'article-1'";
-		let attempted = false;
-		const db = drizzle(sqlite, {
-			schema,
-			logger: {
-				logQuery(query) {
-					if (attempted || !query.startsWith('select') || !query.includes('article_user_states'))
-						return;
-					attempted = true;
-					// The first read established the mutation's snapshot. A worker cannot
-					// commit between it and the revision check on this connection.
-					expect(() => worker.exec(update)).toThrow('database is locked');
+	it.each(['read', 'saved'] as const)(
+		'commits the %s revision when a worker writes concurrently',
+		async (kind) => {
+			const { sqlite, databasePath } = await setupDatabase();
+			sqlite.exec('PRAGMA journal_mode = WAL');
+			seedArticleGraph(sqlite);
+			const worker = new Database(databasePath);
+			databases.push(worker);
+			worker.exec('PRAGMA busy_timeout = 0');
+			const update = "UPDATE articles SET title = 'Worker update' WHERE id = 'article-1'";
+			let attempted = false;
+			const db = drizzle(sqlite, {
+				schema,
+				logger: {
+					logQuery(query) {
+						if (attempted || !query.startsWith('select') || !query.includes('article_user_states'))
+							return;
+						attempted = true;
+						// The first read established the mutation's snapshot. A worker cannot
+						// commit between it and the revision check on this connection.
+						expect(() => worker.exec(update)).toThrow('database is locked');
+					},
 				},
-			},
-		});
-		const repository = new ArticleRepository(db);
-		const result =
-			kind === 'read'
-				? repository.setReadState('user-1', 'article-1', true, 'manual')
-				: repository.setSavedState('user-1', 'article-1', true);
-		expect(attempted).toBe(true);
-		expect(result).toMatchObject({ state: true, revision: 1, applied: true });
-		worker.exec(update);
-		expect(
-			worker.query('SELECT read_revision, saved_revision FROM article_user_states').get(),
-		).toEqual({
-			read_revision: kind === 'read' ? 1 : 0,
-			saved_revision: kind === 'saved' ? 1 : 0,
-		});
-	});
+			});
+			const repository = new ArticleRepository(db);
+			const result =
+				kind === 'read'
+					? repository.setReadState('user-1', 'article-1', true, 'manual')
+					: repository.setSavedState('user-1', 'article-1', true);
+			expect(attempted).toBe(true);
+			expect(result).toMatchObject({ state: true, revision: 1, applied: true });
+			worker.exec(update);
+			expect(
+				worker.query('SELECT read_revision, saved_revision FROM article_user_states').get(),
+			).toEqual({
+				read_revision: kind === 'read' ? 1 : 0,
+				saved_revision: kind === 'saved' ? 1 : 0,
+			});
+		},
+	);
 
 	it('orders and deduplicates offline article-state mutations', async () => {
 		const { sqlite, db } = await setupDatabase();

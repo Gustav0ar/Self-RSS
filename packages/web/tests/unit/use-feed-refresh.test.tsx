@@ -54,13 +54,11 @@ function makeQueryClient() {
 }
 
 function wrapperFor(queryClient: QueryClient) {
-	return function Wrapper({ children }: { children: ReactNode }) {
-		return (
-			<QueryClientProvider client={queryClient}>
-				<AppStateProvider>{children}</AppStateProvider>
-			</QueryClientProvider>
-		);
-	};
+	return ({ children }: { children: ReactNode }) => (
+		<QueryClientProvider client={queryClient}>
+			<AppStateProvider>{children}</AppStateProvider>
+		</QueryClientProvider>
+	);
 }
 
 describe('useFeedRefresh', () => {

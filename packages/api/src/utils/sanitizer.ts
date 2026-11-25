@@ -10,6 +10,8 @@ const KNOWN_EMBED_HOSTS = new Set([
 	'www.youtube.com',
 	'youtube.com',
 	'm.youtube.com',
+	'www.youtube-nocookie.com',
+	'youtube-nocookie.com',
 	'youtu.be',
 	'player.vimeo.com',
 	'www.vimeo.com',
@@ -18,6 +20,7 @@ const KNOWN_EMBED_HOSTS = new Set([
 	'streamable.com',
 	'www.videopress.com',
 	'videopress.com',
+	'video.wordpress.com',
 	'videos.files.wordpress.com',
 	'videos.wordpress.com',
 	'platform.twitter.com',
@@ -454,7 +457,15 @@ function toEmbedUrl(url: string): { provider: string; embedUrl: string } | null 
 	const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
 	const segments = parsed.pathname.split('/').filter(Boolean);
 
-	if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(hostname)) {
+	if (
+		[
+			'youtube.com',
+			'www.youtube.com',
+			'm.youtube.com',
+			'youtube-nocookie.com',
+			'www.youtube-nocookie.com',
+		].includes(hostname)
+	) {
 		const id =
 			segments[0] === 'watch'
 				? parsed.searchParams.get('v')
@@ -462,7 +473,10 @@ function toEmbedUrl(url: string): { provider: string; embedUrl: string } | null 
 					? segments[1]
 					: null;
 		if (isProviderId(id, /^[a-zA-Z0-9_-]+$/)) {
-			return { provider: 'youtube', embedUrl: `https://www.youtube.com/embed/${id}` };
+			const embedHost = hostname.includes('youtube-nocookie')
+				? 'www.youtube-nocookie.com'
+				: 'www.youtube.com';
+			return { provider: 'youtube', embedUrl: `https://${embedHost}/embed/${id}` };
 		}
 	}
 
@@ -494,7 +508,7 @@ function toEmbedUrl(url: string): { provider: string; embedUrl: string } | null 
 		}
 	}
 
-	if (['videopress.com', 'www.videopress.com'].includes(hostname)) {
+	if (['videopress.com', 'www.videopress.com', 'video.wordpress.com'].includes(hostname)) {
 		const id = segments[0] === 'embed' || segments[0] === 'v' ? segments[1] : null;
 		if (isProviderId(id, /^[a-zA-Z0-9]+$/)) {
 			return { provider: 'videopress', embedUrl: `https://videopress.com/embed/${id}` };

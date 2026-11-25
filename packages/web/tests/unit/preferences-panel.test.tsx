@@ -8,6 +8,7 @@ const resetMock = vi.fn();
 const setThemeMock = vi.fn();
 const refetchPreferencesMock = vi.fn();
 const refetchSessionsMock = vi.fn();
+const useAuthSessionsSpy = vi.fn();
 const changePasswordMock = vi.fn();
 
 const defaultPreferences = {
@@ -45,25 +46,28 @@ vi.mock('../../src/hooks/queries', () => ({
 		isLoading: false,
 		refetch: refetchPreferencesMock,
 	}),
-	useAuthSessions: () => ({
-		data: [
-			{
-				id: 'session-1',
-				deviceName: 'Web browser on Linux',
-				clientId: 'client-1',
-				ipAddress: '127.0.0.1',
-				userAgent: 'Test browser',
-				createdAt: '2026-06-21T00:00:00.000Z',
-				lastSeenAt: '2026-06-21T00:00:00.000Z',
-				current: true,
-			},
-		],
-		error: null,
-		isError: false,
-		isFetching: false,
-		isLoading: false,
-		refetch: refetchSessionsMock,
-	}),
+	useAuthSessions: (enabled?: boolean) => {
+		useAuthSessionsSpy(enabled);
+		return {
+			data: [
+				{
+					id: 'session-1',
+					deviceName: 'Web browser on Linux',
+					clientId: 'client-1',
+					ipAddress: '127.0.0.1',
+					userAgent: 'Test browser',
+					createdAt: '2026-06-21T00:00:00.000Z',
+					lastSeenAt: '2026-06-21T00:00:00.000Z',
+					current: true,
+				},
+			],
+			error: null,
+			isError: false,
+			isFetching: false,
+			isLoading: false,
+			refetch: refetchSessionsMock,
+		};
+	},
 	useRevokeAuthSession: () => ({
 		mutate: revokeSessionMock,
 		isPending: false,
@@ -95,6 +99,7 @@ describe('PreferencesPanel', () => {
 		setThemeMock.mockClear();
 		refetchPreferencesMock.mockClear();
 		refetchSessionsMock.mockClear();
+		useAuthSessionsSpy.mockClear();
 		changePasswordMock.mockReset();
 		changePasswordMock.mockResolvedValue(undefined);
 		preferencesMock = { ...defaultPreferences };
@@ -196,7 +201,9 @@ describe('PreferencesPanel', () => {
 
 	it('lists active sessions and revokes the selected device', () => {
 		render(<PreferencesPanel />);
+		expect(useAuthSessionsSpy).toHaveBeenLastCalledWith(false);
 		fireEvent.click(screen.getByRole('button', { name: 'Preferences' }));
+		expect(useAuthSessionsSpy).toHaveBeenLastCalledWith(true);
 
 		expect(screen.getByText('Authenticated devices')).toBeTruthy();
 		expect(screen.getByText('Web browser on Linux')).toBeTruthy();

@@ -7,6 +7,32 @@ import { defineConfig, type Plugin } from 'vite';
 
 const apiProxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:3000';
 
+/** Serve E2E feed fixtures only during dev/test runs, keeping them out of production dist/. */
+function e2eTestFeedsPlugin(): Plugin {
+	const fixturesDir = resolve(import.meta.dirname, 'tests/e2e/fixtures/test-feeds');
+	const allowedFiles = new Set(
+		readdirSync(fixturesDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && entry.name.endsWith('.xml'))
+			.map((entry) => entry.name),
+	);
+	return {
+		name: 'self-feed-e2e-test-feeds',
+		apply: 'serve',
+		configureServer(server) {
+			server.middlewares.use('/test-feeds', (req, res, next) => {
+				const requestPath = (req.url ?? '').split('?')[0] ?? '';
+				const fileName = requestPath.replace(/^\/+/, '');
+				if (!allowedFiles.has(fileName)) {
+					next();
+					return;
+				}
+				res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+				res.end(readFileSync(resolve(fixturesDir, fileName)));
+			});
+		},
+	};
+}
+
 function publicFiles(directory: string, prefix = ''): string[] {
 	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
 		const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -26,7 +52,7 @@ function offlineShellPlugin(): Plugin {
 				digest.update(output.fileName);
 				digest.update(output.type === 'asset' ? output.source : output.code);
 			}
-			const publicDirectory = resolve(__dirname, 'public');
+			const publicDirectory = resolve(import.meta.dirname, 'public');
 			for (const fileName of publicFiles(publicDirectory).sort()) {
 				digest.update(fileName);
 				digest.update(readFileSync(resolve(publicDirectory, fileName)));
@@ -203,10 +229,10 @@ self.addEventListener('fetch', (event) => {
 }
 
 export default defineConfig({
-	plugins: [react(), tailwindcss(), offlineShellPlugin()],
+	plugins: [react(), tailwindcss(), e2eTestFeedsPlugin(), offlineShellPlugin()],
 	resolve: {
 		alias: {
-			'@': resolve(__dirname, './src'),
+			'@': resolve(import.meta.dirname, './src'),
 		},
 	},
 	server: {
@@ -223,16 +249,15 @@ export default defineConfig({
 		rollupOptions: {
 			output: {
 				manualChunks(id) {
-					if (id.includes('node_modules')) {
-						if (id.includes('react') || id.includes('react-dom')) {
-							return 'react';
-						}
-						if (id.includes('@tanstack/react-query') || id.includes('@tanstack/react-router')) {
-							return 'tanstack';
-						}
-						if (id.includes('lucide-react')) {
-							return 'icons';
-						}
+					if (!id.includes('node_modules')) return;
+					if (/node_modules[\\/]@tanstack[\\/]/.test(id)) {
+						return 'tanstack';
+					}
+					if (/node_modules[\\/]lucide-react[\\/]/.test(id)) {
+						return 'icons';
+					}
+					if (/node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+						return 'react';
 					}
 				},
 			},

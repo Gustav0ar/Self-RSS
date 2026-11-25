@@ -1,4 +1,4 @@
-import { type RealtimeEvent, realtimeEventSchema } from '@self-feed/shared';
+import { parseRealtimeEvent, type RealtimeEvent } from '@self-feed/shared';
 import { getAccessToken, getClientId, refreshAccessToken } from './api';
 
 const API_BASE = '/api/v1';
@@ -82,6 +82,7 @@ async function fetchRealtimeStream(signal: AbortSignal) {
 	});
 
 	if (response.status === 401 && (await refreshAccessToken())) {
+		await response.body?.cancel().catch(() => undefined);
 		const refreshedToken = getAccessToken();
 		if (refreshedToken) {
 			headers.set('Authorization', `Bearer ${refreshedToken}`);
@@ -94,6 +95,7 @@ async function fetchRealtimeStream(signal: AbortSignal) {
 	}
 
 	if (!response.ok || !response.body) {
+		await response.body?.cancel().catch(() => undefined);
 		throw new Error(`Realtime stream failed: ${response.status}`);
 	}
 
@@ -128,16 +130,18 @@ export async function streamRealtimeEvents({
 			return;
 		}
 
-		const result = realtimeEventSchema.safeParse(parsed);
-		if (result.success) {
-			onEvent(result.data);
+		const event = parseRealtimeEvent(parsed);
+		if (event) {
+			onEvent(event);
 		}
 	});
 
+	let finished = false;
 	try {
 		while (!signal.aborted) {
 			const { done, value } = await reader.read();
 			if (done) {
+				finished = true;
 				break;
 			}
 			parser.push(decoder.decode(value, { stream: true }));
@@ -145,6 +149,9 @@ export async function streamRealtimeEvents({
 		parser.push(decoder.decode());
 		parser.flush();
 	} finally {
+		if (!finished) {
+			void reader.cancel().catch(() => undefined);
+		}
 		reader.releaseLock();
 	}
 }

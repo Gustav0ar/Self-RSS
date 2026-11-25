@@ -6,6 +6,8 @@ export interface KeyboardNavOptions {
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onToggleRead?: (id: string) => void;
+	onToggleSaved?: (id: string) => void;
+	onFocusArticle?: (id: string) => void;
 	onOpenExternal?: (id: string) => void;
 	onRefresh?: () => void;
 	enabled?: boolean;
@@ -16,6 +18,8 @@ export function useKeyboardNav({
 	selectedId,
 	onSelect,
 	onToggleRead,
+	onToggleSaved,
+	onFocusArticle,
 	onOpenExternal,
 	onRefresh,
 	enabled = true,
@@ -27,6 +31,8 @@ export function useKeyboardNav({
 		selectedId,
 		onSelect,
 		onToggleRead,
+		onToggleSaved,
+		onFocusArticle,
 		onOpenExternal,
 		onRefresh,
 		enabled,
@@ -37,6 +43,8 @@ export function useKeyboardNav({
 		selectedId,
 		onSelect,
 		onToggleRead,
+		onToggleSaved,
+		onFocusArticle,
 		onOpenExternal,
 		onRefresh,
 		enabled,
@@ -64,17 +72,19 @@ export function useKeyboardNav({
 			selectedId: latestSelectedId,
 			onSelect: latestOnSelect,
 			onToggleRead: latestOnToggleRead,
+			onToggleSaved: latestOnToggleSaved,
+			onFocusArticle: latestOnFocusArticle,
 			onOpenExternal: latestOnOpenExternal,
 			onRefresh: latestOnRefresh,
 			enabled: latestEnabled,
 		} = stateRef.current;
 
-		if (!latestEnabled || latestArticleIds.length === 0 || e.shiftKey || !canUseAppShortcut(e))
-			return;
+		if (!latestEnabled || e.shiftKey || !canUseAppShortcut(e)) return;
 
 		switch (e.key) {
 			case 'j':
 			case 'ArrowDown': {
+				if (latestArticleIds.length === 0) return;
 				e.preventDefault();
 				const nextId = getNextArticleId(
 					latestArticleIds,
@@ -86,6 +96,7 @@ export function useKeyboardNav({
 			}
 			case 'k':
 			case 'ArrowUp': {
+				if (latestArticleIds.length === 0) return;
 				e.preventDefault();
 				const prevId = getPrevArticleId(
 					latestArticleIds,
@@ -99,6 +110,13 @@ export function useKeyboardNav({
 				if (latestSelectedId && latestOnToggleRead) {
 					e.preventDefault();
 					latestOnToggleRead(latestSelectedId);
+				}
+				break;
+			}
+			case 's': {
+				if (latestSelectedId && latestOnToggleSaved) {
+					e.preventDefault();
+					latestOnToggleSaved(latestSelectedId);
 				}
 				break;
 			}
@@ -119,7 +137,11 @@ export function useKeyboardNav({
 			case 'Enter': {
 				if (latestSelectedId) {
 					e.preventDefault();
-					latestOnSelect(latestSelectedId);
+					if (latestOnFocusArticle) {
+						latestOnFocusArticle(latestSelectedId);
+					} else {
+						latestOnSelect(latestSelectedId);
+					}
 				}
 				break;
 			}

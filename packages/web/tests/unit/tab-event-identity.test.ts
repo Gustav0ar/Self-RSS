@@ -66,89 +66,94 @@ describe('event identities across tabs sharing browser storage', () => {
 		}
 	});
 
-	it.each([
-		'read',
-		'saved',
-		'mark-all-read',
-	] as const)('applies %s events from another tab', async (kind) => {
-		const first = await openTab();
-		const second = await openTab();
-		const firstCache = new QueryClient();
-		const secondCache = new QueryClient();
-		for (const cache of [firstCache, secondCache]) {
-			cache.setQueryData(['article', 'article-1'], {
-				id: 'article-1',
-				feedId: 'feed-1',
-				isRead: false,
-				isSaved: false,
-			});
-			cache.setQueryData(['feeds'], [{ id: 'feed-1', unreadCount: 1 }]);
-			cache.setQueryData(['stats'], { totalUnread: 1, totalRead: 0 });
-		}
-		const fetchMock = vi
-			.spyOn(globalThis, 'fetch')
-			.mockResolvedValue(new Response('{}', { status: 200 }));
-		await first.apiFetch(
-			kind === 'mark-all-read' ? '/articles/mark-all-read' : `/articles/article-1/${kind}`,
-			{ method: 'PATCH' },
-		);
-		const origin = new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('X-Self-Feed-Client-Id');
-		expect(origin).toBe(first.getClientId());
-		const common = { eventId: 'event-1', clientId: origin, updatedAt: '2026-09-01T00:00:00.000Z' };
-		const event: RealtimeEvent =
-			kind === 'read'
-				? {
-						...common,
-						type: 'article.read_state_changed',
-						articleId: 'article-1',
-						feedId: 'feed-1',
-						isRead: true,
-						source: 'manual',
-					}
-				: kind === 'saved'
+	it.each(['read', 'saved', 'mark-all-read'] as const)(
+		'applies %s events from another tab',
+		async (kind) => {
+			const first = await openTab();
+			const second = await openTab();
+			const firstCache = new QueryClient();
+			const secondCache = new QueryClient();
+			for (const cache of [firstCache, secondCache]) {
+				cache.setQueryData(['article', 'article-1'], {
+					id: 'article-1',
+					feedId: 'feed-1',
+					isRead: false,
+					isSaved: false,
+				});
+				cache.setQueryData(['feeds'], [{ id: 'feed-1', unreadCount: 1 }]);
+				cache.setQueryData(['stats'], { totalUnread: 1, totalRead: 0 });
+			}
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValue(new Response('{}', { status: 200 }));
+			await first.apiFetch(
+				kind === 'mark-all-read' ? '/articles/mark-all-read' : `/articles/article-1/${kind}`,
+				{ method: 'PATCH' },
+			);
+			const origin = new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get(
+				'X-Self-Feed-Client-Id',
+			);
+			expect(origin).toBe(first.getClientId());
+			const common = {
+				eventId: 'event-1',
+				clientId: origin,
+				updatedAt: '2026-09-01T00:00:00.000Z',
+			};
+			const event: RealtimeEvent =
+				kind === 'read'
 					? {
 							...common,
-							type: 'article.saved_state_changed',
+							type: 'article.read_state_changed',
 							articleId: 'article-1',
 							feedId: 'feed-1',
-							isSaved: true,
+							isRead: true,
+							source: 'manual',
 						}
-					: {
-							...common,
-							type: 'articles.marked_read',
-							feedIds: ['feed-1'],
-							scope: {},
-							markedCount: 1,
-						};
-		if (kind !== 'mark-all-read') await queueArticleStateMutation(kind, 'article-1', true);
-		await reconcileRealtimeEvent(firstCache, event, { clientId: first.getClientId() });
-		await reconcileRealtimeEvent(secondCache, event, { clientId: second.getClientId() });
-		expect(firstCache.getQueryData(['article', 'article-1'])).toMatchObject({
-			isRead: false,
-			isSaved: false,
-		});
-		expect(secondCache.getQueryData(['article', 'article-1'])).toMatchObject(
-			kind === 'saved' ? { isSaved: true } : { isRead: true },
-		);
-		if (kind !== 'saved') {
-			expect(secondCache.getQueryData(['feeds'])).toEqual([{ id: 'feed-1', unreadCount: 0 }]);
-			expect(secondCache.getQueryData(['stats'])).toMatchObject({ totalUnread: 0, totalRead: 1 });
-		}
-		if (kind !== 'mark-all-read') {
-			await queueArticleStateMutation(kind, 'article-1', false);
-			secondCache.setQueryData(['article', 'article-1'], {
-				id: 'article-1',
-				feedId: 'feed-1',
-				isRead: false,
-				isSaved: false,
-			});
+					: kind === 'saved'
+						? {
+								...common,
+								type: 'article.saved_state_changed',
+								articleId: 'article-1',
+								feedId: 'feed-1',
+								isSaved: true,
+							}
+						: {
+								...common,
+								type: 'articles.marked_read',
+								feedIds: ['feed-1'],
+								scope: {},
+								markedCount: 1,
+							};
+			if (kind !== 'mark-all-read') await queueArticleStateMutation(kind, 'article-1', true);
+			await reconcileRealtimeEvent(firstCache, event, { clientId: first.getClientId() });
 			await reconcileRealtimeEvent(secondCache, event, { clientId: second.getClientId() });
-			expect(secondCache.getQueryData(['article', 'article-1'])).toMatchObject({
+			expect(firstCache.getQueryData(['article', 'article-1'])).toMatchObject({
 				isRead: false,
 				isSaved: false,
 			});
-		}
-		firstCache.clear();
-		secondCache.clear();
-	});
+			expect(secondCache.getQueryData(['article', 'article-1'])).toMatchObject(
+				kind === 'saved' ? { isSaved: true } : { isRead: true },
+			);
+			if (kind !== 'saved') {
+				expect(secondCache.getQueryData(['feeds'])).toEqual([{ id: 'feed-1', unreadCount: 0 }]);
+				expect(secondCache.getQueryData(['stats'])).toMatchObject({ totalUnread: 0, totalRead: 1 });
+			}
+			if (kind !== 'mark-all-read') {
+				await queueArticleStateMutation(kind, 'article-1', false);
+				secondCache.setQueryData(['article', 'article-1'], {
+					id: 'article-1',
+					feedId: 'feed-1',
+					isRead: false,
+					isSaved: false,
+				});
+				await reconcileRealtimeEvent(secondCache, event, { clientId: second.getClientId() });
+				expect(secondCache.getQueryData(['article', 'article-1'])).toMatchObject({
+					isRead: false,
+					isSaved: false,
+				});
+			}
+			firstCache.clear();
+			secondCache.clear();
+		},
+	);
 });

@@ -164,7 +164,8 @@ function isProviderId(value: string | null | undefined, pattern: RegExp): value 
 	return Boolean(value && value.length <= 128 && pattern.test(value));
 }
 
-function getApprovedEmbedUrl(rawUrl: string): string | null {
+/** Validate and canonicalize an iframe embed URL against approved providers. */
+export function getApprovedEmbedUrl(rawUrl: string): string | null {
 	const parsed = parseHttpUrl(rawUrl);
 	if (!parsed) {
 		return null;
@@ -173,14 +174,26 @@ function getApprovedEmbedUrl(rawUrl: string): string | null {
 	const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
 	const segments = parsed.pathname.split('/').filter(Boolean);
 
-	if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(hostname)) {
+	if (
+		[
+			'youtube.com',
+			'www.youtube.com',
+			'm.youtube.com',
+			'youtube-nocookie.com',
+			'www.youtube-nocookie.com',
+		].includes(hostname)
+	) {
 		const id =
 			segments[0] === 'watch'
 				? parsed.searchParams.get('v')
 				: segments[0] === 'embed' || segments[0] === 'shorts'
 					? segments[1]
 					: null;
-		return isProviderId(id, /^[a-zA-Z0-9_-]+$/) ? `https://www.youtube.com/embed/${id}` : null;
+		if (!isProviderId(id, /^[a-zA-Z0-9_-]+$/)) return null;
+		const embedHost = hostname.includes('youtube-nocookie')
+			? 'www.youtube-nocookie.com'
+			: 'www.youtube.com';
+		return `https://${embedHost}/embed/${id}`;
 	}
 
 	if (hostname === 'youtu.be') {
@@ -203,7 +216,7 @@ function getApprovedEmbedUrl(rawUrl: string): string | null {
 		return isProviderId(id, /^[a-zA-Z0-9]+$/) ? `https://streamable.com/e/${id}` : null;
 	}
 
-	if (['videopress.com', 'www.videopress.com'].includes(hostname)) {
+	if (['videopress.com', 'www.videopress.com', 'video.wordpress.com'].includes(hostname)) {
 		const id = segments[0] === 'embed' || segments[0] === 'v' ? segments[1] : null;
 		return isProviderId(id, /^[a-zA-Z0-9]+$/) ? `https://videopress.com/embed/${id}` : null;
 	}

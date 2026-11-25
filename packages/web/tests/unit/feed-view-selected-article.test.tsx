@@ -39,6 +39,8 @@ const categories = [
 ];
 
 vi.mock('../../src/hooks/queries', () => ({
+	findCachedArticleListItem: () => null,
+	useQueryClient: () => ({}),
 	useSelectFeedDiscoveryCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCancelFeedReplacement: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useCategories: () => ({ data: categories }),

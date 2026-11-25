@@ -6,9 +6,11 @@ describe('useKeyboardNav', () => {
 	function makeContext() {
 		const onSelect = vi.fn();
 		const onToggleRead = vi.fn();
+		const onToggleSaved = vi.fn();
+		const onFocusArticle = vi.fn();
 		const onOpenExternal = vi.fn();
 		const onRefresh = vi.fn();
-		return { onSelect, onToggleRead, onOpenExternal, onRefresh };
+		return { onSelect, onToggleRead, onToggleSaved, onFocusArticle, onOpenExternal, onRefresh };
 	}
 
 	it('does nothing when the hook is disabled', () => {
@@ -173,6 +175,49 @@ describe('useKeyboardNav', () => {
 
 		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
 		expect(ctx.onToggleRead).toHaveBeenCalledWith('a-2');
+	});
+
+	it('toggles saved state with s and focuses the article with Enter', () => {
+		const ctx = makeContext();
+		renderHook(() =>
+			useKeyboardNav({
+				articleIds: ['a-1', 'a-2'],
+				selectedId: 'a-2',
+				enabled: true,
+				...ctx,
+			}),
+		);
+
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+		expect(ctx.onToggleSaved).toHaveBeenCalledWith('a-2');
+
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+		expect(ctx.onFocusArticle).toHaveBeenCalledWith('a-2');
+		expect(ctx.onSelect).not.toHaveBeenCalled();
+	});
+
+	it('keeps selected-article shortcuts working even when the visible queue is empty', () => {
+		const ctx = makeContext();
+		renderHook(() =>
+			useKeyboardNav({
+				articleIds: [],
+				selectedId: 'deep-linked-article',
+				enabled: true,
+				...ctx,
+			}),
+		);
+
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+		expect(ctx.onSelect).not.toHaveBeenCalled();
+		expect(ctx.onToggleSaved).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onToggleRead).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onOpenExternal).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onFocusArticle).toHaveBeenCalledWith('deep-linked-article');
 	});
 
 	it('leaves browser shortcuts and focused controls to their own keyboard handlers', () => {

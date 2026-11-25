@@ -268,6 +268,26 @@ describe('extractMediaFromHtml', () => {
 			embedUrl: 'https://videos.files.wordpress.com/path/video.mp4',
 		});
 	});
+
+	it('extracts youtube-nocookie and video.wordpress.com embeds', () => {
+		const html = `
+			<iframe src="https://www.youtube-nocookie.com/embed/abc123"></iframe>
+			<iframe src="https://video.wordpress.com/embed/AbC123"></iframe>
+		`;
+		const media = extractMediaFromHtml(html);
+
+		expect(media).toHaveLength(2);
+		expect(media[0]).toMatchObject({
+			type: 'embed',
+			provider: 'youtube',
+			embedUrl: 'https://www.youtube-nocookie.com/embed/abc123',
+		});
+		expect(media[1]).toMatchObject({
+			type: 'embed',
+			provider: 'videopress',
+			embedUrl: 'https://videopress.com/embed/AbC123',
+		});
+	});
 });
 
 describe('hasRichMedia', () => {

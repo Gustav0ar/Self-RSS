@@ -216,7 +216,7 @@ async function installStableReaderFixture(page: Page) {
 
 function unreadBadgeName(name: string) {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`^${escaped}(?: \\d+)?$`);
+	return new RegExp(`^${escaped}(?: \\d+ feeds?)?(?: \\d+)?$`);
 }
 
 async function loginThroughUi(page: Page, email = 'reader@example.com', password = 'password123') {
@@ -423,7 +423,7 @@ test.describe('bounded browser matrix', () => {
 		await installStableReaderFixture(page);
 		await loginThroughUi(page, email);
 
-		await page.getByRole('link', { name: 'Administration' }).click();
+		await page.getByRole('link', { name: 'Admin' }).click();
 		await expect(page).toHaveURL(/\/admin$/);
 		await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'Accounts' })).toBeVisible();

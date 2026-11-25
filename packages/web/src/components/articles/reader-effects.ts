@@ -139,10 +139,11 @@ export function useTwitterEmbedResize(scrollerRef: RefObject<HTMLDivElement | nu
 				return;
 			}
 
-			const height = data['twttr.embed'].params?.[0]?.height;
-			if (typeof height !== 'number') {
+			const rawHeight = data['twttr.embed'].params?.[0]?.height;
+			if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight)) {
 				return;
 			}
+			const height = Math.round(Math.min(Math.max(rawHeight, 120), 4000));
 
 			const tweetId = data['twttr.embed'].params?.[0]?.data?.tweet_id;
 			const root = scrollerRef.current;
@@ -151,24 +152,23 @@ export function useTwitterEmbedResize(scrollerRef: RefObject<HTMLDivElement | nu
 			const iframes = root.querySelectorAll<HTMLIFrameElement>(
 				'iframe[src*="platform.twitter.com"]',
 			);
-			let twitterIframesCount = 0;
-			let singleTwitterIframe: HTMLIFrameElement | null = null;
-			for (const iframe of iframes) {
-				twitterIframesCount++;
-				singleTwitterIframe = iframe;
-			}
 
 			for (const iframe of iframes) {
 				const iframeTweetId = iframe.src.match(/[?&]id=(\d+)/)?.[1];
-				const matchesTweetId =
-					tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId);
+				const matchesTweetId = Boolean(
+					tweetId && iframeTweetId && String(tweetId) === String(iframeTweetId),
+				);
+				if (event.source !== null) {
+					if (iframe.contentWindow !== event.source) continue;
+					if (tweetId && iframeTweetId && !matchesTweetId) continue;
+				} else if (!matchesTweetId) {
+					continue;
+				}
 
-				if (matchesTweetId || (twitterIframesCount === 1 && iframe === singleTwitterIframe)) {
-					iframe.style.height = `${height}px`;
-					const parent = iframe.parentElement;
-					if (parent) {
-						parent.style.height = 'auto';
-					}
+				iframe.style.height = `${height}px`;
+				const parent = iframe.parentElement;
+				if (parent) {
+					parent.style.height = 'auto';
 				}
 			}
 		};

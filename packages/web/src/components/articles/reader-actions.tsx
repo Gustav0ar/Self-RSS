@@ -63,10 +63,10 @@ function ReaderTypographyControl({
 				onClick={() => setOpen((current) => !current)}
 				aria-expanded={open}
 				aria-haspopup="dialog"
-				aria-label="Reader typography"
 				className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border px-3 text-xs font-medium hover:bg-accent"
 			>
-				<Type className="h-3.5 w-3.5" />
+				<Type className="h-3.5 w-3.5" aria-hidden="true" />
+				<span className="sr-only">Reader typography </span>
 				Aa
 			</button>
 			{open ? (

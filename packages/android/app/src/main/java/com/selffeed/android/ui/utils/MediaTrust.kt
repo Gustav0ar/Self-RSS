@@ -18,12 +18,12 @@ fun getYouTubeThumbnail(url: String?): String? {
     val host = uri.host?.lowercase() ?: return null
     val segments = uri.path.orEmpty().split('/').filter { it.isNotBlank() }
     val videoId = when {
-        host in setOf("youtube.com", "www.youtube.com", "m.youtube.com") && segments.firstOrNull() == "watch" ->
+        host in YOUTUBE_HOSTS && segments.firstOrNull() == "watch" ->
             uri.rawQuery
                 ?.split('&')
                 ?.firstOrNull { it.startsWith("v=") }
                 ?.substringAfter("v=")
-        host in setOf("youtube.com", "www.youtube.com", "m.youtube.com") &&
+        host in YOUTUBE_HOSTS &&
             segments.firstOrNull() in setOf("embed", "shorts") ->
             segments.getOrNull(1)
         host == "youtu.be" -> segments.firstOrNull()
@@ -46,10 +46,15 @@ private fun String?.toTrustedUri(): URI? {
     return uri
 }
 
-private val TRUSTED_EMBED_HOSTS = setOf(
+private val YOUTUBE_HOSTS = setOf(
     "youtube.com",
     "www.youtube.com",
     "m.youtube.com",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+)
+
+private val TRUSTED_EMBED_HOSTS = YOUTUBE_HOSTS + setOf(
     "youtu.be",
     "player.vimeo.com",
     "vimeo.com",
@@ -58,6 +63,7 @@ private val TRUSTED_EMBED_HOSTS = setOf(
     "www.streamable.com",
     "videopress.com",
     "www.videopress.com",
+    "video.wordpress.com",
     "videos.files.wordpress.com",
     "videos.wordpress.com",
     "platform.twitter.com",

@@ -18,11 +18,13 @@ import { MarkAllReadDialog } from '@/components/articles/mark-all-read-dialog';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import { useRetainedReadArticles } from '@/components/articles/use-retained-read-articles';
 import {
+	findCachedArticleListItem,
 	useCategories,
 	useInfiniteArticles,
 	useMarkRead,
 	usePreferences,
 	usePrefetchArticle,
+	useQueryClient,
 	useSearch,
 	useSetArticleSaved,
 	useUpdatePreferences,
@@ -39,6 +41,7 @@ import {
 	normalizeDensityPreference,
 	normalizeSortPreference,
 } from '@/lib/preferences';
+import { toSafeExternalUrl } from '@/lib/utils';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
 
@@ -67,6 +70,8 @@ export function FeedView({
 	const [sortOverride, setSort] = useState<SortOrder | null>(null);
 	const [markAllDialogOpen, setMarkAllDialogOpen] = useState(false);
 	const [externalShortcutStatus, setExternalShortcutStatus] = useState<string | null>(null);
+	const readerFocusRef = useRef<HTMLDivElement | null>(null);
+	const qc = useQueryClient();
 	const preferencesQuery = usePreferences();
 	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
@@ -74,6 +79,7 @@ export function FeedView({
 	const sort = sortOverride ?? normalizeSortPreference(prefs?.defaultSort);
 	const updatePrefs = useUpdatePreferences();
 	const setArticleSaved = useSetArticleSaved();
+	const setArticleSavedMutate = setArticleSaved.mutate;
 	const { isOffline } = useAuth();
 	const { feedSyncError } = useAppState();
 	const {
@@ -177,9 +183,9 @@ export function FeedView({
 	}, [fetchNextPage]);
 	const handleToggleSaved = useCallback(
 		(articleId: string, saved: boolean) => {
-			setArticleSaved.mutate({ articleId, saved });
+			setArticleSavedMutate({ articleId, saved });
 		},
-		[setArticleSaved],
+		[setArticleSavedMutate],
 	);
 
 	useEffect(() => {
@@ -249,47 +255,43 @@ export function FeedView({
 		ctx.onSelectArticle(id);
 	}, []);
 
+	const findActiveArticle = (id: string) =>
+		findCachedArticleListItem(qc, id) ?? readingQueue.find((a) => a.id === id);
+
 	useKeyboardNav({
 		articleIds,
 		selectedId: effectiveArticleId,
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
-			const article = readingQueue.find((a) => a.id === id);
-			if (article) {
-				markReadMutate({ articleId: id, read: !article.isRead });
-			}
+			const article = findActiveArticle(id);
+			if (article) markReadMutate({ articleId: id, read: !article.isRead });
 		},
+		onToggleSaved: (id) => {
+			const article = findActiveArticle(id);
+			if (article) setArticleSavedMutate({ articleId: id, saved: !article.isSaved });
+		},
+		onFocusArticle: () => readerFocusRef.current?.focus(),
 		onOpenExternal: (id) => {
-			const article = readingQueue.find((a) => a.id === id);
-			if (article?.canonicalUrl) {
-				const target = URL.parse(article.canonicalUrl);
-				if (target && (target.protocol === 'https:' || target.protocol === 'http:')) {
-					window.open(target.href, '_blank', 'noopener,noreferrer');
-					return;
-				}
+			const canonicalUrl =
+				readingQueue.find((a) => a.id === id)?.canonicalUrl ??
+				findCachedArticleListItem(qc, id)?.canonicalUrl;
+			const safeUrl = toSafeExternalUrl(canonicalUrl);
+			if (safeUrl) {
+				window.open(safeUrl, '_blank', 'noopener,noreferrer');
+				return;
 			}
 			setExternalShortcutStatus('The original publisher link is unavailable for this article.');
 		},
 		onRefresh: () => {
-			if (!isRefreshingCurrentSelection) {
-				handleRefresh();
-			}
+			if (!isRefreshingCurrentSelection) handleRefresh();
 		},
 		enabled: keyboardShortcutsEnabled,
 	});
 
-	function handleMarkAllRead() {
-		setMarkAllDialogOpen(true);
-	}
-
 	function handleRefresh() {
 		if (refreshActionBlocked) return;
 		resetRetainedReadArticles();
-		if (feedId) {
-			void refreshFeed(feedId, { force: true });
-		} else {
-			void refreshFeed(undefined, { force: true, categoryId });
-		}
+		void refreshFeed(feedId, feedId ? { force: true } : { force: true, categoryId });
 	}
 
 	const showListLoader =
@@ -328,7 +330,7 @@ export function FeedView({
 					isActionPending={lifecycleActionPending}
 				/>
 				<ExternalShortcutStatus message={externalShortcutStatus} />
-				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
+				<div className="panel-divider sticky top-0 z-20 bg-card px-3 pb-2.5 pt-3">
 					<FeedListHeader
 						title={displayedTitle}
 						loadedCount={articles.length}
@@ -346,7 +348,7 @@ export function FeedView({
 						refreshGuidance={selectedLifecycle?.refreshGuidance ?? undefined}
 						onUnreadToggle={handleUnreadOnlyToggle}
 						onSortToggle={handleSortToggle}
-						onMarkAllRead={handleMarkAllRead}
+						onMarkAllRead={() => setMarkAllDialogOpen(true)}
 						onRefresh={handleRefresh}
 					/>
 
@@ -404,6 +406,7 @@ export function FeedView({
 					articleId={effectiveArticleId}
 					articles={readingQueue}
 					onSelectArticle={handleSelectArticle}
+					focusTargetRef={readerFocusRef}
 				/>
 			</div>
 

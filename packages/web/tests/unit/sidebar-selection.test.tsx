@@ -141,7 +141,7 @@ describe('Sidebar selection', () => {
 	it('selects the category when clicking the category row', () => {
 		const { onSelectCategory } = renderSidebar({ selectedFeedId: undefined });
 
-		fireEvent.click(screen.getByRole('button', { name: 'Blogs 7' }));
+		fireEvent.click(screen.getByRole('button', { name: /^Blogs\b.*\b7$/ }));
 		expect(onSelectCategory).toHaveBeenCalledWith('category-1');
 	});
 
@@ -156,8 +156,8 @@ describe('Sidebar selection', () => {
 		fireEvent.dragStart(screen.getByRole('button', { name: 'Drag to reorder Android' }), {
 			dataTransfer,
 		});
-		fireEvent.dragOver(screen.getByRole('button', { name: 'Linux' }), { dataTransfer });
-		fireEvent.drop(screen.getByRole('button', { name: 'Linux' }), { dataTransfer });
+		fireEvent.dragOver(screen.getByRole('button', { name: /^Linux\b/ }), { dataTransfer });
+		fireEvent.drop(screen.getByRole('button', { name: /^Linux\b/ }), { dataTransfer });
 
 		expect(reorderCategoriesMock).toHaveBeenCalledWith({
 			updates: [
