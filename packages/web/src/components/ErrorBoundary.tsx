@@ -72,28 +72,10 @@ function DefaultErrorFallback({
 }): ReactNode {
 	return (
 		<div
-			style={{
-				display: 'flex',
-				flexDirection: 'column',
-				alignItems: 'center',
-				justifyContent: 'center',
-				minHeight: '200px',
-				padding: '2rem',
-				textAlign: 'center',
-				backgroundColor: 'hsl(var(--destructive) / 0.1)',
-				border: '1px solid hsl(var(--destructive) / 0.3)',
-				borderRadius: 'var(--radius)',
-				margin: '1rem',
-			}}
+			className="m-4 flex min-h-[200px] flex-col items-center justify-center rounded-2xl border border-destructive/30 bg-destructive/10 p-8 text-center"
 			role="alert"
 		>
-			<div
-				style={{
-					fontSize: '2rem',
-					marginBottom: '1rem',
-					color: 'hsl(var(--destructive))',
-				}}
-			>
+			<div className="mb-4 text-destructive">
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
 					aria-hidden="true"
@@ -105,7 +87,7 @@ function DefaultErrorFallback({
 					strokeWidth="2"
 					strokeLinecap="round"
 					strokeLinejoin="round"
-					style={{ margin: '0 auto' }}
+					className="mx-auto"
 				>
 					<circle cx="12" cy="12" r="10" />
 					<line x1="12" y1="8" x2="12" y2="12" />
@@ -113,78 +95,27 @@ function DefaultErrorFallback({
 				</svg>
 			</div>
 
-			<h2
-				style={{
-					fontSize: '1.25rem',
-					fontWeight: 600,
-					marginBottom: '0.5rem',
-					color: 'hsl(var(--foreground))',
-				}}
-			>
-				Something went wrong
-			</h2>
+			<h2 className="mb-2 text-xl font-semibold text-foreground">Something went wrong</h2>
 
-			<p
-				style={{
-					color: 'hsl(var(--muted-foreground))',
-					marginBottom: '1rem',
-					maxWidth: '400px',
-				}}
-			>
+			<p className="mb-4 max-w-[400px] text-sm text-muted-foreground">
 				{error.message || 'An unexpected error occurred'}
 			</p>
 
-			{process.env.NODE_ENV === 'development' && error.stack && (
-				<details
-					style={{
-						width: '100%',
-						maxWidth: '600px',
-						marginBottom: '1rem',
-						textAlign: 'left',
-					}}
-				>
-					<summary
-						style={{
-							cursor: 'pointer',
-							fontWeight: 500,
-							marginBottom: '0.5rem',
-						}}
-					>
+			{import.meta.env.DEV && error.stack ? (
+				<details className="mb-4 w-full max-w-[600px] text-left">
+					<summary className="mb-2 cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
 						Stack Trace
 					</summary>
-					<pre
-						style={{
-							fontSize: '0.75rem',
-							backgroundColor: 'hsl(var(--muted))',
-							padding: '1rem',
-							borderRadius: 'var(--radius)',
-							overflow: 'auto',
-							maxHeight: '200px',
-							whiteSpace: 'pre-wrap',
-							wordBreak: 'break-word',
-						}}
-					>
+					<pre className="max-h-[200px] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted p-4 text-xs text-foreground">
 						{error.stack}
 					</pre>
 				</details>
-			)}
+			) : null}
 
 			<button
 				type="button"
 				onClick={onReset}
-				style={{
-					padding: '0.5rem 1.5rem',
-					backgroundColor: 'hsl(var(--primary))',
-					color: 'hsl(var(--primary-foreground))',
-					border: 'none',
-					borderRadius: 'var(--radius)',
-					fontSize: '0.875rem',
-					fontWeight: 500,
-					cursor: 'pointer',
-					transition: 'opacity 0.2s',
-				}}
-				onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
-				onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+				className="rounded-xl bg-primary px-6 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
 			>
 				Try Again
 			</button>

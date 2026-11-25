@@ -6,18 +6,52 @@ import {
 	Monitor,
 	Moon,
 	Rss,
+	Settings,
 	ShieldCheck,
 	Sun,
 	WifiOff,
 } from 'lucide-react';
+import { lazy, Suspense, useState } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TopBarErrorFallback } from '@/components/error-fallbacks';
-import { PreferencesPanel } from '@/components/preferences/preferences-panel';
 import { SearchBar } from '@/components/search/search-bar';
 import { useUpdatePreferences } from '@/hooks/queries';
 import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
 import type { SearchScope } from '@/routes/article-route-search';
+
+const LazyPreferencesPanel = lazy(() =>
+	import('@/components/preferences/preferences-panel').then((module) => ({
+		default: module.PreferencesPanel,
+	})),
+);
+
+function PreferencesTrigger({ disabled, onClick }: { disabled?: boolean; onClick?: () => void }) {
+	return (
+		<button
+			type="button"
+			disabled={disabled}
+			onClick={onClick}
+			className="inline-flex h-10 w-10 items-center justify-center rounded-2xl text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+			aria-label="Preferences"
+		>
+			<Settings className="h-4 w-4" />
+		</button>
+	);
+}
+
+/** Defer loading the preferences modal chunk until the user opens Preferences. */
+function PreferencesLauncher() {
+	const [activated, setActivated] = useState(false);
+	if (activated) {
+		return (
+			<Suspense fallback={<PreferencesTrigger disabled />}>
+				<LazyPreferencesPanel initialOpen />
+			</Suspense>
+		);
+	}
+	return <PreferencesTrigger onClick={() => setActivated(true)} />;
+}
 
 interface TopBarProps {
 	onSelectArticle?: (id: string) => void;
@@ -103,7 +137,7 @@ function TopBarContent({
 				) : null}
 
 				<div className="ml-auto flex items-center gap-2 sm:gap-3">
-					{isAuthenticated ? <PreferencesPanel /> : null}
+					{isAuthenticated ? <PreferencesLauncher /> : null}
 					<button
 						type="button"
 						onClick={cycleTheme}
@@ -123,19 +157,17 @@ function TopBarContent({
 						<>
 							<Link
 								to="/stats"
-								aria-label="Stats"
 								className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:w-auto sm:px-3"
 							>
-								<BarChart3 className="h-4 w-4 sm:mr-1.5" />
+								<BarChart3 className="h-4 w-4 sm:mr-1.5" aria-hidden="true" />
 								<span className="sr-only sm:not-sr-only">Stats</span>
 							</Link>
 							{user?.role === 'admin' ? (
 								<Link
 									to="/admin"
-									aria-label="Administration"
 									className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground sm:w-auto sm:px-3"
 								>
-									<ShieldCheck className="h-4 w-4 sm:mr-1.5" />
+									<ShieldCheck className="h-4 w-4 sm:mr-1.5" aria-hidden="true" />
 									<span className="sr-only sm:not-sr-only">Admin</span>
 								</Link>
 							) : null}

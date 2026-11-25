@@ -541,11 +541,12 @@ describe('useSyncAllFeeds', () => {
 
 describe('useWarmVisibleArticles', () => {
 	it('warms only four visible details in a batch, preloads images, and queues pending enrichment once', async () => {
-		const loadedImages: string[] = [];
+		const loadedImages: Array<{ src: string; referrerPolicy: string }> = [];
 		class FakeImage {
 			decoding = '';
+			referrerPolicy = '';
 			set src(value: string) {
-				loadedImages.push(value);
+				loadedImages.push({ src: value, referrerPolicy: this.referrerPolicy });
 			}
 		}
 		vi.stubGlobal('Image', FakeImage);
@@ -600,9 +601,10 @@ describe('useWarmVisibleArticles', () => {
 			'/articles/detail?id=article-5',
 			expect.anything(),
 		);
-		expect(loadedImages).toEqual(
+		expect(loadedImages.map((image) => image.src)).toEqual(
 			expect.arrayContaining(['list-1.jpg', 'detail-article-1.jpg', 'media-article-1.jpg']),
 		);
+		expect(loadedImages.every((image) => image.referrerPolicy === 'no-referrer')).toBe(true);
 
 		act(() => result.current(candidates));
 		expect(

@@ -3,6 +3,7 @@ import type { DehydratedState } from '@tanstack/react-query';
 const MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PERSISTED_QUERIES = 600;
 const MAX_PERSISTED_BYTES = 10 * 1024 * 1024;
+const textEncoder = new TextEncoder();
 
 export const PERSISTED_QUERY_ROOTS = new Set([
 	'article',
@@ -27,7 +28,13 @@ export function shouldPersistQuery(queryKey: readonly unknown[]) {
 }
 
 function byteSize(value: unknown) {
-	return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+	return textEncoder.encode(JSON.stringify(value)).byteLength;
+}
+
+/** Return non-expired persisted queries without re-serializing payloads to measure bytes. */
+export function freshQueries(state: DehydratedState): DehydratedState['queries'] {
+	const cutoff = Date.now() - MAX_CACHE_AGE_MS;
+	return state.queries.filter((query) => query.state.dataUpdatedAt >= cutoff);
 }
 
 export function boundedState(state: DehydratedState): DehydratedState {

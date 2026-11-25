@@ -6,6 +6,7 @@ import {
 	useContext,
 	useEffect,
 	useEffectEvent,
+	useMemo,
 	useRef,
 	useState,
 } from 'react';
@@ -430,27 +431,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 	const clearAuthLostMessage = useCallback(() => setAuthLostMessage(null), []);
 
-	return (
-		<AuthContext.Provider
-			value={{
-				isAuthenticated,
-				isLoading,
-				isOffline,
-				username,
-				user,
-				authLostMessage,
-				logoutError,
-				isLoggingOut,
-				login,
-				register,
-				logout,
-				changePassword,
-				clearAuthLostMessage,
-			}}
-		>
-			{children}
-		</AuthContext.Provider>
+	const value = useMemo<AuthState>(
+		() => ({
+			isAuthenticated,
+			isLoading,
+			isOffline,
+			username,
+			user,
+			authLostMessage,
+			logoutError,
+			isLoggingOut,
+			login,
+			register,
+			logout,
+			changePassword,
+			clearAuthLostMessage,
+		}),
+		[
+			isAuthenticated,
+			isLoading,
+			isOffline,
+			username,
+			user,
+			authLostMessage,
+			logoutError,
+			isLoggingOut,
+			login,
+			register,
+			logout,
+			changePassword,
+			clearAuthLostMessage,
+		],
 	);
+
+	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

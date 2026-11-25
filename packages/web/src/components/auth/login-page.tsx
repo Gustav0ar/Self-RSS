@@ -114,10 +114,7 @@ function LoginPageContent() {
 				<section className="surface-card motion-scale rounded-[2rem] p-6 shadow-2xl sm:p-8">
 					<div className="mx-auto w-full max-w-sm">
 						<div className="flex flex-col items-center gap-3 text-center">
-							<div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-primary/12 text-primary lg:hidden">
-								<Rss className="h-7 w-7" />
-							</div>
-							<div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-primary/12 text-primary max-lg:hidden">
+							<div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-primary/12 text-primary">
 								<Rss className="h-7 w-7" />
 							</div>
 							<h1 className="text-2xl font-semibold tracking-tight">SelfFeed</h1>
@@ -151,6 +148,7 @@ function LoginPageContent() {
 								<input
 									id="email"
 									type="email"
+									autoComplete="email"
 									value={email}
 									onChange={(e) => setEmail(e.target.value)}
 									required
@@ -165,6 +163,7 @@ function LoginPageContent() {
 								<input
 									id="password"
 									type="password"
+									autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
 									value={password}
 									onChange={(e) => setPassword(e.target.value)}
 									required

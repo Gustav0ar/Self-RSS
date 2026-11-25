@@ -1,5 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
+import {
+	createContext,
+	type ReactNode,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from 'react';
 import { applyArticleReadState, applyArticleSavedState } from '@/hooks/queries/cache-utils';
 import { dismissOfflineRejections, subscribeOfflineChanges } from '@/lib/offline-changes';
 import type { OfflineSnapshot } from '@/lib/offline-snapshot';
@@ -64,11 +73,14 @@ export function OfflineStatusProvider({
 			refreshing = false;
 		}
 		const update = () => void refresh(true);
+		const updateOnVisible = () => {
+			if (document.visibilityState === 'visible') update();
+		};
 		const unsubscribe = subscribeOfflineChanges((cacheChanged) => void refresh(cacheChanged));
 		window.addEventListener('online', update);
 		window.addEventListener('offline', update);
 		window.addEventListener('focus', update);
-		document.addEventListener('visibilitychange', update);
+		document.addEventListener('visibilitychange', updateOnVisible);
 		update();
 		return () => {
 			disposed = true;
@@ -77,13 +89,17 @@ export function OfflineStatusProvider({
 			window.removeEventListener('online', update);
 			window.removeEventListener('offline', update);
 			window.removeEventListener('focus', update);
-			document.removeEventListener('visibilitychange', update);
+			document.removeEventListener('visibilitychange', updateOnVisible);
 		};
 	}, [userId]);
 
-	async function retry() {
-		if (!userId || !navigator.onLine || retrying) return;
+	const retryingRef = useRef(false);
+
+	const retry = useCallback(async () => {
+		if (!userId || !navigator.onLine || retryingRef.current) return;
+		retryingRef.current = true;
 		setRetrying(true);
+		let latestSnapshot: OfflineSnapshot | null = null;
 		try {
 			const results = await flushOfflineArticleMutations();
 			if (currentUser.current !== userId) return;
@@ -99,40 +115,46 @@ export function OfflineStatusProvider({
 					result.mutation.kind === 'read' ? applyArticleReadState : applyArticleSavedState;
 				apply(queryClient, result.mutation.articleId, result.authoritativeState);
 			}
-			const next = await readOfflineSnapshot(userId);
+			latestSnapshot = await readOfflineSnapshot(userId);
 			if (currentUser.current !== userId) return;
-			if (next.storageAvailable && next.pendingCount === 0 && results.length > 0) {
+			if (
+				latestSnapshot.storageAvailable &&
+				latestSnapshot.pendingCount === 0 &&
+				results.length > 0
+			) {
 				void queryClient.invalidateQueries();
 			}
 		} catch {
 			// Failed deliveries remain in the outbox, keeping their count and Retry visible.
 		} finally {
+			retryingRef.current = false;
 			if (currentUser.current === userId) {
-				const next = await readOfflineSnapshot(userId);
+				const next = latestSnapshot ?? (await readOfflineSnapshot(userId));
 				if (currentUser.current === userId) {
 					setSnapshot(next);
 					setRetrying(false);
 				}
 			}
 		}
-	}
+	}, [queryClient, userId]);
 
-	return (
-		<OfflineStatusContext.Provider
-			value={{
-				snapshot,
-				online,
-				sessionOffline,
-				retrying,
-				retry,
-				dismissRejections: () => {
-					if (userId) dismissOfflineRejections(userId);
-				},
-			}}
-		>
-			{children}
-		</OfflineStatusContext.Provider>
+	const dismissRejections = useCallback(() => {
+		if (userId) dismissOfflineRejections(userId);
+	}, [userId]);
+
+	const value = useMemo(
+		() => ({
+			snapshot,
+			online,
+			sessionOffline,
+			retrying,
+			retry,
+			dismissRejections,
+		}),
+		[dismissRejections, online, retry, retrying, sessionOffline, snapshot],
 	);
+
+	return <OfflineStatusContext.Provider value={value}>{children}</OfflineStatusContext.Provider>;
 }
 
 export function useOfflineStatus() {

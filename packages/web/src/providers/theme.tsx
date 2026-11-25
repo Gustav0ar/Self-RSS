@@ -34,12 +34,28 @@ function applyThemeClasses(resolvedTheme: ResolvedTheme) {
 	root.classList.toggle('dark', resolvedTheme === 'dark');
 }
 
+function readStoredTheme(): string | null {
+	try {
+		return localStorage.getItem(STORAGE_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function writeStoredTheme(value: Theme) {
+	try {
+		localStorage.setItem(STORAGE_KEY, value);
+	} catch {
+		// Restricted storage contexts keep the theme in memory for the current session.
+	}
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
 	const [theme, setThemeState] = useState<Theme>(() => {
 		if (typeof window === 'undefined') return 'system';
-		const stored = localStorage.getItem(STORAGE_KEY);
+		const stored = readStoredTheme();
 		if (stored === 'amoled') {
-			localStorage.setItem(STORAGE_KEY, 'dark');
+			writeStoredTheme('dark');
 			return 'dark';
 		}
 		if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -52,7 +68,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 	const setTheme = useCallback((newTheme: Theme) => {
 		setThemeState(newTheme);
-		localStorage.setItem(STORAGE_KEY, newTheme);
+		writeStoredTheme(newTheme);
 	}, []);
 
 	useEffect(() => {

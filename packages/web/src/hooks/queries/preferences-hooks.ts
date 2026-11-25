@@ -69,10 +69,11 @@ export function usePreferenceSaveQueue(
 	preferences: Preferences | undefined,
 	setTheme: (theme: WebTheme) => void,
 	updatePreferences: Pick<ReturnType<typeof useUpdatePreferences>, 'mutateAsync' | 'reset'>,
+	initialOpen = false,
 ) {
 	const mutatePreferences = updatePreferences.mutateAsync;
 	const resetPreferenceMutation = updatePreferences.reset;
-	const [isOpen, setIsOpen] = useState(false);
+	const [isOpen, setIsOpen] = useState(initialOpen);
 	const [draftPreferences, setDraftPreferences] = useState<Preferences | null>(null);
 	const [pendingPatch, setPendingPatch] = useState<Partial<Preferences> | null>(null);
 	const [savePhase, setSavePhase] = useState<PreferenceSavePhase>('clean');
@@ -228,9 +229,10 @@ export function usePreferenceSaveQueue(
 	};
 }
 
-export function useAuthSessions() {
+export function useAuthSessions(enabled = true) {
 	return useQuery({
 		queryKey: ['auth-sessions'],
+		enabled,
 		queryFn: ({ signal }) =>
 			apiFetch<ApiResponse<AuthSessionsResponse>>('/auth/sessions', { signal }).then(
 				(r) => r.data.sessions,

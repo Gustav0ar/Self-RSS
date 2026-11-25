@@ -1,11 +1,19 @@
 import type { ArticleMedia } from '@self-feed/shared';
+import { getApprovedEmbedUrl } from '@/lib/sanitize-article';
+import { toSafeExternalUrl } from '@/lib/utils';
 
 type ReaderPanelMedia = ArticleMedia & { type: 'video' | 'embed' };
 
 export function getReaderPanelMedia(media: ArticleMedia[]) {
-	return media.filter(
-		(item): item is ReaderPanelMedia => item.type === 'video' || item.type === 'embed',
-	);
+	return media.filter((item): item is ReaderPanelMedia => {
+		if (item.type === 'video') {
+			return toSafeExternalUrl(item.url) !== null;
+		}
+		if (item.type === 'embed') {
+			return getApprovedEmbedUrl(item.embedUrl ?? item.url) !== null;
+		}
+		return false;
+	});
 }
 
 function isXEmbed(item: ReaderPanelMedia) {
@@ -26,6 +34,8 @@ export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 		<div className="surface-card motion-enter mt-6 space-y-4 rounded-xl p-4 dark:bg-black sm:p-5">
 			{media.map((item, index) => {
 				if (item.type === 'video') {
+					const safeVideoUrl = toSafeExternalUrl(item.url);
+					if (!safeVideoUrl) return null;
 					return (
 						<div
 							key={item.url}
@@ -37,7 +47,7 @@ export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 						>
 							{/* biome-ignore lint/a11y/useMediaCaption: RSS media records do not include caption track metadata. */}
 							<video
-								src={item.url}
+								src={safeVideoUrl}
 								title={`Media ${index + 1}`}
 								className="h-full w-full bg-black"
 								controls
@@ -48,6 +58,8 @@ export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 					);
 				}
 
+				const approvedEmbedUrl = getApprovedEmbedUrl(item.embedUrl ?? item.url);
+				if (!approvedEmbedUrl) return null;
 				const isX = isXEmbed(item);
 				return (
 					<div
@@ -65,7 +77,7 @@ export function ReaderMediaPanel({ media }: { media: ReaderPanelMedia[] }) {
 						}
 					>
 						<iframe
-							src={item.embedUrl ?? item.url}
+							src={approvedEmbedUrl}
 							title={`Media ${index + 1}`}
 							className="h-full w-full"
 							loading="lazy"

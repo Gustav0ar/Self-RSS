@@ -289,7 +289,11 @@ function parseContentDispositionFilename(header: string | null) {
 
 	const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
 	if (utf8Match?.[1]) {
-		return decodeURIComponent(utf8Match[1]);
+		try {
+			return decodeURIComponent(utf8Match[1]);
+		} catch {
+			return utf8Match[1];
+		}
 	}
 
 	const basicMatch = header.match(/filename="([^"]+)"|filename=([^;]+)/i);

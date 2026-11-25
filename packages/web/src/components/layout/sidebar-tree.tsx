@@ -136,7 +136,6 @@ export function SidebarTree({
 				<button
 					type="button"
 					onClick={onSelectAll}
-					aria-label={totalUnread > 0 ? `All Feeds ${totalUnread}` : 'All Feeds'}
 					className={cn(
 						'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium hover:bg-accent/80',
 						!selectedFeedId &&
@@ -164,7 +163,6 @@ export function SidebarTree({
 				<button
 					type="button"
 					onClick={onSelectSaved}
-					aria-label="Saved articles"
 					className={cn(
 						'flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium hover:bg-accent/80',
 						savedOnly && 'bg-primary/10 text-sidebar-active shadow-sm',
@@ -422,7 +420,6 @@ function CategoryTreeRow({
 				<button
 					type="button"
 					onClick={() => onSelectCategory(category.id)}
-					aria-label={categoryUnread > 0 ? `${category.name} ${categoryUnread}` : category.name}
 					className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left"
 				>
 					<div className="min-w-0 flex-1 overflow-hidden">
@@ -510,6 +507,8 @@ function FeedTreeRow({
 }) {
 	const healthIssue = feedHealthIssue(feed);
 	const healthDescriptionId = `feed-health-${feed.id}`;
+	const [failedFaviconUrl, setFailedFaviconUrl] = useState<string | null>(null);
+	const showFavicon = Boolean(feed.faviconUrl && feed.faviconUrl !== failedFaviconUrl);
 
 	return (
 		<div>
@@ -522,14 +521,11 @@ function FeedTreeRow({
 				<button
 					type="button"
 					onClick={() => onSelectFeed(feed.id)}
-					aria-label={
-						(feed.unreadCount ?? 0) > 0 ? `${feed.title} ${feed.unreadCount}` : feed.title
-					}
 					aria-describedby={healthIssue ? healthDescriptionId : undefined}
 					className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left"
 				>
 					<div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/75">
-						{feed.faviconUrl ? (
+						{showFavicon && feed.faviconUrl ? (
 							<img
 								src={feed.faviconUrl}
 								alt=""
@@ -537,6 +533,7 @@ function FeedTreeRow({
 								loading="lazy"
 								decoding="async"
 								referrerPolicy="no-referrer"
+								onError={() => setFailedFaviconUrl(feed.faviconUrl)}
 							/>
 						) : (
 							<RssIcon className="h-4 w-4 text-muted-foreground" />

@@ -92,11 +92,27 @@ function enrichArticle(articleId: string) {
 	).then((r) => r.data);
 }
 
-function preloadImages(urls: readonly (string | null | undefined)[]) {
+const MAX_PRELOADED_IMAGE_URLS = 500;
+const preloadedImagesByClient = new WeakMap<QueryClient, Set<string>>();
+
+function preloadImages(qc: QueryClient, urls: readonly (string | null | undefined)[]) {
 	if (typeof Image === 'undefined') return;
+	if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+	let seen = preloadedImagesByClient.get(qc);
+	if (!seen) {
+		seen = new Set();
+		preloadedImagesByClient.set(qc, seen);
+	}
 	for (const url of new Set(urls.filter((value): value is string => !!value))) {
+		if (seen.has(url)) continue;
+		if (seen.size >= MAX_PRELOADED_IMAGE_URLS) {
+			const oldest = seen.values().next().value;
+			if (oldest !== undefined) seen.delete(oldest);
+		}
+		seen.add(url);
 		const image = new Image();
 		image.decoding = 'async';
+		image.referrerPolicy = 'no-referrer';
 		image.src = url;
 	}
 }
@@ -316,6 +332,7 @@ export function useWarmNextArticles() {
 						qc.setQueryData(articleQueryKey(detail.id), detail);
 					}
 					preloadImages(
+						qc,
 						details.flatMap((detail) => [
 							detail.heroImageUrl,
 							...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
@@ -347,7 +364,10 @@ export function useWarmVisibleArticles() {
 			const candidateKey = unique.map((article) => article.id).join('|');
 			if (!candidateKey || candidateKey === lastCandidateKey.current) return;
 			lastCandidateKey.current = candidateKey;
-			preloadImages(unique.map((article) => article.heroImageUrl));
+			preloadImages(
+				qc,
+				unique.map((article) => article.heroImageUrl),
+			);
 
 			const uncachedIds = unique
 				.map((article) => article.id)
@@ -358,6 +378,7 @@ export function useWarmVisibleArticles() {
 
 			const handleDetails = (details: ArticleDetail[]) => {
 				preloadImages(
+					qc,
 					details.flatMap((detail) => [
 						detail.heroImageUrl,
 						...detail.media.filter((item) => item.type === 'image').map((item) => item.url),
@@ -466,7 +487,7 @@ export function useSetArticleSaved() {
 
 			const previousArticle = qc.getQueryData<ArticleDetail>(articleQueryKey(articleId));
 			if (saved && previousArticle) {
-				preloadImages([
+				preloadImages(qc, [
 					previousArticle.heroImageUrl,
 					...previousArticle.media.filter((item) => item.type === 'image').map((item) => item.url),
 				]);

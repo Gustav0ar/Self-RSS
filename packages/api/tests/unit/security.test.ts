@@ -54,19 +54,26 @@ describe('Security headers', () => {
 		expect(csp).toContain('frame-src https://www.youtube.com');
 		expect(csp).toContain('https://player.vimeo.com');
 		expect(csp).toContain('https://streamable.com');
+		expect(csp).toContain('https://videos.files.wordpress.com');
+		expect(csp).toContain('https://videos.wordpress.com');
 	});
 
 	it('keeps nginx CSP aligned for remote RSS media playback without duplicating API headers', () => {
 		const nginx = readFileSync(resolve(testDir, '../../../..', 'nginx.conf'), 'utf8');
 		const cspHeaders = nginx.match(/add_header Content-Security-Policy "[^"]+"/g) ?? [];
 
-		expect(cspHeaders).toHaveLength(3);
+		expect(cspHeaders).toHaveLength(4);
 		for (const header of cspHeaders) {
 			expect(header).toContain("media-src 'self' https:");
 			expect(header).toContain('connect-src $self_feed_connect_sources');
 			expect(header).toContain('frame-src https://www.youtube.com');
+			expect(header).toContain('https://videos.files.wordpress.com');
+			expect(header).toContain('https://videos.wordpress.com');
 			expect(header).toContain('https://platform.twitter.com');
 		}
+		expect(nginx).toMatch(
+			/location = \/index\.html \{[\s\S]*add_header Cache-Control "no-cache" always;/,
+		);
 		expect(nginx).toMatch(
 			/map \$uri \$self_feed_connect_sources \{\s+default "'self'";\s+\/sw\.js "'self' https:";\s+\}/,
 		);
@@ -77,6 +84,11 @@ describe('Security headers', () => {
 		// Server block should not set add_header before location /api/ (which would duplicate Hono headers).
 		const beforeFirstLocation = nginx.slice(0, nginx.indexOf('location '));
 		expect(beforeFirstLocation).not.toContain('add_header ');
+
+		const webIndexHtml = readFileSync(resolve(testDir, '../../../web', 'index.html'), 'utf8');
+		expect(webIndexHtml).toContain("media-src 'self' https:;");
+		expect(webIndexHtml).toContain('https://streamable.com');
+		expect(webIndexHtml).toContain('https://www.youtube-nocookie.com');
 	});
 
 	it('enforces a tighter default JSON body limit while allowing larger OPML uploads', async () => {

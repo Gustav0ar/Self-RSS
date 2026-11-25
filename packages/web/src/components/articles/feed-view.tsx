@@ -39,6 +39,7 @@ import {
 	normalizeDensityPreference,
 	normalizeSortPreference,
 } from '@/lib/preferences';
+import { toSafeExternalUrl } from '@/lib/utils';
 import { useAppState } from '@/providers/app-state';
 import { useAuth } from '@/providers/auth';
 
@@ -67,6 +68,7 @@ export function FeedView({
 	const [sortOverride, setSort] = useState<SortOrder | null>(null);
 	const [markAllDialogOpen, setMarkAllDialogOpen] = useState(false);
 	const [externalShortcutStatus, setExternalShortcutStatus] = useState<string | null>(null);
+	const readerFocusRef = useRef<HTMLDivElement | null>(null);
 	const preferencesQuery = usePreferences();
 	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
@@ -74,6 +76,7 @@ export function FeedView({
 	const sort = sortOverride ?? normalizeSortPreference(prefs?.defaultSort);
 	const updatePrefs = useUpdatePreferences();
 	const setArticleSaved = useSetArticleSaved();
+	const setArticleSavedMutate = setArticleSaved.mutate;
 	const { isOffline } = useAuth();
 	const { feedSyncError } = useAppState();
 	const {
@@ -177,9 +180,9 @@ export function FeedView({
 	}, [fetchNextPage]);
 	const handleToggleSaved = useCallback(
 		(articleId: string, saved: boolean) => {
-			setArticleSaved.mutate({ articleId, saved });
+			setArticleSavedMutate({ articleId, saved });
 		},
-		[setArticleSaved],
+		[setArticleSavedMutate],
 	);
 
 	useEffect(() => {
@@ -255,25 +258,24 @@ export function FeedView({
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
 			const article = readingQueue.find((a) => a.id === id);
-			if (article) {
-				markReadMutate({ articleId: id, read: !article.isRead });
-			}
+			if (article) markReadMutate({ articleId: id, read: !article.isRead });
 		},
+		onToggleSaved: (id) => {
+			const article = readingQueue.find((a) => a.id === id);
+			if (article) setArticleSavedMutate({ articleId: id, saved: !article.isSaved });
+		},
+		onFocusArticle: () => readerFocusRef.current?.focus(),
 		onOpenExternal: (id) => {
 			const article = readingQueue.find((a) => a.id === id);
-			if (article?.canonicalUrl) {
-				const target = URL.parse(article.canonicalUrl);
-				if (target && (target.protocol === 'https:' || target.protocol === 'http:')) {
-					window.open(target.href, '_blank', 'noopener,noreferrer');
-					return;
-				}
+			const safeUrl = toSafeExternalUrl(article?.canonicalUrl);
+			if (safeUrl) {
+				window.open(safeUrl, '_blank', 'noopener,noreferrer');
+				return;
 			}
 			setExternalShortcutStatus('The original publisher link is unavailable for this article.');
 		},
 		onRefresh: () => {
-			if (!isRefreshingCurrentSelection) {
-				handleRefresh();
-			}
+			if (!isRefreshingCurrentSelection) handleRefresh();
 		},
 		enabled: keyboardShortcutsEnabled,
 	});
@@ -328,7 +330,7 @@ export function FeedView({
 					isActionPending={lifecycleActionPending}
 				/>
 				<ExternalShortcutStatus message={externalShortcutStatus} />
-				<div className="panel-divider sticky top-0 z-20 bg-card/95 px-3 pb-2.5 pt-3 backdrop-blur-xl">
+				<div className="panel-divider sticky top-0 z-20 bg-card px-3 pb-2.5 pt-3">
 					<FeedListHeader
 						title={displayedTitle}
 						loadedCount={articles.length}
@@ -404,6 +406,7 @@ export function FeedView({
 					articleId={effectiveArticleId}
 					articles={readingQueue}
 					onSelectArticle={handleSelectArticle}
+					focusTargetRef={readerFocusRef}
 				/>
 			</div>
 

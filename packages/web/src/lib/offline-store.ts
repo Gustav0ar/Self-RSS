@@ -17,6 +17,7 @@ import {
 import {
 	boundedState,
 	cachedArticleIds,
+	freshQueries,
 	isPersistedQueryCache,
 	mergeQuerySnapshots,
 	PERSISTED_QUERY_ROOTS,
@@ -289,7 +290,7 @@ export async function readOfflineSnapshot(
 				? cachedArticles
 				: cachedArticleIds(
 						isPersistedQueryCache(cache, userId, namespace(), SCHEMA_VERSION)
-							? boundedState(cache.state).queries
+							? freshQueries(cache.state)
 							: [],
 					),
 	};

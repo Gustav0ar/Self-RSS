@@ -220,24 +220,24 @@ describe('ReaderPane', () => {
 		});
 	});
 
-	it.each([
-		'feed_ready',
-		'enrichment_pending',
-	])('requests canonical enrichment for selected %s content', (contentStatus) => {
-		vi.useFakeTimers();
-		currentArticle = {
-			...articleWithEmbeddedHtml,
-			isEnriched: false,
-			contentStatus,
-			contentHtml: '<p>Text-only feed content</p>',
-			media: [],
-		};
+	it.each(['feed_ready', 'enrichment_pending'])(
+		'requests canonical enrichment for selected %s content',
+		(contentStatus) => {
+			vi.useFakeTimers();
+			currentArticle = {
+				...articleWithEmbeddedHtml,
+				isEnriched: false,
+				contentStatus,
+				contentHtml: '<p>Text-only feed content</p>',
+				media: [],
+			};
 
-		render(<ReaderPane articleId="article-1" />);
+			render(<ReaderPane articleId="article-1" />);
 
-		act(() => vi.advanceTimersByTime(300));
-		expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
-	});
+			act(() => vi.advanceTimersByTime(300));
+			expect(enrichMutate).toHaveBeenCalledWith('article-1', expect.any(Object));
+		},
+	);
 
 	it('does not immediately retry failed enrichment for the same selection', () => {
 		vi.useFakeTimers();
@@ -430,12 +430,104 @@ describe('ReaderPane', () => {
 		fireEvent.keyDown(window, { key: 'Escape' });
 		expect(queryByRole('dialog', { name: 'Inline image' })).toBeNull();
 
-		fireEvent.click(getByRole('button', { name: 'Reader typography' }));
+		fireEvent.click(getByRole('button', { name: /Reader typography/ }));
 		fireEvent.click(getByRole('button', { name: 'Increase text size' }));
 		expect(updatePrefsMutate).toHaveBeenCalledWith({ textSize: 17 });
 		fireEvent.change(getByRole('combobox', { name: 'Reader font family' }), {
 			target: { value: 'Georgia' },
 		});
 		expect(updatePrefsMutate).toHaveBeenCalledWith({ fontFamily: 'Georgia' });
+	});
+
+	it('drops unsafe canonical links and unapproved embed media URLs', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			canonicalUrl: 'javascript:alert(1)',
+			contentHtml: '<p>Safe body</p>',
+			media: [
+				{
+					id: 'media-evil',
+					articleId: 'article-1',
+					type: 'embed',
+					provider: 'other',
+					url: 'https://evil.example/embed',
+					embedUrl: 'https://evil.example/embed',
+					width: null,
+					height: null,
+					position: 0,
+				},
+			],
+		};
+
+		const { queryByRole } = render(<ReaderPane articleId="article-1" />);
+
+		expect(queryByRole('link', { name: 'Post 1' })).toBeNull();
+		expect(queryByRole('link', { name: 'Original' })).toBeNull();
+		expect(document.querySelectorAll('iframe')).toHaveLength(0);
+	});
+
+	it('clamps Twitter embed resize messages and exposes a focusable reader scroller', () => {
+		currentArticle = {
+			...articleWithEmbeddedHtml,
+			contentHtml: '<p>Body</p>',
+			media: [
+				{
+					id: 'media-tweet',
+					articleId: 'article-1',
+					type: 'embed',
+					provider: 'x',
+					url: 'https://platform.twitter.com/embed/Tweet.html?id=123456',
+					embedUrl: 'https://platform.twitter.com/embed/Tweet.html?id=123456',
+					width: null,
+					height: null,
+					position: 0,
+				},
+			],
+		};
+		const focusTargetRef = { current: null as HTMLDivElement | null };
+
+		render(<ReaderPane articleId="article-1" focusTargetRef={focusTargetRef} />);
+
+		expect(focusTargetRef.current).toBeInstanceOf(HTMLDivElement);
+		expect(focusTargetRef.current?.tabIndex).toBe(-1);
+
+		const iframe = document.querySelector<HTMLIFrameElement>('iframe');
+		expect(iframe).toBeTruthy();
+
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				origin: 'https://platform.twitter.com',
+				data: {
+					'twttr.embed': { method: 'twttr.private.resize', params: [{ height: Number.NaN }] },
+				},
+			}),
+		);
+		expect(iframe?.style.height).toBe('');
+
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				origin: 'https://platform.twitter.com',
+				data: {
+					'twttr.embed': {
+						method: 'twttr.private.resize',
+						params: [{ height: 99999, data: { tweet_id: '123456' } }],
+					},
+				},
+			}),
+		);
+		expect(iframe?.style.height).toBe('4000px');
+
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				origin: 'https://platform.twitter.com',
+				data: {
+					'twttr.embed': {
+						method: 'twttr.private.resize',
+						params: [{ height: 10, data: { tweet_id: '123456' } }],
+					},
+				},
+			}),
+		);
+		expect(iframe?.style.height).toBe('120px');
 	});
 });

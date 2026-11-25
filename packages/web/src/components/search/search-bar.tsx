@@ -1,4 +1,3 @@
-import { formatDistanceToNow } from 'date-fns';
 import { CalendarDays, Search as SearchIcon, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
@@ -7,6 +6,7 @@ import { QueryFailure } from '@/components/query-failure';
 import { usePreferences, usePrefetchArticle, useSearch } from '@/hooks/queries';
 import { useDebouncedSearchTerm } from '@/hooks/search-queries';
 import { canUseAppShortcut } from '@/lib/keyboard-shortcuts';
+import { formatRelativeTime } from '@/lib/utils';
 import type { SearchScope } from '@/routes/article-route-search';
 
 interface SearchBarProps {
@@ -158,6 +158,14 @@ export function SearchBar({
 		setActiveIndex(-1);
 	}, [debouncedQuery, activeCategoryId]);
 
+	useEffect(() => {
+		if (!showDropdown || !activeOptionId) return;
+		const element = document.getElementById(activeOptionId);
+		if (typeof element?.scrollIntoView === 'function') {
+			element.scrollIntoView({ block: 'nearest' });
+		}
+	}, [activeOptionId, showDropdown]);
+
 	return (
 		<div className="relative" ref={containerRef}>
 			<div className="relative">
@@ -256,10 +264,7 @@ export function SearchBar({
 							</div>
 						) : (
 							renderedResults.map((article, index) => {
-								const displayedAt = article.displayedAt ? new Date(article.displayedAt) : null;
-								const timeAgo = displayedAt
-									? formatDistanceToNow(displayedAt, { addSuffix: true })
-									: null;
+								const timeAgo = formatRelativeTime(article.displayedAt);
 								const isActive = index === activeIndex;
 								return (
 									<button

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SERVICE_WORKER_URL } from '../../src/lib/service-worker';
 import { createServiceWorkerSource } from '../../vite.config';
@@ -25,5 +27,9 @@ describe('production service worker source', () => {
 		expect(source).toContain('MAX_MEDIA_BYTES = 2 * 1024 * 1024');
 		expect(source).toContain('touchMediaCache(');
 		expect(source).toContain('pruneCache(opaqueCache, MAX_OPAQUE_MEDIA_ENTRIES)');
+	});
+
+	it('keeps E2E feed fixtures outside public/ so they are excluded from production builds', () => {
+		expect(existsSync(resolve(import.meta.dirname, '../../public/test-feeds'))).toBe(false);
 	});
 });

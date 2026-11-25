@@ -6,6 +6,8 @@ export interface KeyboardNavOptions {
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onToggleRead?: (id: string) => void;
+	onToggleSaved?: (id: string) => void;
+	onFocusArticle?: (id: string) => void;
 	onOpenExternal?: (id: string) => void;
 	onRefresh?: () => void;
 	enabled?: boolean;
@@ -16,6 +18,8 @@ export function useKeyboardNav({
 	selectedId,
 	onSelect,
 	onToggleRead,
+	onToggleSaved,
+	onFocusArticle,
 	onOpenExternal,
 	onRefresh,
 	enabled = true,
@@ -27,6 +31,8 @@ export function useKeyboardNav({
 		selectedId,
 		onSelect,
 		onToggleRead,
+		onToggleSaved,
+		onFocusArticle,
 		onOpenExternal,
 		onRefresh,
 		enabled,
@@ -37,6 +43,8 @@ export function useKeyboardNav({
 		selectedId,
 		onSelect,
 		onToggleRead,
+		onToggleSaved,
+		onFocusArticle,
 		onOpenExternal,
 		onRefresh,
 		enabled,
@@ -64,6 +72,8 @@ export function useKeyboardNav({
 			selectedId: latestSelectedId,
 			onSelect: latestOnSelect,
 			onToggleRead: latestOnToggleRead,
+			onToggleSaved: latestOnToggleSaved,
+			onFocusArticle: latestOnFocusArticle,
 			onOpenExternal: latestOnOpenExternal,
 			onRefresh: latestOnRefresh,
 			enabled: latestEnabled,
@@ -102,6 +112,13 @@ export function useKeyboardNav({
 				}
 				break;
 			}
+			case 's': {
+				if (latestSelectedId && latestOnToggleSaved) {
+					e.preventDefault();
+					latestOnToggleSaved(latestSelectedId);
+				}
+				break;
+			}
 			case 'v': {
 				if (latestSelectedId && latestOnOpenExternal) {
 					e.preventDefault();
@@ -119,7 +136,11 @@ export function useKeyboardNav({
 			case 'Enter': {
 				if (latestSelectedId) {
 					e.preventDefault();
-					latestOnSelect(latestSelectedId);
+					if (latestOnFocusArticle) {
+						latestOnFocusArticle(latestSelectedId);
+					} else {
+						latestOnSelect(latestSelectedId);
+					}
 				}
 				break;
 			}

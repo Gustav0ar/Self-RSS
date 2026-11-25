@@ -139,10 +139,11 @@ export function useTwitterEmbedResize(scrollerRef: RefObject<HTMLDivElement | nu
 				return;
 			}
 
-			const height = data['twttr.embed'].params?.[0]?.height;
-			if (typeof height !== 'number') {
+			const rawHeight = data['twttr.embed'].params?.[0]?.height;
+			if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight)) {
 				return;
 			}
+			const height = Math.round(Math.min(Math.max(rawHeight, 120), 4000));
 
 			const tweetId = data['twttr.embed'].params?.[0]?.data?.tweet_id;
 			const root = scrollerRef.current;

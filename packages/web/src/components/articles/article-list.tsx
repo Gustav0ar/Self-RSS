@@ -1,9 +1,8 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { formatDistanceToNow } from 'date-fns';
 import { Bookmark, BookmarkCheck, Circle, CircleDot } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { DisplayDensityPreference } from '@/lib/preferences';
-import { cn } from '@/lib/utils';
+import { cn, formatRelativeTime } from '@/lib/utils';
 import { OfflineTextStatus } from './offline-text-status';
 
 interface ArticleListItemData {
@@ -45,6 +44,7 @@ const ROW_HEIGHT_PX = {
 } as const;
 const ROW_GAP_PX = 6; // matches `space-y-1.5`
 const ROW_OVERSCAN = 6;
+const SKELETON_IDS = Array.from({ length: 8 }, (_, i) => `skeleton-${i}`);
 
 export function ArticleList({
 	articles,
@@ -65,10 +65,6 @@ export function ArticleList({
 }: ArticleListProps) {
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const lastScrolledSelectedIdRef = useRef<string | null>(null);
-	const skeletonIds = useMemo(
-		() => Array.from({ length: 8 }, (_, i) => `skeleton-${Date.now()}-${i}`),
-		[],
-	);
 
 	const rowHeight = ROW_HEIGHT_PX[density];
 	const rowSize = rowHeight + ROW_GAP_PX;
@@ -115,15 +111,18 @@ export function ArticleList({
 	// trigger from the non-virtualized version.
 	const virtualItems = virtualizer.getVirtualItems();
 	const lastVisibleIndex = virtualItems[virtualItems.length - 1]?.index ?? 0;
+	const visibleArticles = virtualItems
+		.filter((item) => item.index >= 0 && item.index < articles.length)
+		.slice(0, 4)
+		.map((item) => articles[item.index])
+		.filter((article): article is ArticleListItemData => article != null);
+	const visibleArticlesKey = visibleArticles.map((article) => article.id).join('|');
+	const visibleArticlesRef = useRef(visibleArticles);
+	visibleArticlesRef.current = visibleArticles;
 	useEffect(() => {
-		if (!onVisible) return;
-		const visibleArticles = virtualItems
-			.filter((item) => item.index >= 0 && item.index < articles.length)
-			.slice(0, 4)
-			.map((item) => articles[item.index])
-			.filter((article): article is ArticleListItemData => article != null);
-		if (visibleArticles.length > 0) onVisible(visibleArticles);
-	}, [articles, onVisible, virtualItems]);
+		if (!onVisible || !visibleArticlesKey) return;
+		onVisible(visibleArticlesRef.current);
+	}, [onVisible, visibleArticlesKey]);
 	useEffect(() => {
 		if (!hasMore || loadingMore) return;
 		if (articles.length === 0) return;
@@ -188,7 +187,7 @@ export function ArticleList({
 					className="flex-1 overflow-auto px-2.5 pb-2.5"
 				>
 					<div className="space-y-1.5">
-						{skeletonIds.map((id) => (
+						{SKELETON_IDS.map((id) => (
 							<div
 								key={id}
 								className="skeleton-row"
@@ -289,13 +288,7 @@ function ArticleRowImpl({
 	density: DisplayDensityPreference;
 	style?: React.CSSProperties;
 }) {
-	const timeAgo = useMemo(
-		() =>
-			article.publishedAt
-				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
-				: null,
-		[article.publishedAt],
-	);
+	const timeAgo = useMemo(() => formatRelativeTime(article.publishedAt), [article.publishedAt]);
 
 	return (
 		<div

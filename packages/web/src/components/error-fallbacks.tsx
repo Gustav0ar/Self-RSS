@@ -47,7 +47,7 @@ export function AuthErrorFallback(error: Error, onReset: () => void): ReactNode 
 				<p className="mt-2 text-sm text-muted-foreground">
 					We couldn&apos;t load the login page. Please try again.
 				</p>
-				{process.env.NODE_ENV === 'development' && error.stack && (
+				{import.meta.env.DEV && error.stack && (
 					<details className="mt-4 text-left">
 						<summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
 							Technical details
@@ -164,9 +164,9 @@ export function TopBarErrorFallback(_error: Error, onReset: () => void): ReactNo
 // Returns a function that matches the ErrorBoundary fallback signature.
 // onClose is captured from the dialog's props.
 export function createDialogErrorFallback(onClose: () => void) {
-	return function DialogErrorFallback(error: Error, onReset: () => void): ReactNode {
+	return function renderDialogErrorFallback(error: Error, onReset: () => void): ReactNode {
 		return (
-			<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-md">
+			<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6">
 				<div className="surface-card motion-scale w-full max-w-md rounded-[1.75rem] p-6 shadow-2xl sm:p-7">
 					<div className="mb-5 flex items-start justify-between gap-4">
 						<div>
@@ -180,7 +180,7 @@ export function createDialogErrorFallback(onClose: () => void) {
 						<div className="rounded-2xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
 							<p>This dialog encountered an error and could not load properly.</p>
 						</div>
-						{process.env.NODE_ENV === 'development' && error.stack && (
+						{import.meta.env.DEV && error.stack && (
 							<details className="text-left">
 								<summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
 									Technical details

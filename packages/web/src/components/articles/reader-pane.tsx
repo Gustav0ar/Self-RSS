@@ -1,7 +1,6 @@
 import { useRouter } from '@tanstack/react-router';
-import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, ArrowRight, BookOpen, RefreshCw, Sparkles } from 'lucide-react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, RefObject } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
 	useArticle,
@@ -13,6 +12,7 @@ import {
 import { normalizeAutoMarkReadPreference } from '@/lib/preferences';
 import { trackArticleCompletion } from '@/lib/product-analytics';
 import { sanitizeArticleHtml } from '@/lib/sanitize-article';
+import { formatRelativeTime, toSafeExternalUrl } from '@/lib/utils';
 import { OfflineTextStatus } from './offline-text-status';
 import { ReaderCompactActions, ReaderPrimaryActions } from './reader-actions';
 import {
@@ -33,6 +33,7 @@ interface ReaderPaneProps {
 	articleId: string | null;
 	articles?: ReaderArticleSummary[];
 	onSelectArticle?: (id: string) => void;
+	focusTargetRef?: RefObject<HTMLDivElement | null>;
 }
 
 export interface ReaderArticleSummary {
@@ -49,11 +50,18 @@ export interface ReaderArticleSummary {
 	isSaved: boolean;
 }
 
-export function ReaderPane({ articleId, articles = [], onSelectArticle }: ReaderPaneProps) {
+export function ReaderPane({
+	articleId,
+	articles = [],
+	onSelectArticle,
+	focusTargetRef,
+}: ReaderPaneProps) {
 	const { data: article, isLoading, isError, isFetching, refetch } = useArticle(articleId);
 	const { data: prefs } = usePreferences();
 	const updatePreferences = useUpdatePreferences();
+	const updatePreferencesMutate = updatePreferences.mutate;
 	const markRead = useMarkRead();
+	const markReadMutate = markRead.mutate;
 	const setArticleSaved = useSetArticleSaved();
 	const router = useRouter();
 	const lastAutoMarkedId = useRef<string | null>(null);
@@ -84,6 +92,13 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	const mediaToRender = useMemo(() => getReaderPanelMedia(article?.media ?? []), [article?.media]);
 
 	const handleCloseLightbox = useCallback(() => setLightboxImage(null), []);
+	const setScrollerNode = useCallback(
+		(node: HTMLDivElement | null) => {
+			scrollerRef.current = node;
+			if (focusTargetRef) focusTargetRef.current = node;
+		},
+		[focusTargetRef, scrollerRef],
+	);
 	const handleContentClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			const target = event.target;
@@ -99,18 +114,19 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 		[articleId],
 	);
 	const handleUpdateTypography = useCallback(
-		(patch: { fontFamily?: string; textSize?: number }) => updatePreferences.mutate(patch),
-		[updatePreferences],
+		(patch: { fontFamily?: string; textSize?: number }) => updatePreferencesMutate(patch),
+		[updatePreferencesMutate],
 	);
 	// The following `useMemo` calls must run unconditionally (before
 	// the loading / not-found early returns) to satisfy the rules of
 	// hooks. They default to safe values when `article` is null.
 	const publishedAt = useMemo(
-		() =>
-			article?.publishedAt
-				? formatDistanceToNow(new Date(article.publishedAt), { addSuffix: true })
-				: null,
+		() => formatRelativeTime(article?.publishedAt),
 		[article?.publishedAt],
+	);
+	const safeCanonicalUrl = useMemo(
+		() => toSafeExternalUrl(article?.canonicalUrl),
+		[article?.canonicalUrl],
 	);
 	const hasContent = useMemo(() => Boolean(readerHtml.trim()), [readerHtml]);
 	const currentIndex = useMemo(
@@ -171,7 +187,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 			lastAutoMarkedId.current !== articleId
 		) {
 			lastAutoMarkedId.current = articleId;
-			markRead.mutate(
+			markReadMutate(
 				{ articleId, read: true },
 				{
 					onError: () => {
@@ -180,7 +196,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 				},
 			);
 		}
-	}, [articleId, isRead, article, autoMarkReadMode, markRead]);
+	}, [articleId, isRead, article, autoMarkReadMode, markReadMutate]);
 
 	if (!articleId) {
 		return (
@@ -276,7 +292,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 	}
 
 	return (
-		<div ref={scrollerRef} className="h-full overflow-auto">
+		<div ref={setScrollerNode} tabIndex={-1} className="h-full overflow-auto focus:outline-none">
 			<div
 				ref={scrollProgressRef}
 				className="reader-scroll-progress"
@@ -317,9 +333,9 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 							</div>
 						</div>
 						<h1 className="mt-3 text-2xl font-semibold leading-tight tracking-tight text-foreground sm:text-3xl">
-							{article.canonicalUrl ? (
+							{safeCanonicalUrl ? (
 								<a
-									href={article.canonicalUrl}
+									href={safeCanonicalUrl}
 									target="_blank"
 									rel="noopener noreferrer"
 									className="transition-colors hover:text-primary"
@@ -335,7 +351,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 						) : null}
 
 						<ReaderPrimaryActions
-							canonicalUrl={article.canonicalUrl}
+							canonicalUrl={safeCanonicalUrl}
 							isRead={article.isRead}
 							isSaved={article.isSaved}
 							saveDisabled={setArticleSaved.isPending}
@@ -407,7 +423,7 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 								) : null}
 							</div>
 							<ReaderCompactActions
-								canonicalUrl={article.canonicalUrl}
+								canonicalUrl={safeCanonicalUrl}
 								isRead={article.isRead}
 								isSaved={article.isSaved}
 								saveDisabled={setArticleSaved.isPending}
@@ -444,21 +460,26 @@ export function ReaderPane({ articleId, articles = [], onSelectArticle }: Reader
 									More from this feed
 								</p>
 								<div className="mt-2 space-y-1">
-									{moreFromFeed.map((item) => (
-										<button
-											key={item.id}
-											type="button"
-											onClick={() => onSelectArticle(item.id)}
-											className="w-full rounded-lg px-2 py-2 text-left text-xs leading-5 hover:bg-accent"
-										>
-											<span className="line-clamp-2 font-medium text-foreground">{item.title}</span>
-											{item.publishedAt ? (
-												<span className="mt-0.5 block text-muted-foreground">
-													{formatDistanceToNow(new Date(item.publishedAt), { addSuffix: true })}
+									{moreFromFeed.map((item) => {
+										const itemPublishedAt = formatRelativeTime(item.publishedAt);
+										return (
+											<button
+												key={item.id}
+												type="button"
+												onClick={() => onSelectArticle(item.id)}
+												className="w-full rounded-lg px-2 py-2 text-left text-xs leading-5 hover:bg-accent"
+											>
+												<span className="line-clamp-2 font-medium text-foreground">
+													{item.title}
 												</span>
-											) : null}
-										</button>
-									))}
+												{itemPublishedAt ? (
+													<span className="mt-0.5 block text-muted-foreground">
+														{itemPublishedAt}
+													</span>
+												) : null}
+											</button>
+										);
+									})}
 								</div>
 							</div>
 						) : null}
