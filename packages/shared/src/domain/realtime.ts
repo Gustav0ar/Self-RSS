@@ -24,11 +24,11 @@ function isNullableNonEmptyString(value: unknown): value is string | null {
 }
 
 function isNonNegativeInt(value: unknown): value is number {
-	return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isPositiveInt(value: unknown): value is number {
-	return typeof value === 'number' && Number.isInteger(value) && value > 0;
+	return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function isNonEmptyStringArray(value: unknown): value is string[] {

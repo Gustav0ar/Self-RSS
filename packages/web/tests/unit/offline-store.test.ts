@@ -12,6 +12,8 @@ import {
 	loadOfflineUser,
 	persistQueryClient,
 	queueArticleStateMutation,
+	readOfflineSnapshot,
+	restoreOfflineArticle,
 	restoreQueryClient,
 	saveOfflineUser,
 	setOfflineSessionUser,
@@ -485,5 +487,62 @@ describe('offline identity and query cache', () => {
 		const otherAccount = new QueryClient();
 		expect(await restoreQueryClient(otherAccount, 'user-2')).toBe(false);
 		expect(otherAccount.getQueryCache().getAll()).toHaveLength(0);
+	});
+
+	it('keeps offline snapshot article availability aligned with restore bounds for unbounded caches', async () => {
+		setOfflineSessionUser('user-1');
+		const now = Date.now();
+		const queries = Array.from({ length: 601 }, (_, index) => ({
+			queryKey: ['article', `article-${index}`],
+			queryHash: JSON.stringify(['article', `article-${index}`]),
+			state: {
+				status: 'success',
+				data: { id: `article-${index}`, contentHtml: `<p>Body ${index}</p>` },
+				dataUpdatedAt: now - (601 - index) * 1000,
+			},
+		}));
+		// Seed a pre-fix unbounded v2 cache record directly into IndexedDB.
+		await new Promise<void>((resolve, reject) => {
+			const open = indexedDB.open(DATABASE_NAME, 3);
+			open.onupgradeneeded = () => {
+				if (!open.result.objectStoreNames.contains('state')) {
+					open.result.createObjectStore('state');
+				}
+			};
+			open.onsuccess = () => {
+				const db = open.result;
+				const tx = db.transaction('state', 'readwrite');
+				tx.objectStore('state').put(
+					{
+						schemaVersion: 2,
+						ownerId: 'user-1',
+						namespace: window.location.origin,
+						persistedAt: now,
+						state: { mutations: [], queries },
+					},
+					`${window.location.origin}:query-cache:user-1:v2`,
+				);
+				tx.oncomplete = () => {
+					db.close();
+					resolve();
+				};
+				tx.onerror = () => {
+					db.close();
+					reject(tx.error);
+				};
+			};
+			open.onerror = () => reject(open.error);
+		});
+
+		const snapshot = await readOfflineSnapshot('user-1');
+		expect(snapshot.articleIds.size).toBe(600);
+		expect(snapshot.articleIds.has('article-0')).toBe(false);
+		expect(snapshot.articleIds.has('article-600')).toBe(true);
+
+		const restored = new QueryClient();
+		await restoreOfflineArticle(restored, 'article-0');
+		expect(restored.getQueryData(['article', 'article-0'])).toBeUndefined();
+		await restoreOfflineArticle(restored, 'article-600');
+		expect(restored.getQueryData(['article', 'article-600'])).toBeDefined();
 	});
 });

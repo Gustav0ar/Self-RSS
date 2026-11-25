@@ -113,6 +113,9 @@ function preloadImages(qc: QueryClient, urls: readonly (string | null | undefine
 		const image = new Image();
 		image.decoding = 'async';
 		image.referrerPolicy = 'no-referrer';
+		image.onerror = () => {
+			seen.delete(url);
+		};
 		image.src = url;
 	}
 }

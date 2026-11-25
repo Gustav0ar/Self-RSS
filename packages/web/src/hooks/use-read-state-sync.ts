@@ -103,25 +103,30 @@ export function useReadStateSync(enabled: boolean) {
 			clearReconnectTimer();
 			const activeController = new AbortController();
 			controller = activeController;
+			const isCurrent = () => !stopped && controller === activeController;
 			void streamRealtimeEvents({
 				signal: activeController.signal,
 				onConnected: () => {
+					if (!isCurrent()) return;
 					reconnectAttempt = 0;
 					handleConnected();
 				},
 				onEvent: (event) => {
+					if (!isCurrent()) return;
 					reconnectAttempt = 0;
 					void reconcileRealtimeEvent(qc, event, { clientId });
 				},
 			})
 				.catch(() => {
+					if (!isCurrent()) return;
 					qc.setQueryData(['realtime', 'connected'], false);
-					// Reconnect below unless this was an intentional shutdown.
+					// Reconnect below unless this was an intentional shutdown or superseded stream.
 				})
 				.finally(() => {
-					if (controller === activeController) {
-						controller = null;
+					if (controller !== activeController) {
+						return;
 					}
+					controller = null;
 					if (stopped || (typeof navigator !== 'undefined' && !navigator.onLine)) {
 						return;
 					}

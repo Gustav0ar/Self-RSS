@@ -67,6 +67,7 @@ function reviewFeed() {
 }
 
 vi.mock('../../src/hooks/queries', () => ({
+	findCachedArticleListItem: () => null,
 	useCategories: () => ({ data: categories }),
 	useInfiniteArticles: (...args: unknown[]) => useInfiniteArticlesMock(...args),
 	useSearch: () => ({ data: undefined }),
@@ -87,6 +88,7 @@ vi.mock('../../src/hooks/queries', () => ({
 			: undefined,
 	}),
 	usePrefetchArticle: () => vi.fn(),
+	useQueryClient: () => ({}),
 	useWarmNextArticles: () => warmNextArticlesMock,
 	useWarmVisibleArticles: () => vi.fn(),
 	useUpdatePreferences: () => ({ mutate: updatePreferencesMutate }),

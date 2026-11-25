@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
@@ -10,6 +10,11 @@ const apiProxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:3000';
 /** Serve E2E feed fixtures only during dev/test runs, keeping them out of production dist/. */
 function e2eTestFeedsPlugin(): Plugin {
 	const fixturesDir = resolve(import.meta.dirname, 'tests/e2e/fixtures/test-feeds');
+	const allowedFiles = new Set(
+		readdirSync(fixturesDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && entry.name.endsWith('.xml'))
+			.map((entry) => entry.name),
+	);
 	return {
 		name: 'self-feed-e2e-test-feeds',
 		apply: 'serve',
@@ -17,22 +22,12 @@ function e2eTestFeedsPlugin(): Plugin {
 			server.middlewares.use('/test-feeds', (req, res, next) => {
 				const requestPath = (req.url ?? '').split('?')[0] ?? '';
 				const fileName = requestPath.replace(/^\/+/, '');
-				if (
-					!fileName ||
-					fileName.includes('/') ||
-					fileName.includes('..') ||
-					!fileName.endsWith('.xml')
-				) {
-					next();
-					return;
-				}
-				const filePath = resolve(fixturesDir, fileName);
-				if (!existsSync(filePath)) {
+				if (!allowedFiles.has(fileName)) {
 					next();
 					return;
 				}
 				res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-				res.end(readFileSync(filePath));
+				res.end(readFileSync(resolve(fixturesDir, fileName)));
 			});
 		},
 	};

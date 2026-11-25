@@ -12,12 +12,7 @@ import {
 } from '@/hooks/queries';
 import { categoryAncestorIds, flattenCategories, flattenCategoryFeeds } from '@/lib/categories';
 import { SidebarBody } from './sidebar-body';
-import {
-	type SidebarCategoryDialogState,
-	type SidebarDeleteState,
-	SidebarDialogs,
-	type SidebarFeedDialogState,
-} from './sidebar-dialogs';
+import { type SidebarDialogState, SidebarDialogs } from './sidebar-dialogs';
 import { computeCategoryReorderUpdates } from './sidebar-reorder';
 import { loadExpandedFromStorage, saveExpandedToStorage } from './sidebar-storage';
 
@@ -63,10 +58,7 @@ function SidebarContent({
 	const hydratedRef = useRef(false);
 	const [expandedCategories, setExpandedCategories] = useState<Set<string>>(() => new Set());
 	const [uncategorizedExpanded, setUncategorizedExpanded] = useState(true);
-	const [feedDialogState, setFeedDialogState] = useState<SidebarFeedDialogState>(null);
-	const [categoryDialogState, setCategoryDialogState] = useState<SidebarCategoryDialogState>(null);
-	const [importDialogOpen, setImportDialogOpen] = useState(false);
-	const [deleteState, setDeleteState] = useState<SidebarDeleteState>(null);
+	const [dialogState, setDialogState] = useState<SidebarDialogState>(null);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
 	const [exportError, setExportError] = useState<string | null>(null);
 
@@ -157,22 +149,22 @@ function SidebarContent({
 	}
 
 	async function confirmDelete() {
-		if (!deleteState) return;
+		if (dialogState?.kind !== 'delete-feed' && dialogState?.kind !== 'delete-category') return;
 
 		setDeleteError(null);
 		try {
-			if (deleteState.kind === 'feed') {
-				await deleteFeed.mutateAsync(deleteState.feed.id);
-				if (selectedFeedId === deleteState.feed.id) {
+			if (dialogState.kind === 'delete-feed') {
+				await deleteFeed.mutateAsync(dialogState.feed.id);
+				if (selectedFeedId === dialogState.feed.id) {
 					onSelectAll();
 				}
 			} else {
-				await deleteCategory.mutateAsync(deleteState.category.id);
-				if (selectedCategoryId === deleteState.category.id) {
+				await deleteCategory.mutateAsync(dialogState.category.id);
+				if (selectedCategoryId === dialogState.category.id) {
 					onSelectAll();
 				}
 			}
-			setDeleteState(null);
+			setDialogState(null);
 		} catch (error) {
 			setDeleteError(error instanceof Error ? error.message : 'Delete failed');
 		}
@@ -232,26 +224,26 @@ function SidebarContent({
 			onCategoryDragOver={setDragOverId}
 			onCategoryDragLeave={(id) => setDragOverId((current) => (current === id ? null : current))}
 			onAddFeed={() =>
-				setFeedDialogState({ mode: 'create', defaultCategoryId: selectedCategoryId })
+				setDialogState({ kind: 'feed-create', defaultCategoryId: selectedCategoryId })
 			}
 			onAddCategory={() =>
-				setCategoryDialogState({
-					mode: 'create',
+				setDialogState({
+					kind: 'category-create',
 					defaultParentCategoryId: selectedCategoryId,
 				})
 			}
-			onImportOpml={() => setImportDialogOpen(true)}
+			onImportOpml={() => setDialogState({ kind: 'import-opml' })}
 			onExportOpml={() => void handleExportOpml()}
 			isExporting={exportOpml.isPending}
-			onEditCategory={(category) => setCategoryDialogState({ mode: 'edit', category })}
+			onEditCategory={(category) => setDialogState({ kind: 'category-edit', category })}
 			onDeleteCategory={(category) => {
 				setDeleteError(null);
-				setDeleteState({ kind: 'category', category });
+				setDialogState({ kind: 'delete-category', category });
 			}}
-			onEditFeed={(feed) => setFeedDialogState({ mode: 'edit', feed })}
+			onEditFeed={(feed) => setDialogState({ kind: 'feed-edit', feed })}
 			onDeleteFeed={(feed) => {
 				setDeleteError(null);
-				setDeleteState({ kind: 'feed', feed });
+				setDialogState({ kind: 'delete-feed', feed });
 			}}
 		/>
 	);
@@ -301,19 +293,13 @@ function SidebarContent({
 
 			<SidebarDialogs
 				flatCategories={flatCategories}
-				feedDialogState={feedDialogState}
-				categoryDialogState={categoryDialogState}
-				importDialogOpen={importDialogOpen}
-				deleteState={deleteState}
+				dialogState={dialogState}
 				deleteError={deleteError}
 				deletePending={deleteFeed.isPending || deleteCategory.isPending}
-				onCloseFeedDialog={() => setFeedDialogState(null)}
-				onCloseCategoryDialog={() => setCategoryDialogState(null)}
-				onCloseImportDialog={() => setImportDialogOpen(false)}
 				onConfirmDelete={confirmDelete}
-				onCloseDeleteDialog={() => {
+				onClose={() => {
 					setDeleteError(null);
-					setDeleteState(null);
+					setDialogState(null);
 				}}
 			/>
 		</>

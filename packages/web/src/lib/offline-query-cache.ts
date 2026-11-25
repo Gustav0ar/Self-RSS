@@ -20,6 +20,8 @@ export interface PersistedQueryCache {
 	ownerId: string;
 	namespace: string;
 	persistedAt: number;
+	/** Set when the stored snapshot has already passed count and byte bounds. */
+	bounded?: boolean;
 	state: DehydratedState;
 }
 
@@ -35,6 +37,15 @@ function byteSize(value: unknown) {
 export function freshQueries(state: DehydratedState): DehydratedState['queries'] {
 	const cutoff = Date.now() - MAX_CACHE_AGE_MS;
 	return state.queries.filter((query) => query.state.dataUpdatedAt >= cutoff);
+}
+
+/**
+ * Select the exact restorable query set for both status reporting and hydration.
+ * Records marked `bounded` already passed count and byte caps at write time, so
+ * they only need the cheap age filter. Older/unbounded records run `boundedState`.
+ */
+export function selectableQueries(cache: PersistedQueryCache): DehydratedState['queries'] {
+	return cache.bounded === true ? freshQueries(cache.state) : boundedState(cache.state).queries;
 }
 
 export function boundedState(state: DehydratedState): DehydratedState {

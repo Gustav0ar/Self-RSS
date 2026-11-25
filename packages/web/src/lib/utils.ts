@@ -9,11 +9,15 @@ export function cn(...inputs: ClassValue[]) {
 /** Return a normalized http(s) URL string, or null for unsafe or malformed values. */
 export function toSafeExternalUrl(rawUrl: string | null | undefined): string | null {
 	if (!rawUrl) return null;
-	const target = URL.parse(rawUrl.trim());
-	if (!target || (target.protocol !== 'https:' && target.protocol !== 'http:')) {
+	try {
+		const target = new URL(rawUrl.trim());
+		if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+			return null;
+		}
+		return target.href;
+	} catch {
 		return null;
 	}
-	return target.href;
 }
 
 /** Format an ISO timestamp as relative time, returning null for missing or invalid dates. */

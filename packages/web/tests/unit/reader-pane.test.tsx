@@ -510,6 +510,19 @@ describe('ReaderPane', () => {
 				data: {
 					'twttr.embed': {
 						method: 'twttr.private.resize',
+						params: [{ height: 500, data: { tweet_id: '999999' } }],
+					},
+				},
+			}),
+		);
+		expect(iframe?.style.height).toBe('');
+
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				origin: 'https://platform.twitter.com',
+				data: {
+					'twttr.embed': {
+						method: 'twttr.private.resize',
 						params: [{ height: 99999, data: { tweet_id: '123456' } }],
 					},
 				},
@@ -529,5 +542,24 @@ describe('ReaderPane', () => {
 			}),
 		);
 		expect(iframe?.style.height).toBe('120px');
+	});
+
+	it('renders canonical links safely without relying on URL.parse', () => {
+		const originalParse = URL.parse;
+		Object.defineProperty(URL, 'parse', { value: undefined, configurable: true });
+		try {
+			currentArticle = {
+				...articleWithEmbeddedHtml,
+				canonicalUrl: 'https://example.com/post-1',
+				contentHtml: '<p>Body</p>',
+				media: [],
+			};
+			const { getByRole } = render(<ReaderPane articleId="article-1" />);
+			expect(getByRole('link', { name: 'Post 1' }).getAttribute('href')).toBe(
+				'https://example.com/post-1',
+			);
+		} finally {
+			Object.defineProperty(URL, 'parse', { value: originalParse, configurable: true });
+		}
 	});
 });

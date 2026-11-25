@@ -271,6 +271,24 @@ describe('shared validation contracts', () => {
 				contentStatus: 'full_ready',
 				contentVersion: 0,
 			},
+			{
+				type: 'articles.marked_read',
+				eventId: uuidA,
+				clientId: null,
+				updatedAt: 'now',
+				feedIds: [uuidA],
+				scope: {},
+				markedCount: 2 ** 53,
+			},
+			{
+				type: 'article.updated',
+				eventId: uuidA,
+				updatedAt: 'now',
+				articleId: uuidB,
+				feedId: uuidA,
+				contentStatus: 'full_ready',
+				contentVersion: 2 ** 53,
+			},
 		];
 
 		for (const payload of invalidPayloads) {

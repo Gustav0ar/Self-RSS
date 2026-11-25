@@ -10,8 +10,10 @@ class MediaTrustTest {
     @Test
     fun `trusted embed urls are accepted`() {
         assertTrue(isTrustedEmbedUrl("https://www.youtube.com/embed/abc"))
+        assertTrue(isTrustedEmbedUrl("https://www.youtube-nocookie.com/embed/abc"))
         assertTrue(isTrustedEmbedUrl("https://player.vimeo.com/video/123"))
         assertTrue(isTrustedEmbedUrl("https://streamable.com/e/xyz"))
+        assertTrue(isTrustedEmbedUrl("https://video.wordpress.com/embed/AbC123"))
     }
 
     @Test
@@ -60,6 +62,10 @@ class MediaTrustTest {
         assertEquals(
             "https://img.youtube.com/vi/abc123/0.jpg",
             getYouTubeThumbnail("https://youtu.be/abc123"),
+        )
+        assertEquals(
+            "https://img.youtube.com/vi/abc123/0.jpg",
+            getYouTubeThumbnail("https://www.youtube-nocookie.com/embed/abc123"),
         )
         assertNull(getYouTubeThumbnail("https://notyoutube.com/watch?v=abc123"))
     }

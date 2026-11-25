@@ -541,12 +541,21 @@ describe('useSyncAllFeeds', () => {
 
 describe('useWarmVisibleArticles', () => {
 	it('warms only four visible details in a batch, preloads images, and queues pending enrichment once', async () => {
-		const loadedImages: Array<{ src: string; referrerPolicy: string }> = [];
+		const loadedImages: Array<{
+			src: string;
+			referrerPolicy: string;
+			onerror: (() => void) | null;
+		}> = [];
 		class FakeImage {
 			decoding = '';
 			referrerPolicy = '';
+			onerror: (() => void) | null = null;
 			set src(value: string) {
-				loadedImages.push({ src: value, referrerPolicy: this.referrerPolicy });
+				loadedImages.push({
+					src: value,
+					referrerPolicy: this.referrerPolicy,
+					onerror: this.onerror,
+				});
 			}
 		}
 		vi.stubGlobal('Image', FakeImage);
@@ -606,6 +615,10 @@ describe('useWarmVisibleArticles', () => {
 		);
 		expect(loadedImages.every((image) => image.referrerPolicy === 'no-referrer')).toBe(true);
 
+		const failedEntry = loadedImages.find((image) => image.src === 'list-1.jpg');
+		expect(failedEntry?.onerror).toBeTypeOf('function');
+		failedEntry?.onerror?.();
+
 		act(() => result.current(candidates));
 		expect(
 			apiFetchMock.mock.calls.filter(([path]) => path === '/articles/article-1/enrich'),
@@ -623,6 +636,8 @@ describe('useWarmVisibleArticles', () => {
 				apiFetchMock.mock.calls.filter(([path]) => path === '/articles/article-1/enrich'),
 			).toHaveLength(1);
 		});
+		expect(loadedImages.filter((image) => image.src === 'list-1.jpg')).toHaveLength(2);
+		expect(loadedImages.filter((image) => image.src === 'list-2.jpg')).toHaveLength(1);
 		vi.unstubAllGlobals();
 	});
 });

@@ -4,6 +4,7 @@ import {
 	getCategoryDeleteDescription,
 	shouldWarnOnCategoryDelete,
 } from '@/components/management/management-utils';
+import { Dialog } from '@/components/ui/dialog';
 
 const LazyFeedDialog = lazy(() =>
 	import('@/components/management/feed-dialog').then((module) => ({
@@ -26,99 +27,105 @@ const LazyConfirmDialog = lazy(() =>
 	})),
 );
 
-export type SidebarFeedDialogState =
-	| { mode: 'create'; defaultCategoryId?: string }
-	| { mode: 'edit'; feed: FeedWithCounts }
-	| null;
-
-export type SidebarCategoryDialogState =
-	| { mode: 'create'; defaultParentCategoryId?: string }
-	| { mode: 'edit'; category: CategoryWithCounts }
-	| null;
-
-export type SidebarDeleteState =
-	| { kind: 'feed'; feed: FeedWithCounts }
-	| { kind: 'category'; category: CategoryWithCounts }
+export type SidebarDialogState =
+	| { kind: 'feed-create'; defaultCategoryId?: string }
+	| { kind: 'feed-edit'; feed: FeedWithCounts }
+	| { kind: 'category-create'; defaultParentCategoryId?: string }
+	| { kind: 'category-edit'; category: CategoryWithCounts }
+	| { kind: 'import-opml' }
+	| { kind: 'delete-feed'; feed: FeedWithCounts }
+	| { kind: 'delete-category'; category: CategoryWithCounts }
 	| null;
 
 interface SidebarDialogsProps {
 	flatCategories: CategoryWithCounts[];
-	feedDialogState: SidebarFeedDialogState;
-	categoryDialogState: SidebarCategoryDialogState;
-	importDialogOpen: boolean;
-	deleteState: SidebarDeleteState;
+	dialogState: SidebarDialogState;
 	deleteError: string | null;
 	deletePending: boolean;
-	onCloseFeedDialog: () => void;
-	onCloseCategoryDialog: () => void;
-	onCloseImportDialog: () => void;
 	onConfirmDelete: () => Promise<void>;
-	onCloseDeleteDialog: () => void;
+	onClose: () => void;
 }
 
-/** Lazy-loads sidebar management dialogs so they stay out of the initial web bundle. */
+function SidebarDialogLoadingFallback({ onClose }: { onClose: () => void }) {
+	return (
+		<Dialog
+			onClose={onClose}
+			ariaLabel="Loading dialog"
+			className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4 py-6"
+			panelClassName="surface-card motion-scale w-full max-w-sm rounded-[1.75rem] p-6 text-sm text-muted-foreground shadow-2xl"
+		>
+			Loading...
+		</Dialog>
+	);
+}
+
+/** Lazy-loads the single active sidebar management dialog behind a focus-owning fallback. */
 export function SidebarDialogs({
 	flatCategories,
-	feedDialogState,
-	categoryDialogState,
-	importDialogOpen,
-	deleteState,
+	dialogState,
 	deleteError,
 	deletePending,
-	onCloseFeedDialog,
-	onCloseCategoryDialog,
-	onCloseImportDialog,
 	onConfirmDelete,
-	onCloseDeleteDialog,
+	onClose,
 }: SidebarDialogsProps) {
-	if (!feedDialogState && !categoryDialogState && !importDialogOpen && !deleteState) {
+	if (!dialogState) {
 		return null;
 	}
 
 	return (
-		<Suspense fallback={null}>
-			{feedDialogState ? (
+		<Suspense fallback={<SidebarDialogLoadingFallback onClose={onClose} />}>
+			{dialogState.kind === 'feed-create' ? (
 				<LazyFeedDialog
-					mode={feedDialogState.mode}
+					mode="create"
 					categories={flatCategories}
-					feed={feedDialogState.mode === 'edit' ? feedDialogState.feed : undefined}
-					defaultCategoryId={
-						feedDialogState.mode === 'create' ? feedDialogState.defaultCategoryId : undefined
-					}
-					onClose={onCloseFeedDialog}
+					defaultCategoryId={dialogState.defaultCategoryId}
+					onClose={onClose}
 				/>
 			) : null}
 
-			{categoryDialogState ? (
+			{dialogState.kind === 'feed-edit' ? (
+				<LazyFeedDialog
+					mode="edit"
+					categories={flatCategories}
+					feed={dialogState.feed}
+					onClose={onClose}
+				/>
+			) : null}
+
+			{dialogState.kind === 'category-create' ? (
 				<LazyCategoryDialog
-					mode={categoryDialogState.mode}
+					mode="create"
 					categories={flatCategories}
-					category={categoryDialogState.mode === 'edit' ? categoryDialogState.category : undefined}
-					defaultParentCategoryId={
-						categoryDialogState.mode === 'create'
-							? categoryDialogState.defaultParentCategoryId
-							: undefined
-					}
-					onClose={onCloseCategoryDialog}
+					defaultParentCategoryId={dialogState.defaultParentCategoryId}
+					onClose={onClose}
 				/>
 			) : null}
 
-			{importDialogOpen ? <LazyOpmlImportDialog onClose={onCloseImportDialog} /> : null}
+			{dialogState.kind === 'category-edit' ? (
+				<LazyCategoryDialog
+					mode="edit"
+					categories={flatCategories}
+					category={dialogState.category}
+					onClose={onClose}
+				/>
+			) : null}
 
-			{deleteState ? (
+			{dialogState.kind === 'import-opml' ? <LazyOpmlImportDialog onClose={onClose} /> : null}
+
+			{dialogState.kind === 'delete-feed' || dialogState.kind === 'delete-category' ? (
 				<LazyConfirmDialog
-					title={deleteState.kind === 'feed' ? 'Delete feed' : 'Delete category'}
+					title={dialogState.kind === 'delete-feed' ? 'Delete feed' : 'Delete category'}
 					description={
-						deleteState.kind === 'feed'
-							? `Delete the feed "${deleteState.feed.title}"? This cannot be undone.`
+						dialogState.kind === 'delete-feed'
+							? `Delete the feed "${dialogState.feed.title}"? This cannot be undone.`
 							: getCategoryDeleteDescription(
-									deleteState.category.name,
-									deleteState.category.feedCount,
+									dialogState.category.name,
+									dialogState.category.feedCount,
 								)
 					}
 					confirmLabel={
-						deleteState.kind === 'category' &&
-						shouldWarnOnCategoryDelete(deleteState.category.feedCount)
+						dialogState.kind === 'delete-category' &&
+						shouldWarnOnCategoryDelete(dialogState.category.feedCount)
 							? 'Try delete'
 							: 'Delete'
 					}
@@ -126,7 +133,7 @@ export function SidebarDialogs({
 					isPending={deletePending}
 					error={deleteError}
 					onConfirm={onConfirmDelete}
-					onClose={onCloseDeleteDialog}
+					onClose={onClose}
 				/>
 			) : null}
 		</Suspense>

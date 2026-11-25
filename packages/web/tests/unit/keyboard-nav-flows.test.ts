@@ -196,6 +196,30 @@ describe('useKeyboardNav', () => {
 		expect(ctx.onSelect).not.toHaveBeenCalled();
 	});
 
+	it('keeps selected-article shortcuts working even when the visible queue is empty', () => {
+		const ctx = makeContext();
+		renderHook(() =>
+			useKeyboardNav({
+				articleIds: [],
+				selectedId: 'deep-linked-article',
+				enabled: true,
+				...ctx,
+			}),
+		);
+
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true }));
+		document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+		expect(ctx.onSelect).not.toHaveBeenCalled();
+		expect(ctx.onToggleSaved).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onToggleRead).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onOpenExternal).toHaveBeenCalledWith('deep-linked-article');
+		expect(ctx.onFocusArticle).toHaveBeenCalledWith('deep-linked-article');
+	});
+
 	it('leaves browser shortcuts and focused controls to their own keyboard handlers', () => {
 		const ctx = makeContext();
 		renderHook(() => useKeyboardNav({ articleIds: ['a-1'], selectedId: 'a-1', ...ctx }));

@@ -18,11 +18,13 @@ import { MarkAllReadDialog } from '@/components/articles/mark-all-read-dialog';
 import { ReaderPane } from '@/components/articles/reader-pane';
 import { useRetainedReadArticles } from '@/components/articles/use-retained-read-articles';
 import {
+	findCachedArticleListItem,
 	useCategories,
 	useInfiniteArticles,
 	useMarkRead,
 	usePreferences,
 	usePrefetchArticle,
+	useQueryClient,
 	useSearch,
 	useSetArticleSaved,
 	useUpdatePreferences,
@@ -69,6 +71,7 @@ export function FeedView({
 	const [markAllDialogOpen, setMarkAllDialogOpen] = useState(false);
 	const [externalShortcutStatus, setExternalShortcutStatus] = useState<string | null>(null);
 	const readerFocusRef = useRef<HTMLDivElement | null>(null);
+	const qc = useQueryClient();
 	const preferencesQuery = usePreferences();
 	const { data: prefs } = preferencesQuery;
 	const preferencesReady = prefs != null;
@@ -252,22 +255,27 @@ export function FeedView({
 		ctx.onSelectArticle(id);
 	}, []);
 
+	const findActiveArticle = (id: string) =>
+		findCachedArticleListItem(qc, id) ?? readingQueue.find((a) => a.id === id);
+
 	useKeyboardNav({
 		articleIds,
 		selectedId: effectiveArticleId,
 		onSelect: handleSelectArticle,
 		onToggleRead: (id) => {
-			const article = readingQueue.find((a) => a.id === id);
+			const article = findActiveArticle(id);
 			if (article) markReadMutate({ articleId: id, read: !article.isRead });
 		},
 		onToggleSaved: (id) => {
-			const article = readingQueue.find((a) => a.id === id);
+			const article = findActiveArticle(id);
 			if (article) setArticleSavedMutate({ articleId: id, saved: !article.isSaved });
 		},
 		onFocusArticle: () => readerFocusRef.current?.focus(),
 		onOpenExternal: (id) => {
-			const article = readingQueue.find((a) => a.id === id);
-			const safeUrl = toSafeExternalUrl(article?.canonicalUrl);
+			const canonicalUrl =
+				readingQueue.find((a) => a.id === id)?.canonicalUrl ??
+				findCachedArticleListItem(qc, id)?.canonicalUrl;
+			const safeUrl = toSafeExternalUrl(canonicalUrl);
 			if (safeUrl) {
 				window.open(safeUrl, '_blank', 'noopener,noreferrer');
 				return;
@@ -280,18 +288,10 @@ export function FeedView({
 		enabled: keyboardShortcutsEnabled,
 	});
 
-	function handleMarkAllRead() {
-		setMarkAllDialogOpen(true);
-	}
-
 	function handleRefresh() {
 		if (refreshActionBlocked) return;
 		resetRetainedReadArticles();
-		if (feedId) {
-			void refreshFeed(feedId, { force: true });
-		} else {
-			void refreshFeed(undefined, { force: true, categoryId });
-		}
+		void refreshFeed(feedId, feedId ? { force: true } : { force: true, categoryId });
 	}
 
 	const showListLoader =
@@ -348,7 +348,7 @@ export function FeedView({
 						refreshGuidance={selectedLifecycle?.refreshGuidance ?? undefined}
 						onUnreadToggle={handleUnreadOnlyToggle}
 						onSortToggle={handleSortToggle}
-						onMarkAllRead={handleMarkAllRead}
+						onMarkAllRead={() => setMarkAllDialogOpen(true)}
 						onRefresh={handleRefresh}
 					/>
 

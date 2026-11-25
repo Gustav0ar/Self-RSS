@@ -4,12 +4,15 @@ import type {
 	ArticleListItem,
 	StatsResponse,
 } from '@self-feed/shared';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { applyReadStateSyncEvent } from '../../src/hooks/queries';
 import {
 	createRealtimeConnectedHandler,
 	getReadStateReconnectDelay,
+	useReadStateSync,
 } from '../../src/hooks/use-read-state-sync';
 import { clearTokens, setTokens } from '../../src/lib/api';
 import { createSseParser, streamReadStateEvents } from '../../src/lib/read-state-events';
@@ -605,5 +608,62 @@ describe('read-state sync', () => {
 			failedFeeds: 1,
 		});
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['articles'] });
+	});
+
+	it('ignores stale SSE stream rejections after an offline-to-online replacement connects', async () => {
+		setTokens('access-token');
+		let rejectFirst!: (reason?: unknown) => void;
+		let closeSecond!: () => void;
+		let callCount = 0;
+		const fetchMock = vi.fn(async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				return new Promise<Response>((_resolve, reject) => {
+					rejectFirst = reject;
+				});
+			}
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('event: realtime.connected\ndata: {}\n\n'));
+					closeSecond = () => controller.close();
+				},
+			});
+			return new Response(stream, { status: 200 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const qc = createQueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(QueryClientProvider, { client: qc }, children);
+		const { unmount } = renderHook(() => useReadStateSync(true), { wrapper });
+
+		try {
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+
+			act(() => {
+				window.dispatchEvent(new Event('offline'));
+				window.dispatchEvent(new Event('online'));
+			});
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+
+			await act(async () => {
+				await Promise.resolve();
+				await Promise.resolve();
+			});
+			expect(qc.getQueryData(['realtime', 'connected'])).toBe(true);
+
+			await act(async () => {
+				rejectFirst(new DOMException('aborted', 'AbortError'));
+				await Promise.resolve();
+				await Promise.resolve();
+			});
+
+			expect(qc.getQueryData(['realtime', 'connected'])).toBe(true);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		} finally {
+			closeSecond?.();
+			unmount();
+			clearTokens();
+			vi.unstubAllGlobals();
+		}
 	});
 });

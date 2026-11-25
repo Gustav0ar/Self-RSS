@@ -79,12 +79,12 @@ export function useKeyboardNav({
 			enabled: latestEnabled,
 		} = stateRef.current;
 
-		if (!latestEnabled || latestArticleIds.length === 0 || e.shiftKey || !canUseAppShortcut(e))
-			return;
+		if (!latestEnabled || e.shiftKey || !canUseAppShortcut(e)) return;
 
 		switch (e.key) {
 			case 'j':
 			case 'ArrowDown': {
+				if (latestArticleIds.length === 0) return;
 				e.preventDefault();
 				const nextId = getNextArticleId(
 					latestArticleIds,
@@ -96,6 +96,7 @@ export function useKeyboardNav({
 			}
 			case 'k':
 			case 'ArrowUp': {
+				if (latestArticleIds.length === 0) return;
 				e.preventDefault();
 				const prevId = getPrevArticleId(
 					latestArticleIds,
