@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LoginPage } from '@/components/auth/login-page';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { KeyboardHelp } from '@/components/help/keyboard-help';
+import { isTopmostDialog } from '@/components/ui/dialog';
 import { usePreferences } from '@/hooks/queries';
 import { useReadStateSync } from '@/hooks/use-read-state-sync';
 import {
@@ -217,6 +218,9 @@ function MobileSidebarDrawer({ onClose, children }: MobileSidebarDrawerProps) {
 		const focusableSelector =
 			'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 		function handleKey(event: KeyboardEvent) {
+			if (!isTopmostDialog(drawerRef.current)) {
+				return;
+			}
 			if (event.key === 'Escape') {
 				event.preventDefault();
 				onCloseRef.current();

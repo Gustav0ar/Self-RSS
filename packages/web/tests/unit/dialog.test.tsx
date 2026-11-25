@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Dialog } from '../../src/components/ui/dialog';
 
@@ -23,5 +23,23 @@ describe('Dialog', () => {
 			clearTimeoutSpy.mockRestore();
 			vi.useRealTimers();
 		}
+	});
+
+	it('only closes the topmost dialog on Escape when dialogs are nested', () => {
+		const closeOuter = vi.fn();
+		const closeInner = vi.fn();
+
+		render(
+			<Dialog ariaLabel="Outer drawer" onClose={closeOuter}>
+				<Dialog ariaLabel="Inner modal" onClose={closeInner}>
+					<button type="button">Action</button>
+				</Dialog>
+			</Dialog>,
+		);
+
+		fireEvent.keyDown(window, { key: 'Escape' });
+
+		expect(closeInner).toHaveBeenCalledTimes(1);
+		expect(closeOuter).not.toHaveBeenCalled();
 	});
 });

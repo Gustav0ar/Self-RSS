@@ -127,6 +127,7 @@ export function useReadStateSync(enabled: boolean) {
 						return;
 					}
 					controller = null;
+					qc.setQueryData(['realtime', 'connected'], false);
 					if (stopped || (typeof navigator !== 'undefined' && !navigator.onLine)) {
 						return;
 					}

@@ -2,7 +2,7 @@ import type { ApiListResponse, ArticleListItem } from '@self-feed/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useSetArticleSaved } from '../../src/hooks/queries';
+import { findCachedArticleListItem, useSetArticleSaved } from '../../src/hooks/queries';
 import { setOfflineSessionUser } from '../../src/lib/offline-store';
 
 function article(isSaved: boolean): ArticleListItem {
@@ -182,5 +182,21 @@ describe('useSetArticleSaved cache updates', () => {
 					?.data,
 			).toEqual([article(true)]);
 		});
+	});
+
+	it('prefers the most recently updated cached list when no article detail is cached', () => {
+		const qc = new QueryClient();
+		qc.setQueryData(
+			['articles', { feedId: 'feed-1', unreadOnly: false }],
+			{ pages: [{ data: [article(false)], cursor: null, hasMore: false }], pageParams: [null] },
+			{ updatedAt: 1_000 },
+		);
+		qc.setQueryData(
+			['articles', { unreadOnly: false }],
+			{ pages: [{ data: [article(true)], cursor: null, hasMore: false }], pageParams: [null] },
+			{ updatedAt: 2_000 },
+		);
+
+		expect(findCachedArticleListItem(qc, 'article-1')?.isSaved).toBe(true);
 	});
 });

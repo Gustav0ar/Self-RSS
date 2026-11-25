@@ -12,9 +12,11 @@ import {
 	WifiOff,
 } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { TopBarErrorFallback } from '@/components/error-fallbacks';
 import { SearchBar } from '@/components/search/search-bar';
+import { Dialog } from '@/components/ui/dialog';
 import { useUpdatePreferences } from '@/hooks/queries';
 import { useAuth } from '@/providers/auth';
 import { useTheme } from '@/providers/theme';
@@ -40,12 +42,31 @@ function PreferencesTrigger({ disabled, onClick }: { disabled?: boolean; onClick
 	);
 }
 
+function PreferencesLoadingFallback({ onCancel }: { onCancel: () => void }) {
+	return (
+		<>
+			<PreferencesTrigger disabled />
+			{createPortal(
+				<Dialog
+					onClose={onCancel}
+					ariaLabel="Loading preferences"
+					className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/60 px-4 py-6"
+					panelClassName="surface-card motion-scale w-full max-w-sm rounded-[1.75rem] p-6 text-sm text-muted-foreground shadow-2xl"
+				>
+					Loading...
+				</Dialog>,
+				document.body,
+			)}
+		</>
+	);
+}
+
 /** Defer loading the preferences modal chunk until the user opens Preferences. */
 function PreferencesLauncher() {
 	const [activated, setActivated] = useState(false);
 	if (activated) {
 		return (
-			<Suspense fallback={<PreferencesTrigger disabled />}>
+			<Suspense fallback={<PreferencesLoadingFallback onCancel={() => setActivated(false)} />}>
 				<LazyPreferencesPanel initialOpen />
 			</Suspense>
 		);

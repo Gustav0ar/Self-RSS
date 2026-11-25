@@ -666,4 +666,43 @@ describe('read-state sync', () => {
 			vi.unstubAllGlobals();
 		}
 	});
+
+	it('marks realtime disconnected when the SSE stream ends cleanly before reconnecting', async () => {
+		setTokens('access-token');
+		let closeStream!: () => void;
+		const fetchMock = vi.fn(async () => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode('event: realtime.connected\ndata: {}\n\n'));
+					closeStream = () => controller.close();
+				},
+			});
+			return new Response(stream, { status: 200 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const qc = createQueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(QueryClientProvider, { client: qc }, children);
+		const { unmount } = renderHook(() => useReadStateSync(true), { wrapper });
+
+		try {
+			await act(async () => {
+				await Promise.resolve();
+				await Promise.resolve();
+			});
+			expect(qc.getQueryData(['realtime', 'connected'])).toBe(true);
+
+			await act(async () => {
+				closeStream();
+				await Promise.resolve();
+				await Promise.resolve();
+				await Promise.resolve();
+			});
+			expect(qc.getQueryData(['realtime', 'connected'])).toBe(false);
+		} finally {
+			unmount();
+			clearTokens();
+			vi.unstubAllGlobals();
+		}
+	});
 });
