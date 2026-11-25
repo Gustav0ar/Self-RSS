@@ -114,44 +114,42 @@ describe('offline article mutation outbox', () => {
 
 		expect(offline).toMatchObject([{ status: 'queued' }]);
 		expect(delivered).toMatchObject([{ status: 'applied', authoritativeState: true }]);
-		const firstBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-		const secondBody = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+		const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+		const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body ?? '{}'));
 		expect(firstBody.mutationId).toBe(mutation.mutationId);
 		expect(secondBody.mutationId).toBe(mutation.mutationId);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
-	it.each([
-		false,
-		true,
-	])('stops delivery if the outbox write aborts (conflict=%s)', async (conflict) => {
-		setOfflineSessionUser('user-1');
-		const queued = await queueArticleStateMutation('saved', 'article-1', true);
-		const fetchMock = vi
-			.spyOn(globalThis, 'fetch')
-			.mockResolvedValueOnce(mutationResponse({ applied: !conflict, conflict, saved: true }))
-			.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
-		const put = IDBObjectStore.prototype.put;
-		const abortOutboxWrite = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
-			this: IDBObjectStore,
-			value,
-			key,
-		) {
-			const request = put.call(this, value, key);
-			if (String(key).includes(':outbox:')) this.transaction.abort();
-			return request;
-		});
+	it.each([false, true])(
+		'stops delivery if the outbox write aborts (conflict=%s)',
+		async (conflict) => {
+			setOfflineSessionUser('user-1');
+			const queued = await queueArticleStateMutation('saved', 'article-1', true);
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValueOnce(mutationResponse({ applied: !conflict, conflict, saved: true }))
+				.mockResolvedValueOnce(mutationResponse({ saved: true, duplicate: true }));
+			const put = IDBObjectStore.prototype.put;
+			const abortOutboxWrite = vi
+				.spyOn(IDBObjectStore.prototype, 'put')
+				.mockImplementation(function (this: IDBObjectStore, value, key) {
+					const request = put.call(this, value, key);
+					if (String(key).includes(':outbox:')) this.transaction.abort();
+					return request;
+				});
 
-		expect(await flushOfflineArticleMutations()).toMatchObject([
-			{ status: 'queued', mutation: queued },
-		]);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		abortOutboxWrite.mockRestore();
-		expect(await flushOfflineArticleMutations()).toMatchObject([
-			{ status: 'applied', mutation: queued },
-		]);
-		expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
-	});
+			expect(await flushOfflineArticleMutations()).toMatchObject([
+				{ status: 'queued', mutation: queued },
+			]);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			abortOutboxWrite.mockRestore();
+			expect(await flushOfflineArticleMutations()).toMatchObject([
+				{ status: 'applied', mutation: queued },
+			]);
+			expect(await hasPendingArticleStateMutation('article-1', 'saved')).toBe(false);
+		},
+	);
 
 	it('retains a mutation when token refresh is temporarily unavailable', async () => {
 		setOfflineSessionUser('user-1');
@@ -187,7 +185,7 @@ describe('offline article mutation outbox', () => {
 		expect(await hasPendingArticleStateMutation('article-1', 'read')).toBe(false);
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-		const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
 		expect(body).toMatchObject({ read: false, mutationId: newest.mutationId });
 	});
 
@@ -220,8 +218,8 @@ describe('offline article mutation outbox', () => {
 		const results = await flushOfflineArticleMutations();
 
 		expect(results.map((result) => result.status)).toEqual(['reconciled', 'applied']);
-		const firstBody = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-		const secondBody = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+		const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+		const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body ?? '{}'));
 		expect(firstBody.mutationId).toBe(original.mutationId);
 		expect(secondBody.mutationId).not.toBe(original.mutationId);
 		expect(secondBody).toMatchObject({ saved: true, baseRevision: 3 });
@@ -246,38 +244,37 @@ describe('offline article mutation outbox', () => {
 		]);
 	});
 
-	it.each([
-		'success',
-		'conflict',
-		'rejection',
-	])('ignores a late %s after switching away and back', async (outcome) => {
-		setOfflineSessionUser('reader');
-		const mutation = await queueArticleStateMutation('saved', 'article-1', true);
-		const response = Promise.withResolvers<Response>();
-		const started = Promise.withResolvers<void>();
-		const fetchMock = vi
-			.spyOn(globalThis, 'fetch')
-			.mockImplementationOnce(() => {
-				started.resolve();
-				return response.promise;
-			})
-			.mockImplementation(async () => mutationResponse({ saved: true, duplicate: true }));
+	it.each(['success', 'conflict', 'rejection'])(
+		'ignores a late %s after switching away and back',
+		async (outcome) => {
+			setOfflineSessionUser('reader');
+			const mutation = await queueArticleStateMutation('saved', 'article-1', true);
+			const response = Promise.withResolvers<Response>();
+			const started = Promise.withResolvers<void>();
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockImplementationOnce(() => {
+					started.resolve();
+					return response.promise;
+				})
+				.mockImplementation(async () => mutationResponse({ saved: true, duplicate: true }));
 
-		const oldFlush = flushOfflineArticleMutations();
-		await started.promise;
-		setOfflineSessionUser('second-reader');
-		setOfflineSessionUser('reader');
-		response.resolve(
-			outcome === 'rejection'
-				? new Response(null, { status: 404 })
-				: mutationResponse({ conflict: outcome === 'conflict', saved: true, revision: 7 }),
-		);
+			const oldFlush = flushOfflineArticleMutations();
+			await started.promise;
+			setOfflineSessionUser('second-reader');
+			setOfflineSessionUser('reader');
+			response.resolve(
+				outcome === 'rejection'
+					? new Response(null, { status: 404 })
+					: mutationResponse({ conflict: outcome === 'conflict', saved: true, revision: 7 }),
+			);
 
-		expect(await oldFlush).toEqual([]);
-		expect(await getPendingArticleStateMutation('article-1', 'saved')).toEqual(mutation);
-		expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-	});
+			expect(await oldFlush).toEqual([]);
+			expect(await getPendingArticleStateMutation('article-1', 'saved')).toEqual(mutation);
+			expect(await flushOfflineArticleMutations()).toMatchObject([{ status: 'applied', mutation }]);
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		},
+	);
 
 	it('lets the returning reader replay while the earlier acknowledgement is waiting on IndexedDB', async () => {
 		setOfflineSessionUser('reader');

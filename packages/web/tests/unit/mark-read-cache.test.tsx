@@ -49,6 +49,15 @@ function stats(totalUnread: number, totalRead: number): StatsResponse {
 	};
 }
 
+function MarkReadHarness({
+	onReady,
+}: {
+	onReady: (mutation: ReturnType<typeof useMarkRead>) => void;
+}) {
+	onReady(useMarkRead());
+	return null;
+}
+
 describe('useMarkRead cache updates', () => {
 	afterEach(() => {
 		setOfflineSessionUser(null);
@@ -96,14 +105,13 @@ describe('useMarkRead cache updates', () => {
 		});
 		qc.setQueryData(['stats'], stats(1, 4));
 
-		function Harness() {
-			markRead = useMarkRead();
-			return null;
-		}
-
 		render(
 			<QueryClientProvider client={qc}>
-				<Harness />
+				<MarkReadHarness
+					onReady={(mutation) => {
+						markRead = mutation;
+					}}
+				/>
 			</QueryClientProvider>,
 		);
 
@@ -169,14 +177,13 @@ describe('useMarkRead cache updates', () => {
 		});
 		qc.setQueryData(['stats'], stats(1, 4));
 
-		function Harness() {
-			markRead = useMarkRead();
-			return null;
-		}
-
 		render(
 			<QueryClientProvider client={qc}>
-				<Harness />
+				<MarkReadHarness
+					onReady={(mutation) => {
+						markRead = mutation;
+					}}
+				/>
 			</QueryClientProvider>,
 		);
 

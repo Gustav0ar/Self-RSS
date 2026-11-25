@@ -40,62 +40,64 @@ afterEach(async () => {
 });
 
 describe('article mutation reconciliation', () => {
-	it.each([
-		'server',
-		'storage',
-	] as const)('restores a Saved-only row with its acknowledged read state after %s rejection', async (rejection) => {
-		setOfflineSessionUser('reconciliation-reader');
-		const client = new QueryClient();
-		const savedKey = ['articles', { savedOnly: true }] as const;
-		client.setQueryData(savedKey, { data: [article(false, true)], cursor: null, hasMore: false });
-		const queue = offlineStore.queueArticleStateMutation;
-		let releaseSave = () => {};
-		const saveReady = new Promise<void>((resolve) => {
-			releaseSave = resolve;
-		});
-		const queueSpy = vi
-			.spyOn(offlineStore, 'queueArticleStateMutation')
-			.mockImplementation(async (kind, ...args) => {
-				if (kind === 'saved') {
-					await saveReady;
-					if (rejection === 'storage') throw new Error('Storage full');
-				}
-				return queue(kind, ...args);
+	it.each(['server', 'storage'] as const)(
+		'restores a Saved-only row with its acknowledged read state after %s rejection',
+		async (rejection) => {
+			setOfflineSessionUser('reconciliation-reader');
+			const client = new QueryClient();
+			const savedKey = ['articles', { savedOnly: true }] as const;
+			client.setQueryData(savedKey, { data: [article(false, true)], cursor: null, hasMore: false });
+			const queue = offlineStore.queueArticleStateMutation;
+			let releaseSave = () => {};
+			const saveReady = new Promise<void>((resolve) => {
+				releaseSave = resolve;
 			});
-		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) =>
-			String(input).endsWith('/read')
-				? new Response(
-						JSON.stringify({ data: { success: true, applied: true, read: true, revision: 1 } }),
-						{ status: 200 },
-					)
-				: new Response('{}', { status: 403 }),
-		);
-		const { result, unmount } = renderHook(
-			() => ({ read: useMarkRead(), saved: useSetArticleSaved() }),
-			{
-				wrapper: ({ children }) => (
-					<QueryClientProvider client={client}>{children}</QueryClientProvider>
-				),
-			},
-		);
-		await act(async () => {
-			const saving = result.current.saved
-				.mutateAsync({ articleId: 'article-1', saved: false })
-				.catch((error: unknown) => error);
-			await vi.waitFor(() => expect(queueSpy).toHaveBeenCalledTimes(1));
-			expect(client.getQueryData<ApiListResponse<ArticleListItem>>(savedKey)?.data).toEqual([]);
-			await result.current.read.mutateAsync({ articleId: 'article-1', read: true });
-			expect(client.getQueryData(['article', 'article-1'])).toBeUndefined();
-			releaseSave();
-			await saving;
-		});
-		expect(client.getQueryData<ApiListResponse<ArticleListItem>>(savedKey)?.data[0]).toMatchObject({
-			isRead: true,
-			isSaved: true,
-		});
-		unmount();
-		client.clear();
-	});
+			const queueSpy = vi
+				.spyOn(offlineStore, 'queueArticleStateMutation')
+				.mockImplementation(async (kind, ...args) => {
+					if (kind === 'saved') {
+						await saveReady;
+						if (rejection === 'storage') throw new Error('Storage full');
+					}
+					return queue(kind, ...args);
+				});
+			vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) =>
+				String(input).endsWith('/read')
+					? new Response(
+							JSON.stringify({ data: { success: true, applied: true, read: true, revision: 1 } }),
+							{ status: 200 },
+						)
+					: new Response('{}', { status: 403 }),
+			);
+			const { result, unmount } = renderHook(
+				() => ({ read: useMarkRead(), saved: useSetArticleSaved() }),
+				{
+					wrapper: ({ children }) => (
+						<QueryClientProvider client={client}>{children}</QueryClientProvider>
+					),
+				},
+			);
+			await act(async () => {
+				const saving = result.current.saved
+					.mutateAsync({ articleId: 'article-1', saved: false })
+					.catch((error: unknown) => error);
+				await vi.waitFor(() => expect(queueSpy).toHaveBeenCalledTimes(1));
+				expect(client.getQueryData<ApiListResponse<ArticleListItem>>(savedKey)?.data).toEqual([]);
+				await result.current.read.mutateAsync({ articleId: 'article-1', read: true });
+				expect(client.getQueryData(['article', 'article-1'])).toBeUndefined();
+				releaseSave();
+				await saving;
+			});
+			expect(
+				client.getQueryData<ApiListResponse<ArticleListItem>>(savedKey)?.data[0],
+			).toMatchObject({
+				isRead: true,
+				isSaved: true,
+			});
+			unmount();
+			client.clear();
+		},
+	);
 
 	it('keeps a successful read update when saving fails before it reaches the outbox', async () => {
 		setOfflineSessionUser('reconciliation-reader');

@@ -129,29 +129,30 @@ describe('account changes and concurrent session creation', () => {
 		expect(await context.sessions.listActiveByUserId(context.target.id)).toHaveLength(0);
 	});
 
-	it.each(securityChanges)('revokes sessions created during $name cache invalidation', async ({
-		apply,
-	}) => {
-		const context = await setup();
-		const reached = Promise.withResolvers<void>();
-		const resume = Promise.withResolvers<void>();
-		const list = context.sessions.listActiveByUserId.bind(context.sessions);
-		vi.spyOn(context.sessions, 'listActiveByUserId').mockImplementationOnce(async (...args) => {
-			const initialSessions = await list(...args);
-			reached.resolve();
-			await resume.promise;
-			return initialSessions;
-		});
-		const change = apply(context);
-		await reached.promise;
-		const result = await context.auth.login(context.target.email, 'original-password');
-		const payload = await context.tokens.verifyAccessToken(result.tokens.accessToken);
-		expect(await context.auth.isAccessSessionActive(context.target.id, payload.sid)).toBe(true);
-		resume.resolve();
-		await change;
-		expect(await context.auth.isAccessSessionActive(context.target.id, payload.sid)).toBe(false);
-		expect(await context.sessions.listActiveByUserId(context.target.id)).toHaveLength(0);
-	});
+	it.each(securityChanges)(
+		'revokes sessions created during $name cache invalidation',
+		async ({ apply }) => {
+			const context = await setup();
+			const reached = Promise.withResolvers<void>();
+			const resume = Promise.withResolvers<void>();
+			const list = context.sessions.listActiveByUserId.bind(context.sessions);
+			vi.spyOn(context.sessions, 'listActiveByUserId').mockImplementationOnce(async (...args) => {
+				const initialSessions = await list(...args);
+				reached.resolve();
+				await resume.promise;
+				return initialSessions;
+			});
+			const change = apply(context);
+			await reached.promise;
+			const result = await context.auth.login(context.target.email, 'original-password');
+			const payload = await context.tokens.verifyAccessToken(result.tokens.accessToken);
+			expect(await context.auth.isAccessSessionActive(context.target.id, payload.sid)).toBe(true);
+			resume.resolve();
+			await change;
+			expect(await context.auth.isAccessSessionActive(context.target.id, payload.sid)).toBe(false);
+			expect(await context.sessions.listActiveByUserId(context.target.id)).toHaveLength(0);
+		},
+	);
 
 	it('rolls back credential changes if the atomic session revocation fails', async () => {
 		const context = await setup();
@@ -169,50 +170,52 @@ describe('account changes and concurrent session creation', () => {
 		expect(await context.sessions.listActiveByUserId(context.target.id)).toHaveLength(1);
 	});
 
-	it.each(securityChanges)('denies stale cached sessions when $name invalidation fails', async ({
-		apply,
-	}) => {
-		const context = await setup();
-		const reached = Promise.withResolvers<void>();
-		const resume = Promise.withResolvers<void>();
-		const list = context.sessions.listActiveByUserId.bind(context.sessions);
-		vi.spyOn(context.sessions, 'listActiveByUserId').mockImplementationOnce(async (...args) => {
-			const initialSessions = await list(...args);
-			reached.resolve();
-			await resume.promise;
-			return initialSessions;
-		});
-		const change = apply(context).then(
-			() => null,
-			(error: unknown) => error,
-		);
-		await reached.promise;
-		const result = await context.auth.login(context.target.email, 'original-password');
-		const payload = await context.tokens.verifyAccessToken(result.tokens.accessToken);
-		if (!payload.sid) throw new Error('Login did not issue a session-bound access token');
-		// Simulate a positive entry left by a server running the previous version.
-		await redis.set(CacheKeys.authSessionActive(payload.sid), context.target.id, 'EX', 60);
-		expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
-		const failedWrite = vi
-			.spyOn(redis, 'eval')
-			.mockRejectedValueOnce(new Error('Redis write failed'));
-		resume.resolve();
-		expect(await change).toMatchObject({ statusCode: 500 });
-		failedWrite.mockRestore();
-		expect(await context.sessions.findActiveById(payload.sid)).toBeUndefined();
-		expect(await redis.get(CacheKeys.authSessionRevoked(payload.sid))).toBeNull();
-		expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
+	it.each(securityChanges)(
+		'denies stale cached sessions when $name invalidation fails',
+		async ({ apply }) => {
+			const context = await setup();
+			const reached = Promise.withResolvers<void>();
+			const resume = Promise.withResolvers<void>();
+			const list = context.sessions.listActiveByUserId.bind(context.sessions);
+			vi.spyOn(context.sessions, 'listActiveByUserId').mockImplementationOnce(async (...args) => {
+				const initialSessions = await list(...args);
+				reached.resolve();
+				await resume.promise;
+				return initialSessions;
+			});
+			const change = apply(context).then(
+				() => null,
+				(error: unknown) => error,
+			);
+			await reached.promise;
+			const result = await context.auth.login(context.target.email, 'original-password');
+			const payload = await context.tokens.verifyAccessToken(result.tokens.accessToken);
+			if (!payload.sid) throw new Error('Login did not issue a session-bound access token');
+			// Simulate a positive entry left by a server running the previous version.
+			await redis.set(CacheKeys.authSessionActive(payload.sid), context.target.id, 'EX', 60);
+			expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
+			const failedWrite = vi
+				.spyOn(redis, 'eval')
+				.mockRejectedValueOnce(new Error('Redis write failed'));
+			resume.resolve();
+			expect(await change).toMatchObject({ statusCode: 500 });
+			failedWrite.mockRestore();
+			expect(await context.sessions.findActiveById(payload.sid)).toBeUndefined();
+			expect(await redis.get(CacheKeys.authSessionRevoked(payload.sid))).toBeNull();
+			expect(await redis.get(CacheKeys.authSessionActive(payload.sid))).toBe(context.target.id);
 
-		const app = new Hono();
-		app.onError(
-			(error) => new Response(null, { status: error instanceof AppError ? error.statusCode : 500 }),
-		);
-		app.get('/admin', createAuthMiddleware(context.tokens, context.auth), requireAdmin, (c) =>
-			c.json({ allowed: true }),
-		);
-		const response = await app.request('/admin', {
-			headers: { Authorization: `Bearer ${result.tokens.accessToken}` },
-		});
-		expect(response.status).toBe(401);
-	});
+			const app = new Hono();
+			app.onError(
+				(error) =>
+					new Response(null, { status: error instanceof AppError ? error.statusCode : 500 }),
+			);
+			app.get('/admin', createAuthMiddleware(context.tokens, context.auth), requireAdmin, (c) =>
+				c.json({ allowed: true }),
+			);
+			const response = await app.request('/admin', {
+				headers: { Authorization: `Bearer ${result.tokens.accessToken}` },
+			});
+			expect(response.status).toBe(401);
+		},
+	);
 });

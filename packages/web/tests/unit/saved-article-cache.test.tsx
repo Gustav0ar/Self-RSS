@@ -35,6 +35,15 @@ function createQueryClient() {
 	});
 }
 
+function SavedArticleHarness({
+	onReady,
+}: {
+	onReady: (mutation: ReturnType<typeof useSetArticleSaved>) => void;
+}) {
+	onReady(useSetArticleSaved());
+	return null;
+}
+
 describe('useSetArticleSaved cache updates', () => {
 	afterEach(() => {
 		setOfflineSessionUser(null);
@@ -70,13 +79,13 @@ describe('useSetArticleSaved cache updates', () => {
 			pageParams: [null],
 		});
 
-		function Harness() {
-			mutation = useSetArticleSaved();
-			return null;
-		}
 		render(
 			<QueryClientProvider client={qc}>
-				<Harness />
+				<SavedArticleHarness
+					onReady={(next) => {
+						mutation = next;
+					}}
+				/>
 			</QueryClientProvider>,
 		);
 
@@ -117,13 +126,13 @@ describe('useSetArticleSaved cache updates', () => {
 		);
 		qc.setQueryData(['articles', { feedId: 'feed-1' }], response([article(false)]));
 
-		function Harness() {
-			mutation = useSetArticleSaved();
-			return null;
-		}
 		render(
 			<QueryClientProvider client={qc}>
-				<Harness />
+				<SavedArticleHarness
+					onReady={(next) => {
+						mutation = next;
+					}}
+				/>
 			</QueryClientProvider>,
 		);
 
@@ -155,13 +164,13 @@ describe('useSetArticleSaved cache updates', () => {
 		const savedQueryKey = ['articles', null, null, false, true, 'latest', 30] as const;
 		qc.setQueryData(savedQueryKey, { pages: [response([])], pageParams: [null] });
 
-		function Harness() {
-			mutation = useSetArticleSaved();
-			return null;
-		}
 		render(
 			<QueryClientProvider client={qc}>
-				<Harness />
+				<SavedArticleHarness
+					onReady={(next) => {
+						mutation = next;
+					}}
+				/>
 			</QueryClientProvider>,
 		);
 

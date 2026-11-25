@@ -212,59 +212,59 @@ function copyMigrationsBefore(baseDir: string, firstExcludedTag: string) {
 }
 
 describe('SQLite migrations', () => {
-	it.each([
-		'fresh',
-		'upgrade',
-	] as const)('installs the daily activity marker on a %s database', async (path) => {
-		const sqlite = new BunDatabase(':memory:');
-		try {
-			const db = drizzle(sqlite, { schema });
-			if (path === 'upgrade') {
-				const dir = await mkdtemp(join(tmpdir(), 'daily-activity-migration-'));
-				tempDirs.push(dir);
-				applyMigrations(db, {
-					migrationsFolder: copyMigrationsBefore(dir, '0023_daily_reader_activity'),
-				});
-				await db
-					.insert(schema.users)
-					.values({ id: 'reader', email: 'reader@example.com', passwordHash: 'test' });
-				sqlite.exec(
-					"INSERT INTO user_metrics_daily (user_id,date,articles_read_count,feeds_synced_count,feed_failures_count) VALUES ('reader','2026-08-01',3,40,2),('reader','2026-08-02',0,0,0)",
-				);
-			}
-			applyMigrations(db, { migrationsFolder });
-			expect(
-				sqlite
-					.query(
-						`SELECT name, "notnull" AS required, dflt_value FROM pragma_table_info('user_metrics_daily') WHERE name='is_active'`,
-					)
-					.get(),
-			).toMatchObject({ name: 'is_active', required: 1, dflt_value: 'true' });
-			if (path === 'upgrade')
+	it.each(['fresh', 'upgrade'] as const)(
+		'installs the daily activity marker on a %s database',
+		async (path) => {
+			const sqlite = new BunDatabase(':memory:');
+			try {
+				const db = drizzle(sqlite, { schema });
+				if (path === 'upgrade') {
+					const dir = await mkdtemp(join(tmpdir(), 'daily-activity-migration-'));
+					tempDirs.push(dir);
+					applyMigrations(db, {
+						migrationsFolder: copyMigrationsBefore(dir, '0023_daily_reader_activity'),
+					});
+					await db
+						.insert(schema.users)
+						.values({ id: 'reader', email: 'reader@example.com', passwordHash: 'test' });
+					sqlite.exec(
+						"INSERT INTO user_metrics_daily (user_id,date,articles_read_count,feeds_synced_count,feed_failures_count) VALUES ('reader','2026-08-01',3,40,2),('reader','2026-08-02',0,0,0)",
+					);
+				}
+				applyMigrations(db, { migrationsFolder });
 				expect(
-					await db.select().from(schema.userMetricsDaily).orderBy(schema.userMetricsDaily.date),
-				).toMatchObject([
-					{
-						userId: 'reader',
-						date: '2026-08-01',
-						isActive: true,
-						articlesReadCount: 3,
-						feedsSyncedCount: 40,
-						feedFailuresCount: 2,
-					},
-					{
-						userId: 'reader',
-						date: '2026-08-02',
-						isActive: true,
-						articlesReadCount: 0,
-						feedsSyncedCount: 0,
-						feedFailuresCount: 0,
-					},
-				]);
-		} finally {
-			sqlite.close();
-		}
-	});
+					sqlite
+						.query(
+							`SELECT name, "notnull" AS required, dflt_value FROM pragma_table_info('user_metrics_daily') WHERE name='is_active'`,
+						)
+						.get(),
+				).toMatchObject({ name: 'is_active', required: 1, dflt_value: 'true' });
+				if (path === 'upgrade')
+					expect(
+						await db.select().from(schema.userMetricsDaily).orderBy(schema.userMetricsDaily.date),
+					).toMatchObject([
+						{
+							userId: 'reader',
+							date: '2026-08-01',
+							isActive: true,
+							articlesReadCount: 3,
+							feedsSyncedCount: 40,
+							feedFailuresCount: 2,
+						},
+						{
+							userId: 'reader',
+							date: '2026-08-02',
+							isActive: true,
+							articlesReadCount: 0,
+							feedsSyncedCount: 0,
+							feedFailuresCount: 0,
+						},
+					]);
+			} finally {
+				sqlite.close();
+			}
+		},
+	);
 
 	it('backfills auth session expiry on an existing database', async () => {
 		const tempDir = await mkdtemp(join(tmpdir(), 'self-feed-auth-session-migration-'));

@@ -49,9 +49,9 @@ function makeQueryClient() {
 }
 
 function wrapperFor(queryClient: QueryClient) {
-	return function Wrapper({ children }: { children: ReactNode }) {
-		return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-	};
+	return ({ children }: { children: ReactNode }) => (
+		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+	);
 }
 
 describe('useSilentArticleRefresh', () => {
@@ -132,28 +132,31 @@ describe('useSilentArticleRefresh', () => {
 		{ isSaved: true },
 		{ contentStatus: 'enrichment_pending' },
 		{ contentVersion: 2 },
-	] satisfies Partial<ArticleListItem>[])('invalidates when first-page metadata changes: %j', async (changed) => {
-		const queryClient = makeQueryClient();
-		const cached = {
-			pages: [page([article('a-2'), article('a-1')])],
-			pageParams: [null],
-		};
-		queryClient.setQueryData(queryKey, cached);
-		const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue();
-		apiFetchMock.mockResolvedValue(page([article('a-2', changed), article('a-1')]));
+	] satisfies Partial<ArticleListItem>[])(
+		'invalidates when first-page metadata changes: %j',
+		async (changed) => {
+			const queryClient = makeQueryClient();
+			const cached = {
+				pages: [page([article('a-2'), article('a-1')])],
+				pageParams: [null],
+			};
+			queryClient.setQueryData(queryKey, cached);
+			const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue();
+			apiFetchMock.mockResolvedValue(page([article('a-2', changed), article('a-1')]));
 
-		renderHook(() => useSilentArticleRefresh({ limit: 30 }), {
-			wrapper: wrapperFor(queryClient),
-		});
-		act(() => {
-			window.dispatchEvent(new Event('focus'));
-		});
+			renderHook(() => useSilentArticleRefresh({ limit: 30 }), {
+				wrapper: wrapperFor(queryClient),
+			});
+			act(() => {
+				window.dispatchEvent(new Event('focus'));
+			});
 
-		await waitFor(() => {
-			expect(invalidateSpy).toHaveBeenCalledWith({ queryKey, exact: true });
-		});
-		expect(queryClient.getQueryData(queryKey)).toEqual(cached);
-	});
+			await waitFor(() => {
+				expect(invalidateSpy).toHaveBeenCalledWith({ queryKey, exact: true });
+			});
+			expect(queryClient.getQueryData(queryKey)).toEqual(cached);
+		},
+	);
 
 	it.each([false, true])('refreshes a real article query with savedOnly=%s', async (savedOnly) => {
 		const queryClient = makeQueryClient();

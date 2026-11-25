@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.6.9/schema.json",
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
@@ -13,7 +13,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true,
+			"preset": "recommended",
 			"complexity": {
 				"noExtraBooleanCast": "error",
 				"noUselessTypeConstraint": "error"
@@ -56,7 +56,10 @@
 			"!packages/api/openapi.json",
 			"!packages/api/drizzle/meta",
 			"!packages/android/app/schemas",
-			"!packages/android/app/src/androidTest/assets/android-review"
+			"!packages/android/app/src/androidTest/assets/android-review",
+			"!**/*.md",
+			"!**/*.yml",
+			"!**/*.yaml"
 		]
 	}
 }

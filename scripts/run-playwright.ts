@@ -14,6 +14,16 @@ import {
 } from './test-env.js';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const webPackageJson = JSON.parse(
+	readFileSync(resolve(rootDir, 'packages/web/package.json'), 'utf8'),
+) as { devDependencies?: Record<string, string> };
+const playwrightVersion = webPackageJson.devDependencies?.['@playwright/test']?.replace(
+	/^[^\d]*/,
+	'',
+);
+if (!playwrightVersion) {
+	throw new Error('Could not resolve @playwright/test version from packages/web/package.json');
+}
 const needsContainerizedWebKit =
 	process.platform === 'linux' &&
 	/\b(?:arch|cachyos)\b/i.test(readFileSync('/etc/os-release', 'utf8'));
@@ -148,7 +158,7 @@ try {
 				...forwardedEnvironment,
 				'--env',
 				'PLAYWRIGHT_BROWSERS_PATH=/ms-playwright',
-				'mcr.microsoft.com/playwright:v1.60.0-noble',
+				`mcr.microsoft.com/playwright:v${playwrightVersion}-noble`,
 				'node',
 				'node_modules/@playwright/test/cli.js',
 				'test',
